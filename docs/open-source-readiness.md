@@ -1,7 +1,7 @@
 # Open-source release record
 
 Review date: 2026-08-30
-Release state: approved for an initial public source release
+Release state: published and verified
 
 ## Assessment
 
@@ -22,12 +22,12 @@ not legal advice or a formal trademark clearance.
 | Product story and quickstart | Ready | Root README explains the workflow, boundaries, setup, architecture, and agent path |
 | License | Ready | Apache-2.0 text and all package metadata agree |
 | Community health | Ready | Contribution guide, conduct policy, support guide, issue forms, and PR template |
-| Security reporting | Ready when hosted | GitHub private vulnerability reporting is enabled after repository creation |
+| Security reporting | Enabled | GitHub private vulnerability reporting is available from the repository Security tab |
 | Privacy boundary | Ready | Runtime data is external; automated privacy and release scans block common leaks |
 | Dependency hygiene | Ready | Lockfile, automated updates, dependency review, and production audit in CI |
 | Brand system | Ready | BenchLedger mark, lockup, voice, palette, favicon, and screenshot are checked in |
 | Package publishing | Intentionally closed | Every workspace remains private until a coordinated package/versioning plan exists |
-| Public repository | Ready when hosted | Description, topics, branch rules, security features, and CI are verified after push |
+| Public repository | Published | [`newtonlorenz/benchledger`](https://github.com/newtonlorenz/benchledger) is public with topics, Discussions, protected `main`, and passing CI |
 | Stable release | Not yet | The first source publication is pre-1.0 and carries no stable API guarantee |
 
 ## Publication checklist
@@ -38,9 +38,9 @@ not legal advice or a formal trademark clearance.
 - [x] Keep runtime data, private history, build output, dependencies, and credentials out of the public tree
 - [x] Run public/privacy checks, clean dependency installation, build, typecheck,
   focused tests, browser tests, and production dependency audit
-- [ ] Create and push the public GitHub repository
-- [ ] Enable private vulnerability reporting, branch rules, Dependabot, and secret scanning where available
-- [ ] Verify CI and a clean clone from the public repository
+- [x] Create and push the public GitHub repository
+- [x] Enable private vulnerability reporting, branch rules, Dependabot, and secret scanning where available
+- [x] Verify CI and a clean clone from the public repository
 
 ## Repository settings
 
@@ -49,7 +49,7 @@ not legal advice or a formal trademark clearance.
 - Enable secret scanning, push protection, Dependabot alerts, and private
   vulnerability reporting where the hosting plan supports them
 - Disable force-push and branch deletion on `main`
-- Keep Discussions optional; do not use public issues for private support data
+- Use Discussions for public questions; do not use public issues or Discussions for private support data
 
 Package publishing, hosted-service operation, purchasing, and printer control
 remain separate explicit actions.
