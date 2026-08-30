@@ -1,0 +1,11 @@
+interface:
+  display_name: "BenchLedger"
+  short_description: "Maker inventory and project lifecycle"
+  brand_color: "#3F5F55"
+  default_prompt: "Use $benchledger to take this maker project from inventory and exact build setup through BOM, sourcing, revisioned files, and evidence-backed close-out."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "benchledger"
+      description: "BenchLedger MCP server for inventory, exact products, projects, BOMs, build configurations, artifacts, supplier observations, and reconciliation."

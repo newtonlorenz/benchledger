@@ -1,0 +1,23 @@
+{
+  "name": "@benchledger/mcp",
+  "version": "0.1.0",
+  "description": "Model-neutral MCP adapter for the BenchLedger maker inventory and project workspace",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "dependencies": {
+    "@benchledger/api-contract": "0.1.0",
+    "@benchledger/application": "0.1.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+data/
+private/
+backups/
+*.sqlite
+*.sqlite-*
+*.db
+*.log
+.DS_Store
+playwright-report/
+test-results/

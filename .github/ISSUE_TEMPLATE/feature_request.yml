@@ -1,0 +1,49 @@
+name: Feature request
+description: Propose a focused maker or agent workflow improvement
+title: "[Feature]: "
+labels: [enhancement, needs-triage]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Maker problem
+      description: What decision or build step is difficult today, and for whom?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the smallest useful outcome rather than a preferred implementation.
+    validations:
+      required: true
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Project stage
+      options:
+        - Inventory setup
+        - Project planning
+        - BOM and gap analysis
+        - Reuse / inspect / buy
+        - Files and revisions
+        - Build validation
+        - Post-project close-out
+        - Agent integration
+        - Cross-cutting
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence and edge cases
+      description: Note uncertainty, compatibility, safety, privacy, beginner/expert, or agent considerations.
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Boundaries
+      options:
+        - label: This request does not require automatic purchasing or printer control.
+          required: true
+        - label: Any example data is synthetic.
+          required: true

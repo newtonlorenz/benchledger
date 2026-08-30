@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">BenchLedger mark</title>
+  <desc id="desc">Three ascending ledger bars inside an open workbench frame.</desc>
+  <rect width="64" height="64" rx="14" fill="#173A35"/>
+  <path d="M15 17h34M15 17v32h34" fill="none" stroke="#9CD3A9" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="20" y="34" width="7" height="10" rx="1.5" fill="#F7F9F6"/>
+  <rect x="30" y="27" width="7" height="17" rx="1.5" fill="#9CD3A9"/>
+  <rect x="40" y="21" width="7" height="23" rx="1.5" fill="#3F795C"/>
+</svg>

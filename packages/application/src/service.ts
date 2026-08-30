@@ -1,0 +1,1509 @@
+import { createHash, randomUUID } from "node:crypto";
+import {
+  bomGapSchema, createBomLineSchema, createInventoryItemSchema, createOfferSchema,
+  createProjectRevisionSchema, createProjectSchema, createReservationSchema,
+  createProjectWithInitialRevisionSchema, createWorkItemRevisionSchema, createWorkItemSchema, idSchema, inventoryListQuerySchema,
+  stockEventInputSchema, updateBomLineSchema, updateInventoryItemSchema,
+  updateProjectSchema, catalogProductSchema, createCatalogProductSchema,
+  updateCatalogProductSchema, inventoryProductProfileSchema,
+  createInventoryProductProfileSchema, updateInventoryProductProfileSchema,
+  buildConfigurationSnapshotSchema, createBuildConfigurationSnapshotSchema,
+  createInventoryWithProductProfileSchema,
+  inventoryItemSchema,
+  saveReconciliationDraftSchema, commitReconciliationSchema, reconciliationDraftSchema,
+  reconciliationCommitSchema
+} from "@benchledger/api-contract";
+import type {
+  Artifact, BomGap, BomGapCandidate, BomLine, CreateBomLine, CreateInventoryItem, CreateOffer, CreateProject,
+  CreateProjectRevision, CreateReservation, CreateWorkItem, CreateWorkItemRevision,
+  CreateProjectWithInitialRevision, InventoryItem, InventoryListQuery, Offer, Project, ProjectRevision, ProjectWithInitialRevision, Reservation,
+  StockEventInput, UploadSession, WorkItem, WorkItemRevision, CatalogProduct, CreateCatalogProduct,
+  UpdateCatalogProduct, InventoryProductProfile, CreateInventoryProductProfile,
+  UpdateInventoryProductProfile, BuildConfigurationSnapshot, CreateBuildConfigurationSnapshot,
+  ReconciliationDraft, ReconciliationCommit, CommitReconciliation
+} from "@benchledger/api-contract";
+import { ApplicationError, conflict, notFound } from "./errors.js";
+import type {
+  ApplicationPorts, ArtifactDownload, AuditInput, BeginUploadInput, EventBusEvent,
+  GapEvaluation, InventoryListOptions, Mutation, Page, ProjectListOptions, RequestContext,
+  ReservationDetails, StockMutation, UpdateInventoryInput, UploadSessionDetails, UsageInput,
+  CatalogProductListOptions, BuildConfigurationListOptions
+} from "./ports.js";
+import { z } from "zod";
+import { buildReconciliationDocument, reconciliationCommitId, reconciliationDraftId, type ReconciliationSourceSnapshot } from "./reconciliation.js";
+
+const CONFIRMED_EVIDENCE = new Set(["physically_counted", "commissioned"]);
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+const ALLOWED_BINARY_MEDIA = new Set([
+  "application/pdf", "image/jpeg", "image/png", "image/webp", "application/octet-stream",
+  "model/step", "model/stl", "application/vnd.ms-package.3dmanufacturing-3mf"
+]);
+const DISALLOWED_EXTENSIONS = new Set([".html", ".htm", ".svg", ".js", ".mjs", ".cjs", ".exe", ".sh", ".zip", ".tar", ".gz"]);
+const INVENTORY_SCAN_PAGE_SIZE = 200;
+
+/**
+ * The REST and MCP boundaries use the closed bomConstraintsSchema. The
+ * application service also reads older persisted BOM records, so it accepts
+ * their string maps here and keeps unsupported keys fail-closed in matching,
+ * reservation, and evaluation. This is an internal compatibility path only;
+ * new external requests are validated by the strict boundary schemas.
+ */
+const legacyCreateBomLineSchema = createBomLineSchema.extend({
+  constraints: z.record(z.string(), z.string()).default({})
+}).strict();
+const legacyUpdateBomLineSchema = updateBomLineSchema.extend({
+  constraints: z.record(z.string(), z.string()).optional()
+}).strict();
+
+/**
+ * Constraint keys are deliberately allow-listed at the API boundary. BOM
+ * records are persisted as a flexible string map for forward compatibility,
+ * but an unknown key must never silently broaden a match to every item.
+ */
+export const SUPPORTED_BOM_CONSTRAINT_KEYS: ReadonlySet<string> = new Set([
+  "kind", "manufacturer", "model", "sku", "tag", "nameIncludes"
+]);
+
+export function unsupportedBomConstraintKeys(constraints: Readonly<Record<string, string | undefined>> | undefined): readonly string[] {
+  if (constraints === undefined) return [];
+  return Object.keys(constraints).filter((key) => !SUPPORTED_BOM_CONSTRAINT_KEYS.has(key));
+}
+
+export function matchesBomConstraints(item: InventoryItem, constraints: Readonly<Record<string, string | undefined>> | undefined): boolean {
+  if (constraints === undefined) return true;
+  if (unsupportedBomConstraintKeys(constraints).length > 0) return false;
+  return Object.entries(constraints).every(([key, expected]) => {
+    if (typeof expected !== "string") return false;
+    if (key === "kind") return item.kind === expected;
+    if (key === "manufacturer") return item.manufacturer?.toLowerCase() === expected.toLowerCase();
+    if (key === "model") return item.model?.toLowerCase() === expected.toLowerCase();
+    if (key === "sku") return item.sku?.toLowerCase() === expected.toLowerCase();
+    if (key === "tag") return item.tags.some((tag) => tag.toLowerCase() === expected.toLowerCase());
+    if (key === "nameIncludes") return item.name.toLowerCase().includes(expected.toLowerCase());
+    return false;
+  });
+}
+
+type BomCandidateKind = "exact" | "confirmed_alternative" | "uncertain_alternative" | "constraint_match";
+
+interface BomCandidate {
+  readonly item: InventoryItem;
+  readonly kind: BomCandidateKind;
+}
+
+type LegacyBomLineInput = Omit<CreateBomLine, "constraints"> & {
+  /** @deprecated Accepted only for internal callers reading legacy records. */
+  constraints?: Readonly<Record<string, string>>;
+};
+
+function bomCandidateRelationship(kind: BomCandidateKind): BomGapCandidate["relationship"] {
+  return kind;
+}
+
+function bomCandidateAlternative(line: BomLine, itemId: string): BomLine["alternatives"][number] | undefined {
+  return line.alternatives.find((alternative) => alternative.itemId === itemId);
+}
+
+function bomCandidateCompatibility(line: BomLine, candidate: BomCandidate): BomGapCandidate["compatibility"] {
+  if (candidate.kind === "exact") return "confirmed";
+  if (candidate.kind === "constraint_match") return "unknown";
+  return bomCandidateAlternative(line, candidate.item.id)?.compatible ?? "unknown";
+}
+
+function bomCandidateReason(line: BomLine, candidate: BomCandidate): string {
+  const alternative = bomCandidateAlternative(line, candidate.item.id);
+  if (alternative?.reason !== undefined) return alternative.reason;
+  if (candidate.kind === "exact") return "Exact inventory item declared by the BOM.";
+  if (candidate.kind === "confirmed_alternative") return "Explicitly confirmed BOM alternative.";
+  if (candidate.kind === "uncertain_alternative") return "Alternative compatibility is not explicitly confirmed.";
+  return "Matched the BOM constraints; compatibility is not explicitly confirmed.";
+}
+
+/**
+ * Resolve a stock row to the relationship explicitly declared by the BOM.
+ * An item that merely happens to share a unit is not a candidate. Constraint
+ * matches are retained for inspection, but cannot be treated as supplied or
+ * reserved until a concrete inventory identity is attached to the line.
+ */
+function bomCandidateKind(line: BomLine, item: InventoryItem): BomCandidateKind | undefined {
+  if (line.itemId === item.id) return "exact";
+  const alternatives = line.alternatives.filter((alternative) => alternative.itemId === item.id);
+  if (alternatives.some((alternative) => alternative.compatible === "confirmed")) return "confirmed_alternative";
+  if (alternatives.length > 0) return "uncertain_alternative";
+  if (line.itemId === undefined && Object.keys(line.constraints ?? {}).length > 0) return "constraint_match";
+  return undefined;
+}
+
+function canSupplyBomCandidate(candidate: BomCandidate): boolean {
+  return candidate.kind === "exact" || candidate.kind === "confirmed_alternative";
+}
+
+function canReserveBomItem(line: BomLine, item: InventoryItem): boolean {
+  const kind = bomCandidateKind(line, item);
+  return kind === "exact" || kind === "confirmed_alternative";
+}
+
+function compareStableId(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/**
+ * BOM evaluation is an allocation report, so a line must have a stable place
+ * in the allocation order even when an adapter returns rows in a different
+ * order. Exact references take precedence over approved alternatives, which
+ * take precedence over inferred/constraint matches; IDs then provide the
+ * deterministic tie-breaker.
+ */
+function bomLineAllocationPriority(line: BomLine): number {
+  if (line.itemId !== undefined) return 0;
+  if (line.alternatives.some((alternative) => alternative.compatible === "confirmed")) return 1;
+  if (line.alternatives.length > 0) return 2;
+  if (Object.keys(line.constraints ?? {}).length > 0) return 3;
+  return 4;
+}
+
+function compareBomLinesForAllocation(left: BomLine, right: BomLine): number {
+  return bomLineAllocationPriority(left) - bomLineAllocationPriority(right) || compareStableId(left.id, right.id);
+}
+
+function compareBomCandidates(left: BomCandidate, right: BomCandidate): number {
+  const priority = (kind: BomCandidateKind): number => kind === "exact" ? 0 : kind === "confirmed_alternative" ? 1 : kind === "uncertain_alternative" ? 2 : 3;
+  return priority(left.kind) - priority(right.kind) || compareStableId(left.item.id, right.item.id);
+}
+
+/**
+ * Inventory is a shared pool, so BOM evaluation must never make an allocation
+ * decision from a truncated page. Follow the adapter's cursor until it says
+ * the scan is complete, while rejecting contradictory or non-progressing
+ * pagination rather than silently evaluating a partial snapshot.
+ */
+async function listAllInventory(inventory: ApplicationPorts["inventory"]): Promise<readonly InventoryItem[]> {
+  const values: InventoryItem[] = [];
+  const seenItemIds = new Set<string>();
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+  let expectedTotal: number | undefined;
+
+  for (;;) {
+    const current = await inventory.listItems(cursor === undefined
+      ? { limit: INVENTORY_SCAN_PAGE_SIZE }
+      : { limit: INVENTORY_SCAN_PAGE_SIZE, cursor });
+    if (current.total !== undefined) {
+      if (!Number.isSafeInteger(current.total) || current.total < 0) {
+        throw new ApplicationError("integrity_error", "Inventory pagination returned an invalid total");
+      }
+      if (expectedTotal === undefined) expectedTotal = current.total;
+      else if (current.total !== expectedTotal) throw new ApplicationError("integrity_error", "Inventory pagination returned inconsistent totals");
+    }
+    for (const item of current.data) {
+      if (seenItemIds.has(item.id)) throw new ApplicationError("integrity_error", "Inventory pagination returned a duplicate item");
+      seenItemIds.add(item.id);
+      values.push(item);
+    }
+    if (expectedTotal !== undefined && values.length > expectedTotal) {
+      throw new ApplicationError("integrity_error", "Inventory pagination returned more items than its total");
+    }
+
+    const nextCursor = current.nextCursor;
+    if (nextCursor === undefined) {
+      if (expectedTotal !== undefined && values.length !== expectedTotal) {
+        throw new ApplicationError("integrity_error", "Inventory pagination ended before its total was read");
+      }
+      // A full page without a total or continuation cursor is ambiguous: it
+      // may be a truncated adapter response. Fail closed instead of making a
+      // BOM recommendation from an unknown inventory suffix.
+      if (expectedTotal === undefined && current.data.length >= INVENTORY_SCAN_PAGE_SIZE) {
+        throw new ApplicationError("integrity_error", "Inventory pagination ended without a continuation cursor");
+      }
+      return values;
+    }
+    if (nextCursor.length === 0 || seenCursors.has(nextCursor) || nextCursor === cursor) {
+      throw new ApplicationError("integrity_error", "Inventory pagination did not make progress");
+    }
+    if (expectedTotal !== undefined && values.length >= expectedTotal) {
+      throw new ApplicationError("integrity_error", "Inventory pagination returned a cursor after its total was read");
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  }
+}
+
+interface BomLineAllocation {
+  readonly suppliedQuantity: number;
+  readonly inspectQuantity: number;
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function commandContext(ctx: RequestContext, scope: string, input: unknown): RequestContext {
+  if (ctx.fingerprint !== undefined) return ctx;
+  return { ...ctx, fingerprint: createHash("sha256").update(JSON.stringify(canonicalize({ scope, input }))).digest("hex") };
+}
+
+function safeFilename(filename: string): string {
+  const trimmed = filename.trim();
+  if (!trimmed || trimmed.length > 255 || trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("..") || /[\u0000-\u001f\u007f]/u.test(trimmed)) {
+    throw new ApplicationError("validation", "Filename must be a single safe relative name");
+  }
+  const dot = trimmed.lastIndexOf(".");
+  const extension = dot >= 0 ? trimmed.slice(dot).toLowerCase() : "";
+  if (DISALLOWED_EXTENSIONS.has(extension)) {
+    throw new ApplicationError("unsupported_media", "This file type is not accepted");
+  }
+  return trimmed;
+}
+
+function requireId(value: string, label: string): string {
+  const parsed = idSchema.safeParse(value);
+  if (!parsed.success) throw new ApplicationError("validation", `${label} is invalid`);
+  return parsed.data;
+}
+
+function catalogPort(ports: ApplicationPorts): NonNullable<ApplicationPorts["catalog"]> {
+  if (ports.catalog === undefined) throw new ApplicationError("integrity_error", "This runtime does not support the product catalog");
+  return ports.catalog;
+}
+
+function buildConfigurationPort(ports: ApplicationPorts): NonNullable<ApplicationPorts["buildConfigurations"]> {
+  if (ports.buildConfigurations === undefined) throw new ApplicationError("integrity_error", "This runtime does not support build configuration snapshots");
+  return ports.buildConfigurations;
+}
+
+function reconciliationPort(ports: ApplicationPorts): NonNullable<ApplicationPorts["reconciliations"]> {
+  if (ports.reconciliations === undefined) throw new ApplicationError("integrity_error", "This runtime does not support post-project reconciliation");
+  return ports.reconciliations;
+}
+
+function boundedLimit(value: number | undefined, fallback: number, label: string): number {
+  const limit = value ?? fallback;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) {
+    throw new ApplicationError("validation", `${label} must be an integer between 1 and 200`);
+  }
+  return limit;
+}
+
+function boundedCursor(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (value.length === 0 || value.length > 200 || !/^[A-Za-z0-9._~-]+$/.test(value)) throw new ApplicationError("validation", "cursor is invalid");
+  return value;
+}
+
+function catalogListOptions(query: Partial<CatalogProductListOptions> | undefined): CatalogProductListOptions {
+  const q = query?.q;
+  if (q !== undefined && (q.length > 200 || q.trim().length === 0)) {
+    throw new ApplicationError("validation", "q must be a non-empty search string of at most 200 characters");
+  }
+  const kind = query?.kind;
+  if (kind !== undefined && kind !== "filament" && kind !== "printer") {
+    throw new ApplicationError("validation", "kind must be filament or printer");
+  }
+  const cursor = boundedCursor(query?.cursor);
+  return {
+    ...(q === undefined ? {} : { q: q.trim() }),
+    ...(kind === undefined ? {} : { kind }),
+    limit: boundedLimit(query?.limit, 50, "limit"),
+    ...(cursor === undefined ? {} : { cursor })
+  };
+}
+
+function configurationListOptions(query: Partial<BuildConfigurationListOptions> | undefined): BuildConfigurationListOptions {
+  const cursor = boundedCursor(query?.cursor);
+  return {
+    limit: boundedLimit(query?.limit, 50, "limit"),
+    ...(cursor === undefined ? {} : { cursor })
+  };
+}
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((entry) => canonicalize(entry));
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return Object.fromEntries(Object.keys(record).filter((key) => record[key] !== undefined).sort().map((key) => [key, canonicalize(record[key])]));
+  }
+  return value;
+}
+
+function snapshotHash(snapshot: Omit<BuildConfigurationSnapshot, "contentSha256">): string {
+  const {
+    id: _id,
+    createdAt: _createdAt,
+    projectRevisionId: _projectRevisionId,
+    contentSha256: _contentSha256,
+    supersedesSnapshotId: _supersedesSnapshotId,
+    capturedAt: _capturedAt,
+    createdBy: _createdBy,
+    ...content
+  } = snapshot as Partial<BuildConfigurationSnapshot>;
+  return createHash("sha256").update(JSON.stringify(canonicalize(content))).digest("hex");
+}
+
+type SnapshotSelection = BuildConfigurationSnapshot["filamentSelections"][number];
+
+function productForSnapshot(product: CatalogProduct, item: InventoryItem, profile: InventoryProductProfile | null): Record<string, unknown> {
+  if (product.kind === "printer") {
+    return {
+      itemId: item.id,
+      catalogProductId: product.id,
+      ...(profile === null ? { linkState: "reported" as const } : { profileId: profile.id, linkState: profile.linkState }),
+      name: item.name,
+      manufacturer: product.manufacturer,
+      exactModel: product.exactModel,
+      ...(product.exactVariant === undefined ? {} : { exactVariant: product.exactVariant }),
+      technology: product.technology,
+      buildVolumeMm: product.buildVolumeMm
+    };
+  }
+  return {
+    itemId: item.id,
+    catalogProductId: product.id,
+    ...(profile === null ? { linkState: "reported" as const } : { profileId: profile.id, linkState: profile.linkState }),
+    ...(product.productName === undefined ? {} : { name: product.productName }),
+    manufacturer: product.manufacturer,
+    ...(product.sku === undefined ? {} : { sku: product.sku }),
+    ...(product.materialFamily === undefined ? {} : { materialFamily: product.materialFamily }),
+    ...(product.materialSubtype === undefined ? {} : { materialSubtype: product.materialSubtype }),
+    colourName: product.colourName,
+    ...(product.colourCode === undefined ? {} : { colourCode: product.colourCode }),
+    ...(profile?.profileType === "filament_spool" && profile.details.lot === undefined ? {} : profile?.profileType === "filament_spool" ? { lot: profile.details.lot } : {}),
+    ...(profile?.profileType === "filament_spool" && profile.details.batch === undefined ? {} : profile?.profileType === "filament_spool" ? { batch: profile.details.batch } : {}),
+    diameterMm: product.diameterMm,
+    nominalNetMassG: product.nominalNetMassG,
+    ...(product.nominalLengthM === undefined ? {} : { nominalLengthM: product.nominalLengthM }),
+    lengthBasis: product.lengthBasis,
+    ...(product.densityGcm3 === undefined ? {} : { densityGcm3: product.densityGcm3 })
+  };
+}
+
+async function linkedProfile(
+  catalog: NonNullable<ApplicationPorts["catalog"]>,
+  itemId: string,
+  expectedProfileId: string | undefined,
+  productId: string,
+  kind: "filament" | "printer",
+  unknowns: string[]
+): Promise<InventoryProductProfile | null> {
+  const profile = await catalog.getInventoryProductProfile(itemId);
+  if (expectedProfileId !== undefined && profile === null) throw notFound("Inventory product profile", expectedProfileId);
+  if (expectedProfileId !== undefined && profile?.id !== expectedProfileId) {
+    throw new ApplicationError("validation", `Profile '${expectedProfileId}' is not linked to inventory item '${itemId}'`);
+  }
+  if (profile === null) {
+    unknowns.push(`No ${kind} product profile is recorded for inventory item '${itemId}'`);
+    return null;
+  }
+  if (profile.itemId !== itemId || profile.catalogProductId !== productId) {
+    throw new ApplicationError("validation", `Product profile '${profile.id}' does not match the selected product or inventory item`);
+  }
+  if (profile.profileType !== (kind === "filament" ? "filament_spool" : "printer_asset")) {
+    throw new ApplicationError("validation", `Product profile '${profile.id}' has the wrong profile type`);
+  }
+  if (profile.linkState !== "confirmed") {
+    unknowns.push(`Product profile '${profile.id}' has non-confirmed link state '${profile.linkState}'`);
+  }
+  return profile;
+}
+
+export class ApplicationService {
+  constructor(private readonly ports: ApplicationPorts, private readonly version = "0.1.0") {}
+
+  getVersion(): string {
+    return this.version;
+  }
+
+  private async reconciliationSource(revisionId: string): Promise<ReconciliationSourceSnapshot> {
+    const revision = await this.ports.projects.getProjectRevision(revisionId);
+    if (revision === null) throw notFound("Project revision", revisionId);
+    const lines = await this.ports.projects.listBomLines(revisionId);
+    const rawReservations = await this.ports.projects.listReservations(revisionId);
+    const itemIds = [...new Set(rawReservations.map((reservation) => reservation.itemId))].sort((left, right) => left.localeCompare(right));
+    const items: InventoryItem[] = [];
+    for (const itemId of itemIds) {
+      const item = await this.ports.inventory.getItem(itemId);
+      if (item === null) throw notFound("Inventory item", itemId);
+      items.push(item);
+    }
+    const itemById = new Map(items.map((item) => [item.id, item]));
+    const reservations = rawReservations.map((reservation) => {
+      const item = itemById.get(reservation.itemId);
+      if (item === undefined) throw new ApplicationError("integrity_error", `Reservation ${reservation.id} references missing item ${reservation.itemId}`);
+      return {
+        id: reservation.id,
+        lineId: reservation.lineId,
+        itemId: reservation.itemId,
+        quantity: reservation.quantity,
+        status: reservation.status,
+        unit: item.unit,
+        version: reservation.version
+      };
+    });
+    return { projectId: revision.projectId, projectRevisionId: revisionId, lines, reservations, items };
+  }
+
+  async listCatalogProducts(query: Partial<CatalogProductListOptions> = {}): Promise<Page<CatalogProduct>> {
+    const options = catalogListOptions(query);
+    return this.ports.unitOfWork.exclusive(() => catalogPort(this.ports).listProducts(options));
+  }
+
+  async getCatalogProduct(id: string): Promise<CatalogProduct> {
+    const productId = requireId(id, "catalog product id");
+    return this.ports.unitOfWork.exclusive(async () => {
+      const product = await catalogPort(this.ports).getProduct(productId);
+      if (product === null) throw notFound("Catalog product", productId);
+      return catalogProductSchema.parse(product);
+    });
+  }
+
+  async createCatalogProduct(input: CreateCatalogProduct, ctx: RequestContext): Promise<Mutation<CatalogProduct>> {
+    const parsed = createCatalogProductSchema.parse(input);
+    return this.mutate(ctx, "catalog.product.create", "catalog_product", "pending", async () => {
+      const product = catalogProductSchema.parse(await catalogPort(this.ports).createProduct(parsed, ctx));
+      return { value: product, entityId: product.id, version: product.version };
+    });
+  }
+
+  async updateCatalogProduct(id: string, input: unknown, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<CatalogProduct>> {
+    const productId = requireId(id, "catalog product id");
+    const parsed = updateCatalogProductSchema.parse(input) as UpdateCatalogProduct;
+    return this.mutate(ctx, "catalog.product.update", "catalog_product", productId, async () => {
+      const product = catalogProductSchema.parse(await catalogPort(this.ports).updateProduct(productId, parsed, expectedVersion, ctx));
+      return { value: product, entityId: product.id, version: product.version };
+    });
+  }
+
+  async getInventoryProductProfile(itemId: string): Promise<InventoryProductProfile> {
+    const parsedItemId = requireId(itemId, "inventory item id");
+    return this.ports.unitOfWork.exclusive(async () => {
+      const profile = await catalogPort(this.ports).getInventoryProductProfile(parsedItemId);
+      if (profile === null) throw notFound("Inventory product profile", parsedItemId);
+      return inventoryProductProfileSchema.parse(profile);
+    });
+  }
+
+  async putInventoryProductProfile(itemId: string, input: unknown, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<InventoryProductProfile>> {
+    const parsedItemId = requireId(itemId, "inventory item id");
+    const current = await this.ports.unitOfWork.exclusive(() => catalogPort(this.ports).getInventoryProductProfile(parsedItemId));
+    const inventoryItem = await this.ports.inventory.getItem(parsedItemId);
+    if (inventoryItem === null) throw notFound("Inventory item", parsedItemId);
+    if (inventoryItem.kind !== "printer" && inventoryItem.kind !== "filament") {
+      throw new ApplicationError("validation", "Only printer and filament inventory items can have product profiles");
+    }
+    const raw = input !== null && typeof input === "object" ? { ...(input as Record<string, unknown>), itemId: parsedItemId } : input;
+    const parsed = current === null
+      ? createInventoryProductProfileSchema.parse(raw)
+      : updateInventoryProductProfileSchema.parse(raw);
+    const profileProductId = "catalogProductId" in parsed && parsed.catalogProductId !== undefined
+      ? parsed.catalogProductId
+      : current?.catalogProductId;
+    if (profileProductId === undefined) throw new ApplicationError("validation", "catalogProductId is required");
+    const product = await catalogPort(this.ports).getProduct(profileProductId);
+    if (product === null) throw notFound("Catalog product", profileProductId);
+    if (product.kind !== inventoryItem.kind) {
+      throw new ApplicationError("validation", `Catalog product kind '${product.kind}' does not match inventory item kind '${inventoryItem.kind}'`);
+    }
+    if ("itemId" in parsed && parsed.itemId !== undefined && parsed.itemId !== parsedItemId) {
+      throw new ApplicationError("validation", "Profile itemId must match the inventory path");
+    }
+    if (current !== null && "profileType" in parsed && parsed.profileType !== undefined && parsed.profileType !== current.profileType) {
+      throw new ApplicationError("validation", "Profile type cannot change after creation");
+    }
+    const normalized = {
+      ...parsed,
+      itemId: parsedItemId,
+      catalogProductId: profileProductId,
+      profileType: "profileType" in parsed && parsed.profileType !== undefined
+        ? parsed.profileType
+        : current?.profileType ?? (inventoryItem.kind === "filament" ? "filament_spool" : "printer_asset")
+    } as CreateInventoryProductProfile | UpdateInventoryProductProfile;
+    return this.mutate(ctx, "inventory.product_profile.put", "inventory_product_profile", current?.id ?? parsedItemId, async () => {
+      const profile = inventoryProductProfileSchema.parse(await catalogPort(this.ports).putInventoryProductProfile(parsedItemId, normalized, expectedVersion, ctx));
+      return { value: profile, entityId: profile.id, version: profile.version };
+    });
+  }
+
+  async listBuildConfigurations(revisionId: string, query: Partial<BuildConfigurationListOptions> = {}): Promise<Page<BuildConfigurationSnapshot>> {
+    const parsedRevisionId = requireId(revisionId, "project revision id");
+    const options = configurationListOptions(query);
+    await this.getProjectRevision(parsedRevisionId);
+    return this.ports.unitOfWork.exclusive(() => buildConfigurationPort(this.ports).listBuildConfigurations(parsedRevisionId, options));
+  }
+
+  async getLatestBuildConfiguration(revisionId: string): Promise<BuildConfigurationSnapshot | null> {
+    const parsedRevisionId = requireId(revisionId, "project revision id");
+    await this.getProjectRevision(parsedRevisionId);
+    return this.ports.unitOfWork.exclusive(async () => {
+      const configuration = await buildConfigurationPort(this.ports).getLatestBuildConfiguration(parsedRevisionId);
+      return configuration === null ? null : buildConfigurationSnapshotSchema.parse(configuration);
+    });
+  }
+
+  async getBuildConfiguration(id: string): Promise<BuildConfigurationSnapshot> {
+    const configurationId = requireId(id, "build configuration id");
+    return this.ports.unitOfWork.exclusive(async () => {
+      const configuration = await buildConfigurationPort(this.ports).getBuildConfiguration(configurationId);
+      if (configuration === null) throw notFound("Build configuration", configurationId);
+      return buildConfigurationSnapshotSchema.parse(configuration);
+    });
+  }
+
+  async createBuildConfiguration(revisionId: string, input: unknown, ctx: RequestContext): Promise<Mutation<BuildConfigurationSnapshot>> {
+    const parsedRevisionId = requireId(revisionId, "project revision id");
+    const revision = await this.getProjectRevision(parsedRevisionId);
+    if (input === null || typeof input !== "object") throw new ApplicationError("validation", "Build configuration body must be an object");
+    const raw = input as Record<string, unknown>;
+    if (raw.projectRevisionId !== undefined && raw.projectRevisionId !== parsedRevisionId) {
+      throw new ApplicationError("validation", "projectRevisionId must match the revision path");
+    }
+    const supplied: Record<string, unknown> = { ...raw, projectRevisionId: parsedRevisionId };
+    delete supplied.contentSha256;
+    delete supplied.createdAt;
+    const parsed = createBuildConfigurationSnapshotSchema.parse(supplied);
+    const unknowns = [...parsed.explicitUnknowns];
+    const catalog = catalogPort(this.ports);
+    const printerItem = await this.ports.inventory.getItem(parsed.printerItemSnapshot.itemId);
+    if (printerItem === null) throw notFound("Inventory item", parsed.printerItemSnapshot.itemId);
+    if (printerItem.kind !== "printer") throw new ApplicationError("validation", "Build configurations require a printer inventory item");
+    const printerProduct = await catalog.getProduct(parsed.printerItemSnapshot.catalogProductId);
+    if (printerProduct === null) throw notFound("Catalog product", parsed.printerItemSnapshot.catalogProductId);
+    if (printerProduct.kind !== "printer") throw new ApplicationError("validation", "Printer inventory item must link to a printer catalog product");
+    const printerProfile = await linkedProfile(catalog, printerItem.id, parsed.printerItemSnapshot.profileId, printerProduct.id, "printer", unknowns);
+    const printerItemSnapshot = productForSnapshot(printerProduct, printerItem, printerProfile) as BuildConfigurationSnapshot["printerItemSnapshot"];
+
+    const filamentSelections: SnapshotSelection[] = [];
+    for (const selection of parsed.filamentSelections) {
+      const item = await this.ports.inventory.getItem(selection.itemId);
+      if (item === null) throw notFound("Inventory item", selection.itemId);
+      if (item.kind !== "filament") throw new ApplicationError("validation", `Inventory item '${item.id}' is not a filament`);
+      const product = await catalog.getProduct(selection.catalogProductId);
+      if (product === null) throw notFound("Catalog product", selection.catalogProductId);
+      if (product.kind !== "filament") throw new ApplicationError("validation", `Catalog product '${product.id}' is not a filament`);
+      const profile = await linkedProfile(catalog, item.id, selection.profileId, product.id, "filament", unknowns);
+      filamentSelections.push({
+        ...productForSnapshot(product, item, profile),
+        ...(selection.role === undefined ? {} : { role: selection.role }),
+        ...(selection.quantity === undefined ? {} : { quantity: selection.quantity }),
+      } as SnapshotSelection);
+    }
+
+    const snapshotWithoutHash = {
+      id: parsed.id ?? `build-config-${randomUUID()}`,
+      projectRevisionId: revision.id,
+      printerItemSnapshot,
+      filamentSelections,
+      activeHotend: parsed.activeHotend,
+      nozzle: parsed.nozzle,
+      plate: parsed.plate,
+      accessories: parsed.accessories,
+      firmware: parsed.firmware,
+      slicer: parsed.slicer,
+      profile: parsed.profile,
+      calibration: parsed.calibration,
+      explicitUnknowns: [...new Set(unknowns)].sort(),
+      ...(parsed.supersedesSnapshotId === undefined ? {} : { supersedesSnapshotId: parsed.supersedesSnapshotId }),
+      createdAt: nowIso()
+    } satisfies Omit<BuildConfigurationSnapshot, "contentSha256">;
+    if (snapshotWithoutHash.supersedesSnapshotId !== undefined) {
+      const prior = await buildConfigurationPort(this.ports).getBuildConfiguration(snapshotWithoutHash.supersedesSnapshotId);
+      if (prior === null) throw notFound("Build configuration", snapshotWithoutHash.supersedesSnapshotId);
+      if (prior.projectRevisionId !== revision.id) throw new ApplicationError("validation", "A superseded snapshot must belong to the same project revision");
+    }
+    const snapshot = buildConfigurationSnapshotSchema.parse({ ...snapshotWithoutHash, contentSha256: snapshotHash(snapshotWithoutHash) });
+    return this.mutate(ctx, "project.build_configuration.create", "build_configuration_snapshot", snapshot.id, async () => {
+      const created = buildConfigurationSnapshotSchema.parse(await buildConfigurationPort(this.ports).createBuildConfiguration(snapshot, ctx));
+      return { value: created, entityId: created.id };
+    });
+  }
+
+  async listInventory(query: InventoryListQuery): Promise<Page<InventoryItem>> {
+    return this.ports.unitOfWork.exclusive(() => this.ports.inventory.listItems(inventoryListQuerySchema.parse(query) as InventoryListOptions));
+  }
+
+  async getInventoryItem(id: string): Promise<InventoryItem> {
+    return this.ports.unitOfWork.exclusive(async () => {
+      const item = await this.ports.inventory.getItem(requireId(id, "item id"));
+      if (!item) throw notFound("Inventory item", id);
+      return item;
+    });
+  }
+
+  async createInventoryItem(input: CreateInventoryItem, ctx: RequestContext): Promise<Mutation<InventoryItem>> {
+    const parsed = createInventoryItemSchema.parse(input);
+    return this.mutate(ctx, "inventory.item.create", "inventory_item", parsed.id ?? "pending", async () => {
+      const item = await this.ports.inventory.createItem(parsed, ctx);
+      return { value: item, entityId: item.id, version: item.version };
+    });
+  }
+
+  /**
+   * Create an exact inventory item and its physical product profile as one
+   * audited command. The profile is deliberately reference-only at the
+   * boundary; its itemId is injected only after the inventory adapter returns
+   * the durable item identity. Adapters provide narrowly-scoped compensation
+   * hooks so a non-transactional boundary cannot leave an orphan item when
+   * the profile write fails.
+   */
+  async createInventoryWithProductProfile(input: unknown, ctx: RequestContext): Promise<Mutation<{ readonly item: InventoryItem; readonly profile: InventoryProductProfile }>> {
+    const parsed = createInventoryWithProductProfileSchema.parse(input);
+    const parsedItem = parsed.item;
+    const parsedProfile = parsed.profile;
+    const expectedProfileKind = parsedProfile.profileType === "filament_spool" ? "filament" : "printer";
+    if (parsedItem.kind !== expectedProfileKind) {
+      throw new ApplicationError("validation", `Profile type '${parsedProfile.profileType}' does not match inventory item kind '${parsedItem.kind}'`);
+    }
+    const catalog = catalogPort(this.ports);
+    const product = await catalog.getProduct(parsedProfile.catalogProductId);
+    if (product === null) throw notFound("Catalog product", parsedProfile.catalogProductId);
+    if (product.kind !== parsedItem.kind) {
+      throw new ApplicationError("validation", `Catalog product kind '${product.kind}' does not match inventory item kind '${parsedItem.kind}'`);
+    }
+    if (this.ports.inventory.rollbackCreatedItem === undefined || catalog.rollbackCreatedProfile === undefined) {
+      throw new ApplicationError("integrity_error", "The inventory/profile adapters cannot compensate a failed compound create");
+    }
+
+    // A direct application caller may omit a fingerprint; derive one from the
+    // parsed, canonical command so idempotency-key reuse remains safe.
+    const commandContext = ctx.fingerprint === undefined
+      ? { ...ctx, fingerprint: createHash("sha256").update(JSON.stringify({ item: parsedItem, profile: parsedProfile })).digest("hex") }
+      : ctx;
+    return this.mutate(commandContext, "inventory.item_with_product_profile.create", "inventory_item", parsedItem.id ?? "pending", async () => {
+      let createdItem: InventoryItem | undefined;
+      let createdProfile: InventoryProductProfile | undefined;
+      const compensate = async (): Promise<void> => {
+        if (createdProfile !== undefined) await catalog.rollbackCreatedProfile!(createdProfile.id, createdProfile.itemId);
+        if (createdItem !== undefined) await this.ports.inventory.rollbackCreatedItem!(createdItem.id);
+      };
+      try {
+        createdItem = await this.ports.inventory.createItem(parsedItem, commandContext);
+        const profile = await catalog.putInventoryProductProfile(createdItem.id, { ...parsedProfile, itemId: createdItem.id }, undefined, commandContext);
+        createdProfile = inventoryProductProfileSchema.parse(profile);
+        return {
+          value: { item: inventoryItemSchema.parse(createdItem), profile: createdProfile },
+          entityId: createdItem.id,
+          version: createdItem.version,
+          compensate
+        };
+      } catch (error: unknown) {
+        try {
+          await compensate();
+        } catch {
+          throw new ApplicationError("integrity_error", "The compound inventory/profile create failed and could not be compensated");
+        }
+        throw error;
+      }
+    });
+  }
+
+  async updateInventoryItem(id: string, input: unknown, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<InventoryItem>> {
+    const itemId = requireId(id, "item id");
+    const parsed = updateInventoryItemSchema.parse(input) as UpdateInventoryInput;
+    return this.mutate(ctx, "inventory.item.update", "inventory_item", itemId, async () => {
+      const item = await this.ports.inventory.updateItem(itemId, parsed, expectedVersion, ctx);
+      return { value: item, entityId: item.id, version: item.version };
+    });
+  }
+
+  async recordStockEvent(input: StockEventInput, ctx: RequestContext): Promise<Mutation<StockMutation>> {
+    const parsed = stockEventInputSchema.parse(input);
+    if (parsed.type === "count") return this.recordPhysicalCount(parsed.itemId, parsed.quantity, ctx, parsed.unit, parsed.note);
+    return this.mutate(ctx, `inventory.stock.${parsed.type}`, "inventory_item", parsed.itemId, async () => {
+      const mutation = await this.ports.inventory.recordStockEvent(parsed, ctx);
+      return { value: mutation, entityId: mutation.item.id, version: mutation.item.version };
+    });
+  }
+
+  async recordPhysicalCount(itemId: string, quantity: number, ctx: RequestContext, unit?: InventoryItem["unit"], note?: string): Promise<Mutation<StockMutation>> {
+    const parsedId = requireId(itemId, "item id");
+    if (!Number.isFinite(quantity) || quantity < 0) throw new ApplicationError("validation", "Physical count must be zero or greater");
+    return this.mutate(ctx, "inventory.stock.count", "inventory_item", parsedId, async () => {
+      const current = await this.ports.inventory.getItem(parsedId);
+      if (!current) throw notFound("Inventory item", parsedId);
+      if (unit !== undefined && unit !== current.unit) throw new ApplicationError("validation", `Unit mismatch: item uses ${current.unit}, count uses ${unit}`);
+      const value = this.ports.inventory.recordPhysicalCount
+        ? await this.ports.inventory.recordPhysicalCount(parsedId, quantity, ctx, note)
+        : await this.recordPhysicalCountFallback(parsedId, quantity, ctx, note);
+      return { value, entityId: value.item.id, version: value.item.version };
+    });
+  }
+
+  private async recordPhysicalCountFallback(itemId: string, quantity: number, ctx: RequestContext, note?: string): Promise<StockMutation> {
+    const current = await this.ports.inventory.getItem(itemId);
+    if (!current) throw notFound("Inventory item", itemId);
+    const stock = await this.ports.inventory.recordStockEvent({ itemId, type: "count", quantity, unit: current.unit, ...(note === undefined ? {} : { note }) }, ctx);
+    const updated = await this.ports.inventory.updateItem(itemId, { quantity, evidence: { ...current.evidence, state: "physically_counted", observedAt: nowIso() } }, stock.item.version, ctx);
+    return { event: stock.event, item: updated };
+  }
+
+  async listStockEvents(itemId: string, limit = 50, cursor?: string) {
+    return this.ports.unitOfWork.exclusive(() => this.ports.inventory.listStockEvents(requireId(itemId, "item id"), Math.min(Math.max(limit, 1), 200), cursor));
+  }
+
+  async listProjects(query: ProjectListOptions): Promise<Page<Project>> {
+    return this.ports.unitOfWork.exclusive(() => this.ports.projects.listProjects(query));
+  }
+
+  async getProject(id: string): Promise<Project> {
+    return this.ports.unitOfWork.exclusive(async () => {
+      const project = await this.ports.projects.getProject(requireId(id, "project id"));
+      if (!project) throw notFound("Project", id);
+      return project;
+    });
+  }
+
+  async createProject(input: CreateProject, ctx: RequestContext): Promise<Mutation<Project>> {
+    const parsed = createProjectSchema.parse(input);
+    return this.mutate(ctx, "project.create", "project", parsed.id ?? "pending", async () => {
+      const project = await this.ports.projects.createProject(parsed, ctx);
+      return { value: project, entityId: project.id, version: project.version };
+    });
+  }
+
+  async updateProject(id: string, input: unknown, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<Project>> {
+    const projectId = requireId(id, "project id");
+    const parsed = updateProjectSchema.parse(input) as Partial<CreateProject>;
+    return this.mutate(ctx, "project.update", "project", projectId, async () => {
+      const project = await this.ports.projects.updateProject(projectId, parsed, expectedVersion, ctx);
+      return { value: project, entityId: project.id, version: project.version };
+    });
+  }
+
+  async listWorkItems(projectId: string): Promise<readonly WorkItem[]> {
+    return this.ports.unitOfWork.exclusive(() => this.ports.projects.listWorkItems(requireId(projectId, "project id")));
+  }
+
+  async getWorkItem(id: string): Promise<WorkItem> {
+    return this.ports.unitOfWork.exclusive(async () => {
+      const workItem = await this.ports.projects.getWorkItem(requireId(id, "work item id"));
+      if (!workItem) throw notFound("Work item", id);
+      return workItem;
+    });
+  }
+
+  async createWorkItem(projectId: string, input: CreateWorkItem, ctx: RequestContext): Promise<Mutation<WorkItem>> {
+    const parsed = createWorkItemSchema.parse(input);
+    const parentId = requireId(projectId, "project id");
+    return this.mutate(ctx, "project.work_item.create", "work_item", parsed.id ?? "pending", async () => {
+      const item = await this.ports.projects.createWorkItem(parentId, parsed, ctx);
+      return { value: item, entityId: item.id, version: item.version };
+    });
+  }
+
+  async createProjectRevision(projectId: string, input: CreateProjectRevision, ctx: RequestContext): Promise<Mutation<ProjectRevision>> {
+    const parsed = createProjectRevisionSchema.parse(input);
+    const parentId = requireId(projectId, "project id");
+    return this.mutate(ctx, "project.revision.create", "project_revision", parsed.id ?? "pending", async () => {
+      const revision = await this.ports.projects.createProjectRevision(parentId, parsed, ctx);
+      return { value: revision, entityId: revision.id, version: revision.version };
+    });
+  }
+
+  async createProjectWithInitialRevision(input: CreateProjectWithInitialRevision, ctx: RequestContext): Promise<Mutation<ProjectWithInitialRevision>> {
+    const parsed = createProjectWithInitialRevisionSchema.parse(input);
+    const createAtomic = this.ports.projects.createProjectWithInitialRevision;
+    if (createAtomic === undefined) throw new ApplicationError("integrity_error", "This project adapter does not support atomic project creation");
+    return this.mutate(ctx, "project.create_with_initial_revision", "project", parsed.project.id ?? "pending", async () => {
+      const created = await createAtomic.call(this.ports.projects, parsed, ctx);
+      return { value: created, entityId: created.project.id, version: created.project.version };
+    });
+  }
+
+  async getProjectRevision(id: string): Promise<ProjectRevision> {
+    return this.ports.unitOfWork.exclusive(async () => {
+      const revision = await this.ports.projects.getProjectRevision(requireId(id, "revision id"));
+      if (!revision) throw notFound("Project revision", id);
+      return revision;
+    });
+  }
+
+  async createWorkItemRevision(workItemId: string, input: CreateWorkItemRevision, ctx: RequestContext): Promise<Mutation<WorkItemRevision>> {
+    const parsed = createWorkItemRevisionSchema.parse(input);
+    const parentId = requireId(workItemId, "work item id");
+    return this.mutate(ctx, "project.work_item_revision.create", "work_item_revision", parsed.id ?? "pending", async () => {
+      const revision = await this.ports.projects.createWorkItemRevision(parentId, parsed, ctx);
+      return { value: revision, entityId: revision.id, version: revision.version };
+    });
+  }
+
+  async getWorkItemRevision(id: string): Promise<WorkItemRevision> {
+    return this.ports.unitOfWork.exclusive(async () => {
+      const revision = await this.ports.projects.getWorkItemRevision(requireId(id, "work item revision id"));
+      if (!revision) throw notFound("Work item revision", id);
+      return revision;
+    });
+  }
+
+  async listBomLines(revisionId: string): Promise<readonly BomLine[]> {
+    return this.ports.unitOfWork.exclusive(() => this.ports.projects.listBomLines(requireId(revisionId, "revision id")));
+  }
+
+  async getBomLine(id: string): Promise<BomLine> {
+    return this.ports.unitOfWork.exclusive(async () => {
+      const line = await this.ports.projects.getBomLine(requireId(id, "BOM line id"));
+      if (!line) throw notFound("BOM line", id);
+      return line;
+    });
+  }
+
+  async createBomLine(revisionId: string, input: CreateBomLine | LegacyBomLineInput, ctx: RequestContext): Promise<Mutation<BomLine>> {
+    const parsed = legacyCreateBomLineSchema.parse(input) as CreateBomLine;
+    const parentId = requireId(revisionId, "revision id");
+    return this.mutate(ctx, "project.bom_line.create", "bom_line", parsed.id ?? "pending", async () => {
+      const line = await this.ports.projects.createBomLine(parentId, parsed, ctx);
+      return { value: line, entityId: line.id, version: line.version };
+    });
+  }
+
+  async updateBomLine(id: string, input: unknown, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<BomLine>> {
+    const lineId = requireId(id, "BOM line id");
+    const parsed = legacyUpdateBomLineSchema.parse(input) as Partial<CreateBomLine>;
+    return this.mutate(ctx, "project.bom_line.update", "bom_line", lineId, async () => {
+      const line = await this.ports.projects.updateBomLine(lineId, parsed, expectedVersion, ctx);
+      return { value: line, entityId: line.id, version: line.version };
+    });
+  }
+
+  async retireBomLine(id: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<BomLine>> {
+    const lineId = requireId(id, "BOM line id");
+    return this.mutate(ctx, "project.bom_line.retire", "bom_line", lineId, async () => {
+      const line = await this.ports.projects.retireBomLine(lineId, expectedVersion, ctx);
+      return { value: line, entityId: line.id, version: line.version };
+    });
+  }
+
+  async evaluateBomGaps(revisionId: string): Promise<GapEvaluation> {
+    return this.ports.unitOfWork.exclusive(async () => {
+      const id = requireId(revisionId, "revision id");
+      const lines = await this.ports.projects.listBomLines(id);
+      const inventory = { data: await listAllInventory(this.ports.inventory) };
+      const reservations = await this.ports.projects.listReservations(id);
+      const ownedReservations = new Map<string, number>();
+      const reservedByItem = new Map<string, number>();
+      for (const reservation of reservations) {
+        if (reservation.status !== "active") continue;
+        const key = `${reservation.lineId}\u0000${reservation.itemId}`;
+        ownedReservations.set(key, (ownedReservations.get(key) ?? 0) + reservation.quantity);
+        reservedByItem.set(reservation.itemId, (reservedByItem.get(reservation.itemId) ?? 0) + reservation.quantity);
+      }
+      const active = inventory.data;
+      const candidatesByLine = new Map<BomLine, readonly BomCandidate[]>();
+      for (const line of lines) {
+        const candidates = active
+          .filter((item) => item.unit === line.unit && matchesBomConstraints(item, line.constraints))
+          .flatMap((item): readonly BomCandidate[] => {
+            const kind = bomCandidateKind(line, item);
+            return kind === undefined ? [] : [{ item, kind }];
+          });
+        candidatesByLine.set(line, candidates);
+      }
+
+      // `availableQuantity` is the unreserved quantity across all projects.
+      // Keep three local ledgers so a candidate can be allocated at most once
+      // across this evaluation while this revision's own reservations remain
+      // available to their declaring line. The physical and reservation caps
+      // also make a malformed adapter response fail closed rather than count
+      // the same item twice.
+      const remainingPhysical = new Map(active.map((item) => [item.id, Math.max(0, item.quantity)]));
+      const remainingFree = new Map(active.map((item) => [item.id, Math.min(Math.max(0, item.quantity), Math.max(0, item.availableQuantity))]));
+      const remainingReserved = new Map(active.map((item) => [item.id, Math.min(Math.max(0, item.quantity), Math.max(0, reservedByItem.get(item.id) ?? 0))]));
+      const allocations = new Map<BomLine, BomLineAllocation>();
+      const candidateFacts = new Map<string, BomGapCandidate>();
+      const allocationLines = [...lines].sort(compareBomLinesForAllocation);
+
+      const candidateCapacity = (line: BomLine, candidate: BomCandidate, mode: "confirmed" | "inspect"): number => {
+        const itemId = candidate.item.id;
+        const physical = remainingPhysical.get(itemId) ?? 0;
+        if (mode === "inspect") return physical;
+        const free = remainingFree.get(itemId) ?? 0;
+        const reserved = remainingReserved.get(itemId) ?? 0;
+        const own = Math.min(reserved, Math.max(0, ownedReservations.get(`${line.id}\u0000${itemId}`) ?? 0));
+        return Math.min(physical, free + own);
+      };
+
+      const recordCandidateFacts = (line: BomLine, candidates: readonly BomCandidate[], mode: "confirmed" | "inspect"): void => {
+        for (const candidate of candidates) {
+          const factKey = `${line.id}\u0000${candidate.item.id}`;
+          const prior = candidateFacts.get(factKey);
+          candidateFacts.set(factKey, {
+            itemId: candidate.item.id,
+            relationship: bomCandidateRelationship(candidate.kind),
+            compatibility: bomCandidateCompatibility(line, candidate),
+            availableQuantity: Math.max(prior?.availableQuantity ?? 0, candidateCapacity(line, candidate, mode)),
+            suppliedQuantity: prior?.suppliedQuantity ?? 0,
+            inspectQuantity: prior?.inspectQuantity ?? 0,
+            reason: bomCandidateReason(line, candidate),
+          });
+        }
+      };
+
+      const allocate = (line: BomLine, candidates: readonly BomCandidate[], requested: number, mode: "confirmed" | "inspect"): number => {
+        let remaining = requested;
+        for (const candidate of [...candidates].sort(compareBomCandidates)) {
+          if (remaining <= 0) break;
+          const itemId = candidate.item.id;
+          const physical = remainingPhysical.get(itemId) ?? 0;
+          const capacity = candidateCapacity(line, candidate, mode);
+          const free = mode === "confirmed" ? remainingFree.get(itemId) ?? 0 : 0;
+          const own = mode === "confirmed"
+            ? Math.min(remainingReserved.get(itemId) ?? 0, Math.max(0, ownedReservations.get(`${line.id}\u0000${itemId}`) ?? 0))
+            : 0;
+          const factKey = `${line.id}\u0000${itemId}`;
+          const prior = candidateFacts.get(factKey);
+          const taken = Math.min(remaining, capacity);
+          candidateFacts.set(factKey, {
+            itemId,
+            relationship: bomCandidateRelationship(candidate.kind),
+            compatibility: bomCandidateCompatibility(line, candidate),
+            availableQuantity: Math.max(prior?.availableQuantity ?? 0, capacity),
+            suppliedQuantity: (prior?.suppliedQuantity ?? 0) + (mode === "confirmed" ? taken : 0),
+            inspectQuantity: (prior?.inspectQuantity ?? 0) + (mode === "inspect" ? taken : 0),
+            reason: bomCandidateReason(line, candidate),
+          });
+          if (taken <= 0) continue;
+          if (mode === "confirmed") {
+            // Consume a line's own reservation first; unreserved stock is
+            // then consumed from the shared free pool for later lines.
+            const fromReservation = Math.min(own, taken);
+            const fromFree = taken - fromReservation;
+            remainingReserved.set(itemId, Math.max(0, (remainingReserved.get(itemId) ?? 0) - fromReservation));
+            remainingFree.set(itemId, Math.max(0, free - fromFree));
+          }
+          remainingPhysical.set(itemId, Math.max(0, physical - taken));
+          remaining -= taken;
+        }
+        return requested - remaining;
+      };
+
+      // Confirmed supply is allocated first, so a line that only has an
+      // inspect-first relationship cannot consume capacity needed by an exact
+      // or approved-alternative line later in the stable ordering.
+      for (const line of allocationLines) {
+        const candidates = candidatesByLine.get(line) ?? [];
+        const confirmed = candidates.filter((candidate) => canSupplyBomCandidate(candidate) && CONFIRMED_EVIDENCE.has(candidate.item.evidence.state));
+        recordCandidateFacts(line, confirmed, "confirmed");
+        const suppliedQuantity = allocate(line, confirmed, line.requiredQuantity, "confirmed");
+        allocations.set(line, { suppliedQuantity, inspectQuantity: 0 });
+      }
+      for (const line of allocationLines) {
+        const candidates = candidatesByLine.get(line) ?? [];
+        const uncertain = candidates.filter((candidate) => !canSupplyBomCandidate(candidate) || !CONFIRMED_EVIDENCE.has(candidate.item.evidence.state));
+        recordCandidateFacts(line, uncertain, "inspect");
+        const suppliedQuantity = allocations.get(line)?.suppliedQuantity ?? 0;
+        const inspectQuantity = allocate(line, uncertain, Math.max(line.requiredQuantity - suppliedQuantity, 0), "inspect");
+        allocations.set(line, { suppliedQuantity, inspectQuantity });
+      }
+
+      const gaps: BomGap[] = lines.map((line) => {
+        const candidates = candidatesByLine.get(line) ?? [];
+        const confirmed = candidates.filter((candidate) => canSupplyBomCandidate(candidate) && CONFIRMED_EVIDENCE.has(candidate.item.evidence.state));
+        const uncertain = candidates.filter((candidate) => !canSupplyBomCandidate(candidate) || !CONFIRMED_EVIDENCE.has(candidate.item.evidence.state));
+        const suppliedQuantity = allocations.get(line)?.suppliedQuantity ?? 0;
+        const inspectQuantity = allocations.get(line)?.inspectQuantity ?? 0;
+        const missingQuantity = Math.max(line.requiredQuantity - suppliedQuantity - inspectQuantity, 0);
+        let status: BomGap["status"];
+        if (line.optional && suppliedQuantity === 0 && inspectQuantity === 0) status = "optional";
+        else if (missingQuantity === 0 && inspectQuantity === 0) status = "supplied";
+        else if (suppliedQuantity > 0 && missingQuantity > 0) status = "partially_supplied";
+        else if (inspectQuantity > 0) status = "inspect_first";
+        else status = "missing";
+        const candidateResults = candidates.map((candidate) => {
+          const fact = candidateFacts.get(`${line.id}\u0000${candidate.item.id}`);
+          if (fact === undefined) {
+            throw new ApplicationError("integrity_error", "BOM candidate facts were not recorded");
+          }
+          return fact;
+        });
+        const reasons = [
+          ...(confirmed.length > 0 ? ["Physically confirmed stock is available."] : []),
+          ...(uncertain.some((candidate) => !canSupplyBomCandidate(candidate)) ? ["Some matching stock needs an explicit compatibility decision before use."] : []),
+          ...(uncertain.some((candidate) => canSupplyBomCandidate(candidate) && !CONFIRMED_EVIDENCE.has(candidate.item.evidence.state)) ? ["Some matching stock is recorded but needs a physical count before use."] : []),
+          ...(missingQuantity > 0 ? ["No confirmed stock covers the remaining quantity."] : []),
+          ...(candidates.length === 0 ? ["No matching inventory item was found for this line."] : []),
+          ...(line.itemId === undefined && line.alternatives.length === 0 && Object.keys(line.constraints ?? {}).length > 0 ? ["Potential matches were selected using the line constraints."] : [])
+        ];
+        const result = {
+          lineId: line.id,
+          name: line.name,
+          status,
+          requiredQuantity: line.requiredQuantity,
+          suppliedQuantity,
+          inspectQuantity,
+          missingQuantity,
+          unit: line.unit,
+          matchedItemIds: candidates.map((candidate) => candidate.item.id),
+          reasons,
+          alternatives: line.alternatives,
+          candidates: candidateResults
+        } satisfies BomGap;
+        return bomGapSchema.parse(result);
+      });
+      return {
+        revisionId: id,
+        lines: gaps,
+        totals: {
+          suppliedLines: gaps.filter((gap) => gap.status === "supplied").length,
+          inspectFirstLines: gaps.filter((gap) => gap.status === "inspect_first").length,
+          partialLines: gaps.filter((gap) => gap.status === "partially_supplied").length,
+          missingLines: gaps.filter((gap) => gap.status === "missing").length,
+          optionalLines: gaps.filter((gap) => gap.status === "optional").length
+        }
+      }
+    });
+  }
+
+  async createReservation(revisionId: string, input: CreateReservation, ctx: RequestContext): Promise<Mutation<Reservation>> {
+    const parsed = createReservationSchema.parse(input);
+    const parentId = requireId(revisionId, "revision id");
+    return this.mutate(ctx, "project.reservation.create", "reservation", parsed.id ?? "pending", async () => {
+      const lines = await this.ports.projects.listBomLines(parentId);
+      const line = lines.find((candidate) => candidate.id === parsed.lineId);
+      if (line === undefined) throw notFound("BOM line", parsed.lineId);
+      const unsupported = unsupportedBomConstraintKeys(line.constraints);
+      if (unsupported.length > 0) {
+        throw new ApplicationError("validation", `Unsupported BOM constraint key(s): ${unsupported.join(", ")}`);
+      }
+      const item = await this.ports.inventory.getItem(parsed.itemId);
+      if (item === null) throw notFound("Inventory item", parsed.itemId);
+      if (!canReserveBomItem(line, item)) {
+        throw new ApplicationError("validation", "Reservation item must be the exact BOM item or an approved alternative");
+      }
+      if (item.unit !== line.unit) {
+        throw new ApplicationError("validation", `Unit mismatch: BOM uses ${line.unit}, item uses ${item.unit}`);
+      }
+      if (!matchesBomConstraints(item, line.constraints)) {
+        throw new ApplicationError("validation", "Inventory item does not satisfy the BOM constraints");
+      }
+      if (!CONFIRMED_EVIDENCE.has(item.evidence.state)) {
+        throw new ApplicationError("conflict", "Only physically confirmed stock can be reserved");
+      }
+      const reservedForLine = (await this.ports.projects.listReservations(parentId))
+        .filter((reservation) => reservation.status === "active" && reservation.lineId === line.id)
+        .reduce((total, reservation) => total + reservation.quantity, 0);
+      if (reservedForLine + parsed.quantity > line.requiredQuantity) {
+        throw conflict(`Cannot reserve beyond the BOM requirement of ${line.requiredQuantity} ${line.unit}`);
+      }
+      if (item.availableQuantity < parsed.quantity) {
+        throw conflict(`Not enough confirmed stock to reserve ${parsed.quantity} ${line.unit}`);
+      }
+      const reservation = await this.ports.projects.createReservation(parentId, parsed, ctx);
+      return { value: reservation, entityId: reservation.id, version: reservation.version };
+    });
+  }
+
+  async releaseReservation(id: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<Reservation>> {
+    const reservationId = requireId(id, "reservation id");
+    return this.mutate(ctx, "project.reservation.release", "reservation", reservationId, async () => {
+      const reservation = await this.ports.projects.releaseReservation(reservationId, expectedVersion, ctx);
+      return { value: reservation, entityId: reservation.id, version: reservation.version };
+    });
+  }
+
+  async listReservations(revisionId: string): Promise<readonly Reservation[]> {
+    return this.ports.unitOfWork.exclusive(() => this.ports.projects.listReservations(requireId(revisionId, "revision id")));
+  }
+
+  async getReservationDetails(id: string): Promise<ReservationDetails> {
+    return this.ports.unitOfWork.exclusive(async () => {
+      const details = await this.ports.projects.getReservationDetails(requireId(id, "reservation id"));
+      if (!details) throw notFound("Reservation", id);
+      return details;
+    });
+  }
+
+  /** Read the current review document. A missing document is a normal first
+   * visit; callers can save an explicit set of line outcomes to create it. */
+  async getReconciliation(revisionId: string): Promise<ReconciliationDraft | null> {
+    const id = requireId(revisionId, "project revision id");
+    await this.getProjectRevision(id);
+    return this.ports.unitOfWork.exclusive(async () => {
+      const draft = await reconciliationPort(this.ports).getDraft(id);
+      return draft === null ? null : reconciliationDraftSchema.parse(draft);
+    });
+  }
+
+  /** Save a review-only draft. This operation never mutates stock or
+   * reservations; the server recomputes both the basis and preview. */
+  async saveReconciliationDraft(revisionId: string, input: unknown, ctx: RequestContext): Promise<Mutation<ReconciliationDraft>> {
+    const id = requireId(revisionId, "project revision id");
+    const raw = input !== null && typeof input === "object" && !Array.isArray(input)
+      ? { projectRevisionId: id, ...(input as Record<string, unknown>) }
+      : input;
+    if (input !== null && typeof input === "object" && !Array.isArray(input)) {
+      const supplied = (input as Record<string, unknown>).projectRevisionId;
+      if (supplied !== undefined && supplied !== id) throw new ApplicationError("validation", "projectRevisionId must match the revision path");
+    }
+    const parsed = saveReconciliationDraftSchema.parse(raw);
+    const commandCtx = commandContext(ctx, "project.reconciliation.draft.save", parsed);
+    const provisionalId = parsed.draftId ?? reconciliationDraftId(id);
+    return this.mutate(commandCtx, "project.reconciliation.draft.save", "reconciliation_draft", provisionalId, async () => {
+      const port = reconciliationPort(this.ports);
+      const current = await port.getDraft(id);
+      if (parsed.draftId !== undefined && current !== null && current.id !== parsed.draftId) {
+        throw conflict(`Reconciliation draft '${parsed.draftId}' does not belong to revision '${id}'`);
+      }
+      if (parsed.draftId !== undefined && current === null) throw notFound("Reconciliation draft", parsed.draftId);
+      const source = await this.reconciliationSource(id);
+      const document = buildReconciliationDocument(source, parsed.lines, false);
+      const now = nowIso();
+      const draft: ReconciliationDraft = {
+        id: current?.id ?? provisionalId,
+        projectId: source.projectId,
+        projectRevisionId: id,
+        status: "draft",
+        version: current === null ? 1 : current.version + 1,
+        lines: [...document.lines],
+        basis: document.basis,
+        preview: document.preview,
+        createdAt: current?.createdAt ?? now,
+        updatedAt: now
+      };
+      const saved = reconciliationDraftSchema.parse(await port.saveDraft(draft, parsed.expectedVersion));
+      return { value: saved, entityId: saved.id, version: saved.version };
+    });
+  }
+
+  /** Commit a saved review atomically. The durable adapter repeats the basis
+   * check while holding the UnitOfWork transaction before writing any event. */
+  async commitReconciliation(revisionId: string, input: unknown, ctx: RequestContext): Promise<Mutation<ReconciliationCommit>> {
+    const id = requireId(revisionId, "project revision id");
+    const parsed = commitReconciliationSchema.parse(input) as CommitReconciliation;
+    const commandCtx = commandContext(ctx, "project.reconciliation.commit", { projectRevisionId: id, ...parsed });
+    const commitId = reconciliationCommitId(id);
+    return this.mutate(commandCtx, "project.reconciliation.commit", "reconciliation_commit", commitId, async () => {
+      const port = reconciliationPort(this.ports);
+      const draft = await port.getDraft(id);
+      if (draft === null) throw notFound("Reconciliation draft", parsed.draftId);
+      if (draft.id !== parsed.draftId) throw conflict(`Reconciliation draft '${parsed.draftId}' does not belong to revision '${id}'`);
+      if (draft.status !== "draft") throw conflict(`Project revision '${id}' already has a committed reconciliation`);
+      if (parsed.expectedVersion !== undefined && parsed.expectedVersion !== draft.version) {
+        throw conflict(`Reconciliation draft '${draft.id}' changed since it was read`, { expectedVersion: parsed.expectedVersion, actualVersion: draft.version });
+      }
+      const source = await this.reconciliationSource(id);
+      const document = buildReconciliationDocument(source, draft.lines, true);
+      if (document.basis.hash !== draft.basis.hash) {
+        throw conflict("Reconciliation basis changed; refresh the draft before committing", { expectedBasisHash: draft.basis.hash, actualBasisHash: document.basis.hash });
+      }
+      const committed = await port.commit({
+        id: commitId,
+        draftId: draft.id,
+        projectId: draft.projectId,
+        projectRevisionId: id,
+        expectedDraftVersion: draft.version,
+        basis: document.basis,
+        lines: document.lines,
+        preview: document.preview,
+        committedAt: nowIso()
+      }, commandCtx);
+      return { value: reconciliationCommitSchema.parse(committed), entityId: committed.id };
+    });
+  }
+
+  async recordUsage(input: UsageInput, ctx: RequestContext): Promise<Mutation<StockMutation>> {
+    const itemId = requireId(input.itemId, "item id");
+    requireId(input.projectId, "project id");
+    if (input.reservationId !== undefined) requireId(input.reservationId, "reservation id");
+    if (!Number.isFinite(input.quantity) || input.quantity <= 0) {
+      throw new ApplicationError("validation", "Usage quantity must be greater than zero");
+    }
+    return this.mutate(ctx, "project.usage.record", "inventory_item", itemId, async () => {
+      const item = await this.ports.inventory.getItem(itemId);
+      if (item === null) throw notFound("Inventory item", itemId);
+      if (item.unit !== input.unit) {
+        throw new ApplicationError("validation", `Unit mismatch: item uses ${item.unit}, usage uses ${input.unit}`);
+      }
+      const usage = await this.ports.projects.recordUsage({ ...input, itemId }, ctx);
+      return { value: usage, entityId: usage.item.id, version: usage.item.version };
+    });
+  }
+
+  async listOffers(itemId: string | undefined, limit = 50, cursor?: string): Promise<Page<Offer>> {
+    const normalizedCursor = boundedCursor(cursor);
+    return this.ports.unitOfWork.exclusive(() => this.ports.offers.listOffers(itemId ? requireId(itemId, "item id") : undefined, Math.min(Math.max(limit, 1), 200), normalizedCursor));
+  }
+
+  async createOffer(input: CreateOffer, ctx: RequestContext): Promise<Mutation<Offer>> {
+    const parsed = createOfferSchema.parse(input);
+    return this.mutate(ctx, "offer.create", "offer", parsed.id ?? "pending", async () => {
+      const offer = await this.ports.offers.createOffer(parsed, ctx);
+      return { value: offer, entityId: offer.id, version: offer.version };
+    });
+  }
+
+  async listArtifacts(projectId: string, workItemId?: string, revisionId?: string) {
+    return this.ports.unitOfWork.exclusive(() => this.ports.artifacts.listArtifacts(requireId(projectId, "project id"), workItemId, revisionId));
+  }
+
+  async getArtifact(id: string) {
+    return this.ports.unitOfWork.exclusive(async () => {
+      const artifact = await this.ports.artifacts.getArtifact(requireId(id, "artifact id"));
+      if (!artifact) throw notFound("Artifact", id);
+      return artifact;
+    });
+  }
+
+  async getUploadSessionDetails(id: string): Promise<UploadSessionDetails> {
+    return this.ports.unitOfWork.exclusive(async () => {
+      const details = await this.ports.artifacts.getUploadSessionDetails(requireId(id, "upload session id"));
+      if (!details) throw notFound("Upload session", id);
+      return details;
+    });
+  }
+
+  async beginArtifactUpload(input: BeginUploadInput, ctx: RequestContext): Promise<Mutation<UploadSession>> {
+    if (input.byteSize <= 0 || input.byteSize > MAX_UPLOAD_BYTES) throw new ApplicationError("quota_exceeded", "Upload exceeds the per-file limit");
+    const filename = safeFilename(input.filename);
+    if (!ALLOWED_BINARY_MEDIA.has(input.mediaType) && !input.mediaType.startsWith("text/")) {
+      throw new ApplicationError("unsupported_media", "This media type is not accepted");
+    }
+    const normalized = { ...input, filename };
+    return this.mutate(ctx, "artifact.upload.begin", "project", input.projectId, async () => {
+      await this.assertArtifactAncestry(normalized);
+      const session = await this.ports.artifacts.beginUpload(normalized, ctx);
+      return {
+        value: session,
+        entityId: session.id,
+        compensate: async () => {
+          if (this.ports.artifacts.abortUpload === undefined) {
+            throw new ApplicationError("integrity_error", "The artifact upload adapter cannot compensate an uncommitted session");
+          }
+          await this.ports.artifacts.abortUpload(session.id);
+        }
+      };
+    });
+  }
+
+  async writeArtifactUpload(sessionId: string, body: Uint8Array) {
+    requireId(sessionId, "upload session id");
+    if (body.byteLength > MAX_UPLOAD_BYTES) throw new ApplicationError("quota_exceeded", "Upload exceeds the per-file limit");
+    return this.ports.unitOfWork.exclusive(() => this.ports.artifacts.writeUpload(sessionId, body));
+  }
+
+  async finalizeArtifactUpload(sessionId: string, ctx: RequestContext): Promise<Mutation<Artifact>> {
+    const id = requireId(sessionId, "upload session id");
+    let finalizedArtifactId: string | undefined;
+    let createdFinalization = false;
+    const mutation = await this.mutate(ctx, "artifact.upload.finalize", "upload_session", id, async () => {
+      const upload = await this.ports.artifacts.getUploadSessionDetails(id);
+      if (upload === null) throw notFound("Upload session", id);
+      // A finalized session may be retried with another idempotency key after
+      // its original database transaction committed. It may still have a
+      // process-local filesystem receipt if post-commit cleanup failed, but a
+      // later transaction must never own compensation for that already
+      // committed artifact.
+      createdFinalization = upload.session.status !== "finalized";
+      const snapshotId = upload.buildConfigurationSnapshotId;
+      if (snapshotId !== undefined) {
+        if (upload.revisionId === undefined || upload.workItemId !== undefined) {
+          throw new ApplicationError("validation", "A build configuration can only bind to a project-revision upload");
+        }
+        const configurations = buildConfigurationPort(this.ports);
+        const snapshot = await configurations.getBuildConfiguration(snapshotId);
+        if (snapshot === null) throw notFound("Build configuration", snapshotId);
+        if (snapshot.projectRevisionId !== upload.revisionId) {
+          throw new ApplicationError("validation", "The build configuration snapshot does not belong to the upload revision");
+        }
+        const revision = await this.ports.projects.getProjectRevision(upload.revisionId);
+        if (revision === null || revision.projectId !== upload.projectId) {
+          throw new ApplicationError("validation", "The build configuration snapshot is not in the upload project ancestry");
+        }
+        if (this.ports.artifacts.bindBuildConfiguration === undefined) {
+          throw new ApplicationError("integrity_error", "The artifact adapter cannot persist build configuration bindings");
+        }
+      }
+      let artifact: Artifact;
+      try {
+        artifact = await this.ports.artifacts.finalizeUpload(id, ctx);
+        finalizedArtifactId = artifact.id;
+        if (snapshotId !== undefined) {
+          await this.ports.artifacts.bindBuildConfiguration!({ artifactId: artifact.id, buildConfigurationSnapshotId: snapshotId, projectRevisionId: upload.revisionId! });
+        }
+      } catch (error: unknown) {
+        // Binding is part of this operation, so a failure happens before the
+        // normal mutate() compensation receipt can be registered. Roll back a
+        // filesystem finalization immediately only when this invocation
+        // created it; a finalized session belongs to an earlier committed
+        // operation and must remain visible.
+        if (finalizedArtifactId !== undefined && createdFinalization) {
+          if (this.ports.artifacts.rollbackFinalization === undefined) {
+            throw new ApplicationError("integrity_error", "Artifact finalization failed and cannot be compensated");
+          }
+          try {
+            await this.ports.artifacts.rollbackFinalization(id, finalizedArtifactId);
+          } catch {
+            throw new ApplicationError("integrity_error", "Artifact finalization failed and could not be compensated");
+          }
+        }
+        throw error;
+      }
+      return {
+        value: artifact,
+        entityId: artifact.id,
+        version: artifact.version,
+        ...(createdFinalization ? {
+          compensate: async () => {
+            if (this.ports.artifacts.rollbackFinalization !== undefined) await this.ports.artifacts.rollbackFinalization(id, artifact.id);
+          }
+        } : {})
+      };
+    });
+    // The artifact store keeps a process-local compensation receipt until the
+    // surrounding SQLite transaction has committed. A post-commit cleanup
+    // failure is recoverable: an idempotency replay still has the committed
+    // artifact in its result, so retry receipt closure for every successful
+    // return rather than only for the operation that created the artifact.
+    await this.ports.artifacts.commitFinalization?.(id, mutation.data.id);
+    return mutation;
+  }
+
+  async readArtifact(id: string): Promise<ArtifactDownload> {
+    return this.ports.unitOfWork.exclusive(() => this.ports.artifacts.readArtifact(requireId(id, "artifact id")));
+  }
+
+  async retireArtifact(id: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<Artifact>> {
+    const artifactId = requireId(id, "artifact id");
+    return this.mutate(ctx, "artifact.retire", "artifact", artifactId, async () => {
+      const artifact = await this.ports.artifacts.retireArtifact(artifactId, expectedVersion, ctx);
+      return { value: artifact, entityId: artifact.id, version: artifact.version };
+    });
+  }
+
+  async health() {
+    return this.ports.unitOfWork.exclusive(async () => {
+      const checks = this.ports.health ? await this.ports.health.check() : { database: "ok", artifacts: "ok" } as const;
+      const status = Object.values(checks).every((value) => value === "ok") ? "ok" : "degraded";
+      return { status, service: "benchledger", version: this.version, demo: false, now: nowIso(), checks };
+    });
+  }
+
+  subscribe(listener: (event: EventBusEvent) => void): () => void {
+    return this.ports.events.subscribe(listener);
+  }
+
+  /**
+   * Artifact paths are derived from the three logical ancestry components.
+   * Resolve all of them before creating an upload session so an artifact can
+   * never be staged under a missing, cross-project, or mixed work-item tree.
+   * `revisionId` is intentionally interpreted by the presence of
+   * `workItemId`: without a work item it must be a project revision; with one
+   * it must be that work item's revision.
+   */
+  private async assertArtifactAncestry(input: BeginUploadInput): Promise<void> {
+    const projectId = requireId(input.projectId, "project id");
+    const project = await this.ports.projects.getProject(projectId);
+    if (project === null) throw notFound("Project", projectId);
+
+    if (input.workItemId !== undefined) {
+      const workItemId = requireId(input.workItemId, "work item id");
+      const workItem = await this.ports.projects.getWorkItem(workItemId);
+      if (workItem === null || workItem.projectId !== projectId) throw notFound("Work item", workItemId);
+    }
+
+    if (input.buildConfigurationSnapshotId !== undefined && (input.revisionId === undefined || input.workItemId !== undefined)) {
+      throw new ApplicationError("validation", "A build configuration can only bind to a project-revision upload");
+    }
+    if (input.revisionId === undefined) return;
+    const revisionId = requireId(input.revisionId, "revision id");
+    const projectRevision = await this.ports.projects.getProjectRevision(revisionId);
+    const workItemRevision = await this.ports.projects.getWorkItemRevision(revisionId);
+    if (input.workItemId === undefined) {
+      if (projectRevision === null || projectRevision.projectId !== projectId || workItemRevision !== null) {
+        throw notFound("Project revision", revisionId);
+      }
+      if (input.buildConfigurationSnapshotId !== undefined) {
+        const snapshot = await buildConfigurationPort(this.ports).getBuildConfiguration(requireId(input.buildConfigurationSnapshotId, "build configuration id"));
+        if (snapshot === null) throw notFound("Build configuration", input.buildConfigurationSnapshotId);
+        if (snapshot.projectRevisionId !== revisionId) throw new ApplicationError("validation", "The build configuration snapshot does not belong to the upload revision");
+      }
+      return;
+    }
+
+    if (
+      workItemRevision === null ||
+      workItemRevision.projectId !== projectId ||
+      workItemRevision.workItemId !== input.workItemId ||
+      projectRevision !== null
+    ) {
+      throw notFound("Work-item revision", revisionId);
+    }
+  }
+
+  private async mutate<T>(
+    ctx: RequestContext,
+    action: string,
+    entityType: string,
+    provisionalEntityId: string,
+    operation: () => Promise<{
+      readonly value: T;
+      readonly entityId: string;
+      readonly version?: number;
+      /** Cleanup for filesystem state if the audited mutation cannot commit. */
+      readonly compensate?: () => Promise<void>;
+    }>
+  ): Promise<Mutation<T>> {
+    const fingerprint = ctx.fingerprint ?? `${action}:${entityType}:${provisionalEntityId}`;
+    let compensate: (() => Promise<void>) | undefined;
+    let committed: { readonly mutation: Mutation<T>; readonly event: EventBusEvent | undefined };
+    try {
+      committed = await this.ports.unitOfWork.run(async () => {
+        if (ctx.idempotencyKey) {
+          const prior = await this.ports.idempotency.get(ctx.actor, ctx.idempotencyKey);
+          if (prior !== null) {
+            const stored = prior as { readonly action?: string; readonly fingerprint?: string; readonly mutation?: Mutation<T> };
+            if (stored.mutation) {
+              if (stored.action !== action || (stored.fingerprint !== undefined && stored.fingerprint !== fingerprint)) {
+                throw new ApplicationError("idempotency_conflict", "Idempotency key was already used for a different command");
+              }
+              return { mutation: { ...stored.mutation, replayed: true }, event: undefined };
+            }
+            return { mutation: { ...(prior as Mutation<T>), replayed: true }, event: undefined };
+          }
+        }
+        const result = await operation();
+        compensate = result.compensate;
+        const auditInput: AuditInput = {
+          action,
+          actor: ctx.actor,
+          source: ctx.source,
+          correlationId: ctx.correlationId,
+          ...(ctx.idempotencyKey ? { idempotencyKey: ctx.idempotencyKey } : {}),
+          entityType,
+          entityId: result.entityId || provisionalEntityId,
+          ...(result.version !== undefined ? { version: result.version } : {})
+        };
+        const audit = await this.ports.audit.append(auditInput);
+        const mutation: Mutation<T> = { data: result.value, audit, correlationId: ctx.correlationId, replayed: false };
+        if (ctx.idempotencyKey) await this.ports.idempotency.set(ctx.actor, ctx.idempotencyKey, { action, fingerprint, mutation });
+        const event: EventBusEvent = {
+          id: audit.id,
+          type: action,
+          entityType,
+          entityId: result.entityId || provisionalEntityId,
+          ...(result.version !== undefined ? { version: result.version } : {}),
+          correlationId: ctx.correlationId,
+          at: audit.createdAt
+        };
+        return { mutation, event };
+      });
+    } catch (error: unknown) {
+      if (compensate !== undefined) {
+        try {
+          await compensate();
+        } catch {
+          throw new ApplicationError("integrity_error", "The mutation failed and artifact state could not be compensated");
+        }
+      }
+      throw error;
+    }
+    if (committed.event !== undefined) {
+      // Event delivery is deliberately post-commit. A listener is an
+      // integration boundary and must not turn a durable mutation into a
+      // failed/retryable command after SQLite has committed it.
+      try {
+        this.ports.events.publish(committed.event);
+      } catch {
+        // Event subscribers are best-effort; the committed audit/idempotency
+        // record remains the source of truth for replay and reconciliation.
+      }
+    }
+    return committed.mutation;
+  }
+}

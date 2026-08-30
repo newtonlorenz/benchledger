@@ -1,0 +1,35 @@
+{
+  "name": "benchledger",
+  "version": "0.1.0",
+  "description": "Evidence-aware inventory and project planning for 3D printing, electronics, and AI-assisted making",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build:packages": "npm run build --workspace=@benchledger/api-contract && npm run build --workspace=@benchledger/domain && npm run build --workspace=@benchledger/artifacts && npm run build --workspace=@benchledger/database && npm run build --workspace=@benchledger/importers && npm run build --workspace=@benchledger/application && npm run build --workspace=@benchledger/runtime",
+    "build:apps": "npm run build --workspace=@benchledger/web && npm run build --workspace=@benchledger/mcp && npm run build --workspace=@benchledger/import-cli && npm run build --workspace=@benchledger/server",
+    "build": "npm run build:packages && npm run build:apps",
+    "dev": "npm run dev --workspace=@benchledger/server",
+    "test": "vitest run --coverage",
+    "test:e2e": "npm run build && playwright test",
+    "test:watch": "vitest",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "privacy:scan": "node scripts/privacy-scan.mjs",
+    "public:check": "npm run privacy:scan && node scripts/public-release-check.mjs",
+    "check": "npm run public:check && npm run build && npm run typecheck && npm test && playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^24.0.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.4"
+  }
+}

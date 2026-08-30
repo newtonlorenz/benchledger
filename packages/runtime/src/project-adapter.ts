@@ -1,0 +1,462 @@
+import { createBomLine, createId, createProject, createProjectRevision, createWorkItem, createWorkItemRevision, DomainError } from "@benchledger/domain";
+import type {
+  BomConstraints, BomLine, Project, ProjectRevision, Reservation, WorkItem, WorkItemRevision
+} from "@benchledger/domain";
+import type {
+  BomLine as ApiBomLine, CreateBomLine, CreateProject, CreateProjectRevision, CreateReservation,
+  CreateWorkItem, CreateWorkItemRevision, Project as ApiProject, ProjectRevision as ApiProjectRevision,
+  ProjectWithInitialRevision as ApiProjectWithInitialRevision, CreateProjectWithInitialRevision,
+  Reservation as ApiReservation, WorkItem as ApiWorkItem, WorkItemRevision as ApiWorkItemRevision
+} from "@benchledger/api-contract";
+import { matchesBomConstraints, unsupportedBomConstraintKeys } from "@benchledger/application";
+import type { ProjectPort, ProjectListOptions, RequestContext, ReservationDetails, StockMutation, UsageInput } from "@benchledger/application";
+import { BomRepository, ProjectRepository, ReservationRepository } from "@benchledger/database";
+import type { BenchDatabase } from "@benchledger/database";
+import { RuntimeState } from "./persistence.js";
+import {
+  apiBomLineFromNative, apiProjectFromNative, apiProjectRevisionFromNative, apiReservationFromNative, apiStockEventFromNative,
+  apiWorkItemFromNative, apiWorkItemRevisionFromNative, isConfirmedEvidence, mapApiKindToCategory,
+  mapApiUnitToDomain, nativeConstraintsFromApi, nativeProjectStatus
+} from "./mappers.js";
+import { ProductionInventoryAdapter } from "./inventory-adapter.js";
+import { attempt, clone, nowIso, page } from "./utils.js";
+import { createStockEvent } from "@benchledger/domain";
+
+const PROJECT = "project";
+const WORK_ITEM = "work_item";
+const PROJECT_REVISION = "project_revision";
+const WORK_ITEM_REVISION = "work_item_revision";
+const BOM = "bom_line";
+const RESERVATION = "reservation";
+
+function record(value: unknown): Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Readonly<Record<string, unknown>> : {};
+}
+
+function text(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function number(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function bomMetadata(value: Readonly<Record<string, unknown>>): { readonly constraints?: Readonly<Record<string, string>>; readonly alternatives?: readonly ApiBomLine["alternatives"][number][]; readonly retired?: boolean; readonly createdAt?: string; readonly updatedAt?: string } {
+  const constraintsRecord = record(value.constraints);
+  const constraints: Record<string, string> = {};
+  for (const [key, candidate] of Object.entries(constraintsRecord)) if (typeof candidate === "string") constraints[key] = candidate;
+  const alternatives: ApiBomLine["alternatives"] | undefined = Array.isArray(value.alternatives)
+    ? value.alternatives.flatMap((candidate) => {
+      const item = record(candidate);
+      if (typeof item.itemId !== "string") return [];
+      const compatible = item.compatible === "confirmed" || item.compatible === "conditional" || item.compatible === "unknown" ? item.compatible : "conditional";
+      return [{ itemId: item.itemId, ...(typeof item.reason === "string" ? { reason: item.reason } : {}), compatible }];
+    })
+    : undefined;
+  const createdAt = text(value.createdAt);
+  const updatedAt = text(value.updatedAt);
+  return {
+    ...(Object.keys(constraints).length === 0 ? {} : { constraints }),
+    ...(alternatives === undefined ? {} : { alternatives }),
+    ...(value.retired === true ? { retired: true } : {}),
+    ...(createdAt === undefined ? {} : { createdAt }),
+    ...(updatedAt === undefined ? {} : { updatedAt })
+  };
+}
+
+function currentRevisionId(revisions: readonly { readonly id: string; readonly number: number }[]): string | undefined {
+  return revisions.slice().sort((a, b) => b.number - a.number || b.id.localeCompare(a.id))[0]?.id;
+}
+
+/**
+ * Runtime ports still accept legacy persisted BOM maps. The REST/MCP input
+ * schemas are strict, while this adapter keeps old records inspectable and
+ * relies on the application matcher to fail closed on unknown keys.
+ */
+type LegacyCreateBomLineInput = Omit<CreateBomLine, "constraints"> & {
+  constraints?: Readonly<Record<string, string>>;
+};
+
+function nativeBomFromApi(revisionId: string, input: CreateBomLine | LegacyCreateBomLineInput, id: string): BomLine {
+  const constraints = input.constraints ?? {};
+  return createBomLine({
+    id,
+    revisionId,
+    name: input.name,
+    quantity: input.requiredQuantity,
+    unit: mapApiUnitToDomain(input.unit),
+    required: !input.optional,
+    optional: input.optional,
+    ...(input.itemId === undefined ? {} : { itemId: input.itemId }),
+    ...(input.alternatives.length === 0 ? {} : { alternativeItemIds: input.alternatives.map((alternative) => alternative.itemId) }),
+    ...(Object.keys(constraints).length === 0 ? {} : { constraints: nativeConstraintsFromApi(constraints) }),
+    ...(input.notes === undefined ? {} : { notes: input.notes })
+  });
+}
+
+export class ProductionProjectAdapter implements ProjectPort {
+  constructor(
+    private readonly database: BenchDatabase,
+    private readonly projects: ProjectRepository,
+    private readonly boms: BomRepository,
+    private readonly reservations: ReservationRepository,
+    private readonly inventory: ProductionInventoryAdapter,
+    private readonly state: RuntimeState
+  ) {}
+
+  async listProjects(options: ProjectListOptions): Promise<{ readonly data: readonly ApiProject[]; readonly nextCursor?: string; readonly limit: number; readonly total: number }> {
+    return attempt(() => {
+      const values = this.projects.list(true).map((project) => this.toApiProject(project)).filter((project) => {
+        if (options.status !== undefined && project.status !== options.status) return false;
+        const query = options.q?.trim().toLocaleLowerCase();
+        return query === undefined || query.length === 0 || `${project.name} ${project.description ?? ""}`.toLocaleLowerCase().includes(query);
+      }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
+      return page(values, options.limit, options.cursor);
+    });
+  }
+
+  async getProject(id: string): Promise<ApiProject | null> {
+    return attempt(() => {
+      const project = this.projects.get(id);
+      return project === undefined ? null : this.toApiProject(project);
+    });
+  }
+
+  async createProject(input: CreateProject, _ctx: RequestContext): Promise<ApiProject> {
+    return attempt(() => {
+      const id = input.id ?? createId("project");
+      const now = nowIso();
+      const native = createProject({ id, name: input.name, ...(input.description === undefined ? {} : { description: input.description }), status: nativeProjectStatus(input.status), createdAt: now, updatedAt: now });
+      return this.database.transaction(() => {
+        const created = this.projects.create(native);
+        this.state.setInitialVersion(PROJECT, created.id);
+        this.state.setMetadata(PROJECT, created.id, { status: input.status });
+        return this.toApiProject(created);
+      });
+    });
+  }
+
+  async createProjectWithInitialRevision(input: CreateProjectWithInitialRevision, _ctx: RequestContext): Promise<ApiProjectWithInitialRevision> {
+    return attempt(() => {
+      const projectId = input.project.id ?? createId("project");
+      const revisionId = input.revision.id ?? createId("project-revision");
+      const now = nowIso();
+      const nativeProject = createProject({
+        id: projectId,
+        name: input.project.name,
+        ...(input.project.description === undefined ? {} : { description: input.project.description }),
+        status: nativeProjectStatus(input.project.status),
+        createdAt: now,
+        updatedAt: now
+      });
+      const nativeRevision = createProjectRevision({
+        id: revisionId,
+        projectId,
+        number: 1,
+        label: input.revision.name,
+        status: input.revision.status,
+        ...(input.revision.notes === undefined ? {} : { notes: input.revision.notes }),
+        createdAt: now
+      });
+      return this.database.transaction(() => {
+        const createdProject = this.projects.create(nativeProject);
+        this.state.setInitialVersion(PROJECT, createdProject.id);
+        this.state.setMetadata(PROJECT, createdProject.id, { status: input.project.status });
+        const createdRevision = this.projects.createRevision(nativeRevision);
+        this.state.setInitialVersion(PROJECT_REVISION, createdRevision.id);
+        this.state.setMetadata(PROJECT, createdProject.id, { status: input.project.status, currentRevisionId: createdRevision.id });
+        return {
+          project: apiProjectFromNative(createdProject, 1, this.state.getMetadata(PROJECT, createdProject.id), createdRevision.id),
+          revision: apiProjectRevisionFromNative(createdRevision, 1)
+        };
+      });
+    });
+  }
+
+  async updateProject(id: string, input: Partial<CreateProject>, expectedVersion: number | undefined, _ctx: RequestContext): Promise<ApiProject> {
+    return attempt(() => {
+      const native = this.projects.get(id);
+      if (native === undefined) throw new DomainError("project_not_found", `project ${id} does not exist`);
+      return this.database.transaction(() => {
+        this.state.ensureVersion(PROJECT, id, expectedVersion);
+        const current = this.toApiProject(native);
+        const status = input.status ?? current.status;
+        const updatedAt = nowIso();
+        this.database.run("UPDATE projects SET name = ?, description = ?, status = ?, updated_at = ?, retired_at = ? WHERE id = ?", [input.name ?? native.name, input.description ?? native.description ?? null, nativeProjectStatus(status), updatedAt, status === "retired" ? updatedAt : native.retiredAt ?? null, id]);
+        const updated: Project = { ...native, name: input.name ?? native.name, ...(input.description === undefined && native.description === undefined ? {} : { description: input.description ?? native.description }), status: nativeProjectStatus(status), updatedAt, ...(status === "retired" ? { retiredAt: updatedAt } : native.retiredAt === undefined ? {} : { retiredAt: native.retiredAt }) };
+        const version = this.state.bumpVersion(PROJECT, id);
+        this.state.setMetadata(PROJECT, id, { ...this.state.getMetadata(PROJECT, id), status });
+        return apiProjectFromNative(updated, version, this.state.getMetadata(PROJECT, id), this.latestProjectRevisionId(id));
+      });
+    });
+  }
+
+  async createWorkItem(projectId: string, input: CreateWorkItem, _ctx: RequestContext): Promise<ApiWorkItem> {
+    return attempt(() => {
+      if (this.projects.get(projectId) === undefined) throw new DomainError("project_not_found", `project ${projectId} does not exist`);
+      const now = nowIso();
+      const native = createWorkItem({ id: input.id ?? createId("work"), projectId, name: input.name, kind: input.kind, ...(input.description === undefined ? {} : { description: input.description }), createdAt: now, updatedAt: now });
+      const created = this.projects.createWorkItem(native);
+      this.state.setInitialVersion(WORK_ITEM, created.id);
+      return apiWorkItemFromNative(created, 1, undefined);
+    });
+  }
+
+  async getWorkItem(id: string): Promise<ApiWorkItem | null> {
+    return attempt(() => {
+      const workItem = this.projects.getWorkItem(id);
+      return workItem === undefined ? null : apiWorkItemFromNative(workItem, this.state.getVersion(WORK_ITEM, id), this.latestWorkItemRevisionId(id));
+    });
+  }
+
+  async listWorkItems(projectId: string): Promise<readonly ApiWorkItem[]> {
+    return attempt(() => this.projects.listWorkItems(projectId).map((item) => apiWorkItemFromNative(item, this.state.getVersion(WORK_ITEM, item.id), this.latestWorkItemRevisionId(item.id))));
+  }
+
+  async createProjectRevision(projectId: string, input: CreateProjectRevision, _ctx: RequestContext): Promise<ApiProjectRevision> {
+    return attempt(() => {
+      if (this.projects.get(projectId) === undefined) throw new DomainError("project_not_found", `project ${projectId} does not exist`);
+      const previous = this.projects.listRevisions(projectId);
+      const revision = createProjectRevision({ id: input.id ?? createId("project-revision"), projectId, number: Math.max(0, ...previous.map((candidate) => candidate.number)) + 1, label: input.name, status: input.status, ...(input.notes === undefined ? {} : { notes: input.notes }), createdAt: nowIso() });
+      const created = this.projects.createRevision(revision);
+      this.state.setInitialVersion(PROJECT_REVISION, created.id);
+      const metadata = this.state.getMetadata(PROJECT, projectId);
+      this.state.setMetadata(PROJECT, projectId, { ...metadata, currentRevisionId: created.id });
+      return apiProjectRevisionFromNative(created, 1);
+    });
+  }
+
+  async getProjectRevision(id: string): Promise<ApiProjectRevision | null> {
+    return attempt(() => {
+      const found = this.findProjectRevision(id);
+      return found === undefined ? null : apiProjectRevisionFromNative(found.revision, this.state.getVersion(PROJECT_REVISION, id));
+    });
+  }
+
+  async createWorkItemRevision(workItemId: string, input: CreateWorkItemRevision, _ctx: RequestContext): Promise<ApiWorkItemRevision> {
+    return attempt(() => {
+      const work = this.findWorkItem(workItemId);
+      if (work === undefined) throw new DomainError("work_item_not_found", `work item ${workItemId} does not exist`);
+      const previous = this.projects.listWorkItemRevisions(workItemId);
+      const revision = createWorkItemRevision({ id: input.id ?? createId("work-revision"), workItemId, number: Math.max(0, ...previous.map((candidate) => candidate.number)) + 1, label: input.name, status: input.status, ...(input.notes === undefined ? {} : { sourcePath: input.notes }), createdAt: nowIso() });
+      const created = this.projects.createWorkItemRevision(revision);
+      this.state.setInitialVersion(WORK_ITEM_REVISION, created.id);
+      return apiWorkItemRevisionFromNative(created, work.projectId, 1);
+    });
+  }
+
+  async getWorkItemRevision(id: string): Promise<ApiWorkItemRevision | null> {
+    return attempt(() => {
+      const found = this.findWorkItemRevision(id);
+      return found === undefined ? null : apiWorkItemRevisionFromNative(found.revision, found.projectId, this.state.getVersion(WORK_ITEM_REVISION, id));
+    });
+  }
+
+  async listBomLines(revisionId: string): Promise<readonly ApiBomLine[]> {
+    return attempt(() => this.boms.listLines(revisionId).map((line) => this.toApiBom(line)));
+  }
+
+  async getBomLine(id: string): Promise<ApiBomLine | null> {
+    return attempt(() => {
+      const line = this.boms.getLine(id);
+      return line === undefined ? null : this.toApiBom(line);
+    });
+  }
+
+  async createBomLine(revisionId: string, input: CreateBomLine | LegacyCreateBomLineInput, _ctx: RequestContext): Promise<ApiBomLine> {
+    return attempt(() => {
+      if (this.findProjectRevision(revisionId) === undefined) throw new DomainError("project_revision_not_found", `project revision ${revisionId} does not exist`);
+      const native = nativeBomFromApi(revisionId, input, input.id ?? createId("bom"));
+      const created = this.boms.createLine(native);
+      this.state.setInitialVersion(BOM, created.id);
+      this.state.setMetadata(BOM, created.id, { constraints: input.constraints, alternatives: input.alternatives, createdAt: nowIso(), updatedAt: nowIso() });
+      return this.toApiBom(created, 1);
+    });
+  }
+
+  async updateBomLine(id: string, input: Partial<CreateBomLine>, expectedVersion: number | undefined, _ctx: RequestContext): Promise<ApiBomLine> {
+    return attempt(() => {
+      const native = this.boms.getLine(id);
+      if (native === undefined) throw new DomainError("bom_line_not_found", `BOM line ${id} does not exist`);
+      return this.database.transaction(() => {
+        this.state.ensureVersion(BOM, id, expectedVersion);
+        const current = this.toApiBom(native);
+        const optional = input.optional ?? current.optional;
+        const alternatives = input.alternatives ?? current.alternatives;
+        const constraints = input.constraints ?? current.constraints;
+        const updatedAt = nowIso();
+        const updated: BomLine = {
+          ...native,
+          name: input.name ?? native.name,
+          quantity: input.requiredQuantity ?? native.quantity,
+          unit: input.unit === undefined ? native.unit : mapApiUnitToDomain(input.unit),
+          required: !optional,
+          optional,
+          ...(input.itemId === undefined && native.itemId === undefined ? {} : { itemId: input.itemId ?? native.itemId }),
+          alternativeItemIds: alternatives.map((alternative) => alternative.itemId),
+          constraints: nativeConstraintsFromApi(constraints),
+          ...(input.notes === undefined && native.notes === undefined ? {} : { notes: input.notes ?? native.notes })
+        };
+        this.database.run("UPDATE bom_lines SET name = ?, quantity = ?, unit = ?, required = ?, optional = ?, item_id = ?, alternative_item_ids_json = ?, constraints_json = ?, notes = ? WHERE id = ?", [updated.name, updated.quantity, updated.unit, updated.required ? 1 : 0, updated.optional === true ? 1 : 0, updated.itemId ?? null, JSON.stringify(updated.alternativeItemIds ?? []), JSON.stringify(updated.constraints ?? {}), updated.notes ?? null, id]);
+        const version = this.state.bumpVersion(BOM, id);
+        this.state.setMetadata(BOM, id, { ...this.state.getMetadata(BOM, id), constraints, alternatives, updatedAt });
+        return this.toApiBom(updated, version);
+      });
+    });
+  }
+
+  async retireBomLine(id: string, expectedVersion: number | undefined, _ctx: RequestContext): Promise<ApiBomLine> {
+    return this.updateBomLine(id, { optional: true, notes: "Retired" }, expectedVersion, _ctx).then((line) => {
+      this.state.setMetadata(BOM, id, { ...this.state.getMetadata(BOM, id), retired: true });
+      return line;
+    });
+  }
+
+  async createReservation(revisionId: string, input: CreateReservation, _ctx: RequestContext): Promise<ApiReservation> {
+    return attempt(() => {
+      const line = this.boms.getLine(input.lineId);
+      if (line === undefined || line.revisionId !== revisionId) throw new DomainError("bom_line_not_found", `BOM line ${input.lineId} does not exist in revision ${revisionId}`);
+      const apiLine = this.toApiBom(line);
+      const unsupported = unsupportedBomConstraintKeys(apiLine.constraints);
+      if (unsupported.length > 0) throw new DomainError("invalid_bom_constraint", `unsupported BOM constraint key(s): ${unsupported.join(", ")}`);
+      const nativeItem = this.inventory.native(input.itemId);
+      if (nativeItem === undefined) throw new DomainError("inventory_not_found", `inventory item ${input.itemId} does not exist`);
+      const item = this.inventory.toApi(nativeItem);
+      const exact = apiLine.itemId === input.itemId;
+      const approvedAlternative = apiLine.alternatives.some((alternative) => alternative.itemId === input.itemId && alternative.compatible === "confirmed");
+      if (!exact && !approvedAlternative) throw new DomainError("invalid_reservation_reference", "reservation item must be the exact BOM item or an approved alternative");
+      if (!matchesBomConstraints(item, apiLine.constraints)) throw new DomainError("invalid_reservation_reference", "inventory item does not satisfy the BOM constraints");
+      if (item.unit !== this.apiUnit(line.unit)) throw new DomainError("invalid_reservation_reference", "reservation unit does not match the BOM line");
+      if (!isConfirmedEvidence(item.evidence.state)) throw new DomainError("insufficient_stock", "only physically confirmed stock can be reserved");
+      const reservedForLine = this.reservations.list().filter((reservation) => reservation.status === "active" && reservation.projectRevisionId === revisionId && reservation.bomLineId === input.lineId).reduce((total, reservation) => total + reservation.quantity, 0);
+      if (reservedForLine + input.quantity > line.quantity) throw new DomainError("insufficient_stock", `cannot reserve beyond the BOM requirement of ${line.quantity} ${this.apiUnit(line.unit)}`);
+      if (item.availableQuantity < input.quantity) throw new DomainError("insufficient_stock", `cannot reserve ${input.quantity}; only ${item.availableQuantity} unallocated unit(s) remain`);
+      const reservation = this.reservations.create({ ...(input.id === undefined ? {} : { id: input.id }), projectRevisionId: revisionId, bomLineId: input.lineId, itemId: input.itemId, quantity: input.quantity, createdAt: nowIso() });
+      this.state.setInitialVersion(RESERVATION, reservation.id);
+      const itemVersion = this.state.bumpVersion("inventory_item", input.itemId);
+      this.state.setMetadata("stock_event", `reservation-${reservation.id}-allocate`, { apiItemVersion: itemVersion });
+      return apiReservationFromNative(reservation, 1);
+    });
+  }
+
+  async releaseReservation(id: string, expectedVersion: number | undefined, _ctx: RequestContext): Promise<ApiReservation> {
+    return attempt(() => {
+      const current = this.reservations.get(id);
+      if (current === undefined) throw new DomainError("reservation_not_found", `reservation ${id} does not exist`);
+      this.state.ensureVersion(RESERVATION, id, expectedVersion);
+      const released = this.reservations.release(id);
+      const version = this.state.bumpVersion(RESERVATION, id);
+      const itemVersion = this.state.bumpVersion("inventory_item", current.itemId);
+      this.state.setMetadata("stock_event", `reservation-${id}-release`, { apiItemVersion: itemVersion });
+      return apiReservationFromNative(released, version);
+    });
+  }
+
+  async listReservations(revisionId: string): Promise<readonly ApiReservation[]> {
+    return attempt(() => this.reservations.list().filter((reservation) => reservation.projectRevisionId === revisionId).map((reservation) => apiReservationFromNative(reservation, this.state.getVersion(RESERVATION, reservation.id))));
+  }
+
+  async getReservationDetails(id: string): Promise<ReservationDetails | null> {
+    return attempt(() => {
+      const reservation = this.reservations.get(id);
+      if (reservation === undefined) return null;
+      const bomLine = this.boms.getLine(reservation.bomLineId);
+      if (bomLine === undefined || bomLine.revisionId !== reservation.projectRevisionId) return null;
+      const projectRevision = this.projects.getRevision(reservation.projectRevisionId);
+      if (projectRevision === undefined) return null;
+      return {
+        reservation: apiReservationFromNative(reservation, this.state.getVersion(RESERVATION, reservation.id)),
+        projectId: projectRevision.projectId,
+        projectRevisionId: reservation.projectRevisionId,
+        bomLine: this.toApiBom(bomLine)
+      };
+    });
+  }
+
+  async recordUsage(input: UsageInput, ctx: RequestContext): Promise<StockMutation> {
+    return attempt(() => {
+      const project = this.projects.get(input.projectId);
+      if (project === undefined) throw new DomainError("project_not_found", `project ${input.projectId} does not exist`);
+      const nativeItem = this.inventory.native(input.itemId);
+      if (nativeItem === undefined) throw new DomainError("inventory_not_found", `inventory item ${input.itemId} does not exist`);
+      if (nativeItem.unit !== mapApiUnitToDomain(input.unit)) throw new DomainError("invalid_unit", `unit mismatch: item uses ${nativeItem.unit}, usage uses ${input.unit}`);
+      if (!Number.isFinite(input.quantity) || input.quantity <= 0) throw new DomainError("invalid_usage_quantity", "usage quantity must be greater than zero");
+
+      if (input.reservationId === undefined) {
+        return this.inventory.recordStockEvent({ itemId: input.itemId, type: "consume", quantity: input.quantity, unit: input.unit, ...(input.note === undefined ? {} : { note: input.note }), projectId: input.projectId }, ctx);
+      }
+
+      const reservation = this.reservations.get(input.reservationId);
+      if (reservation === undefined) throw new DomainError("reservation_not_found", `reservation ${input.reservationId} does not exist`);
+      if (reservation.status !== "active") throw new DomainError("reservation_not_active", `reservation ${input.reservationId} is no longer active`);
+      if (reservation.itemId !== input.itemId) throw new DomainError("invalid_usage_reference", "usage item does not match the reservation");
+      const revision = this.findProjectRevision(reservation.projectRevisionId);
+      if (revision === undefined || revision.projectId !== project.id) throw new DomainError("invalid_usage_reference", "reservation belongs to a different project revision");
+      const usageEvent = createStockEvent({
+        id: createId("usage"),
+        itemId: input.itemId,
+        kind: "consume",
+        quantity: input.quantity,
+        unit: nativeItem.unit,
+        reason: input.note ?? `Consume reservation ${input.reservationId}`,
+        actor: { type: ctx.source === "mcp" ? "agent" : ctx.source === "import" ? "import" : ctx.source === "system" ? "system" : "human", id: ctx.actor },
+        source: ctx.source,
+        evidence: { projectId: project.id, reservationId: input.reservationId, ...(input.note === undefined ? {} : { note: input.note }) },
+        correlationId: ctx.correlationId,
+        ...(ctx.idempotencyKey === undefined ? {} : { idempotencyKey: ctx.idempotencyKey })
+      });
+      const consumed = this.reservations.consume(input.reservationId, input.quantity, usageEvent);
+      this.state.bumpVersion(RESERVATION, input.reservationId);
+      const releaseVersion = this.state.bumpVersion("inventory_item", input.itemId);
+      this.state.setMetadata("stock_event", consumed.releaseEvent.id, { apiItemVersion: releaseVersion });
+      const usageVersion = this.state.bumpVersion("inventory_item", input.itemId);
+      this.state.setMetadata("stock_event", consumed.usage.event.id, { apiItemVersion: usageVersion });
+      const currentItem = this.inventory.native(input.itemId);
+      if (currentItem === undefined) throw new DomainError("inventory_not_found", `inventory item ${input.itemId} does not exist`);
+      return { event: apiStockEventFromNative(consumed.usage.event, usageVersion), item: this.inventory.toApi(currentItem, usageVersion) };
+    });
+  }
+
+  private toApiProject(project: Project): ApiProject {
+    const revisions = this.projects.listRevisions(project.id);
+    return apiProjectFromNative(project, this.state.getVersion(PROJECT, project.id), this.state.getMetadata(PROJECT, project.id), currentRevisionId(revisions));
+  }
+
+  private toApiBom(line: BomLine, version = this.state.getVersion(BOM, line.id)): ApiBomLine {
+    const metadata = bomMetadata(this.state.getMetadata(BOM, line.id));
+    return apiBomLineFromNative(line, metadata, version);
+  }
+
+  private latestProjectRevisionId(projectId: string): string | undefined {
+    return currentRevisionId(this.projects.listRevisions(projectId));
+  }
+
+  private latestWorkItemRevisionId(workItemId: string): string | undefined {
+    return currentRevisionId(this.projects.listWorkItemRevisions(workItemId));
+  }
+
+  private findProjectRevision(id: string): { readonly revision: ProjectRevision; readonly projectId: string } | undefined {
+    const revision = this.projects.getRevision(id);
+    return revision === undefined ? undefined : { revision, projectId: revision.projectId };
+  }
+
+  private findWorkItem(workItemId: string): WorkItem | undefined {
+    return this.projects.getWorkItem(workItemId);
+  }
+
+  private findWorkItemRevision(id: string): { readonly revision: WorkItemRevision; readonly projectId: string } | undefined {
+    return this.projects.getWorkItemRevision(id);
+  }
+
+  private apiUnit(unit: BomLine["unit"]): ApiBomLine["unit"] {
+    switch (unit) {
+      case "gram": return "gram";
+      case "millimetre": return "millimetre";
+      case "millilitre": return "millilitre";
+      case "meter":
+      case "metre": return "metre";
+      case "set": return "set";
+      default: return "each";
+    }
+  }
+}

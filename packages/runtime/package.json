@@ -1,0 +1,28 @@
+{
+  "name": "@benchledger/runtime",
+  "version": "0.1.0",
+  "description": "Production runtime adapters and backup support for BenchLedger",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js",
+    "./backup": "./dist/backup.js"
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@benchledger/api-contract": "0.1.0",
+    "@benchledger/application": "0.1.0",
+    "@benchledger/artifacts": "0.1.0",
+    "@benchledger/database": "0.1.0",
+    "@benchledger/domain": "0.1.0"
+  }
+}

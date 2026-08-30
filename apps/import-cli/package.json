@@ -1,0 +1,24 @@
+{
+  "name": "@benchledger/import-cli",
+  "version": "0.1.0",
+  "description": "Private one-shot legacy inventory importer for BenchLedger",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "benchledger-import": "./dist/main.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --config vitest.config.ts",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@benchledger/database": "0.1.0",
+    "@benchledger/domain": "0.1.0",
+    "@benchledger/importers": "0.1.0",
+    "@benchledger/runtime": "0.1.0"
+  }
+}
