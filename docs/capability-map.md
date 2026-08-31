@@ -75,7 +75,7 @@ kept in the checked-in capability contract and enforced server-side.
 | Human workflow | UI surface | MCP composition |
 | --- | --- | --- |
 | See what I have | Inventory dashboard and item detail | `read_inventory_summary` → `list_inventory` → item resource |
-| Organize inventory | Planned settings UI; API/MCP available | `list_inventory_categories` → `create_inventory_category` / `update_inventory_category` / `archive_inventory_category`; pass `categoryNodeId` when creating or updating an item |
+| Organize inventory | Settings category manager; inventory table and item drawer show managed assignments | `list_inventory_categories` → `create_inventory_category` / `update_inventory_category` / `archive_inventory_category`; pass `categoryNodeId` when creating or updating an item |
 | Count uncertain stock | Item count form and stock timeline | `read_inventory_item` → `record_stock_event(kind=count_correction)` |
 | Add an exact printer or spool | Exact-product guided add | catalog search/read → `create_inventory_with_product_profile` |
 | Start a project | Guided project setup | `create_project_with_initial_revision` → `create_work_item`; use `create_project_revision` for later planning baselines |

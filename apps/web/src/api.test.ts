@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, createSampleWorkspaceAdapter, createWorkspaceAdapter, mapInventoryItem } from "./api";
+import { loadAllInventoryCategories } from "./App";
 import type { Artifact, InventoryItem, Project } from "./domain";
 
 type ServerInventoryItem = Parameters<typeof mapInventoryItem>[0];
@@ -71,6 +72,170 @@ afterEach(() => {
 });
 
 describe("authenticated BenchLedger API adapter", () => {
+  it("follows opaque cursors when loading all managed categories", async () => {
+    const calls: Array<{ limit?: number; cursor?: string }> = [];
+    const categories = [
+      { id: "category-tools", name: "Tools", sortOrder: 0, archived: false, createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 },
+      { id: "category-electronics", name: "Electronics", sortOrder: 1, archived: false, createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 }
+    ] as const;
+    const adapter = {
+      listInventoryCategories: async (options: { limit?: number; cursor?: string } = {}) => {
+        calls.push(options);
+        return options.cursor === undefined
+          ? { data: categories.slice(0, 1), limit: 1, total: 2, nextCursor: "opaque-next" }
+          : { data: categories.slice(1), limit: 1, total: 2 };
+      }
+    };
+
+    await expect(loadAllInventoryCategories(adapter, 1)).resolves.toEqual(categories);
+    expect(calls).toEqual([{ limit: 1 }, { limit: 1, cursor: "opaque-next" }]);
+  });
+
+  it("keeps quick-create identity separate while retrying the same category assignment", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-quick-category" });
+    const requestBodies: string[] = [];
+    const requestKeys: string[] = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async (_input, init) => {
+        requestBodies.push(String(init?.body));
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        return Promise.reject(new TypeError("response lost after commit"));
+      })
+      .mockImplementationOnce(async (_input, init) => {
+        requestBodies.push(String(init?.body));
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        return jsonResponse({ data: serverItem({ id: "quick-tool", kind: "tool", categoryNodeId: "category-tools", name: "Hex driver" }) });
+      });
+
+    const adapter = createWorkspaceAdapter();
+    const input = { name: "Hex driver", category: "Accessories" as const, kind: "tool", categoryNodeId: "category-tools", quantity: 1, unit: "each" as const };
+    await expect(adapter.createInventoryItem(input)).rejects.toMatchObject({ kind: "offline" });
+    await expect(adapter.createInventoryItem(input)).resolves.toMatchObject({ id: "quick-tool", kind: "tool", categoryNodeId: "category-tools" });
+    expect(requestBodies[1]).toBe(requestBodies[0]);
+    expect(requestKeys[1]).toBe(requestKeys[0]);
+    expect(JSON.parse(requestBodies[0]!)).toMatchObject({ name: "Hex driver", kind: "tool", categoryNodeId: "category-tools", quantity: 1, unit: "each" });
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("x-csrf-token")).toBe("csrf-quick-category");
+  });
+
+  it("sends CSRF, idempotency, and optimistic versions for category mutations", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-category-mutation" });
+    const category = { id: "category-tools", name: "Tools", sortOrder: 0, archived: false, createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ data: category }))
+      .mockResolvedValueOnce(jsonResponse({ data: { ...category, name: "Bench tools", sortOrder: 2, version: 2 } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { ...category, name: "Bench tools", sortOrder: 2, archived: true, version: 3 } }));
+    const adapter = createWorkspaceAdapter();
+
+    await adapter.createInventoryCategory({ name: "Tools", sortOrder: 0 });
+    await adapter.updateInventoryCategory("category-tools", { name: "Bench tools", sortOrder: 2 }, 1);
+    await adapter.archiveInventoryCategory("category-tools", 2);
+
+    const createInit = fetchMock.mock.calls[0]?.[1];
+    const updateInit = fetchMock.mock.calls[1]?.[1];
+    const archiveInit = fetchMock.mock.calls[2]?.[1];
+    expect(new Headers(createInit?.headers).get("x-csrf-token")).toBe("csrf-category-mutation");
+    expect(new Headers(createInit?.headers).get("idempotency-key")).toMatch(/^web-inventory-category-/);
+    expect(new Headers(updateInit?.headers).get("if-match")).toBe("1");
+    expect(new Headers(updateInit?.headers).get("idempotency-key")).toMatch(/^web-inventory-category-update-/);
+    expect(JSON.parse(String(updateInit?.body))).toEqual({ name: "Bench tools", sortOrder: 2 });
+    expect(new Headers(archiveInit?.headers).get("if-match")).toBe("2");
+    expect(new Headers(archiveInit?.headers).get("idempotency-key")).toMatch(/^web-inventory-category-archive-/);
+  });
+
+  it("reuses a category mutation key after an ambiguous response", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-category-retry" });
+    const category = { id: "category-tools", name: "Bench tools", sortOrder: 2, archived: false, createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 2 };
+    const requestKeys: string[] = [];
+    const requestBodies: string[] = [];
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async (_input, init) => {
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        requestBodies.push(String(init?.body));
+        return Promise.reject(new TypeError("response lost after commit"));
+      })
+      .mockImplementationOnce(async (_input, init) => {
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        requestBodies.push(String(init?.body));
+        return jsonResponse({ data: category });
+      })
+      .mockImplementationOnce(async (_input, init) => {
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        requestBodies.push(String(init?.body));
+        return jsonResponse({ data: { ...category, version: 3 } });
+      });
+
+    const adapter = createWorkspaceAdapter();
+    const input = { name: "Bench tools", sortOrder: 2 };
+    await expect(adapter.updateInventoryCategory("category-tools", input, 1)).rejects.toMatchObject({ kind: "offline" });
+    await expect(adapter.updateInventoryCategory("category-tools", input, 1)).resolves.toMatchObject(category);
+    await expect(adapter.updateInventoryCategory("category-tools", input, 1)).resolves.toMatchObject({ version: 3 });
+    expect(requestKeys[1]).toBe(requestKeys[0]);
+    expect(requestKeys[0]).toMatch(/^web-inventory-category-update-/);
+    expect(requestBodies[1]).toBe(requestBodies[0]);
+    expect(requestKeys[2]).not.toBe(requestKeys[1]);
+    expect(requestBodies[2]).toBe(requestBodies[1]);
+  });
+
+  it("reuses a category create key after a lost response", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-category-create-retry" });
+    const category = { id: "category-new", name: "New category", sortOrder: 4, archived: false, createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 };
+    const requestKeys: string[] = [];
+    const requestBodies: string[] = [];
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async (_input, init) => {
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        requestBodies.push(String(init?.body));
+        return Promise.reject(new TypeError("response lost after commit"));
+      })
+      .mockImplementationOnce(async (_input, init) => {
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        requestBodies.push(String(init?.body));
+        return jsonResponse({ data: category });
+      });
+
+    const adapter = createWorkspaceAdapter();
+    const input = { name: "New category", sortOrder: 4 };
+    await expect(adapter.createInventoryCategory(input)).rejects.toMatchObject({ kind: "offline" });
+    await expect(adapter.createInventoryCategory(input)).resolves.toMatchObject(category);
+    expect(requestKeys[1]).toBe(requestKeys[0]);
+    expect(requestBodies[1]).toBe(requestBodies[0]);
+    expect(JSON.parse(requestBodies[0]!)).toEqual({ name: "New category", sortOrder: 4 });
+  });
+
+  it("reuses an archive key after a lost response and refreshes it after success", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-category-archive-retry" });
+    const category = { id: "category-tools", name: "Tools", sortOrder: 0, archived: true, createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 2 };
+    const requestKeys: string[] = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async (_input, init) => {
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        return Promise.reject(new TypeError("response lost after commit"));
+      })
+      .mockImplementationOnce(async (_input, init) => {
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        return jsonResponse({ data: category });
+      })
+      .mockImplementationOnce(async (_input, init) => {
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        return jsonResponse({ data: { ...category, version: 3 } });
+      });
+
+    const adapter = createWorkspaceAdapter();
+    await expect(adapter.archiveInventoryCategory("category-tools", 1)).rejects.toMatchObject({ kind: "offline" });
+    await expect(adapter.archiveInventoryCategory("category-tools", 1)).resolves.toMatchObject(category);
+    await expect(adapter.archiveInventoryCategory("category-tools", 1)).resolves.toMatchObject({ version: 3 });
+    expect(requestKeys[1]).toBe(requestKeys[0]);
+    expect(requestKeys[0]).toMatch(/^web-inventory-category-archive-/);
+    expect(requestKeys[2]).not.toBe(requestKeys[1]);
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("x-csrf-token")).toBe("csrf-category-archive-retry");
+    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("if-match")).toBe("1");
+  });
+
+  it("keeps sample category rename validation aligned with the managed API", async () => {
+    const adapter = createSampleWorkspaceAdapter();
+    await expect(adapter.updateInventoryCategory("category-tools", { name: "Filament" }, 1)).rejects.toMatchObject({ status: 409, message: "A category with this name already exists beside it." });
+  });
+
   it("surfaces an authentication boundary instead of silently showing synthetic data", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "0.1.0", demo: false, now: "2026-08-30T10:00:00.000Z" }))
       .mockResolvedValueOnce(jsonResponse({ error: { code: "unauthenticated", message: "Authentication is required" } }, 401));
@@ -449,7 +614,7 @@ describe("authenticated BenchLedger API adapter", () => {
     expect(search[0]).toMatchObject({ id: canonicalProduct.id, family: "PETG", model: "PETG HF", colour: "Black", netMassG: 1000, sku: "PETG-HF-BLK" });
     const createdProduct = await adapter.createCatalogProduct({ kind: "filament", manufacturer: "Bambu Lab", family: "PETG", model: "PETG HF", variant: "HF", colour: "Black", colourCode: "BK", diameterMm: 1.75, netMassG: 1000 });
     expect(createdProduct).toMatchObject({ id: canonicalProduct.id, materialFamily: "PETG" });
-    const exact = await adapter.createExactInventoryItem({ category: "Filament", product: createdProduct, quantity: 1000, linkState: "reported", filament: { lotBatch: "LOT-1", state: "opened", openedAt: "2026-08-30", tareMassG: 164, placement: "AMS slot 1" } });
+    const exact = await adapter.createExactInventoryItem({ category: "Filament", categoryNodeId: "category-filament", product: createdProduct, quantity: 1000, linkState: "reported", filament: { lotBatch: "LOT-1", state: "opened", openedAt: "2026-08-30", tareMassG: 164, placement: "AMS slot 1" } });
     expect(exact).toMatchObject({ id: "spool-1", catalogProduct: { id: canonicalProduct.id }, productProfile: { linkState: "reported", filament: { lotBatch: "LOT-1", state: "opened" } } });
 
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/v1/catalog/products?kind=filament&q=PETG");
@@ -460,7 +625,7 @@ describe("authenticated BenchLedger API adapter", () => {
     expect(inventoryBody).not.toHaveProperty("catalogProductId");
     expect(inventoryBody).not.toHaveProperty("productProfile");
     expect(inventoryBody).not.toHaveProperty("linkState");
-    expect(inventoryBody).toMatchObject({ kind: "filament", unit: "gram", manufacturer: "Bambu Lab", sku: "PETG-HF-BLK" });
+    expect(inventoryBody).toMatchObject({ kind: "filament", categoryNodeId: "category-filament", unit: "gram", manufacturer: "Bambu Lab", sku: "PETG-HF-BLK" });
     const profileBody = compoundBody.profile;
     expect(profileBody).toEqual({ catalogProductId: canonicalProduct.id, profileType: "filament_spool", linkState: "reported", details: { lot: "LOT-1", openedState: "open", openedAt: "2026-08-30T00:00:00.000Z", tareMassG: 164, currentPlacement: "AMS slot 1" } });
     expect(profileBody).not.toHaveProperty("itemId");

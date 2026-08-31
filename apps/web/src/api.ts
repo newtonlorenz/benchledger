@@ -25,10 +25,12 @@ import type {
   ReconciliationReservationViewModel,
   ReconciliationViewModel
 } from "./reconciliation-ui";
+import { DEFAULT_MANAGED_INVENTORY_CATEGORIES } from "./category-ui";
+import type { CategoryCreateInput, CategoryUpdateInput, ManagedInventoryCategory } from "./category-ui";
 
 type ServerHealth = { status: "ok" | "degraded"; service: string; version: string; demo: boolean; now: string };
 type ServerInventoryItem = {
-  id: string; name: string; kind: string; description?: string; manufacturer?: string; model?: string; sku?: string;
+  id: string; name: string; kind: string; categoryNodeId?: string; description?: string; manufacturer?: string; model?: string; sku?: string;
   quantity: number; availableQuantity: number; unit: string; location?: string;
   dimensions?: { lengthMm?: number; widthMm?: number; heightMm?: number; diameterMm?: number; measured?: boolean; uncertaintyMm?: number };
   tags: string[];
@@ -67,7 +69,7 @@ type ServerReconciliationCommit = { id: string; projectId: string; projectRevisi
 type ServerReservation = { id: string; lineId: string; itemId: string; quantity: number; status: string; version: number; unit?: string };
 export type RevisionInput = { name: string; notes?: string; status?: string; buildConfig?: BuildConfigInput };
 export type BomInput = { name: string; requiredQuantity: number; unit: BomLine["unit"]; itemId?: string; optional?: boolean; note?: string };
-export type InventoryUpdateInput = Pick<InventoryItem, "name" | "description" | "manufacturer" | "location" | "sku" | "tags"> & { model: string };
+export type InventoryUpdateInput = Pick<InventoryItem, "name" | "description" | "manufacturer" | "location" | "sku" | "tags"> & { model: string; categoryNodeId?: string | null };
 
 export type CatalogProductDraft = {
   kind: CatalogKind;
@@ -85,6 +87,7 @@ export type CatalogProductDraft = {
 
 export type ExactInventoryInput = {
   category: "Filament" | "Printers";
+  categoryNodeId?: string;
   product: CatalogProduct;
   quantity: number;
   linkState: InventoryProductProfile["linkState"];
@@ -115,6 +118,7 @@ export class ApiError extends Error {
 export interface LoginResult { authenticated: true; actor: string; csrfToken: string; expiresAt: string }
 export interface SessionResult { authenticated: true; actor: string; source?: string; scopes: string[]; projectIds?: string[] }
 export interface WorkspaceSnapshot { inventory: InventoryItem[]; projects: Project[]; offers: Offer[]; source: "api" | "synthetic"; fetchedAt: string; health?: ServerHealth }
+export interface InventoryCategoryPage { data: readonly ManagedInventoryCategory[]; nextCursor?: string; limit: number; total?: number }
 export interface WorkspaceAdapter {
   checkHealth(): Promise<ServerHealth>;
   session(): Promise<SessionResult>;
@@ -123,7 +127,11 @@ export interface WorkspaceAdapter {
   loadWorkspace(): Promise<WorkspaceSnapshot>;
   recordCount(itemId: string, quantity: number): Promise<InventoryItem>;
   updateInventoryItem(itemId: string, input: Partial<InventoryUpdateInput>, expectedVersion?: number): Promise<InventoryItem>;
-  createInventoryItem(input: { name: string; category: InventoryItem["category"]; quantity: number; unit: InventoryItem["unit"] }): Promise<InventoryItem>;
+  createInventoryItem(input: { name: string; category: InventoryItem["category"]; categoryNodeId?: string; kind?: string; quantity: number; unit: InventoryItem["unit"] }): Promise<InventoryItem>;
+  listInventoryCategories(options?: { includeArchived?: boolean; limit?: number; cursor?: string }): Promise<InventoryCategoryPage>;
+  createInventoryCategory(input: CategoryCreateInput): Promise<ManagedInventoryCategory>;
+  updateInventoryCategory(id: string, input: CategoryUpdateInput, expectedVersion: number): Promise<ManagedInventoryCategory>;
+  archiveInventoryCategory(id: string, expectedVersion: number): Promise<ManagedInventoryCategory>;
   searchCatalogProducts(kind: CatalogKind, query?: string): Promise<CatalogProduct[]>;
   createCatalogProduct(input: CatalogProductDraft): Promise<CatalogProduct>;
   createExactInventoryItem(input: ExactInventoryInput): Promise<InventoryItem>;
@@ -556,6 +564,7 @@ function exactInventoryBody(input: ExactInventoryInput): UnknownRecord {
   return {
     name: catalogProductDisplayName(product),
     kind: input.category === "Filament" ? "filament" : "printer",
+    ...(input.categoryNodeId ? { categoryNodeId: input.categoryNodeId } : {}),
     quantity: input.quantity,
     unit: input.category === "Filament" ? "gram" : "each",
     manufacturer: product.manufacturer,
@@ -665,7 +674,7 @@ export function mapInventoryItem(item: ServerInventoryItem): InventoryItem {
     unit: "mm" as const
   } : undefined;
   return {
-    id: item.id, name: item.name, kind: item.kind, category,
+    id: item.id, name: item.name, kind: item.kind, category, ...(item.categoryNodeId ? { categoryNodeId: item.categoryNodeId } : {}),
     variant: item.model ?? item.sku ?? item.kind,
     ...(item.model ? { model: item.model } : {}),
     description: item.description?.trim() || "No description recorded.", quantity: item.quantity, availableQuantity: item.availableQuantity, unit: mapUnit(item.unit),
@@ -683,6 +692,40 @@ export function mapInventoryItem(item: ServerInventoryItem): InventoryItem {
     ...(item.evidence.observedAt ? { lastCounted: item.evidence.observedAt.slice(0, 10) } : {}), accent: mapAccent(category), serverUnit: item.unit,
     ...(catalogProduct ? { catalogProduct } : {}), ...(productProfile ? { productProfile } : {})
   };
+}
+
+export function mapManagedInventoryCategory(value: unknown): ManagedInventoryCategory | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const id = firstString(record, "id");
+  const name = firstString(record, "name");
+  const sortOrder = firstNumber(record, "sortOrder", "sort_order");
+  const version = firstNumber(record, "version");
+  const createdAt = firstString(record, "createdAt", "created_at");
+  const updatedAt = firstString(record, "updatedAt", "updated_at");
+  if (!id || !name || sortOrder === undefined || version === undefined || !createdAt || !updatedAt) return undefined;
+  const parentId = firstString(record, "parentId", "parent_id");
+  return {
+    id,
+    name,
+    ...(parentId ? { parentId } : {}),
+    sortOrder,
+    archived: record.archived === true,
+    createdAt,
+    updatedAt,
+    version
+  };
+}
+
+function managedCategoryPage(value: unknown): InventoryCategoryPage {
+  const record = asRecord(value);
+  const rawData = record?.data ?? value;
+  const data = Array.isArray(rawData) ? rawData : asRecord(rawData)?.data;
+  const categories = (Array.isArray(data) ? data : []).map(mapManagedInventoryCategory).filter((category): category is ManagedInventoryCategory => category !== undefined);
+  const nextCursor = record && typeof record.nextCursor === "string" ? record.nextCursor : asRecord(rawData)?.nextCursor;
+  const limit = record && typeof record.limit === "number" ? record.limit : asRecord(rawData)?.limit;
+  const total = record && typeof record.total === "number" ? record.total : asRecord(rawData)?.total;
+  return { data: categories, limit: typeof limit === "number" ? limit : categories.length, ...(typeof nextCursor === "string" ? { nextCursor } : {}), ...(typeof total === "number" ? { total } : {}) };
 }
 
 function mapBomLine(line: ServerBomLine): BomLine {
@@ -803,6 +846,10 @@ type PendingExactInventoryCommand = {
   readonly key: string;
   readonly body: ExactInventoryRequestBody;
 };
+type PendingCategoryCommand = {
+  readonly key: string;
+  readonly body: UnknownRecord;
+};
 type ReconciliationDraftRequestBody = ReturnType<typeof reconciliationDraftBody>;
 type ReconciliationCommitRequestBody = ReturnType<typeof reconciliationCommitBody>;
 type PendingReconciliationCommand<TBody> = {
@@ -836,6 +883,10 @@ function revisionCommandId(projectId: string, body: RevisionRequestBody): string
   // project/body pair. It is intentionally not derived from the project
   // alone, so a later revision cannot inherit an earlier key.
   return `${projectId}\u0000${JSON.stringify(body)}`;
+}
+
+function categoryCommandId(action: string, id: string | undefined, body: UnknownRecord): string {
+  return `${action}\u0000${id ?? ""}\u0000${JSON.stringify(body)}`;
 }
 
 function exactInventoryCommandId(body: ExactInventoryRequestBody): string {
@@ -890,6 +941,29 @@ function serverQuantityUnit(unit: InventoryItem["unit"]): string {
   if (unit === "g") return "gram";
   if (unit === "m") return "metre";
   return "each";
+}
+
+type InventoryRequestBody = ReturnType<typeof inventoryRequestBody>;
+type PendingInventoryCommand = {
+  readonly key: string;
+  readonly body: InventoryRequestBody;
+};
+
+function inventoryRequestBody(input: { name: string; category: InventoryItem["category"]; categoryNodeId?: string; kind?: string; quantity: number; unit: InventoryItem["unit"] }): UnknownRecord {
+  return {
+    name: input.name,
+    kind: input.kind ?? serverItemKind(input.category),
+    ...(input.categoryNodeId ? { categoryNodeId: input.categoryNodeId } : {}),
+    quantity: input.quantity,
+    unit: serverQuantityUnit(input.unit),
+    tags: [input.category.toLowerCase()],
+    links: [],
+    evidence: { state: "unknown", source: "ui" }
+  };
+}
+
+function inventoryCommandId(body: InventoryRequestBody): string {
+  return JSON.stringify(body);
 }
 
 function reconciliationUnit(unit: string): string {
@@ -1215,6 +1289,7 @@ function syntheticSnapshot(): WorkspaceSnapshot {
 export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
   const state = syntheticSnapshot();
   const catalogState = structuredClone(fallbackCatalogProducts);
+  let categoryState = structuredClone(DEFAULT_MANAGED_INVENTORY_CATEGORIES);
   const buildConfigs = new Map<string, BuildConfigSnapshot>();
   const nextRevision = (project: Project, input: RevisionInput): Project => ({
     ...project,
@@ -1242,9 +1317,13 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     async updateInventoryItem(itemId, input) {
       const item = state.inventory.find((candidate) => candidate.id === itemId);
       if (!item) throw new ApiError("Inventory item not found", { kind: "validation", status: 404 });
+      const { categoryNodeId, ...restInput } = input;
+      const { categoryNodeId: _existingCategoryNodeId, ...itemWithoutCategory } = item;
+      const baseItem = categoryNodeId === null ? itemWithoutCategory : item;
       const updated: InventoryItem = {
-        ...item,
-        ...input,
+        ...baseItem,
+        ...restInput,
+        ...(categoryNodeId === undefined || categoryNodeId === null ? {} : { categoryNodeId }),
         ...(input.model === undefined ? {} : { variant: input.model }),
         tags: input.tags ? [...input.tags] : item.tags,
         version: (item.version ?? 0) + 1
@@ -1253,9 +1332,50 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
       return updated;
     },
     async createInventoryItem(input) {
-      const item: InventoryItem = { id: `sample-item-${Date.now()}`, name: input.name, kind: serverItemKind(input.category), category: input.category, variant: "Variant not recorded", description: "Sample inventory item.", quantity: input.quantity, availableQuantity: 0, unit: input.unit, reserved: 0, state: "inspect-first", evidence: "delivered", provenance: { source: "sample workspace" }, location: "Unassigned", tags: [input.category.toLowerCase()], compatibility: [], accent: mapAccent(input.category), version: 1 };
+      const kind = input.kind ?? serverItemKind(input.category);
+      const item: InventoryItem = { id: `sample-item-${Date.now()}`, name: input.name, kind, category: mapCategory(kind), ...(input.categoryNodeId ? { categoryNodeId: input.categoryNodeId } : {}), variant: "Variant not recorded", description: "Sample inventory item.", quantity: input.quantity, availableQuantity: 0, unit: input.unit, reserved: 0, state: "inspect-first", evidence: "delivered", provenance: { source: "sample workspace" }, location: "Unassigned", tags: [input.category.toLowerCase()], compatibility: [], accent: mapAccent(input.category), version: 1 };
       state.inventory = [item, ...state.inventory];
       return item;
+    },
+    async listInventoryCategories(options = {}) {
+      const values = categoryState.filter((category) => options.includeArchived === true || !category.archived);
+      const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
+      const cursorIndex = options.cursor === undefined ? 0 : Math.max(values.findIndex((category) => category.id === options.cursor) + 1, 0);
+      const page = values.slice(cursorIndex, cursorIndex + limit);
+      const nextCursor = cursorIndex + page.length < values.length ? page.at(-1)?.id : undefined;
+      return { data: page, limit, total: values.length, ...(nextCursor === undefined ? {} : { nextCursor }) };
+    },
+    async createInventoryCategory(input) {
+      const parent = input.parentId ? categoryState.find((category) => category.id === input.parentId) : undefined;
+      if (input.parentId && (!parent || parent.archived)) throw new ApiError("Choose an active parent category.", { kind: "validation", status: 409 });
+      if (parent?.parentId) throw new ApiError("Categories support only one level of subcategories.", { kind: "validation", status: 409 });
+      const siblingNames = categoryState.filter((category) => category.parentId === input.parentId && !category.archived).map((category) => category.name.toLocaleLowerCase());
+      if (siblingNames.includes(input.name.trim().toLocaleLowerCase())) throw new ApiError("A category with this name already exists beside it.", { kind: "validation", status: 409 });
+      const now = new Date().toISOString();
+      const category: ManagedInventoryCategory = { id: input.id ?? `sample-category-${Date.now()}`, name: input.name.trim(), ...(input.parentId ? { parentId: input.parentId } : {}), sortOrder: input.sortOrder ?? 0, archived: false, createdAt: now, updatedAt: now, version: 1 };
+      categoryState = [...categoryState, category];
+      return category;
+    },
+    async updateInventoryCategory(id, input, expectedVersion) {
+      const current = categoryState.find((category) => category.id === id);
+      if (!current) throw new ApiError("Inventory category not found.", { kind: "validation", status: 404 });
+      if (current.version !== expectedVersion) throw new ApiError("This category changed in another tab. Reload it and try again.", { kind: "validation", status: 409, code: "version_conflict" });
+      const nextName = input.name === undefined ? current.name : input.name.trim();
+      const siblingNames = categoryState.filter((category) => category.id !== id && category.parentId === current.parentId && !category.archived).map((category) => category.name.toLocaleLowerCase());
+      if (siblingNames.includes(nextName.toLocaleLowerCase())) throw new ApiError("A category with this name already exists beside it.", { kind: "validation", status: 409 });
+      const updated: ManagedInventoryCategory = { ...current, ...(input.name === undefined ? {} : { name: input.name.trim() }), ...(input.sortOrder === undefined ? {} : { sortOrder: input.sortOrder }), updatedAt: new Date().toISOString(), version: current.version + 1 };
+      categoryState = categoryState.map((category) => category.id === id ? updated : category);
+      return updated;
+    },
+    async archiveInventoryCategory(id, expectedVersion) {
+      const current = categoryState.find((category) => category.id === id);
+      if (!current) throw new ApiError("Inventory category not found.", { kind: "validation", status: 404 });
+      if (current.version !== expectedVersion) throw new ApiError("This category changed in another tab. Reload it and try again.", { kind: "validation", status: 409, code: "version_conflict" });
+      if (categoryState.some((category) => category.parentId === id && !category.archived)) throw new ApiError("Archive its active subcategories first.", { kind: "validation", status: 409 });
+      if (state.inventory.some((item) => item.categoryNodeId === id)) throw new ApiError("This category is in use by active inventory. Reassign those items first.", { kind: "validation", status: 409 });
+      const archived: ManagedInventoryCategory = { ...current, archived: true, updatedAt: new Date().toISOString(), version: current.version + 1 };
+      categoryState = categoryState.map((category) => category.id === id ? archived : category);
+      return archived;
     },
     async searchCatalogProducts(kind, query = "") {
       const needle = query.trim().toLocaleLowerCase();
@@ -1273,6 +1393,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
         name: catalogProductDisplayName(input.product),
         kind: input.category === "Filament" ? "filament" : "printer",
         category: input.category,
+        ...(input.categoryNodeId ? { categoryNodeId: input.categoryNodeId } : {}),
         variant: [input.product.family, input.product.model, input.product.variant].filter(Boolean).join(" · ") || "Exact product",
         description: input.category === "Filament" ? "Exact filament product with a physical spool profile." : "Exact printer product with an owned asset profile.",
         quantity: input.quantity,
@@ -1358,6 +1479,8 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
   const pendingRevisionCommands = new Map<string, PendingRevisionCommand>();
   const pendingProjectCommands = new Map<string, PendingProjectCommand>();
   const pendingExactInventoryCommands = new Map<string, PendingExactInventoryCommand>();
+  const pendingInventoryCommands = new Map<string, PendingInventoryCommand>();
+  const pendingCategoryCommands = new Map<string, PendingCategoryCommand>();
   const pendingReconciliationDraftCommands = new Map<string, PendingReconciliationCommand<ReconciliationDraftRequestBody>>();
   const pendingReconciliationCommitCommands = new Map<string, PendingReconciliationCommand<ReconciliationCommitRequestBody>>();
   const adapter: WorkspaceAdapter = {
@@ -1413,7 +1536,8 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         ...(input.manufacturer === undefined ? {} : { manufacturer: input.manufacturer }),
         ...(input.sku === undefined ? {} : { sku: input.sku }),
         ...(input.location === undefined ? {} : { location: input.location }),
-        ...(input.tags === undefined ? {} : { tags: [...input.tags] })
+        ...(input.tags === undefined ? {} : { tags: [...input.tags] }),
+        ...(input.categoryNodeId === undefined ? {} : { categoryNodeId: input.categoryNodeId })
       };
       const payload = await request<{ data?: ServerInventoryItem }>(`/inventory/${encodeURIComponent(itemId)}`, {
         method: "PATCH",
@@ -1429,12 +1553,85 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
     async createInventoryItem(input) {
       const token = csrfToken ?? cookieValue("forge_csrf");
       if (!token) throw new ApiError("Your session needs a fresh CSRF token before adding inventory", { kind: "csrf", status: 403 });
-      const payload = await request<{ data: ServerInventoryItem }>("/inventory", { method: "POST", headers: { "Idempotency-Key": idempotencyKey("inventory") }, body: JSON.stringify({ name: input.name, kind: serverItemKind(input.category), quantity: input.quantity, unit: serverQuantityUnit(input.unit), tags: [input.category.toLowerCase()], links: [], evidence: { state: "unknown", source: "ui" } }) }, token);
-      const item = mutationData(payload);
-      serverUnits.set(item.id, item.unit);
-      const mapped = mapInventoryItem(item);
-      inventoryCache.set(mapped.id, mapped);
-      return mapped;
+      const body = inventoryRequestBody(input);
+      const commandId = inventoryCommandId(body);
+      const pending = pendingInventoryCommands.get(commandId);
+      const command = pending ?? { key: idempotencyKey("inventory"), body };
+      if (!pending) pendingInventoryCommands.set(commandId, command);
+      try {
+        const payload = await request<{ data: ServerInventoryItem }>("/inventory", { method: "POST", headers: { "Idempotency-Key": command.key }, body: JSON.stringify(command.body) }, token);
+        const item = mutationData(payload);
+        serverUnits.set(item.id, item.unit);
+        const mapped = mapInventoryItem(item);
+        inventoryCache.set(mapped.id, mapped);
+        if (pendingInventoryCommands.get(commandId)?.key === command.key) pendingInventoryCommands.delete(commandId);
+        return mapped;
+      } catch (error: unknown) {
+        if (!mutationFailureIsAmbiguous(error) && pendingInventoryCommands.get(commandId)?.key === command.key) pendingInventoryCommands.delete(commandId);
+        throw error;
+      }
+    },
+    async listInventoryCategories(options = {}) {
+      const params = new URLSearchParams();
+      if (options.includeArchived) params.set("includeArchived", "true");
+      if (options.limit !== undefined) params.set("limit", String(options.limit));
+      if (options.cursor) params.set("cursor", options.cursor);
+      const payload = await request<unknown>(`/inventory/categories${params.toString() ? `?${params.toString()}` : ""}`);
+      return managedCategoryPage(payload);
+    },
+    async createInventoryCategory(input) {
+      const token = csrfToken ?? cookieValue("forge_csrf");
+      if (!token) throw new ApiError("Your session needs a fresh CSRF token before adding a category", { kind: "csrf", status: 403 });
+      const body: UnknownRecord = { name: input.name, ...(input.id ? { id: input.id } : {}), ...(input.parentId ? { parentId: input.parentId } : {}), ...(input.sortOrder === undefined ? {} : { sortOrder: input.sortOrder }) };
+      const commandId = categoryCommandId("create", undefined, body);
+      const pending = pendingCategoryCommands.get(commandId);
+      const command = pending ?? { key: idempotencyKey("inventory-category"), body };
+      if (!pending) pendingCategoryCommands.set(commandId, command);
+      try {
+        const category = mapManagedInventoryCategory(responseValue(await request<unknown>("/inventory/categories", { method: "POST", headers: { "Idempotency-Key": command.key }, body: JSON.stringify(command.body) }, token)));
+        if (!category) throw new ApiError("The service returned an incomplete category", { kind: "server", status: 502 });
+        if (pendingCategoryCommands.get(commandId)?.key === command.key) pendingCategoryCommands.delete(commandId);
+        return category;
+      } catch (error: unknown) {
+        if (!mutationFailureIsAmbiguous(error) && pendingCategoryCommands.get(commandId)?.key === command.key) pendingCategoryCommands.delete(commandId);
+        throw error;
+      }
+    },
+    async updateInventoryCategory(id, input, expectedVersion) {
+      const token = csrfToken ?? cookieValue("forge_csrf");
+      if (!token) throw new ApiError("Your session needs a fresh CSRF token before editing a category", { kind: "csrf", status: 403 });
+      const body: UnknownRecord = { ...input };
+      const commandId = categoryCommandId("update", id, { ...body, expectedVersion });
+      const pending = pendingCategoryCommands.get(commandId);
+      const command = pending ?? { key: idempotencyKey("inventory-category-update"), body };
+      if (!pending) pendingCategoryCommands.set(commandId, command);
+      try {
+        const category = mapManagedInventoryCategory(responseValue(await request<unknown>(`/inventory/categories/${encodeURIComponent(id)}`, { method: "PATCH", headers: { "Idempotency-Key": command.key, "If-Match": String(expectedVersion) }, body: JSON.stringify(command.body) }, token)));
+        if (!category) throw new ApiError("The service returned an incomplete category", { kind: "server", status: 502 });
+        if (pendingCategoryCommands.get(commandId)?.key === command.key) pendingCategoryCommands.delete(commandId);
+        return category;
+      } catch (error: unknown) {
+        if (!mutationFailureIsAmbiguous(error) && pendingCategoryCommands.get(commandId)?.key === command.key) pendingCategoryCommands.delete(commandId);
+        throw error;
+      }
+    },
+    async archiveInventoryCategory(id, expectedVersion) {
+      const token = csrfToken ?? cookieValue("forge_csrf");
+      if (!token) throw new ApiError("Your session needs a fresh CSRF token before archiving a category", { kind: "csrf", status: 403 });
+      const body: UnknownRecord = { expectedVersion };
+      const commandId = categoryCommandId("archive", id, body);
+      const pending = pendingCategoryCommands.get(commandId);
+      const command = pending ?? { key: idempotencyKey("inventory-category-archive"), body: {} };
+      if (!pending) pendingCategoryCommands.set(commandId, command);
+      try {
+        const category = mapManagedInventoryCategory(responseValue(await request<unknown>(`/inventory/categories/${encodeURIComponent(id)}/archive`, { method: "POST", headers: { "Idempotency-Key": command.key, "If-Match": String(expectedVersion) } }, token)));
+        if (!category) throw new ApiError("The service returned an incomplete category", { kind: "server", status: 502 });
+        if (pendingCategoryCommands.get(commandId)?.key === command.key) pendingCategoryCommands.delete(commandId);
+        return category;
+      } catch (error: unknown) {
+        if (!mutationFailureIsAmbiguous(error) && pendingCategoryCommands.get(commandId)?.key === command.key) pendingCategoryCommands.delete(commandId);
+        throw error;
+      }
     },
     async searchCatalogProducts(kind, query = "") {
       const params = new URLSearchParams({ kind });

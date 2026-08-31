@@ -161,6 +161,8 @@ export interface InventoryItem {
   name: string;
   /** API item kind retained for exact filtering and lossless edits. */
   kind?: string;
+  /** Optional user-managed taxonomy assignment; legacy semantic category remains separate. */
+  categoryNodeId?: string;
   category: InventoryCategory;
   variant: string;
   model?: string;

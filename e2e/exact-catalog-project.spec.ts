@@ -37,7 +37,11 @@ async function addExactInventory(
 ): Promise<Response> {
   await page.getByRole("button", { name: "Add item", exact: true }).click();
   const addDialog = page.getByRole("dialog", { name: "Add to inventory" });
-  await addDialog.getByRole("button", { name: new RegExp(`^${category}\\b`, "u") }).click();
+  await addDialog.getByRole("combobox", { name: /Item type/u }).selectOption(kind);
+  const categorySelect = addDialog.getByRole("combobox", { name: /Category/u });
+  await expect(categorySelect).toBeEnabled();
+  await categorySelect.selectOption({ label: category });
+  await addDialog.getByRole("button", { name: "Continue", exact: true }).click();
 
   const productSearch = page.getByRole("combobox", {
     name: category === "Filament" ? "Exact filament product" : "Exact printer model",
@@ -83,9 +87,10 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   );
   const printerBody = await printerResponse.json() as { data?: { item?: unknown; profile?: unknown } };
   expect(printerBody.data).toMatchObject({
-    item: { kind: "printer", quantity: 2 },
+    item: { kind: "printer", categoryNodeId: "category-printers", quantity: 2 },
     profile: { catalogProductId: "catalog-printer-h2d", profileType: "printer_asset", linkState: "confirmed" },
   });
+  expect(printerResponse.request().postDataJSON().item).toMatchObject({ kind: "printer", categoryNodeId: "category-printers" });
   expect(printerResponse.request().postDataJSON().profile).not.toHaveProperty("itemId");
 
   const filamentResponse = await addExactInventory(
@@ -98,9 +103,10 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   );
   const filamentBody = await filamentResponse.json() as { data?: { item?: unknown; profile?: unknown } };
   expect(filamentBody.data).toMatchObject({
-    item: { kind: "filament", quantity: 777, unit: "gram" },
+    item: { kind: "filament", categoryNodeId: "category-filament", quantity: 777, unit: "gram" },
     profile: { catalogProductId: "catalog-filament-petg-hf", profileType: "filament_spool", linkState: "confirmed" },
   });
+  expect(filamentResponse.request().postDataJSON().item).toMatchObject({ kind: "filament", categoryNodeId: "category-filament" });
   expect(filamentResponse.request().postDataJSON().profile).not.toHaveProperty("itemId");
 
   await page.getByRole("button", { name: "Workbench", exact: true }).click();

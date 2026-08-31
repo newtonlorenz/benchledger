@@ -20,10 +20,12 @@ import {
   sumMoneyByCurrency
 } from "./domain";
 import type { BomLineStatus, InventoryCategory, InventoryItem, Project, StockLabelTone, StockState } from "./domain";
-import { activity, capabilityGroups, categoryOptions, offers as fixtureOffers } from "./mock-data";
+import { activity, capabilityGroups, offers as fixtureOffers } from "./mock-data";
 import { Icon } from "./icons";
 import { ReconciliationUI } from "./reconciliation-ui";
 import type { ReconciliationViewModel } from "./reconciliation-ui";
+import { CategoryManager, CategorySelection, inventoryCategoryFilterOptions, managedCategoryForId, selectedCategoryLabel } from "./category-ui";
+import type { CategoryCreateInput, CategoryUpdateInput, ManagedInventoryCategory } from "./category-ui";
 
 type Page = "overview" | "inventory" | "projects" | "capabilities" | "settings";
 type ProjectTab = "plan" | "files" | "offers" | "reconciliation";
@@ -32,6 +34,22 @@ type PendingRevisionSetup = { readonly projectId: string; readonly revisionId: s
 type ProjectCreateOutcome = "created" | "failed" | "ambiguous";
 
 const ambiguousProjectCreationMessage = "BenchLedger could not confirm whether this project was created. Your details are still here. Retry safely; the same command will be replayed if it committed.";
+
+/** Read the bounded category endpoint to completion without inventing a larger page size. */
+export async function loadAllInventoryCategories(adapter: Pick<WorkspaceAdapter, "listInventoryCategories">, limit = 200): Promise<ManagedInventoryCategory[]> {
+  const categories: ManagedInventoryCategory[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+  do {
+    const page = await adapter.listInventoryCategories({ limit, ...(cursor === undefined ? {} : { cursor }) });
+    categories.push(...page.data.map((category) => ({ ...category })));
+    const nextCursor = page.nextCursor;
+    if (!nextCursor || seenCursors.has(nextCursor)) break;
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  } while (cursor !== undefined);
+  return categories;
+}
 
 const pageCopy: Record<Page, { label: string; icon: Parameters<typeof Icon>[0]["name"] }> = {
   overview: { label: "Workbench", icon: "grid" },
@@ -50,7 +68,7 @@ const categoryIcons: Record<InventoryCategory, Parameters<typeof Icon>[0]["name"
   Fasteners: "link",
   "Wire & cable": "link"
 };
-const addableCategories: readonly InventoryCategory[] = categoryOptions.slice(1) as readonly InventoryCategory[];
+const UNASSIGNED_CATEGORY_FILTER = "__unassigned__";
 
 function App() {
   const [adapter, setAdapter] = useState<WorkspaceAdapter>(() => createWorkspaceAdapter());
@@ -71,6 +89,7 @@ function App() {
   const [demoAvailable, setDemoAvailable] = useState(false);
   const [sampleMode, setSampleMode] = useState(false);
   const [reloadNonce, setReloadNonce] = useState(0);
+  const [categoryReloadNonce, setCategoryReloadNonce] = useState(0);
   const [showNewProject, setShowNewProject] = useState(false);
   const [showNewRevision, setShowNewRevision] = useState(false);
   const [showAddBom, setShowAddBom] = useState(false);
@@ -78,6 +97,9 @@ function App() {
   const [pendingRevisionSetup, setPendingRevisionSetup] = useState<PendingRevisionSetup>();
   const [catalogQuery, setCatalogQuery] = useState("");
   const [catalogProducts, setCatalogProducts] = useState<CatalogProduct[]>([]);
+  const [categories, setCategories] = useState<ManagedInventoryCategory[]>([]);
+  const [categoriesLoading, setCategoriesLoading] = useState(false);
+  const [categoriesError, setCategoriesError] = useState<string>();
   const catalogSearchSequence = useRef(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const newProjectTriggerRef = useRef<HTMLButtonElement>(null);
@@ -107,6 +129,21 @@ function App() {
     });
     return () => { active = false; };
   }, [adapter, reloadNonce]);
+
+  useEffect(() => {
+    if (connection === "loading" || connection === "unauthenticated") return;
+    let active = true;
+    setCategoriesLoading(true);
+    setCategoriesError(undefined);
+    loadAllInventoryCategories(adapter).then((result) => {
+      if (!active) return;
+      setCategories(result);
+    }).catch((error: unknown) => {
+      if (!active) return;
+      setCategoriesError(normalizeApiError(error).message);
+    }).finally(() => { if (active) setCategoriesLoading(false); });
+    return () => { active = false; };
+  }, [adapter, connection, categoryReloadNonce]);
 
   useEffect(() => {
     if (!toast) return;
@@ -366,7 +403,7 @@ function App() {
     }
   };
 
-  const addInventoryItem = async (input: { name: string; category: InventoryCategory; quantity: number; unit: InventoryItem["unit"] }): Promise<boolean> => {
+  const addInventoryItem = async (input: { name: string; category: InventoryCategory; categoryNodeId: string; kind: string; quantity: number; unit: InventoryItem["unit"] }): Promise<boolean> => {
     try {
       const item = await adapter.createInventoryItem(input);
       setItems((current) => [item, ...current]);
@@ -376,6 +413,41 @@ function App() {
     } catch (error: unknown) {
       handleMutationError(error, "adding that inventory item");
       return false;
+    }
+  };
+
+  const createInventoryCategory = async (input: CategoryCreateInput): Promise<ManagedInventoryCategory | undefined> => {
+    try {
+      const category = await adapter.createInventoryCategory(input);
+      setCategories((current) => [...current, category]);
+      return category;
+    } catch (error: unknown) {
+      const normalized = normalizeApiError(error);
+      throw normalized;
+    }
+  };
+
+  const updateInventoryCategory = async (id: string, input: CategoryUpdateInput, expectedVersion: number): Promise<ManagedInventoryCategory | undefined> => {
+    try {
+      const category = await adapter.updateInventoryCategory(id, input, expectedVersion);
+      setCategories((current) => current.map((candidate) => candidate.id === id ? category : candidate));
+      return category;
+    } catch (error: unknown) {
+      const normalized = normalizeApiError(error);
+      if (normalized.code === "version_conflict") setCategoryReloadNonce((current) => current + 1);
+      throw normalized;
+    }
+  };
+
+  const archiveInventoryCategory = async (id: string, expectedVersion: number): Promise<ManagedInventoryCategory | undefined> => {
+    try {
+      const category = await adapter.archiveInventoryCategory(id, expectedVersion);
+      setCategories((current) => current.map((candidate) => candidate.id === id ? category : candidate));
+      return category;
+    } catch (error: unknown) {
+      const normalized = normalizeApiError(error);
+      if (normalized.code === "version_conflict") setCategoryReloadNonce((current) => current + 1);
+      throw normalized;
     }
   };
 
@@ -454,20 +526,20 @@ function App() {
 
           <main className="content" id="main-content">
             {page === "overview" && <OverviewPage items={items} projects={projects} expert={expert} sampleMode={sampleMode} onNavigate={navigate} onOpenProject={openProject} onSelectItem={setSelectedItemId} onNewProject={openNewProject} />}
-            {page === "inventory" && <InventoryPage items={items} search={search} onSearch={setSearch} onSelectItem={setSelectedItemId} onNewItem={() => setShowNewItem(true)} />}
+            {page === "inventory" && <InventoryPage items={items} categories={categories} search={search} expert={expert} onSearch={setSearch} onSelectItem={setSelectedItemId} onNewItem={() => setShowNewItem(true)} />}
             {page === "projects" && selectedProject && <ProjectPage project={selectedProject} projects={projects} items={items} offers={offers} tab={projectTab} expert={expert} sampleMode={sampleMode} onTabChange={setProjectTab} onSelectProject={setSelectedProjectId} onOpenItem={setSelectedItemId} onNavigate={navigate} onToast={setToast} onNewProject={openNewProject} onNewRevision={() => setShowNewRevision(true)} onRetrySetup={pendingRevisionSetup?.projectId === selectedProject.id && pendingRevisionSetup.revisionId === selectedProject.serverRevisionId ? retryRevisionSetup : undefined} onAddBom={() => setShowAddBom(true)} onUpload={uploadArtifact} onReadReconciliation={adapter.readReconciliation} onSaveReconciliation={adapter.saveReconciliationDraft} onCommitReconciliation={adapter.commitReconciliation} onRefreshWorkspace={refreshWorkspace} />}
             {page === "projects" && !selectedProject && <EmptyState icon="folder" title="No projects yet" description="Start with a name and project goal. You can add parts and files after that." action="Create first project" onAction={() => setShowNewProject(true)} />}
             {page === "capabilities" && <CapabilitiesPage expert={expert} onCopy={setToast} />}
-            {page === "settings" && <SettingsPage expert={expert} sampleMode={sampleMode} connection={connection} onExpert={() => setExpert((current) => !current)} onLogout={sampleMode ? returnToPrivateWorkspace : signOut} />}
+            {page === "settings" && <SettingsPage expert={expert} sampleMode={sampleMode} connection={connection} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} onRetryCategories={() => setCategoryReloadNonce((current) => current + 1)} onCreateCategory={createInventoryCategory} onUpdateCategory={updateInventoryCategory} onArchiveCategory={archiveInventoryCategory} onExpert={() => setExpert((current) => !current)} onLogout={sampleMode ? returnToPrivateWorkspace : signOut} />}
           </main>
         </div>
       </div>
 
-      {selectedItem && <InventoryDrawer item={selectedItem} expert={expert} onClose={() => setSelectedItemId(undefined)} onCount={recordCount} onUpdate={updateInventoryItem} />}
+      {selectedItem && <InventoryDrawer item={selectedItem} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} expert={expert} onClose={() => setSelectedItemId(undefined)} onCount={recordCount} onUpdate={updateInventoryItem} />}
       {showNewProject && <NewProjectDialog onClose={closeNewProject} onCreate={createProject} />}
       {showNewRevision && selectedProject && <NewRevisionDialog project={selectedProject} items={items} expert={expert} onClose={() => setShowNewRevision(false)} onCreate={createRevision} />}
       {showAddBom && selectedProject && <AddBomDialog items={items} project={selectedProject} onClose={() => setShowAddBom(false)} onCreate={addBomLine} />}
-      {showNewItem && <NewInventoryDialog catalogQuery={catalogQuery} catalogProducts={catalogProducts} onCatalogQuery={setCatalogQuery} onSearchCatalog={searchCatalogProducts} onCreateCatalogProduct={addCatalogProduct} onCreateExact={addExactInventoryItem} onClose={() => setShowNewItem(false)} onCreate={addInventoryItem} />}
+      {showNewItem && <NewInventoryDialog categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} catalogQuery={catalogQuery} catalogProducts={catalogProducts} onCatalogQuery={setCatalogQuery} onSearchCatalog={searchCatalogProducts} onCreateCatalogProduct={addCatalogProduct} onCreateExact={addExactInventoryItem} onClose={() => setShowNewItem(false)} onGoSettings={() => { setShowNewItem(false); navigate("settings"); }} onCreate={addInventoryItem} />}
       {toast && <div className="toast" role="status"><Icon name="check-circle" size={18} /><span>{toast}</span><button className="toast-close" aria-label="Dismiss notification" onClick={() => setToast(undefined)}><Icon name="close" size={15} /></button></div>}
     </div>
   );
@@ -582,7 +654,7 @@ function SectionHeading({ eyebrow, title, action, onAction }: { eyebrow: string;
   return <div className="section-heading"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2></div>{action && <button className="text-button" onClick={onAction}>{action}<Icon name="arrow-right" size={14} /></button>}</div>;
 }
 
-function InventoryPage({ items, search, onSearch, onSelectItem, onNewItem }: { items: InventoryItem[]; search: string; onSearch: (value: string) => void; onSelectItem: (id: string) => void; onNewItem: () => void }) {
+function InventoryPage({ items, categories, search, onSearch, onSelectItem, onNewItem }: { items: InventoryItem[]; categories: readonly ManagedInventoryCategory[]; search: string; onSearch: (value: string) => void; onSelectItem: (id: string) => void; onNewItem: () => void }) {
   const [category, setCategory] = useState<(typeof categoryOptions)[number]>("All");
   const [kind, setKind] = useState("All");
   const [evidence, setEvidence] = useState<InventoryItem["evidence"] | "All">("All");
@@ -612,7 +684,7 @@ function InventoryPage({ items, search, onSearch, onSelectItem, onNewItem }: { i
           <InventoryFilter label="Availability" value={availability} onChange={(value) => setAvailability(value as typeof availability)} options={[{ value: "All", label: "All availability" }, { value: "available", label: "Available for reuse" }, { value: "unavailable", label: "Not available" }]} />
         </div>
       </div>
-      {filtered.length ? <InventoryTable items={filtered} onSelectItem={onSelectItem} /> : <EmptyState icon="search" title="No matching items" description="Change the search text or filters." action="Clear filters" onAction={clearFilters} />}
+      {filtered.length ? <InventoryTable items={filtered} categories={categories} onSelectItem={onSelectItem} /> : <EmptyState icon="search" title="No matching items" description="Change the search text or filters." action="Clear filters" onAction={clearFilters} />}
     </section>
   </>;
 }
@@ -621,8 +693,12 @@ function InventoryFilter({ label, value, options, onChange }: { label: string; v
   return <label className="category-control"><span className="category-control-label">{label}</span><select aria-label={`Filter inventory by ${label.toLowerCase()}`} value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
 }
 
-function InventoryTable({ items, onSelectItem }: { items: InventoryItem[]; onSelectItem: (id: string) => void }) {
-  return <div className="table-scroll"><table className="data-table inventory-table"><caption className="sr-only">Inventory items</caption><thead><tr><th scope="col">Item</th><th scope="col">Category</th><th scope="col">Quantity</th><th scope="col">Status</th><th scope="col">Location</th><th scope="col"><span className="sr-only">Open</span></th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td><button className="table-item" onClick={() => onSelectItem(item.id)}><span className={`item-glyph accent-${item.accent}`}><Icon name={categoryIcons[item.category]} size={16} /></span><span><strong>{item.name}</strong><small>{item.variant}</small>{(item.category === "Filament" || item.category === "Printers") && <small className={`exact-product-state ${item.productProfile?.linkState === "confirmed" ? "is-confirmed" : ""}`}>{exactProductLabel(item)}</small>}</span></button></td><td><span className="category-label"><Icon name={categoryIcons[item.category]} size={14} />{item.category}</span></td><td className="quantity-cell"><strong>{formatQuantity(Math.max(item.quantity - item.reserved, 0), item.unit)}</strong>{item.reserved > 0 && <small>{formatQuantity(item.reserved, item.unit)} reserved</small>}</td><td><StatusPill state={item.state} /></td><td><span className="location-label"><Icon name="archive" size={14} />{item.location}</span></td><td><button className="row-open" onClick={() => onSelectItem(item.id)} aria-label={`Open ${item.name}`}><Icon name="chevron-right" size={17} /></button></td></tr>)}</tbody></table></div>;
+function managedInventoryLabel(categories: readonly ManagedInventoryCategory[], item: InventoryItem): string {
+  return selectedCategoryLabel(categories, item.categoryNodeId) ?? (item.categoryNodeId ? "Managed category unavailable" : "Unassigned legacy item");
+}
+
+function InventoryTable({ items, categories, onSelectItem }: { items: InventoryItem[]; categories: readonly ManagedInventoryCategory[]; onSelectItem: (id: string) => void }) {
+  return <div className="table-scroll"><table className="data-table inventory-table"><caption className="sr-only">Inventory items</caption><thead><tr><th scope="col">Item</th><th scope="col">Category</th><th scope="col">Quantity</th><th scope="col">Status</th><th scope="col">Location</th><th scope="col"><span className="sr-only">Open</span></th></tr></thead><tbody>{items.map((item) => { const categoryLabel = managedInventoryLabel(categories, item); return <tr key={item.id}><td><button className="table-item" onClick={() => onSelectItem(item.id)}><span className={`item-glyph accent-${item.accent}`}><Icon name={categoryIcons[item.category]} size={16} /></span><span><strong>{item.name}</strong><small>{item.variant}</small>{(item.category === "Filament" || item.category === "Printers") && <small className={`exact-product-state ${item.productProfile?.linkState === "confirmed" ? "is-confirmed" : ""}`}>{exactProductLabel(item)}</small>}</span></button></td><td><span className="category-label"><Icon name={categoryIcons[item.category]} size={14} />{categoryLabel}</span></td><td className="quantity-cell"><strong>{formatQuantity(Math.max(item.quantity - item.reserved, 0), item.unit)}</strong>{item.reserved > 0 && <small>{formatQuantity(item.reserved, item.unit)} reserved</small>}</td><td><StatusPill state={item.state} /></td><td><span className="location-label"><Icon name="archive" size={14} />{item.location}</span></td><td><button className="row-open" onClick={() => onSelectItem(item.id)} aria-label={`Open ${item.name}`}><Icon name="chevron-right" size={17} /></button></td></tr>;})}</tbody></table></div>;
 }
 
 function evidenceLabel(evidence: InventoryItem["evidence"]): string {
@@ -823,9 +899,9 @@ function CapabilitiesPage({ expert, onCopy }: { expert: boolean; onCopy: (messag
 
 function Prompt({ text }: { text: string }) { return <button className="prompt-row" onClick={() => navigator.clipboard?.writeText(text)}><Icon name="spark" size={15} /><span>{text}</span><Icon name="copy" size={14} /></button>; }
 
-function SettingsPage({ expert, sampleMode, connection, onExpert, onLogout }: { expert: boolean; sampleMode: boolean; connection: ConnectionState; onExpert: () => void; onLogout: () => void }) {
+function SettingsPage({ expert, sampleMode, connection, categories, categoriesLoading, categoriesError, onRetryCategories, onCreateCategory, onUpdateCategory, onArchiveCategory, onExpert, onLogout }: { expert: boolean; sampleMode: boolean; connection: ConnectionState; categories: readonly ManagedInventoryCategory[]; categoriesLoading: boolean; categoriesError?: string | undefined; onRetryCategories: () => void; onCreateCategory: (input: CategoryCreateInput) => Promise<ManagedInventoryCategory | undefined>; onUpdateCategory: (id: string, input: CategoryUpdateInput, expectedVersion: number) => Promise<ManagedInventoryCategory | undefined>; onArchiveCategory: (id: string, expectedVersion: number) => Promise<ManagedInventoryCategory | undefined>; onExpert: () => void; onLogout: () => void }) {
   const connected = connection === "ready";
-  return <><PageHeader eyebrow="Workspace settings" title="Review workspace settings" description="Set the detail level and review connection information." /><div className="settings-layout"><section className="surface settings-section"><SectionHeading eyebrow="Display" title="Display detail" /><div className="setting-row"><div><strong>Detail level</strong><span>Beginner view shows task labels. Expert view also shows identifiers and technical evidence.</span></div><button className={`mode-toggle setting-control ${expert ? "is-expert" : ""}`} aria-pressed={expert} onClick={onExpert}><span className="mode-dot" />{expert ? "Expert details on" : "Beginner view on"}</button></div><div className="setting-row"><div><strong>Measurements</strong><span>Current display units are millimetres, grams, metres, and pieces. This value is not editable.</span></div><span className="setting-value">mm · g · m · each</span></div><div className="setting-row"><div><strong>Currency</strong><span>Each supplier price keeps its source currency and observation date. This value is not editable.</span></div><span className="setting-value">Source currency</span></div></section><section className="surface settings-section"><SectionHeading eyebrow="Connection" title="Private API" /><div className="connection-panel"><div className="connection-panel-top"><span className="connection-icon"><Icon name="link" size={18} /></span><div><strong>{sampleMode ? "Sample workspace" : "Local workspace adapter"}</strong><span>{sampleMode ? "Synthetic data only" : "Connected to /api/v1"}</span></div><span className="connection-badge"><span className={`online-dot ${connected || sampleMode ? "" : "is-offline"}`} /> {sampleMode ? "Sample mode" : connected ? "Connected" : "Session error"}</span></div><p>{sampleMode ? "This workspace contains synthetic records. Changes remain in the sample workspace." : "The browser sends supported reads and writes to the authenticated private service. It reports failed writes."}</p></div><div className="setting-row setting-row-last"><div><strong>MCP endpoint</strong><span>Use a scoped token. Read the capability manifest before you use tools.</span></div><code className="setting-value">benchledger://capabilities</code></div><button className="button button-quiet settings-logout" onClick={onLogout}><Icon name="arrow-left" size={16} /> {sampleMode ? "Close sample workspace" : "Sign out"}</button></section><section className="surface settings-section"><SectionHeading eyebrow="Evidence states" title="Inventory evidence rules" /><div className="evidence-legend"><Legend tone="good" title="Ready to use" text="A physical count or commissioning record confirms the stock." /><Legend tone="warn" title="Check quantity" text="Count delivered or uncertain stock before you reuse it." /><Legend tone="bad" title="Need to buy" text="Confirmed compatible stock does not cover the requirement." /></div></section></div></>;
+  return <><PageHeader eyebrow="Workspace settings" title="Review workspace settings" description="Set the detail level and review connection information." /><div className="settings-layout"><section className="surface settings-section"><SectionHeading eyebrow="Display" title="Display detail" /><div className="setting-row"><div><strong>Detail level</strong><span>Beginner view shows task labels. Expert view also shows identifiers and technical evidence.</span></div><button className={`mode-toggle setting-control ${expert ? "is-expert" : ""}`} aria-pressed={expert} onClick={onExpert}><span className="mode-dot" />{expert ? "Expert details on" : "Beginner view on"}</button></div><div className="setting-row"><div><strong>Measurements</strong><span>Current display units are millimetres, grams, metres, and pieces. This value is not editable.</span></div><span className="setting-value">mm · g · m · each</span></div><div className="setting-row"><div><strong>Currency</strong><span>Each supplier price keeps its source currency and observation date. This value is not editable.</span></div><span className="setting-value">Source currency</span></div></section>{categoriesLoading && <div className="category-loading" role="status" aria-live="polite"><Icon name="refresh" size={16} /> Loading inventory categories…</div>}{categoriesError ? <section className="surface settings-section category-load-error" role="alert"><Icon name="warning" size={18} /><div><strong>Could not load inventory categories.</strong><span>{categoriesError}</span></div><button type="button" className="button button-secondary" onClick={onRetryCategories}>Try again</button></section> : !categoriesLoading ? <CategoryManager categories={categories} onCreate={onCreateCategory} onUpdate={onUpdateCategory} onArchive={onArchiveCategory} /> : null}<section className="surface settings-section"><SectionHeading eyebrow="Connection" title="Private API" /><div className="connection-panel"><div className="connection-panel-top"><span className="connection-icon"><Icon name="link" size={18} /></span><div><strong>{sampleMode ? "Sample workspace" : "Local workspace adapter"}</strong><span>{sampleMode ? "Synthetic data only" : "Connected to /api/v1"}</span></div><span className="connection-badge"><span className={`online-dot ${connected || sampleMode ? "" : "is-offline"}`} /> {sampleMode ? "Sample mode" : connected ? "Connected" : "Session error"}</span></div><p>{sampleMode ? "This workspace contains synthetic records. Changes remain in the sample workspace." : "The browser sends supported reads and writes to the authenticated private service. It reports failed writes."}</p></div><div className="setting-row setting-row-last"><div><strong>MCP endpoint</strong><span>Use a scoped token. Read the capability manifest before you use tools.</span></div><code className="setting-value">benchledger://capabilities</code></div><button className="button button-quiet settings-logout" onClick={onLogout}><Icon name="arrow-left" size={16} /> {sampleMode ? "Close sample workspace" : "Sign out"}</button></section><section className="surface settings-section"><SectionHeading eyebrow="Evidence states" title="Inventory evidence rules" /><div className="evidence-legend"><Legend tone="good" title="Ready to use" text="A physical count or commissioning record confirms the stock." /><Legend tone="warn" title="Check quantity" text="Count delivered or uncertain stock before you reuse it." /><Legend tone="bad" title="Need to buy" text="Confirmed compatible stock does not cover the requirement." /></div></section></div></>;
 }
 
 function Legend({ tone, title, text }: { tone: StockLabelTone; title: string; text: string }) { return <div className="legend-row"><span className={`legend-mark mark-${tone}`}>{tone === "good" ? "✓" : tone === "warn" ? "?" : "!"}</span><div><strong>{title}</strong><span>{text}</span></div></div>; }
@@ -893,7 +969,7 @@ function useOverlayBehavior(containerRef: React.RefObject<HTMLElement | null>, o
   }, [containerRef]);
 }
 
-function InventoryDrawer({ item, expert, onClose, onCount, onUpdate }: { item: InventoryItem; expert: boolean; onClose: () => void; onCount: (id: string, quantity: number) => Promise<InventoryItem>; onUpdate: (id: string, input: Partial<InventoryUpdateInput>, expectedVersion?: number) => Promise<InventoryItem> }) {
+function InventoryDrawer({ item, categories, categoriesLoading, categoriesError, expert, onClose, onCount, onUpdate }: { item: InventoryItem; categories: readonly ManagedInventoryCategory[]; categoriesLoading: boolean; categoriesError?: string | undefined; expert: boolean; onClose: () => void; onCount: (id: string, quantity: number) => Promise<InventoryItem>; onUpdate: (id: string, input: Partial<InventoryUpdateInput>, expectedVersion?: number) => Promise<InventoryItem> }) {
   const [quantity, setQuantity] = useState(String(item.quantity));
   const [countSaving, setCountSaving] = useState(false);
   const [countError, setCountError] = useState<string>();
@@ -908,6 +984,7 @@ function InventoryDrawer({ item, expert, onClose, onCount, onUpdate }: { item: I
   const [sku, setSku] = useState(item.sku ?? "");
   const [location, setLocation] = useState(item.location === "Unassigned" ? "" : item.location);
   const [tags, setTags] = useState(item.tags.join(", "));
+  const [categoryNodeId, setCategoryNodeId] = useState(item.categoryNodeId ?? "");
   const drawerRef = useRef<HTMLElement>(null);
   const drawerTitleId = useId();
   const availableForReuse = item.availableQuantity ?? Math.max(item.quantity - item.reserved, 0);
@@ -940,6 +1017,7 @@ function InventoryDrawer({ item, expert, onClose, onCount, onUpdate }: { item: I
     setSku(item.sku ?? "");
     setLocation(item.location === "Unassigned" ? "" : item.location);
     setTags(item.tags.join(", "));
+    setCategoryNodeId(item.categoryNodeId ?? "");
     setEditError(undefined);
     setEditing(false);
   };
@@ -960,7 +1038,8 @@ function InventoryDrawer({ item, expert, onClose, onCount, onUpdate }: { item: I
         manufacturer: manufacturer.trim(),
         sku: sku.trim(),
         location: location.trim(),
-        tags: tags.split(",").map((tag) => tag.trim()).filter(Boolean)
+        tags: tags.split(",").map((tag) => tag.trim()).filter(Boolean),
+        ...(categoryNodeId ? { categoryNodeId } : {})
       }, item.version);
       setEditing(false);
     } catch (error: unknown) {
@@ -973,7 +1052,7 @@ function InventoryDrawer({ item, expert, onClose, onCount, onUpdate }: { item: I
   return <>
     <div className="drawer-scrim" aria-hidden="true" onClick={onClose} />
     <aside ref={drawerRef} className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby={drawerTitleId} tabIndex={-1}>
-      <div className="drawer-header"><span className={`item-glyph accent-${item.accent}`} aria-hidden="true"><Icon name={categoryIcons[item.category]} size={18} /></span><div><span className="eyebrow">{item.category}</span><h2 id={drawerTitleId}>{item.name}</h2></div><button type="button" className="icon-button" aria-label="Close item details" onClick={onClose}><Icon name="close" size={20} /></button></div>
+      <div className="drawer-header"><span className={`item-glyph accent-${item.accent}`} aria-hidden="true"><Icon name={categoryIcons[item.category]} size={18} /></span><div><span className="eyebrow">{managedInventoryLabel(categories, item)}</span><h2 id={drawerTitleId}>{item.name}</h2></div><button type="button" className="icon-button" aria-label="Close item details" onClick={onClose}><Icon name="close" size={20} /></button></div>
       <div className="drawer-body">
         <div className="drawer-title-actions"><StatusPill state={item.state} />{!editing && <button type="button" className="button button-secondary" onClick={() => setEditing(true)}>Edit item</button>}</div>
         {editing ? <form className="inventory-edit-form" onSubmit={(event) => { void submitEdit(event); }} aria-busy={editSaving}>
@@ -987,6 +1066,7 @@ function InventoryDrawer({ item, expert, onClose, onCount, onUpdate }: { item: I
             <label className="form-field"><span>Location</span><input value={location} onChange={(event) => setLocation(event.target.value)} disabled={editSaving} /></label>
           </div>
           <label className="form-field"><span>Tags</span><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="Separate tags with commas" disabled={editSaving} /></label>
+          {categoriesError ? <p className="field-hint category-edit-note" role="alert">Managed categories are unavailable: {categoriesError}</p> : categoriesLoading ? <p className="field-hint category-edit-note" role="status">Loading active categories…</p> : <CategorySelection categories={categories} value={categoryNodeId} onChange={setCategoryNodeId} required={Boolean(item.categoryNodeId)} ariaInvalid={Boolean(item.categoryNodeId && !managedCategoryForId(categories, item.categoryNodeId))} />}
           {editError && <p className="form-error" role="alert">{editError}</p>}
           <div className="drawer-form-actions"><button type="button" className="button button-quiet" onClick={cancelEdit} disabled={editSaving}>Cancel</button><button type="submit" className="button button-primary" disabled={!name.trim() || editSaving}>{editSaving ? "Saving…" : "Save changes"}</button></div>
         </form> : <>
@@ -1106,20 +1186,41 @@ function AddBomDialog({ items, project, onClose, onCreate }: { items: InventoryI
   return <Dialog title={`Add a requirement to ${project.currentRevision}`} onClose={onClose}><form onSubmit={(event) => { void submit(event); }}><p className="dialog-intro">Describe one physical or digital requirement. Matching stock is evaluated from the recorded variant and evidence state.</p><label className="form-field"><span>Requirement name</span><input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. ESP32 development board" disabled={submitting} /></label><div className="form-row"><label className="form-field"><span>Quantity</span><input type="number" min="0.01" step="any" required value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={submitting} /></label><label className="form-field"><span>Unit</span><select value={unit} onChange={(event) => setUnit(event.target.value as BomInput["unit"])} disabled={submitting}><option value="each">pieces</option><option value="g">grams</option><option value="m">metres</option></select></label></div><label className="form-field"><span>Known matching stock <small>(optional)</small></span><select value={itemId} onChange={(event) => setItemId(event.target.value)} disabled={submitting}><option value="">Let BenchLedger match it</option>{items.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.variant}</option>)}</select></label><label className="form-field"><span>Requirement note <small>(optional)</small></span><textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} placeholder="Fit, material, or compatibility detail" disabled={submitting} /></label><label className="check-field"><input type="checkbox" checked={optional} onChange={(event) => setOptional(event.target.checked)} disabled={submitting} /><span>Mark as optional</span></label>{formError && <p className="form-error" role="alert">{formError}</p>}<div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose} disabled={submitting}>Cancel</button><button type="submit" className="button button-primary" disabled={!name.trim() || submitting} aria-busy={submitting}>{submitting ? "Adding…" : "Add requirement"} {!submitting && <Icon name="arrow-right" size={16} />}</button></div></form></Dialog>;
 }
 
-function NewInventoryDialog({ catalogQuery, catalogProducts, onCatalogQuery, onSearchCatalog, onCreateCatalogProduct, onCreateExact, onClose, onCreate }: { catalogQuery: string; catalogProducts: CatalogProduct[]; onCatalogQuery: (query: string) => void; onSearchCatalog: (kind: "filament" | "printer", query: string) => Promise<CatalogProduct[]>; onCreateCatalogProduct: (input: CatalogProductDraft) => Promise<CatalogProduct | undefined>; onCreateExact: (input: ExactInventoryInput) => Promise<boolean>; onClose: () => void; onCreate: (input: { name: string; category: InventoryCategory; quantity: number; unit: InventoryItem["unit"] }) => Promise<boolean> }) {
-  const [category, setCategory] = useState<InventoryCategory>();
+type InventoryItemType = "printer" | "filament" | "tool" | "accessory" | "consumable" | "electronic" | "fastener" | "wire" | "adhesive" | "other";
+const itemTypeOptions: readonly { value: InventoryItemType; label: string }[] = [
+  { value: "printer", label: "Printer" }, { value: "filament", label: "Filament" }, { value: "tool", label: "Tool" }, { value: "accessory", label: "Accessory" }, { value: "consumable", label: "Consumable" }, { value: "electronic", label: "Electronic" }, { value: "fastener", label: "Fastener" }, { value: "wire", label: "Wire & cable" }, { value: "adhesive", label: "Adhesive" }, { value: "other", label: "Other" }
+];
+
+function displayCategoryForKind(kind: InventoryItemType): InventoryCategory {
+  if (kind === "printer") return "Printers";
+  if (kind === "filament") return "Filament";
+  if (kind === "tool") return "Tools";
+  if (kind === "electronic") return "Electronics";
+  if (kind === "fastener") return "Fasteners";
+  if (kind === "wire") return "Wire & cable";
+  return "Accessories";
+}
+
+function NewInventoryDialog({ categories, categoriesLoading, categoriesError, catalogQuery, catalogProducts, onCatalogQuery, onSearchCatalog, onCreateCatalogProduct, onCreateExact, onClose, onGoSettings, onCreate }: { categories: readonly ManagedInventoryCategory[]; categoriesLoading: boolean; categoriesError?: string | undefined; catalogQuery: string; catalogProducts: CatalogProduct[]; onCatalogQuery: (query: string) => void; onSearchCatalog: (kind: "filament" | "printer", query: string) => Promise<CatalogProduct[]>; onCreateCatalogProduct: (input: CatalogProductDraft) => Promise<CatalogProduct | undefined>; onCreateExact: (input: ExactInventoryInput) => Promise<boolean>; onClose: () => void; onGoSettings: () => void; onCreate: (input: { name: string; category: InventoryCategory; categoryNodeId: string; kind: string; quantity: number; unit: InventoryItem["unit"] }) => Promise<boolean> }) {
+  const [itemType, setItemType] = useState<InventoryItemType>();
+  const [categoryNodeId, setCategoryNodeId] = useState("");
+  const [selectionConfirmed, setSelectionConfirmed] = useState(false);
   const [name, setName] = useState("");
   const [quantity, setQuantity] = useState("1");
   const [unit, setUnit] = useState<InventoryItem["unit"]>("each");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string>();
+  const categoryHintId = useId();
+  const selectedCategory = managedCategoryForId(categories, categoryNodeId);
+  const setType = (next: InventoryItemType) => { setItemType(next); setSelectionConfirmed(false); setFormError(undefined); setName(""); setQuantity("1"); setUnit(next === "filament" ? "g" : "each"); };
+  const resetSelection = () => { setItemType(undefined); setCategoryNodeId(""); setSelectionConfirmed(false); setFormError(undefined); };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!category || !name.trim() || submitting) return;
+    if (!itemType || !categoryNodeId || !name.trim() || submitting) return;
     setSubmitting(true);
     setFormError(undefined);
     try {
-      const created = await onCreate({ name: name.trim(), category, quantity: Math.max(Number(quantity) || 0, 0), unit });
+      const created = await onCreate({ name: name.trim(), category: displayCategoryForKind(itemType), categoryNodeId, kind: itemType, quantity: Math.max(Number(quantity) || 0, 0), unit });
       if (!created) setFormError("The item was not added. Check the service connection and try again.");
     } catch (error: unknown) {
       setFormError(normalizeApiError(error).message);
@@ -1127,10 +1228,17 @@ function NewInventoryDialog({ catalogQuery, catalogProducts, onCatalogQuery, onS
       setSubmitting(false);
     }
   };
-  const chooseCategory = (next: InventoryCategory) => { setCategory(next); setFormError(undefined); setName(""); setQuantity("1"); setUnit(next === "Filament" ? "g" : "each"); };
-  if (!category) return <Dialog title="Add to inventory" onClose={onClose}><div className="category-picker"><p className="dialog-intro">Start with a category. Filament and printers use an exact-product check; other categories keep the quick add form.</p><div className="category-choice-grid">{addableCategories.map((option) => <button type="button" className="category-choice" key={option} onClick={() => chooseCategory(option)}><span className={`item-glyph accent-${option === "Filament" ? "slate" : option === "Printers" ? "teal" : "blue"}`}><Icon name={categoryIcons[option]} size={18} /></span><span><strong>{option}</strong><small>{option === "Filament" || option === "Printers" ? "Choose an exact product" : "Quick add"}</small></span><Icon name="chevron-right" size={15} /></button>)}</div><div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose}>Cancel</button></div></div></Dialog>;
-  if (category === "Filament" || category === "Printers") return <Dialog title={`Add ${category === "Filament" ? "filament" : "a printer"}`} onClose={onClose}><CatalogInventoryFlow category={category} products={catalogProducts.filter((product) => product.kind === (category === "Filament" ? "filament" : "printer"))} query={catalogQuery} onQueryChange={onCatalogQuery} onSearch={onSearchCatalog} onCreateProduct={onCreateCatalogProduct} onCreate={onCreateExact} onBack={() => { setCategory(undefined); onCatalogQuery(""); }} /></Dialog>;
-  return <Dialog title="Add an inventory item" onClose={onClose}><form onSubmit={(event) => { void submit(event); }}><button type="button" className="text-button category-back" onClick={() => setCategory(undefined)} disabled={submitting}><Icon name="arrow-left" size={15} /> Choose another category</button><p className="dialog-intro">This records what you received, but it starts as <strong>Check quantity</strong> until you physically count it. The entered quantity is not treated as available stock.</p><label className="form-field"><span>Name</span><input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. JST-PH 2-pin leads" disabled={submitting} /></label><div className="form-row"><label className="form-field"><span>Category</span><select value={category} onChange={(event) => chooseCategory(event.target.value as InventoryCategory)} disabled={submitting}>{addableCategories.filter((option) => option !== "Filament" && option !== "Printers").map((option) => <option key={option} value={option}>{option}</option>)}</select></label><label className="form-field"><span>Quantity received</span><input type="number" min="0" step="any" value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={submitting} /></label><label className="form-field"><span>Unit</span><select value={unit} onChange={(event) => setUnit(event.target.value as InventoryItem["unit"])} disabled={submitting}><option value="each">pieces</option><option value="g">grams</option><option value="m">metres</option></select></label></div>{formError && <p className="form-error" role="alert">{formError}</p>}<div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose} disabled={submitting}>Cancel</button><button type="submit" className="button button-primary" disabled={!name.trim() || submitting} aria-busy={submitting}>{submitting ? "Adding…" : "Add item"} {!submitting && <Icon name="plus" size={16} />}</button></div></form></Dialog>;
+  const chooseItemType = (event: ChangeEvent<HTMLSelectElement>) => { const next = event.target.value as InventoryItemType; if (next) setType(next); };
+  const exactCategory = itemType === "filament" ? "Filament" : itemType === "printer" ? "Printers" : undefined;
+  const categoryAvailable = !categoriesLoading && !categoriesError && selectedCategory !== undefined;
+  if (!itemType || !categoryAvailable || !selectionConfirmed) {
+    const activeCategoryCount = categories.filter((category) => !category.archived).length;
+    const categoriesUnavailable = Boolean(categoriesError) || (!categoriesLoading && activeCategoryCount === 0);
+    return <Dialog title="Add to inventory" onClose={onClose}><form className="inventory-start-form" onSubmit={(event) => { event.preventDefault(); }}><p className="dialog-intro">Choose the item type for matching, then assign a managed category. The category is required for every new item.</p><label className="form-field"><span>Item type <small>(required)</small></span><select autoFocus required value={itemType ?? ""} onChange={chooseItemType}><option value="">Choose an item type</option>{itemTypeOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label><CategorySelection categories={categories} value={categoryNodeId} onChange={(id) => { setCategoryNodeId(id); setSelectionConfirmed(false); }} disabled={categoriesLoading || categoriesUnavailable} ariaInvalid={categoriesUnavailable || !categoryNodeId} ariaDescribedBy={categoryHintId} /><p id={categoryHintId} className="field-hint">{categoriesLoading ? "Refreshing active categories…" : categoriesError ? categoriesError : activeCategoryCount === 0 ? "No active categories are available. Add one in Settings before creating inventory." : "Choose an active category or subcategory."}</p>{categoriesUnavailable && <div className="category-unavailable" role="alert"><span>{categoriesError ? "Inventory categories could not be loaded." : "Inventory needs one active managed category before a new item can be added."}</span><button type="button" className="text-button" onClick={onGoSettings}>Open Settings <Icon name="arrow-right" size={15} /></button></div>}<div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose}>Cancel</button><button type="button" className="button button-primary" disabled={!itemType || !categoryNodeId || categoriesUnavailable} onClick={() => setSelectionConfirmed(true)}>Continue <Icon name="arrow-right" size={16} /></button></div></form></Dialog>;
+  }
+  const availableCategory = selectedCategory!;
+  if (exactCategory) return <Dialog title={`Add ${exactCategory === "Filament" ? "filament" : "a printer"}`} onClose={onClose}><div className="inventory-selection-summary"><span><strong>Item type</strong>{itemTypeOptions.find((option) => option.value === itemType)?.label}</span><span><strong>Category</strong>{availableCategory.name}</span><button type="button" className="text-button" onClick={resetSelection}>Change selection</button></div><CatalogInventoryFlow category={exactCategory} products={catalogProducts.filter((product) => product.kind === (exactCategory === "Filament" ? "filament" : "printer"))} query={catalogQuery} onQueryChange={onCatalogQuery} onSearch={onSearchCatalog} onCreateProduct={onCreateCatalogProduct} onCreate={(input) => onCreateExact({ ...input, categoryNodeId })} onBack={resetSelection} /></Dialog>;
+  return <Dialog title="Add an inventory item" onClose={onClose}><form onSubmit={(event) => { void submit(event); }}><button type="button" className="text-button category-back" onClick={resetSelection} disabled={submitting}><Icon name="arrow-left" size={15} /> Choose another type or category</button><div className="inventory-selection-summary"><span><strong>Item type</strong>{itemTypeOptions.find((option) => option.value === itemType)?.label}</span><span><strong>Category</strong>{availableCategory.name}</span></div><p className="dialog-intro">This records what you received, but it starts as <strong>Check quantity</strong> until you physically count it. The entered quantity is not treated as available stock.</p><label className="form-field"><span>Name</span><input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. JST-PH 2-pin leads" disabled={submitting} /></label><div className="form-row"><label className="form-field"><span>Quantity received</span><input type="number" min="0" step="any" value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={submitting} /></label><label className="form-field"><span>Unit</span><select value={unit} onChange={(event) => setUnit(event.target.value as InventoryItem["unit"])} disabled={submitting}><option value="each">pieces</option><option value="g">grams</option><option value="m">metres</option></select></label></div>{formError && <p className="form-error" role="alert">{formError}</p>}<div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose} disabled={submitting}>Cancel</button><button type="submit" className="button button-primary" disabled={!name.trim() || submitting} aria-busy={submitting}>{submitting ? "Adding…" : "Add item"} {!submitting && <Icon name="plus" size={16} />}</button></div></form></Dialog>;
 }
 
 function Dialog({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {

@@ -50,9 +50,21 @@ test("filters, edits, and physically counts evidence-aware inventory", async ({ 
   await drawer.getByRole("button", { name: "Edit item" }).click();
   await drawer.getByLabel("Description").fill("Controller board for test fixtures.");
   await drawer.getByLabel("Location").fill("Electronics drawer 2");
+  await drawer.getByRole("combobox", { name: /Category/u }).selectOption("category-electronics");
+  const legacyUpdateResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === "PATCH" && response.status() === 200 && /\/api\/v1\/inventory\/board-esp32$/u.test(url.pathname);
+  });
   await drawer.getByRole("button", { name: "Save changes" }).click();
+  const legacyUpdate = await legacyUpdateResponse;
+  expect(legacyUpdate.request().postDataJSON()).toMatchObject({
+    description: "Controller board for test fixtures.",
+    location: "Electronics drawer 2",
+    categoryNodeId: "category-electronics",
+  });
   await expect(drawer).toContainText("Controller board for test fixtures.");
   await expect(drawer).toContainText("Electronics drawer 2");
+  await expect(drawer.locator(".drawer-header .eyebrow")).toHaveText("Electronics");
 
   await drawer.getByLabel("Physical count").fill("3");
   await drawer.getByRole("button", { name: "Save physical count" }).click();
@@ -83,6 +95,34 @@ test("keeps inventory quantity and status columns usable on mobile", async ({ pa
     return window.scrollX;
   });
   expect(horizontalScroll).toBe(0);
+});
+
+test("requires and persists the managed category and semantic kind for quick inventory add", async ({ page }) => {
+  await signIn(page);
+  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await page.getByRole("button", { name: "Add item", exact: true }).click();
+
+  const selectionDialog = page.getByRole("dialog", { name: "Add to inventory" });
+  await selectionDialog.getByRole("combobox", { name: /Item type/u }).selectOption("tool");
+  await expect(selectionDialog.getByRole("button", { name: "Continue", exact: true })).toBeDisabled();
+  await selectionDialog.getByRole("combobox", { name: /Category/u }).selectOption("category-tools");
+  await selectionDialog.getByRole("button", { name: "Continue", exact: true }).click();
+
+  const quickDialog = page.getByRole("dialog", { name: "Add an inventory item" });
+  await quickDialog.getByLabel("Name").fill("E2E quick category item");
+  const createResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === "POST" && response.status() === 201 && url.pathname === "/api/v1/inventory";
+  });
+  await quickDialog.getByRole("button", { name: "Add item", exact: true }).click();
+  const response = await createResponse;
+  expect(response.request().postDataJSON()).toMatchObject({
+    name: "E2E quick category item",
+    kind: "tool",
+    categoryNodeId: "category-tools",
+  });
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.locator(".table-item").filter({ hasText: "E2E quick category item" })).toBeVisible();
 });
 
 test("creates a project atomically and finalizes a revisioned artifact", async ({ page }) => {
@@ -201,4 +241,84 @@ test("shows exactly one accessible navigation surface at 390px", async ({ page }
   });
   expect(horizontalScroll).toBe(0);
   await expect(page.getByRole("button", { name: "Open account settings" })).toBeVisible();
+});
+
+test("creates, edits, and archives a managed category hierarchy", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await signIn(page);
+  await page.getByRole("button", { name: "Open account settings" }).click();
+  await expect(page.getByRole("heading", { name: "Review workspace settings" })).toBeVisible();
+
+  const manager = page.locator(".category-manager");
+  await expect(manager.getByRole("heading", { name: "Manage inventory categories" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await manager.getByRole("button", { name: "New category" }).click();
+  const createForm = manager.locator('form[aria-label="Create top-level category"]');
+  await expect(createForm.getByLabel("Name")).toBeFocused();
+  await createForm.getByLabel("Name").fill("E2E managed category");
+  await createForm.getByLabel("Order").fill("100");
+  await createForm.getByRole("button", { name: "Add category", exact: true }).click();
+  await expect(manager.getByText("E2E managed category", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+  let rootGroup = manager.locator(".category-tree-group").filter({ hasText: "E2E managed category" });
+  await rootGroup.getByRole("button", { name: "Add subcategory" }).click();
+  const childForm = manager.locator('form[aria-label="Create subcategory under E2E managed category"]');
+  await childForm.getByLabel("Name").fill("E2E child category");
+  await childForm.getByLabel("Order").fill("1");
+  await childForm.getByRole("button", { name: "Add subcategory", exact: true }).click();
+  await expect(manager.getByText("E2E managed category / E2E child category", { exact: true })).toBeVisible();
+
+  await manager.getByRole("button", { name: "Rename E2E managed category" }).click();
+  const editForm = manager.locator('form[aria-label="Edit E2E managed category"]');
+  await editForm.getByLabel("Name").fill("E2E renamed category");
+  await editForm.getByLabel("Order").fill("101");
+  await editForm.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(manager.getByText("E2E renamed category / E2E child category", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+  rootGroup = manager.locator(".category-tree-group").filter({ hasText: "E2E renamed category" });
+  const archiveParentButton = rootGroup.getByRole("button", { name: "Archive E2E renamed category" });
+  await archiveParentButton.click();
+  const parentConfirmation = manager.getByRole("alertdialog", { name: "Archive E2E renamed category?" });
+  await expect(page.locator(".category-archive-scrim")).toBeVisible();
+  expect(await page.locator(".category-archive-scrim").evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return rect.left === 0 && rect.top === 0 && rect.width >= window.innerWidth && rect.height >= window.innerHeight;
+  })).toBe(true);
+  await expect(parentConfirmation).toHaveAttribute("aria-modal", "true");
+  await expect(parentConfirmation.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
+  const accountButton = page.getByRole("button", { name: "Open account settings" });
+  const accountBox = await accountButton.boundingBox();
+  if (accountBox) await page.mouse.click(accountBox.x + accountBox.width / 2, accountBox.y + accountBox.height / 2);
+  await expect(parentConfirmation).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(parentConfirmation).toHaveCount(0);
+  await expect(archiveParentButton).toBeFocused();
+  await archiveParentButton.click();
+  await parentConfirmation.getByRole("button", { name: "Archive", exact: true }).click();
+  await expect(manager.getByRole("alert")).toContainText("Inventory category");
+  await parentConfirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(parentConfirmation).toHaveCount(0);
+
+  const childGroup = manager.locator(".category-child-group").filter({ hasText: "E2E renamed category / E2E child category" });
+  await childGroup.getByRole("button", { name: "Archive E2E child category" }).click();
+  await manager.getByRole("alertdialog", { name: "Archive E2E child category?" }).getByRole("button", { name: "Archive", exact: true }).click();
+  await expect(manager.getByText("E2E renamed category / E2E child category", { exact: true })).toHaveCount(0);
+
+  rootGroup = manager.locator(".category-tree-group").filter({ hasText: "E2E renamed category" });
+  await rootGroup.getByRole("button", { name: "Archive E2E renamed category" }).click();
+  const finalConfirmation = manager.getByRole("alertdialog", { name: "Archive E2E renamed category?" });
+  let releaseArchive: (() => void) | undefined;
+  await page.route("**/api/v1/inventory/categories/*/archive", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    await new Promise<void>((resolve) => { releaseArchive = resolve; });
+    await route.continue();
+  });
+  await finalConfirmation.getByRole("button", { name: "Archive", exact: true }).click();
+  await expect(finalConfirmation.getByRole("button", { name: "Cancel", exact: true })).toBeDisabled();
+  await expect(finalConfirmation.getByRole("button", { name: "Archiving…", exact: true })).toBeDisabled();
+  releaseArchive?.();
+  await expect(manager.getByText("E2E renamed category", { exact: true })).toHaveCount(0);
+  await page.unroute("**/api/v1/inventory/categories/*/archive");
 });
