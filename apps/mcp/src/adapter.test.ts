@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ApplicationError } from "@benchledger/application";
 import { McpAdapter } from "./adapter.js";
 import type {
   BuildConfigurationSnapshot,
@@ -232,6 +233,15 @@ describe("McpAdapter", () => {
     expect(result.isError).toBe(false);
     expect(result.structuredContent).toMatchObject({ items: [{ id: "item-esp32" }] });
     expect(result.content[0]).toMatchObject({ type: "text" });
+  });
+
+  it("maps an application invalid cursor from list_inventory to INVALID_ARGUMENT", async () => {
+    const failing = backend();
+    failing.inventory.list = async () => { throw new ApplicationError("invalid_cursor", "The inventory pagination cursor is invalid"); };
+
+    const result = await new McpAdapter(failing).callTool("list_inventory", { cursor: "-1" }, context);
+
+    expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
   });
 
   it("requires a write scope for stock events", async () => {

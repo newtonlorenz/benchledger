@@ -3,13 +3,12 @@ import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import type * as React from "react";
 import { ApiError, createSampleWorkspaceAdapter, createWorkspaceAdapter } from "./api";
 import type { WorkspaceAdapter } from "./api";
-import type { BomInput, CatalogProductDraft, ExactInventoryInput, InventoryCommissionInput, InventoryUpdateInput, RevisionInput } from "./api";
+import type { BomInput, CatalogProductDraft, ExactInventoryInput, InventoryCommissionInput, InventoryKindQuery, InventoryListQuery, InventoryUpdateInput, RevisionInput } from "./api";
 import { CatalogInventoryFlow, BuildSetupSummary, OwnedItemCombobox, splitSetupValues } from "./catalog-ui";
 import type { BuildConfigInput, CatalogProduct } from "./domain";
 import {
   calculateProjectSummary,
   countByState,
-  filterInventory,
   formatMoney,
   formatQuantity,
   getLineLabel,
@@ -19,7 +18,7 @@ import {
   railSteps,
   sumMoneyByCurrency
 } from "./domain";
-import type { BomLineStatus, InventoryCategory, InventoryItem, Project, StockLabelTone, StockState } from "./domain";
+import type { BomLineStatus, InventoryCategory, InventoryEvidenceState, InventoryItem, Project, StockLabelTone, StockState } from "./domain";
 import { activity, capabilityGroups, offers as fixtureOffers } from "./mock-data";
 import { Icon } from "./icons";
 import { ReconciliationUI } from "./reconciliation-ui";
@@ -51,6 +50,20 @@ export async function loadAllInventoryCategories(adapter: Pick<WorkspaceAdapter,
   return categories;
 }
 
+function readInventoryUrlState(): { readonly search: string; readonly categoryNodeId: string; readonly kind: InventoryKindQuery | "All"; readonly evidence: InventoryEvidenceState | "All"; readonly availability: "All" | "available" | "unavailable" } {
+  if (typeof window === "undefined") return { search: "", categoryNodeId: "", kind: "All", evidence: "All", availability: "All" };
+  const params = new URLSearchParams(window.location.search);
+  const categoryNodeId = params.get("unassigned") === "true" ? UNASSIGNED_CATEGORY_FILTER : params.get("categoryNodeId")?.trim() ?? "";
+  const kindValue = params.get("kind");
+  const evidenceValue = params.get("evidence");
+  const availableValue = params.get("available");
+  const kind = inventoryKindOptions.some((option) => option.value === kindValue) ? kindValue as InventoryKindQuery : "All";
+  const evidenceValues: InventoryEvidenceState[] = ["physically_counted", "commissioned", "delivered_uncounted", "ordered_unverified", "allocated", "consumed", "unknown"];
+  const evidence = evidenceValues.includes(evidenceValue as InventoryEvidenceState) ? evidenceValue as InventoryEvidenceState : "All";
+  const availability = availableValue === "true" ? "available" : availableValue === "false" ? "unavailable" : "All";
+  return { search: params.get("q")?.trim() ?? "", categoryNodeId, kind, evidence, availability };
+}
+
 const pageCopy: Record<Page, { label: string; icon: Parameters<typeof Icon>[0]["name"] }> = {
   overview: { label: "Workbench", icon: "grid" },
   inventory: { label: "Inventory", icon: "box" },
@@ -79,7 +92,7 @@ function App() {
   const [selectedProjectId, setSelectedProjectId] = useState("project-lamp");
   const [selectedItemId, setSelectedItemId] = useState<string>();
   const [projectTab, setProjectTab] = useState<ProjectTab>("plan");
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => readInventoryUrlState().search);
   const [expert, setExpert] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
   const [toast, setToast] = useState<string>();
@@ -90,6 +103,7 @@ function App() {
   const [sampleMode, setSampleMode] = useState(false);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [categoryReloadNonce, setCategoryReloadNonce] = useState(0);
+  const [inventoryRefreshNonce, setInventoryRefreshNonce] = useState(0);
   const [showNewProject, setShowNewProject] = useState(false);
   const [showNewRevision, setShowNewRevision] = useState(false);
   const [showAddBom, setShowAddBom] = useState(false);
@@ -210,6 +224,7 @@ function App() {
       setDemoAvailable(Boolean(snapshot.health?.demo));
       setConnection(snapshot.source === "synthetic" ? "sample" : "ready");
       setConnectionError(undefined);
+      setInventoryRefreshNonce((current) => current + 1);
       return true;
     } catch (error: unknown) {
       // A close-out commit is already durable by the time this refresh runs.
@@ -280,6 +295,7 @@ function App() {
     try {
       const result = await adapter.recordCount(itemId, quantity);
       setItems((current) => current.map((item) => item.id === itemId ? result : item));
+      setInventoryRefreshNonce((current) => current + 1);
       setToast(`Saved physical count: ${formatQuantity(result.quantity, result.unit)} for ${result.name}.`);
       return result;
     } catch (error: unknown) {
@@ -304,6 +320,7 @@ function App() {
     try {
       const result = await adapter.updateInventoryItem(itemId, input, expectedVersion);
       setItems((current) => current.map((item) => item.id === itemId ? result : item));
+      setInventoryRefreshNonce((current) => current + 1);
       setToast(`Saved changes to ${result.name}.`);
       return result;
     } catch (error: unknown) {
@@ -419,6 +436,7 @@ function App() {
     try {
       const item = await adapter.createInventoryItem(input);
       setItems((current) => [item, ...current]);
+      setInventoryRefreshNonce((current) => current + 1);
       setShowNewItem(false);
       setToast(`${item.name} added as Check quantity. Record a physical count before reserving it.`);
       return true;
@@ -494,6 +512,7 @@ function App() {
     try {
       const item = await adapter.createExactInventoryItem(input);
       setItems((current) => [item, ...current]);
+      setInventoryRefreshNonce((current) => current + 1);
       setShowNewItem(false);
       setCatalogQuery("");
       setCatalogProducts([]);
@@ -538,7 +557,7 @@ function App() {
 
           <main className="content" id="main-content">
             {page === "overview" && <OverviewPage items={items} projects={projects} expert={expert} sampleMode={sampleMode} onNavigate={navigate} onOpenProject={openProject} onSelectItem={setSelectedItemId} onNewProject={openNewProject} />}
-            {page === "inventory" && <InventoryPage items={items} categories={categories} search={search} onSearch={setSearch} onSelectItem={setSelectedItemId} onNewItem={() => setShowNewItem(true)} />}
+            {page === "inventory" && <InventoryPage adapter={adapter} categories={categories} search={search} refreshKey={inventoryRefreshNonce} onSearch={setSearch} onPageItems={(pageItems) => setItems((current) => { const byId = new Map(current.map((item) => [item.id, item] as const)); pageItems.forEach((item) => byId.set(item.id, item)); return [...byId.values()]; })} onSelectItem={setSelectedItemId} onNewItem={() => setShowNewItem(true)} />}
             {page === "projects" && selectedProject && <ProjectPage project={selectedProject} projects={projects} items={items} offers={offers} tab={projectTab} expert={expert} sampleMode={sampleMode} onTabChange={setProjectTab} onSelectProject={setSelectedProjectId} onOpenItem={setSelectedItemId} onNavigate={navigate} onToast={setToast} onNewProject={openNewProject} onNewRevision={() => setShowNewRevision(true)} onRetrySetup={pendingRevisionSetup?.projectId === selectedProject.id && pendingRevisionSetup.revisionId === selectedProject.serverRevisionId ? retryRevisionSetup : undefined} onAddBom={() => setShowAddBom(true)} onUpload={uploadArtifact} onReadReconciliation={adapter.readReconciliation} onSaveReconciliation={adapter.saveReconciliationDraft} onCommitReconciliation={adapter.commitReconciliation} onRefreshWorkspace={refreshWorkspace} />}
             {page === "projects" && !selectedProject && <EmptyState icon="folder" title="No projects yet" description="Start with a name and project goal. You can add parts and files after that." action="Create first project" onAction={() => setShowNewProject(true)} />}
             {page === "capabilities" && <CapabilitiesPage expert={expert} onCopy={setToast} />}
@@ -680,17 +699,97 @@ function SectionHeading({ eyebrow, title, action, onAction }: { eyebrow: string;
   return <div className="section-heading"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2></div>{action && <button className="text-button" onClick={onAction}>{action}<Icon name="arrow-right" size={14} /></button>}</div>;
 }
 
-function InventoryPage({ items, categories, search, onSearch, onSelectItem, onNewItem }: { items: InventoryItem[]; categories: readonly ManagedInventoryCategory[]; search: string; onSearch: (value: string) => void; onSelectItem: (id: string) => void; onNewItem: () => void }) {
-  const [categoryNodeId, setCategoryNodeId] = useState("");
-  const [kind, setKind] = useState("All");
-  const [evidence, setEvidence] = useState<InventoryItem["evidence"] | "All">("All");
-  const [availability, setAvailability] = useState<"All" | "available" | "unavailable">("All");
-  const filtered = filterInventory(items, search, {
-    ...(categoryNodeId === UNASSIGNED_CATEGORY_FILTER ? { categoryNodeId: null } : categoryNodeId ? { categoryNodeId } : {}),
-    kind,
-    evidence,
+function InventoryPage({ adapter, categories, search, refreshKey, onSearch, onPageItems, onSelectItem, onNewItem }: { adapter: WorkspaceAdapter; categories: readonly ManagedInventoryCategory[]; search: string; refreshKey: number; onSearch: (value: string) => void; onPageItems: (items: readonly InventoryItem[]) => void; onSelectItem: (id: string) => void; onNewItem: () => void }) {
+  const initialUrlState = readInventoryUrlState();
+  const [categoryNodeId, setCategoryNodeId] = useState(initialUrlState.categoryNodeId);
+  const [kind, setKind] = useState<InventoryKindQuery | "All">(initialUrlState.kind);
+  const [evidence, setEvidence] = useState<InventoryEvidenceState | "All">(initialUrlState.evidence);
+  const [availability, setAvailability] = useState<"All" | "available" | "unavailable">(initialUrlState.availability);
+  const [pageItems, setPageItems] = useState<InventoryItem[]>([]);
+  const [nextCursor, setNextCursor] = useState<string>();
+  const [total, setTotal] = useState<number>();
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<ApiError>();
+  const [loadMoreError, setLoadMoreError] = useState<ApiError>();
+  const [retryNonce, setRetryNonce] = useState(0);
+  const requestSequence = useRef(0);
+  const baseQuery: InventoryListQuery = {
+    limit: 25,
+    ...(search.trim() ? { q: search.trim() } : {}),
+    ...(kind === "All" ? {} : { kind }),
+    ...(evidence === "All" ? {} : { evidence }),
+    ...(categoryNodeId === UNASSIGNED_CATEGORY_FILTER ? { unassigned: true } : categoryNodeId ? { categoryNodeId } : {}),
     ...(availability === "All" ? {} : { available: availability === "available" })
-  });
+  };
+  const filterKey = `${search}|${categoryNodeId}|${kind}|${evidence}|${availability}`;
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    ["q", "categoryNodeId", "unassigned", "kind", "evidence", "available"].forEach((key) => params.delete(key));
+    if (search.trim()) params.set("q", search.trim());
+    if (categoryNodeId === UNASSIGNED_CATEGORY_FILTER) params.set("unassigned", "true");
+    else if (categoryNodeId) params.set("categoryNodeId", categoryNodeId);
+    if (kind !== "All") params.set("kind", kind);
+    if (evidence !== "All") params.set("evidence", evidence);
+    if (availability !== "All") params.set("available", String(availability === "available"));
+    const query = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
+  }, [search, categoryNodeId, kind, evidence, availability]);
+
+  useEffect(() => {
+    const sequence = ++requestSequence.current;
+    let active = true;
+    setPageItems([]);
+    setNextCursor(undefined);
+    setTotal(undefined);
+    setError(undefined);
+    setLoadMoreError(undefined);
+    setLoading(true);
+    setLoadingMore(false);
+    const timeout = window.setTimeout(() => {
+      adapter.listInventory(baseQuery).then((result) => {
+        if (!active || sequence !== requestSequence.current) return;
+        setPageItems(result.items);
+        setNextCursor(result.nextCursor);
+        setTotal(result.total);
+        onPageItems(result.items);
+      }).catch((cause: unknown) => {
+        if (!active || sequence !== requestSequence.current) return;
+        setError(normalizeApiError(cause));
+      }).finally(() => {
+        if (active && sequence === requestSequence.current) setLoading(false);
+      });
+    }, 280);
+    return () => { active = false; window.clearTimeout(timeout); };
+  // filterKey intentionally represents the primitive filter state and keeps
+  // this request debounced when the user types rapidly.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adapter, filterKey, refreshKey, retryNonce]);
+
+  const loadMore = async () => {
+    if (!nextCursor || loadingMore) return;
+    const sequence = ++requestSequence.current;
+    setLoadingMore(true);
+    setLoadMoreError(undefined);
+    try {
+      const result = await adapter.listInventory({ ...baseQuery, cursor: nextCursor });
+      if (sequence !== requestSequence.current) return;
+      setPageItems((current) => {
+        const byId = new Map(current.map((item) => [item.id, item] as const));
+        result.items.forEach((item) => byId.set(item.id, item));
+        return [...byId.values()];
+      });
+      setNextCursor(result.nextCursor);
+      setTotal(result.total);
+      onPageItems(result.items);
+    } catch (cause: unknown) {
+      if (sequence === requestSequence.current) setLoadMoreError(normalizeApiError(cause));
+    } finally {
+      if (sequence === requestSequence.current) setLoadingMore(false);
+    }
+  };
+
   const clearFilters = () => {
     onSearch("");
     setCategoryNodeId("");
@@ -705,12 +804,13 @@ function InventoryPage({ items, categories, search, onSearch, onSelectItem, onNe
         <label className="field-search"><Icon name="search" size={17} /><span className="sr-only">Filter inventory</span><input value={search} onChange={(event) => onSearch(event.target.value)} placeholder="Search name, model, tag, or location" /></label>
         <div className="inventory-filter-grid">
           <InventoryFilter label="Category" value={categoryNodeId} onChange={setCategoryNodeId} options={[{ value: "", label: "All categories" }, ...inventoryCategoryFilterOptions(categories), { value: UNASSIGNED_CATEGORY_FILTER, label: "Unassigned legacy items" }]} />
-          <InventoryFilter label="Kind" value={kind} onChange={setKind} options={[{ value: "All", label: "All kinds" }, ...inventoryKindOptions]} />
-          <InventoryFilter label="Evidence" value={evidence} onChange={(value) => setEvidence(value as InventoryItem["evidence"] | "All")} options={[{ value: "All", label: "All evidence" }, { value: "counted", label: "Physically counted" }, { value: "commissioned", label: "Commissioned" }, { value: "delivered", label: "Delivered or unknown" }, { value: "ordered", label: "Ordered, not verified" }]} />
+          <InventoryFilter label="Kind" value={kind} onChange={(value) => setKind(value as InventoryKindQuery | "All")} options={[{ value: "All", label: "All kinds" }, ...inventoryKindOptions]} />
+          <InventoryFilter label="Evidence" value={evidence} onChange={(value) => setEvidence(value as InventoryEvidenceState | "All")} options={[{ value: "All", label: "All evidence" }, { value: "physically_counted", label: "Physically counted" }, { value: "commissioned", label: "Commissioned" }, { value: "delivered_uncounted", label: "Delivered, not counted" }, { value: "ordered_unverified", label: "Ordered, not verified" }, { value: "allocated", label: "Allocated" }, { value: "consumed", label: "Consumed" }, { value: "unknown", label: "Unknown" }]} />
           <InventoryFilter label="Availability" value={availability} onChange={(value) => setAvailability(value as typeof availability)} options={[{ value: "All", label: "All availability" }, { value: "available", label: "Available for reuse" }, { value: "unavailable", label: "Not available" }]} />
         </div>
       </div>
-      {filtered.length ? <InventoryTable items={filtered} categories={categories} onSelectItem={onSelectItem} /> : <EmptyState icon="search" title="No matching items" description="Change the search text or filters." action="Clear filters" onAction={clearFilters} />}
+      <div className="inventory-page-status" role="status" aria-live="polite">{loading ? "Loading inventory…" : error ? "Inventory could not be loaded." : loadMoreError ? "Showing the loaded items. More items could not be loaded." : total === undefined ? `Showing ${pageItems.length} items` : `Showing ${pageItems.length} of ${total} items`}</div>
+      {error ? <div className="inventory-load-error" role="alert"><span>{error.message}</span><button className="button button-secondary" onClick={() => setRetryNonce((value) => value + 1)}>Try again</button></div> : loading && pageItems.length === 0 ? <div className="inventory-loading" aria-label="Loading inventory">Loading inventory…</div> : pageItems.length ? <><InventoryTable items={pageItems} categories={categories} onSelectItem={onSelectItem} />{loadMoreError && <div className="inventory-load-error" role="alert"><span>{loadMoreError.message}</span><button className="button button-secondary" onClick={() => { void loadMore(); }}>Try again</button></div>}{nextCursor && <div className="inventory-load-more"><button className="button button-secondary" onClick={() => { void loadMore(); }} disabled={loadingMore} aria-busy={loadingMore}>{loadingMore ? "Loading…" : "Load more"}<Icon name="chevron-right" size={16} /></button></div>}</> : <EmptyState icon="search" title="No matching items" description="Change the search text or filters." action="Clear filters" onAction={clearFilters} />}
     </section>
   </>;
 }
@@ -727,11 +827,18 @@ function InventoryTable({ items, categories, onSelectItem }: { items: InventoryI
   return <div className="table-scroll"><table className="data-table inventory-table"><caption className="sr-only">Inventory items</caption><thead><tr><th scope="col">Item</th><th scope="col">Category</th><th scope="col">Quantity</th><th scope="col">Status</th><th scope="col">Location</th><th scope="col"><span className="sr-only">Open</span></th></tr></thead><tbody>{items.map((item) => { const categoryLabel = managedInventoryLabel(categories, item); return <tr key={item.id}><td><button className="table-item" onClick={() => onSelectItem(item.id)}><span className={`item-glyph accent-${item.accent}`}><Icon name={categoryIcons[item.category]} size={16} /></span><span><strong>{item.name}</strong><small>{item.variant}</small>{(item.category === "Filament" || item.category === "Printers") && <small className={`exact-product-state ${item.productProfile?.linkState === "confirmed" ? "is-confirmed" : ""}`}>{exactProductLabel(item)}</small>}</span></button></td><td><span className="category-label"><Icon name={categoryIcons[item.category]} size={14} />{categoryLabel}</span></td><td className="quantity-cell"><strong>{formatQuantity(Math.max(item.quantity - item.reserved, 0), item.unit)}</strong>{item.reserved > 0 && <small>{formatQuantity(item.reserved, item.unit)} reserved</small>}</td><td><StatusPill state={item.state} /></td><td><span className="location-label"><Icon name="archive" size={14} />{item.location}</span></td><td><button className="row-open" onClick={() => onSelectItem(item.id)} aria-label={`Open ${item.name}`}><Icon name="chevron-right" size={17} /></button></td></tr>;})}</tbody></table></div>;
 }
 
-function evidenceLabel(evidence: InventoryItem["evidence"]): string {
+function evidenceLabel(evidence: InventoryItem["evidence"], serverEvidence?: InventoryItem["serverEvidence"]): string {
+  if (serverEvidence === "physically_counted") return "Physically counted";
+  if (serverEvidence === "commissioned") return "Commissioned";
+  if (serverEvidence === "delivered_uncounted") return "Delivered, not counted";
+  if (serverEvidence === "ordered_unverified") return "Ordered, not verified";
+  if (serverEvidence === "allocated") return "Allocated";
+  if (serverEvidence === "consumed") return "Consumed";
+  if (serverEvidence === "unknown") return "Unknown";
   if (evidence === "counted") return "Physically counted";
   if (evidence === "commissioned") return "Commissioned";
   if (evidence === "ordered") return "Ordered, not verified";
-  return "Delivered or unknown";
+  return "Delivered, not counted";
 }
 
 function StatusPill({ state, compact = false }: { state: StockState | "optional"; compact?: boolean }) {
@@ -1153,7 +1260,7 @@ function InventoryDrawer({ item, categories, categoriesLoading, categoriesError,
 
         <section className="drawer-quantity" aria-labelledby="physical-count-heading"><div><span className="eyebrow" id="physical-count-heading">Verified on-hand quantity</span><strong>{formatQuantity(item.quantity, item.unit)}</strong><span>{item.reserved ? `${formatQuantity(item.reserved, item.unit)} reserved; ${formatQuantity(availableForReuse, item.unit)} available for reuse.` : "No quantity is reserved."}</span><p>Enter the quantity that you can physically verify. This action creates a stock event and replaces the recorded on-hand quantity.</p></div><div className="count-form"><label htmlFor="count-quantity">Physical count</label><div><input id="count-quantity" type="number" min="0" step="any" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={countSaving} /><span>{item.unit}</span></div><button type="button" className="button button-secondary" onClick={() => { void submitCount(); }} disabled={countSaving}>{countSaving ? "Saving…" : "Save physical count"}</button>{countError && <p className="form-error" role="alert">{countError}</p>}{countSaved && <p className="form-success" role="status">{countSaved}</p>}</div></section>
 
-        <section className="provenance-panel" aria-labelledby="provenance-heading"><div><span className="eyebrow" id="provenance-heading">Provenance</span><strong>{evidenceLabel(item.evidence)}</strong></div><dl><div><dt>Source</dt><dd>{item.provenance?.source ?? "Not recorded"}</dd></div><div><dt>Observed</dt><dd>{item.provenance?.observedAt ? item.provenance.observedAt.slice(0, 10) : "Not recorded"}</dd></div>{item.provenance?.sourceId && <div><dt>Source record</dt><dd><code>{item.provenance.sourceId}</code></dd></div>}{item.provenance?.note && <div><dt>Note</dt><dd>{item.provenance.note}</dd></div>}</dl></section>
+        <section className="provenance-panel" aria-labelledby="provenance-heading"><div><span className="eyebrow" id="provenance-heading">Provenance</span><strong>{evidenceLabel(item.evidence, item.serverEvidence)}</strong></div><dl><div><dt>Source</dt><dd>{item.provenance?.source ?? "Not recorded"}</dd></div><div><dt>Observed</dt><dd>{item.provenance?.observedAt ? item.provenance.observedAt.slice(0, 10) : "Not recorded"}</dd></div>{item.provenance?.sourceId && <div><dt>Source record</dt><dd><code>{item.provenance.sourceId}</code></dd></div>}{item.provenance?.note && <div><dt>Note</dt><dd>{item.provenance.note}</dd></div>}</dl></section>
 
         {expert && <details className="expert-detail" open><summary>Technical evidence</summary><div className="detail-grid"><div><span>Item kind</span><code>{item.kind ?? "Not recorded"}</code></div><div><span>Evidence state</span><code>{item.evidence}</code></div><div><span>Exact link state</span><code>{item.productProfile?.linkState ?? "not linked"}</code></div><div><span>Catalog product</span><code>{item.catalogProduct?.id ?? "Not recorded"}</code></div><div><span>Version</span><code>{item.version ?? "Not recorded"}</code></div><div><span>Dimensions</span><code>{item.dimensions ? formatDimensions(item.dimensions) : "Not recorded"}</code></div><div><span>Tags</span><code>{item.tags.join(" · ") || "None"}</code></div></div><div className="compatibility-box"><span>Compatibility notes</span>{item.compatibility.length ? <ul>{item.compatibility.map((note) => <li key={note}>{note}</li>)}</ul> : <p>No compatibility evidence is recorded.</p>}</div></details>}
       </div>

@@ -778,6 +778,7 @@ async function scopedProjectPage(service: ApplicationService, query: ProjectList
 function errorStatus(error: ApplicationError): number {
   switch (error.code) {
     case "not_found": return 404;
+    case "invalid_cursor": return 400;
     case "conflict": case "idempotency_conflict": case "integrity_error": return 409;
     case "forbidden": return 403;
     case "quota_exceeded": return 413;
@@ -946,7 +947,15 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const params = request.params as { id: string };
     return service.updateCatalogProduct(params.id, parseBody(updateCatalogProductSchema, request.body), parseExpectedVersion(request), requestContext(request));
   });
-  app.get(route("/inventory"), async (request) => { requireScope(request, "read", auth); const query = parseBody(inventoryListQuerySchema, request.query); return service.listInventory(query); });
+  app.get(route("/inventory"), async (request) => {
+    requireScope(request, "read", auth);
+    const query = parseBody(inventoryListQuerySchema, request.query);
+    const page = await service.listInventory(query);
+    const inventory = request.principal?.projectIds === undefined
+      ? await hydrateWorkspaceInventory(service, page.data)
+      : page.data;
+    return { ...page, data: inventory };
+  });
   app.get(route("/inventory/categories"), async (request) => { requireScope(request, "read", auth); return service.listInventoryCategories(parseBody(inventoryCategoryListQuerySchema, request.query)); });
   app.post(route("/inventory/categories"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const mutation = await service.createInventoryCategory(parseBody(createInventoryCategorySchema, request.body), requestContext(request)); return reply.code(201).send(mutationBody(mutation)); });
   app.get(route("/inventory/categories/:id"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; return service.getInventoryCategory(params.id); });

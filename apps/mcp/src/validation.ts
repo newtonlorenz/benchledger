@@ -99,6 +99,12 @@ function optionalString(value: unknown, label: string, max = 4096): string | und
   return stringValue(value, label, { max });
 }
 
+function optionalBoolean(value: unknown, label: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") fail(`${label} must be a boolean.`);
+  return value;
+}
+
 function integer(value: unknown, label: string, min = 0, max = Number.MAX_SAFE_INTEGER): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min || value > max) {
     fail(`${label} must be a safe integer between ${min} and ${max}.`);
@@ -211,11 +217,12 @@ export function catalogProductSearch(value: unknown): CatalogProductSearchInput 
   const page = parsePageInput({ limit: input.limit, cursor: input.cursor });
   const query = optionalString(input.query, "arguments.query", 200);
   if (query !== undefined && query.trim().length === 0) fail("arguments.query must not be blank.");
-  return {
+  const result: CatalogProductSearchInput = {
     ...page,
     ...(query === undefined ? {} : { query: query.trim() }),
     kind: optionalEnum(input.kind, "arguments.kind", ["filament", "printer"] as const),
   };
+  return result;
 }
 
 export function catalogProductCreate(value: unknown): CatalogProductCreateInput {
@@ -294,7 +301,7 @@ export function reconciliationCommit(value: unknown): ReconciliationCommitInput 
 export function quantity(value: unknown, label: string): Quantity {
   const input = record(value, label);
   keys(input, ["value", "unit"], label);
-  return {
+  const result: InventoryListInput = {
     value: finiteNumber(input.value, `${label}.value`, 0.000001),
     unit: enumValue(input.unit, `${label}.unit`, ["piece", "gram", "millimetre", "millilitre", "metre", "roll", "set"] as const),
   };
@@ -327,7 +334,7 @@ function optionalDimensions(value: unknown, label: string): Dimensions | undefin
 export function evidence(value: unknown, label: string): EvidenceSummary {
   const input = record(value, label);
   keys(input, ["state", "source", "sourceId", "recordedAt", "note"], label);
-  return {
+  const result: InventoryListInput = {
     state: enumValue(input.state, `${label}.state`, ["physical_count", "commissioned", "measured", "manufacturer", "order", "delivery", "user_reported", "inferred", "unknown"] as const),
     source: stringValue(input.source, `${label}.source`, { max: 256 }),
     ...(input.sourceId === undefined ? {} : { sourceId: optionalString(input.sourceId, `${label}.sourceId`, 500) }),
@@ -375,17 +382,21 @@ function textFields(input: UnknownRecord, label: string, output: Record<string, 
 
 export function inventoryList(value: unknown): InventoryListInput {
   const input = record(value ?? {}, "arguments");
-  keys(input, ["limit", "cursor", "query", "category", "availability", "location"], "arguments");
+  keys(input, ["limit", "cursor", "query", "category", "categoryNodeId", "unassigned", "availability", "location"], "arguments");
   // Location filtering is applied after bounded application pages and uses a
   // compact opaque cursor that can contain a near-maximum source cursor.
   const page = parsePageInput({ limit: input.limit, cursor: input.cursor }, "arguments", 512);
-  return {
+  const result: InventoryListInput = {
     ...page,
     query: optionalString(input.query, "arguments.query", 256),
     category: optionalString(input.category, "arguments.category", 128),
+    categoryNodeId: input.categoryNodeId === undefined ? undefined : categoryId(input.categoryNodeId, "arguments.categoryNodeId"),
+    unassigned: optionalBoolean(input.unassigned, "arguments.unassigned"),
     availability: optionalEnum(input.availability, "arguments.availability", ["confirmed", "inspect_first", "ordered_unverified", "delivered_uncounted", "allocated", "depleted", "retired"] satisfies readonly Availability[]),
     location: optionalString(input.location, "arguments.location", 256),
   };
+  if (result.categoryNodeId !== undefined && result.unassigned === true) fail("arguments.categoryNodeId and arguments.unassigned cannot be combined.");
+  return result;
 }
 
 export function inventoryCreate(value: unknown): InventoryCreateInput {

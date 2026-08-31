@@ -120,6 +120,10 @@ export interface InventoryListOptions {
   readonly kind?: InventoryListQuery["kind"];
   readonly evidence?: InventoryListQuery["evidence"];
   readonly available?: boolean;
+  /** Exact managed taxonomy node; applied before ordering and pagination. */
+  readonly categoryNodeId?: InventoryListQuery["categoryNodeId"];
+  /** Select only legacy items with no managed taxonomy assignment. */
+  readonly unassigned?: boolean;
   readonly limit: number;
   readonly cursor?: string;
   readonly includeRetired?: boolean;

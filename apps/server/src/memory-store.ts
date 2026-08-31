@@ -9,7 +9,7 @@ import type {
   UpdateInventoryProductProfile, BuildConfigurationSnapshot, CreateBuildConfigurationSnapshot,
   ArtifactBuildConfigurationBinding, CommissionInventoryItem, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory
 } from "@benchledger/api-contract";
-import { ApplicationError } from "@benchledger/application";
+import { ApplicationError, parseInventoryCursor } from "@benchledger/application";
 import type {
   ApplicationPorts, ArtifactDownload, ArtifactPort, AuditEvent, AuditInput, AuditPort,
   BeginUploadInput, EventBusEvent, EventBusPort, HealthPort, IdempotencyPort,
@@ -109,15 +109,21 @@ class MemoryInventory implements InventoryPort {
   }
 
   listItems(options: InventoryListOptions): Promise<Page<InventoryItem>> {
-    const normalized = options.q?.trim().toLowerCase();
+    const normalized = options.q?.trim().toLocaleLowerCase();
     const items = [...this.items.values()].filter((item) => {
+      if (!options.includeRetired && item.retiredAt !== undefined) return false;
       if (options.kind && item.kind !== options.kind) return false;
       if (options.evidence && item.evidence.state !== options.evidence) return false;
       if (options.available !== undefined && (item.availableQuantity > 0) !== options.available) return false;
+      if (options.categoryNodeId !== undefined && item.categoryNodeId !== options.categoryNodeId) return false;
+      if (options.unassigned === true && item.categoryNodeId !== undefined) return false;
       if (!normalized) return true;
-      return [item.name, item.description, item.manufacturer, item.model, item.sku, ...item.tags].filter(Boolean).join(" ").toLowerCase().includes(normalized);
-    }).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
-    return Promise.resolve(page(items, options.limit, options.cursor));
+      return [item.name, item.description, item.manufacturer, item.model, item.sku, item.location, ...item.tags].filter(Boolean).join(" ").toLocaleLowerCase().includes(normalized);
+    }).sort((a, b) => a.name.trim().toLocaleLowerCase().localeCompare(b.name.trim().toLocaleLowerCase()) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+    const offset = parseInventoryCursor(options.cursor);
+    const selected = items.slice(offset, offset + options.limit);
+    const nextOffset = offset + selected.length < items.length ? offset + selected.length : undefined;
+    return Promise.resolve({ data: clone(selected), limit: options.limit, total: items.length, ...(nextOffset === undefined ? {} : { nextCursor: String(nextOffset) }) });
   }
 
   getItem(itemId: string): Promise<InventoryItem | null> {

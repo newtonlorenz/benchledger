@@ -45,7 +45,7 @@ export function mapBackendError(error: unknown): McpAdapterError {
     if (candidate.code === "FORBIDDEN" || candidate.code === "forbidden" || candidate.statusCode === 403) {
       return new McpAdapterError("FORBIDDEN", "The current token is not allowed to perform this action.");
     }
-    if (candidate.code === "validation" || candidate.code === "quota_exceeded" || candidate.code === "unsupported_media") {
+    if (candidate.code === "validation" || candidate.code === "invalid_cursor" || candidate.code === "quota_exceeded" || candidate.code === "unsupported_media") {
       return new McpAdapterError("INVALID_ARGUMENT", "The request arguments are invalid.");
     }
   }

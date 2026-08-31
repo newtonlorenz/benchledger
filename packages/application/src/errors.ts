@@ -1,6 +1,7 @@
 export type ApplicationErrorCode =
   | "not_found"
   | "conflict"
+  | "invalid_cursor"
   | "validation"
   | "forbidden"
   | "idempotency_conflict"

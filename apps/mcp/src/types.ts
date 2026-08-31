@@ -154,6 +154,10 @@ export interface InventorySummary {
 export interface InventoryListInput extends PageInput {
   query?: string;
   category?: string;
+  /** Exact managed taxonomy node filter; distinct from semantic `category`. */
+  categoryNodeId?: string;
+  /** Select only legacy inventory without a managed category assignment. */
+  unassigned?: boolean;
   availability?: Availability;
   location?: string;
 }

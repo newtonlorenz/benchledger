@@ -23,6 +23,7 @@ import type {
   ReconciliationDraft, ReconciliationCommit, CommitReconciliation, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory
 } from "@benchledger/api-contract";
 import { ApplicationError, conflict, notFound } from "./errors.js";
+import { parseInventoryCursor } from "./inventory-pagination.js";
 import type {
   ApplicationPorts, ArtifactDownload, AuditInput, BeginUploadInput, EventBusEvent,
   GapEvaluation, InventoryListOptions, Mutation, Page, ProjectListOptions, RequestContext,
@@ -646,7 +647,9 @@ export class ApplicationService {
   }
 
   async listInventory(query: InventoryListQuery): Promise<Page<InventoryItem>> {
-    return this.ports.unitOfWork.exclusive(() => this.ports.inventory.listItems(inventoryListQuerySchema.parse(query) as InventoryListOptions));
+    const parsed = inventoryListQuerySchema.parse(query) as InventoryListOptions;
+    parseInventoryCursor(parsed.cursor);
+    return this.ports.unitOfWork.exclusive(() => this.ports.inventory.listItems(parsed));
   }
 
   async getInventoryItem(id: string): Promise<InventoryItem> {

@@ -9,8 +9,21 @@ async function signIn(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { name: "Review build status." })).toBeVisible();
 }
 
+function inventoryRecord(id: string, name: string, kind = "tool") {
+  return {
+    id, name, kind, quantity: 1, availableQuantity: 1, unit: "each", tags: [], links: [],
+    evidence: { state: "physically_counted" }, createdAt: "2026-08-30T10:00:00.000Z",
+    updatedAt: "2026-08-30T10:00:00.000Z", version: 1
+  };
+}
+
 test("filters, edits, and physically counts evidence-aware inventory", async ({ page }) => {
   await signIn(page);
+  const inventoryRequests: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (request.method() === "GET" && url.pathname.endsWith("/api/v1/inventory")) inventoryRequests.push(url.toString());
+  });
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
 
   await expect(page.getByRole("heading", { name: "Review inventory." })).toBeVisible();
@@ -24,13 +37,22 @@ test("filters, edits, and physically counts evidence-aware inventory", async ({ 
   await expect(headers.nth(4)).toHaveText("Location");
   await expect(headers.nth(5)).toHaveText("Open");
   await expect(page.getByRole("columnheader", { name: "Evidence source", exact: true })).toHaveCount(0);
-  await expect(page.getByLabel("Filter inventory by category")).toHaveCount(1);
+  await expect(page.getByLabel("Filter inventory by category")).toHaveCount(0);
   await page.getByLabel("Filter inventory by kind").selectOption("electronic");
-  await page.getByLabel("Filter inventory by evidence").selectOption("counted");
+  await page.getByLabel("Filter inventory by evidence").selectOption("physically_counted");
   await page.getByLabel("Filter inventory by availability").selectOption("available");
   await page.getByLabel("Search inventory").fill("ESP32");
+  await expect(page.locator(".inventory-page-status")).toContainText("Showing 1 of 1 items");
   const espRow = page.getByRole("row").filter({ has: page.getByRole("button", { name: "ESP32 development board electronic" }) });
   await expect(espRow).toBeVisible();
+  expect(inventoryRequests.some((value) => {
+    const url = new URL(value);
+    return url.searchParams.get("q") === "ESP32"
+      && url.searchParams.get("kind") === "electronic"
+      && url.searchParams.get("evidence") === "physically_counted"
+      && url.searchParams.get("available") === "true"
+      && url.searchParams.get("limit") === "25";
+  })).toBe(true);
   await expect(espRow).toContainText("Ready to use");
   await expect(espRow).not.toContainText("synthetic-demo");
   await expect(page.getByRole("button", { name: "Bambu Lab H2D printer" })).toHaveCount(0);
@@ -79,6 +101,57 @@ test("filters, edits, and physically counts evidence-aware inventory", async ({ 
   await drawer.getByRole("button", { name: "Save changes" }).click();
   await expect(drawer.getByRole("alert")).toContainText("The item changed on the service. Reload and try again.");
   await expect(drawer.getByRole("button", { name: "Cancel" })).toBeVisible();
+});
+
+test("loads server-backed continuation pages, resets filters, and ignores stale search results", async ({ page }) => {
+  await signIn(page);
+  const rows = Array.from({ length: 30 }, (_, index) => inventoryRecord(`tool-${String(index).padStart(2, "0")}`, `Tool ${String(index).padStart(2, "0")}`));
+  const electronic = inventoryRecord("electronic-one", "Fast ESP32", "electronic");
+  const slow = inventoryRecord("slow-result", "Slow result");
+  const fast = inventoryRecord("fast-result", "Fast result");
+  let continuationFailures = 1;
+  await page.route("**/api/v1/inventory**", async (route) => {
+    const requestUrl = new URL(route.request().url());
+    if (route.request().method() !== "GET" || requestUrl.pathname !== "/api/v1/inventory") return route.continue();
+    const query = requestUrl.searchParams.get("q") ?? "";
+    const kind = requestUrl.searchParams.get("kind");
+    const cursor = requestUrl.searchParams.get("cursor");
+    const filtered = kind === "electronic" ? [electronic] : query === "slow" ? [slow] : query === "fast" ? [fast] : rows;
+    if (query === "slow") await new Promise((resolve) => setTimeout(resolve, 450));
+    const offset = cursor === "25" ? 25 : 0;
+    if (offset === 25 && continuationFailures > 0) {
+      continuationFailures -= 1;
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: { code: "temporary_failure", message: "Continuation temporarily unavailable." } }) });
+      return;
+    }
+    const data = filtered.slice(offset, offset + 25);
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data, limit: 25, total: filtered.length, ...(offset + data.length < filtered.length ? { nextCursor: String(offset + data.length) } : {}) }) });
+  });
+
+  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  const status = page.locator(".inventory-page-status");
+  await expect(status).toHaveText("Showing 25 of 30 items");
+  await page.getByRole("button", { name: "Load more" }).click();
+  await expect(status).toHaveText("Showing the loaded items. More items could not be loaded.");
+  await expect(page.getByRole("button", { name: "Open Tool 24" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open Tool 29" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(status).toHaveText("Showing 30 of 30 items");
+  await expect(page.getByRole("button", { name: "Open Tool 29" })).toBeVisible();
+
+  await page.getByLabel("Filter inventory by kind").selectOption("electronic");
+  await expect(status).toHaveText("Showing 1 of 1 items");
+  await expect(page.getByRole("button", { name: "Open Fast ESP32" })).toBeVisible();
+  await page.getByLabel("Filter inventory by kind").selectOption("All");
+  await expect(status).toHaveText("Showing 25 of 30 items");
+
+  const search = page.locator(".field-search input");
+  await search.fill("slow");
+  await page.waitForTimeout(320);
+  await search.fill("fast");
+  await expect(status).toHaveText("Showing 1 of 1 items");
+  await expect(page.getByRole("button", { name: "Open Fast result" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open Slow result" })).toHaveCount(0);
 });
 
 test("keeps inventory quantity and status columns usable on mobile", async ({ page }) => {

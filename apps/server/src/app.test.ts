@@ -128,6 +128,25 @@ describe("BenchLedger HTTP API", () => {
     await app.close();
   });
 
+  it("pages inventory after server-side filtering and rejects invalid cursors", async () => {
+    const { app, cookie } = await loggedIn();
+    const first = await app.inject({ method: "GET", url: "/api/v1/inventory?limit=1", headers: { cookie } });
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toMatchObject({ data: [{ id: "printer-h2d" }], limit: 1, total: 4, nextCursor: "1" });
+    const second = await app.inject({ method: "GET", url: `/api/v1/inventory?limit=1&cursor=${encodeURIComponent(first.json<{ nextCursor: string }>().nextCursor)}`, headers: { cookie } });
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toMatchObject({ data: [{ id: "filament-petg-hf" }], limit: 1, total: 4, nextCursor: "2" });
+    const filtered = await app.inject({ method: "GET", url: "/api/v1/inventory?q=ESP32&kind=electronic&limit=1", headers: { cookie } });
+    expect(filtered.statusCode).toBe(200);
+    expect(filtered.json()).toMatchObject({ data: [{ id: "board-esp32" }], total: 1 });
+    for (const cursor of ["-1", "not-a-cursor", "9007199254740992"]) {
+      const invalid = await app.inject({ method: "GET", url: `/api/v1/inventory?limit=1&cursor=${encodeURIComponent(cursor)}`, headers: { cookie } });
+      expect(invalid.statusCode).toBe(400);
+      expect(invalid.json()).toMatchObject({ error: { code: "invalid_cursor" } });
+    }
+    await app.close();
+  });
+
   it("binds category If-Match versions into REST idempotency fingerprints", async () => {
     const { app, cookie, csrf } = await loggedIn();
     const baseHeaders = { cookie, "x-csrf-token": csrf };
@@ -695,6 +714,9 @@ describe("BenchLedger HTTP API", () => {
       productProfile: { id: "profile-filament-petg-hf", catalogProductId: "catalog-filament-petg-hf", linkState: "confirmed" },
       catalogProduct: { id: "catalog-filament-petg-hf", productName: "PETG HF" }
     });
+    const inventoryPage = await app.inject({ method: "GET", url: "/api/v1/inventory?kind=filament&limit=1", headers: { cookie } });
+    expect(inventoryPage.statusCode).toBe(200);
+    expect(inventoryPage.json()).toMatchObject({ data: [{ id: "filament-petg-hf", productProfile: { id: "profile-filament-petg-hf" }, catalogProduct: { id: "catalog-filament-petg-hf" } }], total: 1 });
     const legacy = body.inventory.find((item) => item.id === "board-esp32");
     expect(legacy).not.toHaveProperty("productProfile");
     expect(legacy).not.toHaveProperty("catalogProduct");
@@ -975,6 +997,11 @@ describe("BenchLedger HTTP API", () => {
     const projects = await app.inject({ method: "GET", url: "/api/v1/projects", headers });
     expect(projects.statusCode).toBe(200);
     expect(projects.json<{ data: Array<{ id: string }> }>().data.map((project) => project.id)).toEqual(["synthetic-project-lamp"]);
+    const inventory = await app.inject({ method: "GET", url: "/api/v1/inventory?limit=1", headers });
+    expect(inventory.statusCode).toBe(200);
+    expect(inventory.json()).toMatchObject({ limit: 1, total: 4, nextCursor: "1", data: [{ id: "printer-h2d" }] });
+    expect(inventory.json<{ data: Array<Record<string, unknown>> }>().data[0]).not.toHaveProperty("productProfile");
+    expect(inventory.json<{ data: Array<Record<string, unknown>> }>().data[0]).not.toHaveProperty("catalogProduct");
     expect((await app.inject({ method: "GET", url: "/api/v1/workspace", headers })).statusCode).toBe(403);
     expect((await app.inject({ method: "POST", url: "/api/v1/projects", headers, payload: { name: "Must not create", status: "planning" } })).statusCode).toBe(403);
     expect((await app.inject({ method: "GET", url: "/api/v1/project-revisions/not-a-visible-revision", headers })).statusCode).toBe(403);

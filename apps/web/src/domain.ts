@@ -147,6 +147,15 @@ export interface BuildConfigSnapshot extends BuildConfigInput {
 }
 
 export type EvidenceState = "counted" | "commissioned" | "delivered" | "ordered";
+/** Canonical API evidence values retained for exact server-side filtering. */
+export type InventoryEvidenceState =
+  | "physically_counted"
+  | "commissioned"
+  | "delivered_uncounted"
+  | "ordered_unverified"
+  | "allocated"
+  | "consumed"
+  | "unknown";
 
 export interface Dimensions {
   length?: number;
@@ -170,6 +179,8 @@ export interface InventoryItem {
   quantity: number;
   /** Server-calculated quantity that is available for reuse. */
   availableQuantity?: number;
+  /** Lossless API evidence state used by the paginated inventory query. */
+  serverEvidence?: InventoryEvidenceState;
   unit: "each" | "g" | "m";
   reserved: number;
   state: StockState;

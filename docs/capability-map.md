@@ -72,6 +72,16 @@ kept in the checked-in capability contract and enforced server-side.
 
 ## UI parity
 
+The Inventory destination uses the authenticated `GET /api/v1/inventory` page
+directly, with server-side search, canonical kind/evidence/availability filters,
+normalized-name-plus-id ordering, and a default page size of 25 with **Load
+more**. Each response is read-committed: `nextCursor` is opaque and should be
+passed back unchanged, but concurrent writes may change later pages. Keyset
+snapshot semantics are deliberately deferred. The bounded `/workspace` preview
+continues to support the overview and project flows; it is not the inventory
+list source. Inventory pages hydrate exact catalog products and physical
+profiles when present.
+
 | Human workflow | UI surface | MCP composition |
 | --- | --- | --- |
 | See what I have | Inventory dashboard and item detail | `read_inventory_summary` → `list_inventory` → item resource |

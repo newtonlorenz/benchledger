@@ -234,6 +234,17 @@ describe("authenticated BenchLedger API adapter", () => {
   it("keeps sample category rename validation aligned with the managed API", async () => {
     const adapter = createSampleWorkspaceAdapter();
     await expect(adapter.updateInventoryCategory("category-tools", { name: "Filament" }, 1)).rejects.toMatchObject({ status: 409, message: "A category with this name already exists beside it." });
+  it("requests inventory pages from the server and maps pagination without slicing a workspace snapshot", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({
+      data: [serverItem({ id: "item-page", name: "Paged item" })], limit: 10, total: 21, nextCursor: "10"
+    }));
+    const adapter = createWorkspaceAdapter();
+    const result = await adapter.listInventory({ q: "  ESP32 ", kind: "electronic", evidence: "physically_counted", available: true, limit: 10, cursor: "20" });
+    expect(result).toMatchObject({ items: [{ id: "item-page", name: "Paged item" }], limit: 10, total: 21, nextCursor: "10" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url] = fetchMock.mock.calls[0]!;
+    expect(url).toContain("/api/v1/inventory?");
+    expect(new URL(String(url), "http://localhost").search).toBe("?q=ESP32&kind=electronic&evidence=physically_counted&available=true&limit=10&cursor=20");
   });
 
   it("surfaces an authentication boundary instead of silently showing synthetic data", async () => {
@@ -958,6 +969,16 @@ describe("API boundaries and mutation guards", () => {
 });
 
 describe("sample workspace adapter", () => {
+  it("keeps demo pagination server-shaped and rejects malformed cursors", async () => {
+    const adapter = createSampleWorkspaceAdapter();
+    const first = await adapter.listInventory({ limit: 1 });
+    expect(first.items).toHaveLength(1);
+    expect(first.nextCursor).toBeDefined();
+    await expect(adapter.listInventory({ limit: 1, cursor: first.nextCursor! })).resolves.toMatchObject({ items: expect.any(Array) });
+    await expect(adapter.listInventory({ limit: 1, cursor: "-1" })).rejects.toMatchObject({ code: "invalid_cursor", status: 400 });
+    await expect(adapter.listInventory({ limit: 1, cursor: "not-a-cursor" })).rejects.toMatchObject({ code: "invalid_cursor", status: 400 });
+  });
+
   it("keeps a complete local vertical slice for demos without pretending it is counted stock", async () => {
     const adapter = createSampleWorkspaceAdapter();
     await expect(adapter.checkHealth()).resolves.toMatchObject({ status: "ok", demo: true, version: "sample" });
