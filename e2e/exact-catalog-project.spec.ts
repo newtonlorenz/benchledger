@@ -6,8 +6,8 @@ const projectName = "E2E exact catalog build";
 async function signIn(page: Page): Promise<void> {
   await page.goto("/");
   await page.getByLabel("Workspace password").fill(demoPassword);
-  await page.getByRole("button", { name: "Open workspace" }).click();
-  await expect(page.getByRole("heading", { name: "Make the next build clear." })).toBeVisible();
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("heading", { name: "Review build status." })).toBeVisible();
 }
 
 function catalogResponse(kind: "filament" | "printer", query: string) {
@@ -71,7 +71,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
 
   await signIn(page);
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Know what is on the bench." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Review inventory." })).toBeVisible();
 
   const printerResponse = await addExactInventory(
     page,
@@ -106,7 +106,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   await page.getByRole("button", { name: "Workbench", exact: true }).click();
   await page.getByRole("button", { name: "New project", exact: true }).click();
   await page.getByLabel("Project name").fill(projectName);
-  await page.getByLabel("What are you making?").fill("A small exact-catalog test enclosure for the maker workflow.");
+  await page.getByLabel("Project goal").fill("A small exact-catalog test enclosure for the maker workflow.");
   const projectResponse = page.waitForResponse(mutationResponse("/api/v1/projects/with-initial-revision"));
   await page.getByRole("button", { name: "Create project", exact: true }).click();
   const createdProjectResponse = await projectResponse;
@@ -180,7 +180,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
 
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Make the next build clear." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Review build status." })).toBeVisible();
   await page.getByRole("button", { name: /^Projects(?: \d+)?$/u }).click();
   const projectPicker = page.getByRole("combobox", { name: "Choose project" });
   await projectPicker.selectOption({ label: projectName });

@@ -360,7 +360,7 @@ export const offers: Offer[] = [
   { id: "offer-servo-1", itemId: "bom-servo", supplier: "RobotShop", title: "STS3215 serial bus servo", priceMinor: 2499, currency: "EUR", pack: "1 piece", eta: "3–5 days", url: "https://example.com/robotshop/sts3215", observed: "30 Aug 2026", preferred: true },
   { id: "offer-servo-2", itemId: "bom-servo", supplier: "Makersupply", title: "STS3215 smart servo · metal gear", priceMinor: 2890, currency: "EUR", pack: "1 piece", eta: "1 week", url: "https://example.com/makersupply/sts3215", observed: "28 Aug 2026" },
   { id: "offer-bearing-1", itemId: "bom-bearing", supplier: "123Bearing", title: "608-2RS sealed bearing", priceMinor: 380, currency: "EUR", pack: "2 pieces", eta: "2–4 days", url: "https://example.com/123bearing/608-2rs", observed: "30 Aug 2026", preferred: true },
-  { id: "offer-bearing-2", itemId: "bom-bearing", supplier: "Local hardware", title: "608 skate bearing", priceMinor: 650, currency: "EUR", pack: "4 pieces", eta: "Pick up today", url: "https://example.com/local/608", observed: "20 Aug 2026" },
+  { id: "offer-bearing-2", itemId: "bom-bearing", supplier: "Local hardware", title: "608 skate bearing", priceMinor: 650, currency: "EUR", pack: "4 pieces", eta: "Check local stock", url: "https://example.com/local/608", observed: "20 Aug 2026" },
   { id: "offer-diffuser", itemId: "bom-wall-diffuser", supplier: "LightParts", title: "Opal acrylic diffuser 2 mm", priceMinor: 1190, currency: "EUR", pack: "A4 sheet", eta: "4–6 days", url: "https://example.com/lightparts/opal-a4", observed: "29 Aug 2026" }
 ];
 
@@ -434,7 +434,7 @@ export const catalogProducts: CatalogProduct[] = [
 export const capabilityGroups = [
   {
     title: "Inventory",
-    description: "Know what is on hand before you recommend a purchase.",
+    description: "Check recorded stock before you propose a purchase.",
     tools: ["list_inventory", "read_inventory_item", "record_stock_event", "list_stock_events"]
   },
   {
@@ -449,7 +449,7 @@ export const capabilityGroups = [
   },
   {
     title: "Procurement",
-    description: "Compare observed offers. BenchLedger never buys for you.",
+    description: "Compare recorded offers. BenchLedger has no purchase authority.",
     tools: ["list_offers", "record_offer_snapshot"]
   }
 ];

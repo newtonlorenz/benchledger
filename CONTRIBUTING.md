@@ -30,6 +30,23 @@ npm run dev
 The development server uses synthetic demo data at
 `http://127.0.0.1:8792`.
 
+## Branch and integration workflow
+
+Use a local branch for each contribution and keep `main` aligned with the public
+GitHub default branch. Do not push a branch, open a pull request, publish a
+package, deploy, or change remote infrastructure until the maintainer explicitly
+approves that external action.
+
+The expected lifecycle is local development, focused local verification, optional
+read-only smoke checks against the configured private LAN Docker development/test
+deployment, then a GitHub pull request. Treat that LAN deployment as an
+integration target only; it is not production evidence. Never include its exact
+host address, credentials, private data directory, database, artifacts, logs, or
+environment file in commits, issues, pull requests, or screenshots.
+
+See [`docs/development-workflow.md`](docs/development-workflow.md) for the full
+operator workflow.
+
 ## Agile testing
 
 Use the smallest useful check while iterating:
@@ -37,10 +54,11 @@ Use the smallest useful check while iterating:
 | Change | Useful check |
 | --- | --- |
 | Documentation, metadata, community files | `npm run public:check` |
-| One workspace | `npm test --workspace=<workspace>` |
+| Focused Vitest files | `npx vitest run packages/domain/src` (replace the path) |
 | Type or contract changes | `npm run typecheck` |
 | UI behavior | the focused web test plus the affected Playwright flow |
 | Domain, authorization, storage, imports | focused invariant and failure-path tests |
+| HTTP, MCP, runtime, Docker, auth, artifacts, deployment behavior | focused local checks plus read-only LAN development/test smoke checks when configured |
 
 Write tests first when a rule is risky or a regression would be expensive.
 Coverage is a signal for critical domain, security, artifact, and data-integrity
@@ -58,6 +76,8 @@ Keep the description practical:
 
 - the user or agent outcome;
 - the focused tests you ran;
+- the full `npm run check` result;
+- the remote integration result, or why it was not run;
 - privacy/security impact;
 - migration and rollback considerations;
 - UI/MCP capability-map changes, if any.

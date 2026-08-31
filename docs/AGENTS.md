@@ -9,6 +9,35 @@ This is the public technical quickstart. It contains synthetic examples only;
 the private instance must keep inventory, order/email provenance, project files,
 credentials, tokens, logs, and backups outside the public checkout.
 
+## Repository operating lifecycle
+
+Develop BenchLedger locally, verify with synthetic data, then use any configured
+private LAN Docker instance only as a development/test integration target. Do not
+treat a LAN endpoint as production evidence, and do not write to a live container,
+change Docker state, rotate credentials, or publish externally without explicit
+human approval.
+
+The normal source workflow is:
+
+1. Create a local branch from the current public `main`.
+2. Make the smallest scoped change that preserves the documented public/private
+   data boundary.
+3. Run the focused local check first, then `npm run public:check` before sharing
+   a branch or source archive.
+4. Run `npm run check` before requesting merge or release.
+5. Perform read-only smoke checks against the configured private LAN Docker
+   development/test deployment when the change affects HTTP, MCP, runtime,
+   Docker, auth, artifact transfer, or deployment behavior.
+6. Contribute through GitHub branches and pull requests. Do not push, open a PR,
+   publish packages, deploy, or alter remote infrastructure without explicit
+   approval.
+
+Keep exact hostnames, IP addresses, bearer tokens, session secrets, admin
+password hashes, SQLite files, private artifacts, logs, and backups out of the
+repository. Store those details in private operator notes or runtime
+configuration, not in public docs or examples. For the full operator sequence,
+see [`development-workflow.md`](development-workflow.md).
+
 ## Minute 0–1: discover
 
 Connect to the authenticated MCP endpoint configured by the host application:
@@ -69,7 +98,7 @@ Example:
 
 > “Evaluate `project-rev-01` against confirmed stock only. Explain the H2D and
 > material configuration, every compatible alternative, remaining quantity,
-> evidence age, and the shortfall. Compare observed supplier offers in EUR, but
+> evidence age, and the shortfall. Compare observed supplier offers by source currency, but
 > do not fetch links or purchase.”
 
 ## Minute 6–8: project and BOM

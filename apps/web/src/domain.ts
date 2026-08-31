@@ -159,10 +159,15 @@ export interface Dimensions {
 export interface InventoryItem {
   id: string;
   name: string;
+  /** API item kind retained for exact filtering and lossless edits. */
+  kind?: string;
   category: InventoryCategory;
   variant: string;
+  model?: string;
   description: string;
   quantity: number;
+  /** Server-calculated quantity that is available for reuse. */
+  availableQuantity?: number;
   unit: "each" | "g" | "m";
   reserved: number;
   state: StockState;
@@ -173,6 +178,14 @@ export interface InventoryItem {
   sku?: string;
   tags: string[];
   compatibility: string[];
+  provenance?: {
+    source?: string;
+    sourceId?: string;
+    observedAt?: string;
+    note?: string;
+  };
+  /** Server version used for optimistic updates. */
+  version?: number;
   /** Original API unit retained so writes remain lossless after UI normalization. */
   serverUnit?: string;
   lastCounted?: string;
@@ -225,13 +238,16 @@ export interface Project {
   buildConfigSnapshot?: BuildConfigSnapshot;
 }
 
+/** ISO 4217 code. The API validates three uppercase letters at its boundary. */
+export type CurrencyCode = Uppercase<string>;
+
 export interface Offer {
   id: string;
   itemId: string;
   supplier: string;
   title: string;
   priceMinor: number;
-  currency: "EUR" | "USD";
+  currency: CurrencyCode;
   pack: string;
   eta: string;
   url: string;
@@ -248,7 +264,7 @@ export function getStockLabel(state: StockState): { label: string; tone: StockLa
     case "inspect-first":
       return { label: "Check quantity", tone: "warn" };
     case "ordered-unverified":
-      return { label: "On the way?", tone: "muted" };
+      return { label: "Ordered, not verified", tone: "muted" };
     case "reserved":
       return { label: "Reserved", tone: "warn" };
     case "depleted":
@@ -256,7 +272,7 @@ export function getStockLabel(state: StockState): { label: string; tone: StockLa
   }
 }
 
-export function formatMoney(minorUnits: number, currency: "EUR" | "USD" = "EUR"): string {
+export function formatMoney(minorUnits: number, currency: CurrencyCode = "EUR"): string {
   return new Intl.NumberFormat("en", { style: "currency", currency }).format(minorUnits / 100);
 }
 
@@ -277,11 +293,51 @@ export function formatQuantity(quantity: number, unit: InventoryItem["unit"] | B
   return `${quantity.toLocaleString()} ${quantity === 1 ? "piece" : "pieces"}`;
 }
 
-export function filterInventory(items: InventoryItem[], query: string, category?: InventoryCategory | "All"): InventoryItem[] {
+export interface InventoryFilters {
+  category?: InventoryCategory | "All";
+  kind?: string | "All";
+  evidence?: EvidenceState | "All";
+  available?: boolean;
+}
+
+export const inventoryKindOptions = [
+  { value: "printer", label: "Printer" },
+  { value: "tool", label: "Tool" },
+  { value: "accessory", label: "Accessory" },
+  { value: "consumable", label: "Consumable" },
+  { value: "electronic", label: "Electronic part" },
+  { value: "fastener", label: "Fastener" },
+  { value: "filament", label: "Filament" },
+  { value: "wire", label: "Wire or cable" },
+  { value: "adhesive", label: "Adhesive" },
+  { value: "other", label: "Other" }
+] as const;
+
+function inventoryKind(item: Pick<InventoryItem, "kind" | "category">): string {
+  if (item.kind) return item.kind;
+  switch (item.category) {
+    case "Printers": return "printer";
+    case "Filament": return "filament";
+    case "Tools": return "tool";
+    case "Electronics": return "electronic";
+    case "Fasteners": return "fastener";
+    case "Wire & cable": return "wire";
+    default: return "accessory";
+  }
+}
+
+export function filterInventory(items: InventoryItem[], query: string, filters?: InventoryFilters | InventoryCategory | "All"): InventoryItem[] {
   const normalized = query.trim().toLowerCase();
+  const resolved = typeof filters === "string" ? { category: filters } : filters ?? {};
   return items.filter((item) => {
-    const categoryMatch = !category || category === "All" || item.category === category;
+    const categoryMatch = !resolved.category || resolved.category === "All" || item.category === resolved.category;
     if (!categoryMatch) return false;
+    const kindMatch = !resolved.kind || resolved.kind === "All" || inventoryKind(item) === resolved.kind;
+    if (!kindMatch) return false;
+    const evidenceMatch = !resolved.evidence || resolved.evidence === "All" || item.evidence === resolved.evidence;
+    if (!evidenceMatch) return false;
+    const availableQuantity = item.availableQuantity ?? (["available", "reserved"].includes(item.state) ? Math.max(item.quantity - item.reserved, 0) : 0);
+    if (resolved.available !== undefined && (availableQuantity > 0) !== resolved.available) return false;
     if (!normalized) return true;
     return [item.name, item.category, item.variant, item.description, item.location, ...item.tags]
       .join(" ")
