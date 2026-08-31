@@ -7,16 +7,17 @@ import type {
   StockEventInput, UploadSession, WorkItem, WorkItemRevision, CatalogProduct, CreateCatalogProduct,
   UpdateCatalogProduct, InventoryProductProfile, CreateInventoryProductProfile,
   UpdateInventoryProductProfile, BuildConfigurationSnapshot, CreateBuildConfigurationSnapshot,
-  ArtifactBuildConfigurationBinding
+  ArtifactBuildConfigurationBinding, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory
 } from "@benchledger/api-contract";
 import { ApplicationError } from "@benchledger/application";
 import type {
   ApplicationPorts, ArtifactDownload, ArtifactPort, AuditEvent, AuditInput, AuditPort,
   BeginUploadInput, EventBusEvent, EventBusPort, HealthPort, IdempotencyPort,
   BuildConfigurationListOptions, BuildConfigurationPort, CatalogPort, CatalogProductListOptions,
-  InventoryListOptions, InventoryPort, OfferPort, Page, ProjectListOptions, ProjectPort, RequestContext,
+  InventoryCategoryListOptions, InventoryCategoryPort, InventoryListOptions, InventoryPort, OfferPort, Page, ProjectListOptions, ProjectPort, RequestContext,
   ReservationDetails, StockMutation, UnitOfWorkOperation, UnitOfWorkPort, UpdateInventoryInput, UploadSessionDetails, UsageInput
 } from "@benchledger/application";
+import { BUILTIN_INVENTORY_CATEGORIES, compareInventoryCategoryKeys, normalizeInventoryCategoryKey, normalizeInventoryCategoryName } from "@benchledger/domain";
 
 const clone = <T>(value: T): T => structuredClone(value);
 
@@ -28,11 +29,21 @@ function id(prefix: string, counter: number): string {
   return `${prefix}-${counter.toString(36)}-${Date.now().toString(36)}`;
 }
 
-function page<T>(items: readonly T[], limit: number, cursor?: string): Page<T> {
-  const offset = cursor ? Math.max(0, Number.parseInt(cursor, 10) || 0) : 0;
-  const selected = items.slice(offset, offset + limit);
-  const next = offset + selected.length < items.length ? String(offset + selected.length) : undefined;
+function page<T>(items: readonly T[], limit: number, cursor?: string, options: { readonly rejectInvalidCursor?: boolean } = {}): Page<T> {
+  const offset = cursor === undefined ? 0 : Number.parseInt(cursor, 10);
+  if (options.rejectInvalidCursor && cursor !== undefined && (!/^(?:0|[1-9][0-9]*)$/u.test(cursor) || !Number.isSafeInteger(offset) || offset < 0)) {
+    throw new ApplicationError("validation", "cursor is invalid");
+  }
+  const safeOffset = Number.isSafeInteger(offset) && offset >= 0 ? offset : 0;
+  const selected = items.slice(safeOffset, safeOffset + limit);
+  const next = safeOffset + selected.length < items.length ? String(safeOffset + selected.length) : undefined;
   return { data: clone(selected), limit, ...(next ? { nextCursor: next } : {}), total: items.length };
+}
+
+function compareInventoryCategories(left: InventoryCategory, right: InventoryCategory): number {
+  return left.sortOrder - right.sortOrder
+    || compareInventoryCategoryKeys(left.name, right.name)
+    || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
 }
 
 function canCount(evidence: InventoryItem["evidence"]["state"]): boolean {
@@ -86,6 +97,7 @@ class MemoryInventory implements InventoryPort {
     const evidence = input.evidence;
     const item: InventoryItem = {
       id: itemId, name: input.name.trim(), kind: input.kind,
+      ...(input.categoryNodeId === undefined ? {} : { categoryNodeId: input.categoryNodeId }),
       ...(input.description === undefined ? {} : { description: input.description }),
       ...(input.manufacturer === undefined ? {} : { manufacturer: input.manufacturer }),
       ...(input.model === undefined ? {} : { model: input.model }),
@@ -120,9 +132,11 @@ class MemoryInventory implements InventoryPort {
     const availableQuantity = input.quantity !== undefined || input.evidence !== undefined
       ? (canCount(evidence.state) ? quantity : 0)
       : current.availableQuantity;
+    const nextCategoryNodeId = input.categoryNodeId === null ? undefined : input.categoryNodeId ?? current.categoryNodeId;
     const next = {
       ...current,
       ...input,
+      ...(nextCategoryNodeId === undefined ? { categoryNodeId: undefined } : { categoryNodeId: nextCategoryNodeId }),
       ...(input.tags ? { tags: [...input.tags] } : {}),
       ...(input.links ? { links: clone(input.links) } : {}),
       ...(input.dimensions ? { dimensions: clone(input.dimensions) } : {}),
@@ -185,6 +199,92 @@ class MemoryInventory implements InventoryPort {
 
   listStockEvents(itemId: string, limit: number, cursor?: string): Promise<Page<StockEvent>> {
     return Promise.resolve(page(this.events.get(itemId) ?? [], limit, cursor));
+  }
+}
+
+class MemoryInventoryCategories implements InventoryCategoryPort {
+  readonly categories = new Map<string, InventoryCategory>();
+  private sequence = 700;
+
+  constructor(private readonly inventory: MemoryInventory, seed: readonly InventoryCategory[] = []) {
+    for (const category of seed) this.categories.set(category.id, clone(category));
+  }
+
+  listCategories(options: InventoryCategoryListOptions): Promise<Page<InventoryCategory>> {
+    const values = [...this.categories.values()]
+      .filter((category) => options.includeArchived || !category.archived)
+      .sort(compareInventoryCategories);
+    return Promise.resolve(page(values, options.limit, options.cursor, { rejectInvalidCursor: true }));
+  }
+
+  getCategory(categoryId: string): Promise<InventoryCategory | null> {
+    const category = this.categories.get(categoryId);
+    return Promise.resolve(category === undefined ? null : clone(category));
+  }
+
+  getItemCategoryNode(itemId: string): Promise<string | null> {
+    return Promise.resolve(this.inventory.items.get(itemId)?.categoryNodeId ?? null);
+  }
+
+  assignItemCategory(itemId: string, categoryNodeId: string | null): Promise<void> {
+    const current = this.inventory.items.get(itemId);
+    if (current === undefined) throw new ApplicationError("not_found", `Inventory item '${itemId}' was not found`);
+    const next = categoryNodeId === null ? { ...current, categoryNodeId: undefined } : { ...current, categoryNodeId };
+    this.inventory.items.set(itemId, clone(next));
+    return Promise.resolve();
+  }
+
+  createCategory(input: CreateInventoryCategory): Promise<InventoryCategory> {
+    const parent = input.parentId === undefined ? undefined : this.categories.get(input.parentId);
+    if (input.parentId !== undefined && parent === undefined) throw new ApplicationError("not_found", `Inventory category '${input.parentId}' was not found`);
+    if (parent?.parentId !== undefined) throw new ApplicationError("validation", "Categories support only one level of subcategories");
+    if (parent?.archived) throw new ApplicationError("validation", "An archived category cannot receive subcategories");
+    const name = normalizeInventoryCategoryName(input.name);
+    this.assertSiblingUnique(name, input.parentId, input.id);
+    const createdAt = iso();
+    const category: InventoryCategory = {
+      id: input.id ?? id("category", ++this.sequence), name,
+      ...(input.parentId === undefined ? {} : { parentId: input.parentId }),
+      sortOrder: input.sortOrder ?? 0, archived: false, createdAt, updatedAt: createdAt, version: 1
+    };
+    if (this.categories.has(category.id)) throw new ApplicationError("conflict", `Inventory category '${category.id}' already exists`);
+    this.categories.set(category.id, clone(category));
+    return Promise.resolve(clone(category));
+  }
+
+  updateCategory(categoryId: string, input: UpdateInventoryCategory, expectedVersion: number): Promise<InventoryCategory> {
+    const current = this.categories.get(categoryId);
+    if (current === undefined) throw new ApplicationError("not_found", `Inventory category '${categoryId}' was not found`);
+    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) throw new ApplicationError("validation", "expectedVersion is required and must be a positive integer");
+    ensureVersion(current.version, expectedVersion, "Inventory category");
+    const name = input.name === undefined ? current.name : normalizeInventoryCategoryName(input.name);
+    this.assertSiblingUnique(name, current.parentId, categoryId);
+    const updated: InventoryCategory = { ...current, name, sortOrder: input.sortOrder ?? current.sortOrder, updatedAt: iso(), version: current.version + 1 };
+    this.categories.set(categoryId, clone(updated));
+    return Promise.resolve(clone(updated));
+  }
+
+  archiveCategory(categoryId: string, expectedVersion: number): Promise<InventoryCategory> {
+    const current = this.categories.get(categoryId);
+    if (current === undefined) throw new ApplicationError("not_found", `Inventory category '${categoryId}' was not found`);
+    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) throw new ApplicationError("validation", "expectedVersion is required and must be a positive integer");
+    ensureVersion(current.version, expectedVersion, "Inventory category");
+    if ([...this.categories.values()].some((candidate) => candidate.parentId === categoryId && !candidate.archived)) {
+      throw new ApplicationError("conflict", `Inventory category '${categoryId}' has active subcategories`);
+    }
+    if ([...this.inventory.items.values()].some((item) => item.retiredAt === undefined && item.categoryNodeId === categoryId)) {
+      throw new ApplicationError("conflict", `Inventory category '${categoryId}' is referenced by active inventory`);
+    }
+    const updated: InventoryCategory = { ...current, archived: true, updatedAt: iso(), version: current.version + 1 };
+    this.categories.set(categoryId, clone(updated));
+    return Promise.resolve(clone(updated));
+  }
+
+  private assertSiblingUnique(name: string, parentId: string | undefined, selfId: string | undefined): void {
+    const normalized = normalizeInventoryCategoryKey(name);
+    if ([...this.categories.values()].some((candidate) => candidate.id !== selfId && (candidate.parentId ?? "") === (parentId ?? "") && normalizeInventoryCategoryKey(candidate.name) === normalized)) {
+      throw new ApplicationError("conflict", `A category named '${name}' already exists beside this category`);
+    }
   }
 }
 
@@ -486,18 +586,20 @@ export interface MemoryRuntime {
   readonly inventory: MemoryInventory;
   readonly projects: MemoryProjects;
   readonly catalog: MemoryCatalog;
+  readonly inventoryCategories: MemoryInventoryCategories;
   readonly buildConfigurations: MemoryBuildConfigurations;
   readonly unitOfWork: UnitOfWorkPort;
 }
 
 export function createMemoryRuntime(seed: readonly InventoryItem[] = []): MemoryRuntime {
   const inventory = new MemoryInventory(seed);
+  const inventoryCategories = new MemoryInventoryCategories(inventory, BUILTIN_INVENTORY_CATEGORIES);
   const projects = new MemoryProjects(inventory);
   const catalog = new MemoryCatalog();
   const buildConfigurations = new MemoryBuildConfigurations();
   const unitOfWork = new MemoryUnitOfWork();
-  const ports: ApplicationPorts = { inventory, projects, offers: new MemoryOffers(), artifacts: new MemoryArtifacts(), catalog, buildConfigurations, audit: new MemoryAudit(), events: new MemoryEvents(), idempotency: new MemoryIdempotency(), unitOfWork, health: new MemoryHealth() };
-  return { ports, inventory, projects, catalog, buildConfigurations, unitOfWork };
+  const ports: ApplicationPorts = { inventory, inventoryCategories, projects, offers: new MemoryOffers(), artifacts: new MemoryArtifacts(), catalog, buildConfigurations, audit: new MemoryAudit(), events: new MemoryEvents(), idempotency: new MemoryIdempotency(), unitOfWork, health: new MemoryHealth() };
+  return { ports, inventory, inventoryCategories, projects, catalog, buildConfigurations, unitOfWork };
 }
 
 function seedItem(item: Omit<InventoryItem, "createdAt" | "updatedAt" | "version">): InventoryItem {

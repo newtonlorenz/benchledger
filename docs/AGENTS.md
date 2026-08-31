@@ -68,6 +68,14 @@ Call `refresh_context` before a recommendation or write, then:
 3. `read_inventory_item` or `benchledger://inventory/items/{itemId}` for exact
    dimensions, links, evidence, compatibility, and history
 
+Use `list_inventory_categories` or `benchledger://inventory/categories` when
+organizing stock. The closed item `kind` remains semantic (for example,
+`filament` or `printer`); a user-managed category is an optional
+`categoryNodeId` assignment. Categories support top-level nodes plus one
+subcategory level. Rename/reorder with an expected version; parentage is fixed
+after creation, and archiving is a separate expected-version command that is
+blocked while active children or active inventory references remain.
+
 All list responses are bounded pages. Follow `nextCursor`; never request an
 unbounded database dump. Read the project resources for context, BOM, and
 artifact metadata when working in a project.

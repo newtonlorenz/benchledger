@@ -184,6 +184,38 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE INDEX IF NOT EXISTS audit_log_entity_idx ON audit_log(entity_type, entity_id, occurred_at, id);
 `;
 
+/** Additive user-managed inventory taxonomy. It is not a replacement for the
+ * closed semantic inventory kind or the legacy category text. */
+export const INVENTORY_CATEGORY_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS inventory_categories (
+  id TEXT PRIMARY KEY NOT NULL,
+  name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+  normalized_name TEXT NOT NULL,
+  parent_id TEXT REFERENCES inventory_categories(id),
+  sort_order INTEGER NOT NULL CHECK (sort_order >= 0),
+  archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS inventory_categories_sibling_name_idx
+  ON inventory_categories(COALESCE(parent_id, ''), normalized_name);
+CREATE INDEX IF NOT EXISTS inventory_categories_parent_idx
+  ON inventory_categories(parent_id, sort_order, normalized_name, id);
+CREATE INDEX IF NOT EXISTS inventory_categories_archived_idx
+  ON inventory_categories(archived, sort_order, normalized_name, id);
+
+CREATE TABLE IF NOT EXISTS inventory_item_category_assignments (
+  item_id TEXT PRIMARY KEY NOT NULL REFERENCES inventory_items(id) ON DELETE CASCADE,
+  category_node_id TEXT NOT NULL REFERENCES inventory_categories(id),
+  assigned_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS inventory_item_category_assignments_category_idx
+  ON inventory_item_category_assignments(category_node_id, item_id);
+`;
+
 /**
  * Additive v2 exact-product storage. These tables intentionally reference,
  * but never rewrite, the legacy inventory and revision tables. JSON payloads
@@ -281,5 +313,10 @@ CREATE TABLE IF NOT EXISTS reconciliation_commits (
 CREATE INDEX IF NOT EXISTS reconciliation_commits_draft_idx ON reconciliation_commits(draft_id, committed_at, id);
 `;
 
-/** The full schema used for new databases; all additions are idempotent. */
+/**
+ * The eager base schema used by BenchDatabase. Managed inventory categories
+ * are intentionally installed by migrateInventoryCategorySchema during the
+ * real startup sequence so legacy category tables can be upgraded and their
+ * persisted normalized keys backfilled before the unique/order indexes exist.
+ */
 export const SCHEMA_SQL = `${BASE_SCHEMA_SQL}\n${CATALOG_SCHEMA_SQL}\n${RECONCILIATION_SCHEMA_SQL}`;

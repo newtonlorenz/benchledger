@@ -252,9 +252,22 @@ describe("catalog and build configuration application services", () => {
     catalog.putInventoryProductProfile = async () => {
       throw new Error("forced profile-write failure");
     };
+    Object.assign(ports, {
+      inventoryCategories: {
+        getCategory: async (id: string) => id === "category-compound" ? {
+          id,
+          name: "Compound category",
+          sortOrder: 0,
+          archived: false,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          version: 1,
+        } : null,
+      },
+    });
 
     await expect(serviceFor(ports).createInventoryWithProductProfile({
-      item: { id: createdItem.id, name: createdItem.name, kind: createdItem.kind, quantity: createdItem.quantity, unit: createdItem.unit, tags: [], links: [], evidence: createdItem.evidence },
+      item: { id: createdItem.id, name: createdItem.name, kind: createdItem.kind, quantity: createdItem.quantity, unit: createdItem.unit, tags: [], links: [], categoryNodeId: "category-compound", evidence: createdItem.evidence },
       profile: { catalogProductId: "product-petg-hf", profileType: "filament_spool", linkState: "confirmed", details: { openedState: "sealed" } },
     }, context)).rejects.toThrow("forced profile-write failure");
     expect(itemPresent).toBe(false);

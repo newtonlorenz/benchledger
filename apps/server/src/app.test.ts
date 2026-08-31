@@ -40,6 +40,14 @@ describe("BenchLedger HTTP API", () => {
     expect(lines.find((line) => line.id === "synthetic-bom-fasteners")).toMatchObject({ optional: false, requiredQuantity: 4, unit: "each" });
   });
 
+  it("keeps synthetic category ordering aligned with persisted binary keys", async () => {
+    const runtime = createSyntheticRuntime();
+    await runtime.inventoryCategories.createCategory({ id: "category-demo-zebra", name: "Zebra", sortOrder: 100 });
+    await runtime.inventoryCategories.createCategory({ id: "category-demo-eclair", name: "Éclair", sortOrder: 100 });
+    const page = await runtime.inventoryCategories.listCategories({ limit: 200, includeArchived: false });
+    expect(page.data.filter((value) => value.sortOrder === 100).map((value) => value.id)).toEqual(["category-demo-zebra", "category-demo-eclair"]);
+  });
+
   it("keeps health public but protects inventory", async () => {
     const app = await createApp({ demo: true, auth: { sessionSecret: "s".repeat(48), secureCookies: false } });
     const health = await app.inject({ method: "GET", url: "/api/v1/health" });
@@ -66,6 +74,110 @@ describe("BenchLedger HTTP API", () => {
     const changed = await app.inject({ method: "POST", url: "/api/v1/inventory", headers: { cookie, "x-csrf-token": csrf, "idempotency-key": "create-hex-key-1" }, payload: { ...input, name: "Different tool" } });
     expect(changed.statusCode).toBe(409);
     await app.close();
+  });
+
+  it("supports managed category CRUD over HTTP with immutable parentage and dedicated archive", async () => {
+    const { app, cookie, csrf } = await loggedIn();
+    const headers = { cookie, "x-csrf-token": csrf };
+    const created = await app.inject({ method: "POST", url: "/api/v1/inventory/categories", headers: { ...headers, "idempotency-key": "http-category-1" }, payload: { id: "http-category", name: "HTTP category", sortOrder: 10 } });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ data: { id: "http-category", archived: false, version: 1 } });
+    const child = await app.inject({ method: "POST", url: "/api/v1/inventory/categories", headers: { ...headers, "idempotency-key": "http-category-child-1" }, payload: { id: "http-category-child", name: "HTTP child", parentId: "http-category" } });
+    expect(child.statusCode).toBe(201);
+    const listed = await app.inject({ method: "GET", url: "/api/v1/inventory/categories?limit=200", headers });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json<{ data: Array<{ id: string }> }>().data.some((value) => value.id === "http-category")).toBe(true);
+    const missingVersion = await app.inject({ method: "PATCH", url: "/api/v1/inventory/categories/http-category-child", headers, payload: { name: "Should not update" } });
+    expect(missingVersion.statusCode).toBe(400);
+    const emptyPatch = await app.inject({ method: "PATCH", url: "/api/v1/inventory/categories/http-category-child", headers: { ...headers, "if-match": "1" }, payload: {} });
+    expect(emptyPatch.statusCode).toBe(400);
+    const renamed = await app.inject({ method: "PATCH", url: "/api/v1/inventory/categories/http-category-child", headers: { ...headers, "if-match": "1" }, payload: { name: "Renamed child", sortOrder: 2 } });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json()).toMatchObject({ data: { name: "Renamed child", parentId: "http-category", version: 2 } });
+    const blockedParentArchive = await app.inject({ method: "POST", url: "/api/v1/inventory/categories/http-category/archive", headers: { ...headers, "if-match": "1" } });
+    expect(blockedParentArchive.statusCode).toBe(409);
+    const archivedChild = await app.inject({ method: "POST", url: "/api/v1/inventory/categories/http-category-child/archive", headers: { ...headers, "if-match": "2" } });
+    expect(archivedChild.statusCode).toBe(200);
+    const archivedParent = await app.inject({ method: "POST", url: "/api/v1/inventory/categories/http-category/archive", headers: { ...headers, "if-match": "1" } });
+    expect(archivedParent.statusCode).toBe(200);
+    const archivedList = await app.inject({ method: "GET", url: "/api/v1/inventory/categories?includeArchived=true&limit=200", headers });
+    expect(archivedList.json<{ data: Array<{ id: string; archived: boolean }> }>().data.find((value) => value.id === "http-category")?.archived).toBe(true);
+    const malformedCursor = await app.inject({ method: "GET", url: "/api/v1/inventory/categories?cursor=malformed", headers });
+    expect(malformedCursor.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("binds category If-Match versions into REST idempotency fingerprints", async () => {
+    const { app, cookie, csrf } = await loggedIn();
+    const baseHeaders = { cookie, "x-csrf-token": csrf };
+    const create = await app.inject({ method: "POST", url: "/api/v1/inventory/categories", headers: { ...baseHeaders, "idempotency-key": "http-category-fingerprint-create" }, payload: { id: "http-category-fingerprint", name: "Fingerprint category" } });
+    expect(create.statusCode).toBe(201);
+
+    const updateHeaders = { ...baseHeaders, "if-match": "1", "idempotency-key": "http-category-fingerprint-update" };
+    const firstUpdate = await app.inject({ method: "PATCH", url: "/api/v1/inventory/categories/http-category-fingerprint", headers: updateHeaders, payload: { name: "Updated once" } });
+    expect(firstUpdate.statusCode).toBe(200);
+    const replayUpdate = await app.inject({ method: "PATCH", url: "/api/v1/inventory/categories/http-category-fingerprint", headers: updateHeaders, payload: { name: "Updated once" } });
+    expect(replayUpdate.statusCode).toBe(200);
+    expect(replayUpdate.json()).toMatchObject({ replayed: true, data: { version: 2 } });
+    const changedVersionUpdate = await app.inject({ method: "PATCH", url: "/api/v1/inventory/categories/http-category-fingerprint", headers: { ...updateHeaders, "if-match": "2" }, payload: { name: "Updated once" } });
+    expect(changedVersionUpdate.statusCode).toBe(409);
+    expect(changedVersionUpdate.json()).toMatchObject({ error: { code: "idempotency_conflict" } });
+
+    const archiveCreate = await app.inject({ method: "POST", url: "/api/v1/inventory/categories", headers: { ...baseHeaders, "idempotency-key": "http-category-fingerprint-archive-create" }, payload: { id: "http-category-fingerprint-archive", name: "Archive fingerprint category" } });
+    expect(archiveCreate.statusCode).toBe(201);
+    const archiveHeaders = { ...baseHeaders, "if-match": "1", "idempotency-key": "http-category-fingerprint-archive" };
+    const firstArchive = await app.inject({ method: "POST", url: "/api/v1/inventory/categories/http-category-fingerprint-archive/archive", headers: archiveHeaders });
+    expect(firstArchive.statusCode).toBe(200);
+    const replayArchive = await app.inject({ method: "POST", url: "/api/v1/inventory/categories/http-category-fingerprint-archive/archive", headers: archiveHeaders });
+    expect(replayArchive.statusCode).toBe(200);
+    expect(replayArchive.json()).toMatchObject({ replayed: true, data: { version: 2 } });
+    const changedVersionArchive = await app.inject({ method: "POST", url: "/api/v1/inventory/categories/http-category-fingerprint-archive/archive", headers: { ...archiveHeaders, "if-match": "2" } });
+    expect(changedVersionArchive.statusCode).toBe(409);
+    expect(changedVersionArchive.json()).toMatchObject({ error: { code: "idempotency_conflict" } });
+    await app.close();
+  });
+
+  it("accepts exact plain, quoted, and weak If-Match versions and rejects malformed syntax", async () => {
+    const { app, cookie, csrf } = await loggedIn();
+    const baseHeaders = { cookie, "x-csrf-token": csrf };
+    const create = await app.inject({ method: "POST", url: "/api/v1/inventory/categories", headers: { ...baseHeaders, "idempotency-key": "http-category-version-create" }, payload: { id: "http-category-version", name: "Version syntax category" } });
+    expect(create.statusCode).toBe(201);
+    const update = async (header: string, name: string) => app.inject({ method: "PATCH", url: "/api/v1/inventory/categories/http-category-version", headers: { ...baseHeaders, "if-match": header }, payload: { name } });
+    expect((await update("1", "Plain version")).statusCode).toBe(200);
+    expect((await update('"2"', "Quoted version")).statusCode).toBe(200);
+    expect((await update('W/"3"', "Weak quoted version")).statusCode).toBe(200);
+    for (const header of ["1.5", "1junk", '"1.5"', 'W/"1junk"', "W/3", '"1', "0", "1e2"]) {
+      expect((await update(header, "Rejected version")).statusCode).toBe(400);
+    }
+    await app.close();
+  });
+
+  it("continues a worst-case production category cursor over HTTP", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "benchledger-category-cursor-"));
+    try {
+      const app = await createApp({ dataDir, publicBaseUrl: "http://127.0.0.1:8792", auth: { sessionSecret: "s".repeat(48), secureCookies: false, bearerTokens: [bearerRecord("category-cursor-token", ["read", "write"])] }, logger: false });
+      const headers = { authorization: "Bearer category-cursor-token" };
+      const firstId = "category-" + "a".repeat(151);
+      const secondId = "category-" + "b".repeat(151);
+      for (const [id, name, key] of [[firstId, "ﬃ".repeat(120), "long-category-a"], [secondId, "G".repeat(120), "long-category-b"]] as const) {
+        const created = await app.inject({ method: "POST", url: "/api/v1/inventory/categories", headers: { ...headers, "idempotency-key": key }, payload: { id, name, sortOrder: 0 } });
+        expect(created.statusCode).toBe(201);
+      }
+      const first = await app.inject({ method: "GET", url: "/api/v1/inventory/categories?limit=1", headers });
+      expect(first.statusCode).toBe(200);
+      const firstPage = first.json<{ data: Array<{ id: string }>; nextCursor?: string }>();
+      expect(firstPage.data[0]?.id).toBe(firstId);
+      expect(firstPage.nextCursor).toBeDefined();
+      expect(firstPage.nextCursor?.length).toBeGreaterThan(200);
+      const cursor = firstPage.nextCursor;
+      if (cursor === undefined) throw new Error("expected a continuation cursor");
+      const second = await app.inject({ method: "GET", url: `/api/v1/inventory/categories?limit=1&cursor=${encodeURIComponent(cursor)}`, headers });
+      expect(second.statusCode).toBe(200);
+      expect(second.json<{ data: Array<{ id: string }> }>().data[0]?.id).toBe(secondId);
+      await app.close();
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
   });
 
   it("binds REST stock-event idempotency to the item route and replays the same logical request", async () => {
@@ -273,6 +385,10 @@ describe("BenchLedger HTTP API", () => {
       expect(document.paths["/projects/with-initial-revision"]).toBeDefined();
       expect(document.paths["/inventory/with-product-profile"]).toMatchObject({ post: { requestBody: { content: { "application/json": { schema: { $ref: "#/components/schemas/CreateInventoryWithProductProfile" } } } } } });
       expect(document.components.schemas.CreateInventoryWithProductProfile).toMatchObject({ required: ["item", "profile"], additionalProperties: false });
+      expect(document.components.schemas.CreateInventoryCategory).toMatchObject({ required: ["name"], additionalProperties: false });
+      expect(document.components.schemas.UpdateInventoryCategory).toMatchObject({ minProperties: 1, additionalProperties: false });
+      expect(JSON.stringify(document.paths["/inventory/categories"])).toContain('"maxLength":512');
+      expect(document.paths["/inventory/categories/{id}"]).toMatchObject({ patch: { parameters: [{ name: "If-Match", in: "header", required: true }] } });
       const payload = {
         project: { id: "atomic-project", name: "Atomic project", description: "One command", status: "planning" },
         revision: { id: "atomic-revision", name: "Initial", notes: "Starting point", status: "concept" }
@@ -767,6 +883,9 @@ describe("BenchLedger HTTP API", () => {
     expect((await app.inject({ method: "POST", url: "/api/v1/projects", headers, payload: { name: "Must not create", status: "planning" } })).statusCode).toBe(403);
     expect((await app.inject({ method: "GET", url: "/api/v1/project-revisions/not-a-visible-revision", headers })).statusCode).toBe(403);
     expect((await app.inject({ method: "GET", url: "/api/v1/inventory", headers })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/v1/inventory/categories", headers })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/v1/inventory/categories/category-tools", headers })).statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url: "/api/v1/inventory/categories", headers, payload: { name: "Must not mutate" } })).statusCode).toBe(403);
     expect((await app.inject({ method: "POST", url: "/api/v1/inventory", headers, payload: { name: "Must not mutate", kind: "tool", quantity: 1, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } } })).statusCode).toBe(403);
     expect((await app.inject({ method: "GET", url: "/api/v1/offers", headers })).statusCode).toBe(403);
     expect((await app.inject({ method: "GET", url: "/api/v1/offers?itemId=board-esp32", headers })).statusCode).toBe(200);

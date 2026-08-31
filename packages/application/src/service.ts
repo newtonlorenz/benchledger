@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  bomGapSchema, createBomLineSchema, createInventoryItemSchema, createOfferSchema,
+  bomGapSchema, createBomLineSchema, createInventoryCategorySchema, createInventoryItemSchema, createOfferSchema,
   createProjectRevisionSchema, createProjectSchema, createReservationSchema,
   createProjectWithInitialRevisionSchema, createWorkItemRevisionSchema, createWorkItemSchema, idSchema, inventoryListQuerySchema,
-  stockEventInputSchema, updateBomLineSchema, updateInventoryItemSchema,
+  stockEventInputSchema, updateBomLineSchema, updateInventoryCategorySchema, updateInventoryItemSchema,
   updateProjectSchema, catalogProductSchema, createCatalogProductSchema,
   updateCatalogProductSchema, inventoryProductProfileSchema,
   createInventoryProductProfileSchema, updateInventoryProductProfileSchema,
@@ -20,14 +20,14 @@ import type {
   StockEventInput, UploadSession, WorkItem, WorkItemRevision, CatalogProduct, CreateCatalogProduct,
   UpdateCatalogProduct, InventoryProductProfile, CreateInventoryProductProfile,
   UpdateInventoryProductProfile, BuildConfigurationSnapshot, CreateBuildConfigurationSnapshot,
-  ReconciliationDraft, ReconciliationCommit, CommitReconciliation
+  ReconciliationDraft, ReconciliationCommit, CommitReconciliation, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory
 } from "@benchledger/api-contract";
 import { ApplicationError, conflict, notFound } from "./errors.js";
 import type {
   ApplicationPorts, ArtifactDownload, AuditInput, BeginUploadInput, EventBusEvent,
   GapEvaluation, InventoryListOptions, Mutation, Page, ProjectListOptions, RequestContext,
   ReservationDetails, StockMutation, UpdateInventoryInput, UploadSessionDetails, UsageInput,
-  CatalogProductListOptions, BuildConfigurationListOptions
+  CatalogProductListOptions, BuildConfigurationListOptions, InventoryCategoryListOptions, InventoryCategoryPort
 } from "./ports.js";
 import { z } from "zod";
 import { buildReconciliationDocument, reconciliationCommitId, reconciliationDraftId, type ReconciliationSourceSnapshot } from "./reconciliation.js";
@@ -266,6 +266,11 @@ function catalogPort(ports: ApplicationPorts): NonNullable<ApplicationPorts["cat
   return ports.catalog;
 }
 
+function inventoryCategoryPort(ports: ApplicationPorts): InventoryCategoryPort {
+  if (ports.inventoryCategories === undefined) throw new ApplicationError("integrity_error", "This runtime does not support managed inventory categories");
+  return ports.inventoryCategories;
+}
+
 function buildConfigurationPort(ports: ApplicationPorts): NonNullable<ApplicationPorts["buildConfigurations"]> {
   if (ports.buildConfigurations === undefined) throw new ApplicationError("integrity_error", "This runtime does not support build configuration snapshots");
   return ports.buildConfigurations;
@@ -290,6 +295,19 @@ function boundedCursor(value: string | undefined): string | undefined {
   return value;
 }
 
+function boundedCategoryCursor(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (value.length === 0 || value.length > 512 || !/^[A-Za-z0-9._~-]+$/.test(value)) throw new ApplicationError("validation", "cursor is invalid");
+  return value;
+}
+
+function requiredCategoryVersion(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    throw new ApplicationError("validation", "expectedVersion is required and must be a positive integer");
+  }
+  return value;
+}
+
 function catalogListOptions(query: Partial<CatalogProductListOptions> | undefined): CatalogProductListOptions {
   const q = query?.q;
   if (q !== undefined && (q.length > 200 || q.trim().length === 0)) {
@@ -311,6 +329,17 @@ function catalogListOptions(query: Partial<CatalogProductListOptions> | undefine
 function configurationListOptions(query: Partial<BuildConfigurationListOptions> | undefined): BuildConfigurationListOptions {
   const cursor = boundedCursor(query?.cursor);
   return {
+    limit: boundedLimit(query?.limit, 50, "limit"),
+    ...(cursor === undefined ? {} : { cursor })
+  };
+}
+
+function categoryListOptions(query: Partial<InventoryCategoryListOptions> | undefined): InventoryCategoryListOptions {
+  const includeArchived = query?.includeArchived ?? false;
+  if (typeof includeArchived !== "boolean") throw new ApplicationError("validation", "includeArchived must be a boolean");
+  const cursor = boundedCategoryCursor(query?.cursor);
+  return {
+    includeArchived,
     limit: boundedLimit(query?.limit, 50, "limit"),
     ...(cursor === undefined ? {} : { cursor })
   };
@@ -627,9 +656,62 @@ export class ApplicationService {
     });
   }
 
+  async listInventoryCategories(query: Partial<InventoryCategoryListOptions> = {}): Promise<Page<InventoryCategory>> {
+    const options = categoryListOptions(query);
+    return this.ports.unitOfWork.exclusive(() => inventoryCategoryPort(this.ports).listCategories(options));
+  }
+
+  async getInventoryCategory(id: string): Promise<InventoryCategory> {
+    const categoryId = requireId(id, "inventory category id");
+    return this.ports.unitOfWork.exclusive(async () => {
+      const category = await inventoryCategoryPort(this.ports).getCategory(categoryId);
+      if (category === null) throw notFound("Inventory category", categoryId);
+      return category;
+    });
+  }
+
+  async createInventoryCategory(input: CreateInventoryCategory, ctx: RequestContext): Promise<Mutation<InventoryCategory>> {
+    const parsed = createInventoryCategorySchema.parse(input);
+    const commandCtx = commandContext(ctx, "inventory.category.create", parsed);
+    return this.mutate(commandCtx, "inventory.category.create", "inventory_category", parsed.id ?? "pending", async () => {
+      const category = await inventoryCategoryPort(this.ports).createCategory(parsed, commandCtx);
+      return { value: category, entityId: category.id, version: category.version };
+    });
+  }
+
+  async updateInventoryCategory(id: string, input: unknown, expectedVersion: number, ctx: RequestContext): Promise<Mutation<InventoryCategory>> {
+    const categoryId = requireId(id, "inventory category id");
+    const parsed = updateInventoryCategorySchema.parse(input) as UpdateInventoryCategory;
+    const requiredVersion = requiredCategoryVersion(expectedVersion);
+    const commandCtx = commandContext(ctx, "inventory.category.update", { categoryId, input: parsed, expectedVersion: requiredVersion });
+    return this.mutate(commandCtx, "inventory.category.update", "inventory_category", categoryId, async () => {
+      const category = await inventoryCategoryPort(this.ports).updateCategory(categoryId, parsed, requiredVersion, commandCtx);
+      return { value: category, entityId: category.id, version: category.version };
+    });
+  }
+
+  async archiveInventoryCategory(id: string, expectedVersion: number, ctx: RequestContext): Promise<Mutation<InventoryCategory>> {
+    const categoryId = requireId(id, "inventory category id");
+    const requiredVersion = requiredCategoryVersion(expectedVersion);
+    const commandCtx = commandContext(ctx, "inventory.category.archive", { categoryId, expectedVersion: requiredVersion });
+    return this.mutate(commandCtx, "inventory.category.archive", "inventory_category", categoryId, async () => {
+      const category = await inventoryCategoryPort(this.ports).archiveCategory(categoryId, requiredVersion, commandCtx);
+      return { value: category, entityId: category.id, version: category.version };
+    });
+  }
+
+  private async validateInventoryCategoryReferences(categoryNodeId: string | null | undefined): Promise<void> {
+    if (categoryNodeId === undefined || categoryNodeId === null) return;
+    const categories = inventoryCategoryPort(this.ports);
+    const category = await categories.getCategory(categoryNodeId);
+    if (category === null) throw notFound("Inventory category", categoryNodeId);
+    if (category.archived) throw new ApplicationError("validation", "archived categories cannot be assigned to inventory");
+  }
+
   async createInventoryItem(input: CreateInventoryItem, ctx: RequestContext): Promise<Mutation<InventoryItem>> {
     const parsed = createInventoryItemSchema.parse(input);
     return this.mutate(ctx, "inventory.item.create", "inventory_item", parsed.id ?? "pending", async () => {
+      await this.validateInventoryCategoryReferences(parsed.categoryNodeId);
       const item = await this.ports.inventory.createItem(parsed, ctx);
       return { value: item, entityId: item.id, version: item.version };
     });
@@ -667,6 +749,7 @@ export class ApplicationService {
       ? { ...ctx, fingerprint: createHash("sha256").update(JSON.stringify({ item: parsedItem, profile: parsedProfile })).digest("hex") }
       : ctx;
     return this.mutate(commandContext, "inventory.item_with_product_profile.create", "inventory_item", parsedItem.id ?? "pending", async () => {
+      await this.validateInventoryCategoryReferences(parsedItem.categoryNodeId);
       let createdItem: InventoryItem | undefined;
       let createdProfile: InventoryProductProfile | undefined;
       const compensate = async (): Promise<void> => {
@@ -698,6 +781,7 @@ export class ApplicationService {
     const itemId = requireId(id, "item id");
     const parsed = updateInventoryItemSchema.parse(input) as UpdateInventoryInput;
     return this.mutate(ctx, "inventory.item.update", "inventory_item", itemId, async () => {
+      await this.validateInventoryCategoryReferences(parsed.categoryNodeId);
       const item = await this.ports.inventory.updateItem(itemId, parsed, expectedVersion, ctx);
       return { value: item, entityId: item.id, version: item.version };
     });

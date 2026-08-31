@@ -17,6 +17,12 @@ import type {
   ReconciliationLine,
   ReconciliationPreview
 } from "@benchledger/api-contract";
+import type {
+  InventoryCategory as ApiInventoryCategory,
+  CreateInventoryCategory as ApiCreateInventoryCategory,
+  UpdateInventoryCategory as ApiUpdateInventoryCategory,
+  InventoryCategoryListQuery as ApiInventoryCategoryListQuery,
+} from "@benchledger/api-contract";
 
 /** Application aliases intentionally re-export the canonical API contracts. */
 export type CatalogProduct = ApiCatalogProduct;
@@ -29,6 +35,9 @@ export type BuildConfiguration = ApiBuildConfigurationSnapshot;
 export type CreateBuildConfiguration = ApiCreateBuildConfigurationSnapshot;
 export type CatalogProductKind = CatalogProduct["kind"];
 export type CatalogProductLinkStatus = InventoryProductProfile["linkState"];
+export type InventoryCategory = ApiInventoryCategory;
+export type CreateInventoryCategory = ApiCreateInventoryCategory;
+export type UpdateInventoryCategory = ApiUpdateInventoryCategory;
 
 export interface CatalogProductListOptions {
   readonly q?: string;
@@ -115,6 +124,19 @@ export interface InventoryListOptions {
   readonly includeRetired?: boolean;
 }
 
+export type InventoryCategoryListOptions = ApiInventoryCategoryListQuery;
+
+export interface InventoryCategoryPort {
+  listCategories(options: InventoryCategoryListOptions): Promise<Page<InventoryCategory>>;
+  getCategory(id: string): Promise<InventoryCategory | null>;
+  createCategory(input: CreateInventoryCategory, ctx: RequestContext): Promise<InventoryCategory>;
+  updateCategory(id: string, input: UpdateInventoryCategory, expectedVersion: number, ctx: RequestContext): Promise<InventoryCategory>;
+  archiveCategory(id: string, expectedVersion: number, ctx: RequestContext): Promise<InventoryCategory>;
+  /** Internal additive assignment seam used by inventory adapters. */
+  getItemCategoryNode?(itemId: string): Promise<string | null>;
+  assignItemCategory?(itemId: string, categoryNodeId: string | null): Promise<void>;
+}
+
 export interface UpdateInventoryInput {
   readonly name?: string;
   readonly kind?: InventoryItem["kind"];
@@ -122,6 +144,7 @@ export interface UpdateInventoryInput {
   readonly manufacturer?: string;
   readonly model?: string;
   readonly sku?: string;
+  readonly categoryNodeId?: string | null;
   readonly quantity?: number;
   readonly unit?: InventoryItem["unit"];
   readonly location?: string;
@@ -343,6 +366,8 @@ export interface HealthPort {
 
 export interface ApplicationPorts {
   readonly inventory: InventoryPort;
+  /** Shared user-managed taxonomy for inventory; absent on legacy hosts. */
+  readonly inventoryCategories?: InventoryCategoryPort;
   readonly projects: ProjectPort;
   readonly offers: OfferPort;
   readonly artifacts: ArtifactPort;

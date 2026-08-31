@@ -15,9 +15,16 @@ function tool(name: string, description: string, requiredScope: McpToolDefinitio
 
 const pageProperties = {
   limit: integer("Maximum 100 results; defaults to 25."),
-  cursor: string("Opaque pagination cursor from the previous response."),
+  cursor: string("Opaque pagination cursor from the previous response; maximum 200 characters."),
+};
+const categoryPageProperties = {
+  ...pageProperties,
+  cursor: string("Opaque category pagination cursor from the previous response; maximum 512 characters."),
 };
 const idProperty = (description = "Stable identifier."): JsonObject => string(description);
+const nullableIdProperty = (description: string): JsonObject => ({ oneOf: [idProperty(description), { type: "null" }] });
+const categoryIdProperty = (description = "Stable managed category identifier."): JsonObject => ({ ...string(description), maxLength: 160 });
+const nullableCategoryIdProperty = (description: string): JsonObject => ({ oneOf: [categoryIdProperty(description), { type: "null" }] });
 const quantityProperty: JsonObject = object({ value: number("Positive amount."), unit: string("Canonical unit: piece, gram, millimetre, millilitre, metre, roll, or set.") }, ["value", "unit"]);
 const bomConstraintsProperty: JsonObject = object(Object.fromEntries(BOM_CONSTRAINT_KEYS.map((key) => [key, string(`Match inventory ${key}.`)])));
 const bomAlternativeProperty: JsonObject = object({ itemId: idProperty("Alternative inventory item."), compatible: string("Compatibility evidence: confirmed, conditional, or unknown."), reason: string("Why this alternative is or is not compatible.") }, ["itemId", "compatible"]);
@@ -56,6 +63,7 @@ const profileDetailsProperty: JsonObject = object({
 const inventoryItemCreateProperty: JsonObject = object({
   name: string("Human-readable inventory item name."),
   category: string("Inventory category, for example filament or printer."),
+  categoryNodeId: categoryIdProperty("Optional user-managed category or subcategory assignment."),
   quantity: quantityProperty,
   evidence: object({ state: string(), source: string(), recordedAt: string(), note: string() }, ["state", "source", "recordedAt"]),
   description: string(), manufacturer: string(), model: string(), sku: string(),
@@ -161,9 +169,14 @@ export const TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
   tool("read_inventory_item", "Read one inventory item, including dimensions, links, evidence, and current quantity.", "inventory:read", false, { itemId: idProperty("Inventory item identifier.") }, ["itemId"]),
   tool("create_inventory_item", "Add a catalog item or stock record with an explicit evidence state.", "inventory:write", true, inventoryItemCreateProperty.properties as Record<string, JsonValue>, ["name", "category", "quantity", "evidence"]),
   tool("create_inventory_with_product_profile", "Atomically create one physical printer or filament inventory item and its exact product profile. Requires both inventory:write and catalog:write; retries with the same idempotency key are safe and failed profile/audit writes are compensated.", "inventory:write", true, inventoryWithProductProfileProperty.properties as Record<string, JsonValue>, ["item", "profile"]),
-  tool("update_inventory_item", "Update descriptive inventory metadata using optimistic versioning.", "inventory:write", true, { itemId: idProperty("Inventory item identifier."), expectedVersion: integer(), name: string(), category: string(), description: string(), manufacturer: string(), model: string(), sku: string(), dimensions: object({ length: number(), width: number(), height: number(), diameter: number(), unit: string(), source: string(), uncertainty: number() }), condition: string(), location: string(), links: array(object({ label: string(), url: string() }, ["label", "url"])) }, ["itemId"]),
+  tool("update_inventory_item", "Update descriptive inventory metadata and optionally assign a user-managed category using optimistic versioning.", "inventory:write", true, { itemId: idProperty("Inventory item identifier."), expectedVersion: integer(), name: string(), category: string(), categoryNodeId: nullableCategoryIdProperty("Optional category assignment; null clears it."), description: string(), manufacturer: string(), model: string(), sku: string(), dimensions: object({ length: number(), width: number(), height: number(), diameter: number(), unit: string(), source: string(), uncertainty: number() }), condition: string(), location: string(), links: array(object({ label: string(), url: string() }, ["label", "url"])) }, ["itemId"]),
   tool("record_stock_event", "Record one append-only receipt, count correction, allocation, use, return, loss, or disposal event.", "inventory:write", true, { itemId: idProperty("Inventory item identifier."), kind: string(), quantity: quantityProperty, note: string() }, ["itemId", "kind", "quantity"]),
   tool("list_stock_events", "List the append-only stock event history for one item.", "inventory:read", false, { ...pageProperties, itemId: idProperty("Inventory item identifier.") }, ["itemId"]),
+  tool("list_inventory_categories", "List the bounded user-managed inventory taxonomy; semantic inventory kinds remain closed and separate.", "inventory:read", false, { ...categoryPageProperties, includeArchived: boolean("Include archived categories.") }),
+  tool("read_inventory_category", "Read one user-managed inventory category or subcategory.", "inventory:read", false, { categoryId: categoryIdProperty("Inventory category identifier.") }, ["categoryId"]),
+  tool("create_inventory_category", "Create a top-level category or one-level subcategory with a stable identifier.", "inventory:write", true, { id: categoryIdProperty("Optional stable category identifier."), name: string("Category name."), parentId: categoryIdProperty("Optional top-level parent category."), sortOrder: integer("Deterministic sibling order.") }, ["name"]),
+  tool("update_inventory_category", "Rename or reorder a category using optimistic versioning; its parent is immutable after creation.", "inventory:write", true, { categoryId: categoryIdProperty("Inventory category identifier."), expectedVersion: integer("Required optimistic concurrency version."), name: string("Replacement category name."), sortOrder: integer("Replacement sibling order.") }, ["categoryId", "expectedVersion"]),
+  tool("archive_inventory_category", "Archive a category using a dedicated optimistic-version command; active children or inventory references block the archive.", "inventory:write", true, { categoryId: categoryIdProperty("Inventory category identifier."), expectedVersion: integer("Required optimistic concurrency version.") }, ["categoryId", "expectedVersion"]),
 
   tool("search_catalog_products", "Search exact printer and filament catalog products with bounded pagination; this never asserts physical stock.", "catalog:read", false, { ...pageProperties, query: string("Case-insensitive product search."), kind: string("filament or printer.") }),
   tool("read_catalog_product", "Read one exact catalog product. Catalog identity is not evidence that a matching physical item exists.", "catalog:read", false, { productId: idProperty("Catalog product identifier.") }, ["productId"]),
@@ -219,11 +232,13 @@ export const TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
 export const RESOURCES: readonly McpResource[] = [
   { uri: "benchledger://capabilities", name: "BenchLedger capabilities", description: "Machine-readable capability and safety contract.", mimeType: "application/json" },
   { uri: "benchledger://inventory/summary", name: "Inventory summary", description: "Bounded counts and categories for the current inventory.", mimeType: "application/json" },
+  { uri: "benchledger://inventory/categories", name: "Inventory categories", description: "Bounded user-managed inventory taxonomy; archived nodes are omitted by default.", mimeType: "application/json" },
 ];
 
 export const RESOURCE_TEMPLATES: readonly McpResourceTemplate[] = [
   { uriTemplate: "benchledger://catalog/products/{productId}", name: "Catalog product", description: "One exact printer or filament product; catalog identity does not prove physical stock.", mimeType: "application/json" },
   { uriTemplate: "benchledger://inventory/items/{itemId}", name: "Inventory item", description: "One inventory item with evidence and links.", mimeType: "application/json" },
+  { uriTemplate: "benchledger://inventory/categories/{categoryId}", name: "Inventory category", description: "One user-managed inventory category or subcategory.", mimeType: "application/json" },
   { uriTemplate: "benchledger://inventory/items/{itemId}/product-profile", name: "Inventory product profile", description: "The exact-product profile for one physical item; serial-like fields are withheld. Exact inventory/profile creates return this resource only after both records commit.", mimeType: "application/json" },
   { uriTemplate: "benchledger://projects/{projectId}/context", name: "Project context", description: "Bounded project context and next actions.", mimeType: "application/json" },
   { uriTemplate: "benchledger://projects/{projectId}/revisions/{revisionId}", name: "Project revision", description: "One versioned project planning revision.", mimeType: "application/json" },
@@ -253,7 +268,7 @@ export const CAPABILITY_DOCUMENT: JsonObject = {
   scopeBehavior: {
     projectTokens: "A token with projectIds may address only those projects. Project list results are allow-list filtered; workspace-wide aggregate endpoints are rejected.",
     indirectProjectIds: "Revision, work-item, BOM-line, reservation, artifact, and upload identifiers are resolved from durable host state before dispatch. If ancestry cannot be proven, the request is rejected; request-local ID caches are never authoritative.",
-    inventory: "The inventory catalog is shared workspace context. Project-scoped tokens may read inventory and stock history for matching, but cannot create, update, retire, count, or record stock events.",
+    inventory: "The inventory catalog and user-managed category taxonomy are shared workspace context. Project-scoped tokens may read inventory, categories, and stock history for matching, but cannot create, update, retire, count, record stock events, or mutate categories.",
     atomicInventoryProfile: "create_inventory_with_product_profile requires both inventory:write and catalog:write on an unscoped token. Its item and profile commit as one audited, idempotent command; a failed profile, audit, idempotency, or binding step compensates the just-created records.",
     catalog: "Exact catalog products are shared workspace context. Project-scoped tokens may search and read products for in-scope snapshots, but only unscoped catalog tokens may create or correct products.",
     profiles: "Physical product profiles are workspace-global. Profile reads and writes require catalog scope and are not available to project-scoped tokens; reported and suggested links never imply confirmed stock or compatibility.",

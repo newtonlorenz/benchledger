@@ -28,7 +28,7 @@ export function mapPersistenceError(error: unknown): never {
     if (error.code.startsWith("reconciliation_") && !error.code.endsWith("_not_found")) {
       throw new ApplicationError("conflict", error.message);
     }
-    if (error.code.includes("duplicate") || error.code.includes("insufficient") || error.code.includes("negative") || error.code.includes("over_allocation") || error.code.includes("not_active") || error.code.includes("version_conflict") || error.code.includes("ancestry_conflict")) {
+    if (error.code.includes("duplicate") || error.code.includes("insufficient") || error.code.includes("negative") || error.code.includes("over_allocation") || error.code.includes("not_active") || error.code.includes("version_conflict") || error.code.includes("ancestry_conflict") || error.code.includes("category_in_use") || error.code.includes("category_has_children")) {
       throw new ApplicationError("conflict", error.message);
     }
     if (error.code.startsWith("invalid_")) throw new ApplicationError("validation", error.message);

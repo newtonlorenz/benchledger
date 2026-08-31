@@ -7,6 +7,7 @@ import type {
   McpRequestContext,
   Page,
   InventoryItem,
+  InventoryCategory,
 } from "./types.js";
 
 const context: McpRequestContext = {
@@ -94,6 +95,15 @@ function backend(): BenchLedgerBackend {
     },
     links: [],
   };
+  const inventoryCategory: InventoryCategory = {
+    id: "category-tools",
+    name: "Tools",
+    sortOrder: 0,
+    archived: false,
+    createdAt: "2026-08-30T10:00:00.000Z",
+    updatedAt: "2026-08-30T10:00:00.000Z",
+    version: 1,
+  };
 
   return {
     inventory: {
@@ -129,6 +139,13 @@ function backend(): BenchLedgerBackend {
           version: 1,
         },
       }),
+    },
+    inventoryCategories: {
+      list: async () => page([inventoryCategory]),
+      get: async () => inventoryCategory,
+      create: async (input) => ({ id: inventoryCategory.id, version: 1, category: { ...inventoryCategory, name: input.name } }),
+      update: async (input) => ({ id: input.categoryId, version: 2, category: { ...inventoryCategory, id: input.categoryId, ...(input.name === undefined ? {} : { name: input.name }), version: 2 } }),
+      archive: async (input) => ({ id: input.categoryId, version: 2, category: { ...inventoryCategory, id: input.categoryId, archived: true, version: 2 } }),
     },
     projects: {
       list: async () => page([]),
@@ -225,6 +242,26 @@ describe("McpAdapter", () => {
     expect(result.structuredContent).toMatchObject({ error: { code: "FORBIDDEN" } });
   });
 
+  it("dispatches category CRUD with the same bounded scopes and archive command", async () => {
+    const adapter = new McpAdapter(backend());
+    const listed = await adapter.callTool("list_inventory_categories", { limit: 10 }, context);
+    expect(listed).toMatchObject({ isError: false, structuredContent: { items: [{ id: "category-tools" }] } });
+    const created = await adapter.callTool("create_inventory_category", { name: "Printer parts" }, context);
+    expect(created).toMatchObject({ isError: false, structuredContent: { category: { name: "Printer parts" } } });
+    const updated = await adapter.callTool("update_inventory_category", { categoryId: "category-tools", expectedVersion: 1, name: "Workshop tools" }, context);
+    expect(updated).toMatchObject({ isError: false, structuredContent: { category: { name: "Workshop tools", version: 2 } } });
+    const archived = await adapter.callTool("archive_inventory_category", { categoryId: "category-tools", expectedVersion: 1 }, context);
+    expect(archived).toMatchObject({ isError: false, structuredContent: { category: { archived: true } } });
+  });
+
+  it("rejects project-scoped category writes while preserving category reads", async () => {
+    const adapter = new McpAdapter(backend());
+    const scoped = { actorId: "project-agent", scopes: ["inventory:read", "inventory:write"] as const, projectIds: ["project-1"] };
+    await expect(adapter.callTool("list_inventory_categories", {}, scoped)).resolves.toMatchObject({ isError: false });
+    await expect(adapter.callTool("create_inventory_category", { name: "Not allowed" }, scoped)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "FORBIDDEN" } } });
+    await expect(adapter.callTool("archive_inventory_category", { categoryId: "category-tools", expectedVersion: 1 }, scoped)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "FORBIDDEN" } } });
+  });
+
   it("returns scoped HTTP links for artifacts and rejects inline data URLs", async () => {
     const adapter = new McpAdapter(backend());
     const result = await adapter.callTool("begin_artifact_upload", { projectId: "project-1", filename: "source.step", role: "source", mediaType: "model/step", byteLength: 12, sha256: "a".repeat(64) }, context);
@@ -252,6 +289,17 @@ describe("McpAdapter", () => {
 
     expect(names).toContain("calculate_bom_gaps");
     expect(names).toContain("refresh_context");
+    const categoryUpdate = adapter.listTools().find((tool) => tool.name === "update_inventory_category");
+    expect(categoryUpdate?.inputSchema).toMatchObject({ required: expect.arrayContaining(["categoryId", "expectedVersion"]) });
+    const categoryArchive = adapter.listTools().find((tool) => tool.name === "archive_inventory_category");
+    expect(categoryArchive?.inputSchema).toMatchObject({ required: expect.arrayContaining(["categoryId", "expectedVersion"]) });
+    const categoryList = adapter.listTools().find((tool) => tool.name === "list_inventory_categories");
+    expect(categoryList?.inputSchema.properties.cursor).toMatchObject({ description: expect.stringContaining("512") });
+    const categoryRead = adapter.listTools().find((tool) => tool.name === "read_inventory_category");
+    expect(categoryRead?.inputSchema.properties.categoryId).toMatchObject({ type: "string", maxLength: 160 });
+    expect(adapter.listTools().find((tool) => tool.name === "create_inventory_category")?.inputSchema.properties.id).toMatchObject({ type: "string", maxLength: 160 });
+    const inventoryUpdate = adapter.listTools().find((tool) => tool.name === "update_inventory_item");
+    expect(inventoryUpdate?.inputSchema.properties.categoryNodeId).toMatchObject({ oneOf: expect.arrayContaining([expect.objectContaining({ type: "string", maxLength: 160 }), expect.objectContaining({ type: "null" })]) });
     expect(names).not.toContain("retire_inventory_item");
     expect(names).not.toContain("freeze_artifact_revision");
     expect(names).not.toEqual(expect.arrayContaining(["run_shell", "execute_sql", "fetch_url", "purchase", "start_print"]));
@@ -484,8 +532,8 @@ describe("McpAdapter", () => {
       const result = await adapter.callTool(name, input, context);
       expect(result.isError, `${name} should dispatch successfully`).toBe(false);
     }
-    expect(adapter.listResources()).toHaveLength(2);
-    expect(adapter.listResourceTemplates()).toHaveLength(10);
+    expect(adapter.listResources()).toHaveLength(3);
+    expect(adapter.listResourceTemplates()).toHaveLength(11);
     expect(adapter.capabilityDocument()).toMatchObject({ product: "BenchLedger" });
   });
 

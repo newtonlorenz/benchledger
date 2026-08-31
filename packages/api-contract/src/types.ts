@@ -4,7 +4,7 @@ import type {
   createInventoryItemSchema, createOfferSchema, createProjectRevisionSchema,
   createProjectSchema, createProjectWithInitialRevisionSchema, createReservationSchema, createWorkItemRevisionSchema,
   createWorkItemSchema, dimensionSchema, healthSchema, inventoryItemSchema,
-  inventoryListQuerySchema, offerSchema, projectRevisionSchema, projectSchema, projectWithInitialRevisionSchema,
+  inventoryListQuerySchema, inventoryCategoryListQuerySchema, inventoryCategorySchema, createInventoryCategorySchema, updateInventoryCategorySchema, offerSchema, projectRevisionSchema, projectSchema, projectWithInitialRevisionSchema,
   readinessSchema, reservationSchema, stockEventInputSchema, stockEventSchema,
   updateBomLineSchema, updateInventoryItemSchema, updateProjectSchema, usageInputSchema,
   uploadSessionSchema, workItemRevisionSchema, workItemSchema,
@@ -28,6 +28,10 @@ import type {
 
 export type Dimension = z.infer<typeof dimensionSchema>;
 export type InventoryItem = z.infer<typeof inventoryItemSchema>;
+export type InventoryCategory = z.infer<typeof inventoryCategorySchema>;
+export type InventoryCategoryListQuery = z.infer<typeof inventoryCategoryListQuerySchema>;
+export type CreateInventoryCategory = z.infer<typeof createInventoryCategorySchema>;
+export type UpdateInventoryCategory = z.infer<typeof updateInventoryCategorySchema>;
 export type InventoryListQuery = z.infer<typeof inventoryListQuerySchema>;
 export type CreateInventoryItem = z.infer<typeof createInventoryItemSchema>;
 export type UpdateInventoryItem = z.infer<typeof updateInventoryItemSchema>;

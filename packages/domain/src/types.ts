@@ -92,6 +92,8 @@ export interface InventoryItem {
   id: string;
   name: string;
   category: ItemCategory;
+  /** Optional managed taxonomy assignment; legacy category text remains intact. */
+  categoryNodeId?: string;
   variant?: string;
   purchasedQuantity: number;
   unit: QuantityUnit;

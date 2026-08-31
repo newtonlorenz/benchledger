@@ -56,6 +56,9 @@ import type {
   EvidenceSummary,
   BenchLedgerBackend,
   InventoryCreateInput,
+  InventoryCategory,
+  InventoryCategoryCreateInput,
+  InventoryCategoryUpdateInput,
   InventoryItem,
   InventoryListInput,
   InventoryUpdateInput,
@@ -315,6 +318,35 @@ export function createApplicationBackend(service: ApplicationService, options: P
         const page = await service.listStockEvents(input.itemId, input.limit ?? 25, input.cursor);
         return appPage(page.data.map(toMcpStockEvent), page);
       },
+    },
+    inventoryCategories: {
+      list: async (input) => {
+        const page = await service.listInventoryCategories({
+          limit: input.limit ?? 25,
+          ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+          ...(input.includeArchived === undefined ? {} : { includeArchived: input.includeArchived }),
+        });
+        return appPage(page.data.map(toMcpInventoryCategory), page);
+      },
+      get: async (input) => toMcpInventoryCategory(await service.getInventoryCategory(input.categoryId)),
+      create: async (input: InventoryCategoryCreateInput, context) => mutationResult(
+        await service.createInventoryCategory(input, appContext(context)),
+        "category",
+        toMcpInventoryCategory,
+      ),
+      update: async (input: { categoryId: string; expectedVersion: number } & InventoryCategoryUpdateInput, context) => {
+        const { categoryId, expectedVersion, ...changes } = input;
+        return mutationResult(
+          await service.updateInventoryCategory(categoryId, changes, expectedVersion, appContext(context)),
+          "category",
+          toMcpInventoryCategory,
+        );
+      },
+      archive: async (input: { categoryId: string; expectedVersion: number }, context) => mutationResult(
+        await service.archiveInventoryCategory(input.categoryId, input.expectedVersion, appContext(context)),
+        "category",
+        toMcpInventoryCategory,
+      ),
     },
     projects: {
       list: async (input, context) => {
@@ -773,6 +805,10 @@ function toMcpInventoryProductProfile(profile: ApiInventoryProductProfile): Inve
   return profile;
 }
 
+function toMcpInventoryCategory(category: InventoryCategory): InventoryCategory {
+  return category;
+}
+
 function toMcpBuildConfiguration(snapshot: ApiBuildConfigurationSnapshot): BuildConfigurationSnapshot {
   return snapshot;
 }
@@ -823,6 +859,7 @@ function toMcpInventoryItem(item: ApiInventoryItem): InventoryItem {
     quantity: toQuantity(item.quantity, item.unit),
     availability: toMcpAvailability(item),
     evidence: toMcpEvidence(item),
+    ...(item.categoryNodeId === undefined ? {} : { categoryNodeId: item.categoryNodeId }),
     ...(item.description === undefined ? {} : { description: item.description }),
     ...(item.manufacturer === undefined ? {} : { manufacturer: item.manufacturer }),
     ...(item.model === undefined ? {} : { model: item.model }),
@@ -865,11 +902,11 @@ function toApiDimensions(value: Dimensions | undefined): CreateInventoryItem["di
 }
 
 function toApiInventoryCreate(input: InventoryCreateInput): CreateInventoryItem {
-  return { name: input.name, kind: toApiKind(input.category), quantity: input.quantity.value, unit: toApiUnit(input.quantity.unit), evidence: toApiEvidenceInput(input.evidence), tags: [], links: (input.links ?? []).map((link) => ({ supplier: link.label, url: link.url, ...(link.label === undefined ? {} : { label: link.label }) })), ...(input.description === undefined ? {} : { description: input.description }), ...(input.manufacturer === undefined ? {} : { manufacturer: input.manufacturer }), ...(input.model === undefined ? {} : { model: input.model }), ...(input.sku === undefined ? {} : { sku: input.sku }), ...(input.location === undefined ? {} : { location: input.location }), ...(input.condition === undefined ? {} : { condition: input.condition === "used" ? "good" : input.condition === "opened" ? "worn" : input.condition }), ...(input.dimensions === undefined ? {} : { dimensions: toApiDimensions(input.dimensions) }) };
+  return { name: input.name, kind: toApiKind(input.category), quantity: input.quantity.value, unit: toApiUnit(input.quantity.unit), evidence: toApiEvidenceInput(input.evidence), tags: [], links: (input.links ?? []).map((link) => ({ supplier: link.label, url: link.url, ...(link.label === undefined ? {} : { label: link.label }) })), ...(input.categoryNodeId === undefined ? {} : { categoryNodeId: input.categoryNodeId }), ...(input.description === undefined ? {} : { description: input.description }), ...(input.manufacturer === undefined ? {} : { manufacturer: input.manufacturer }), ...(input.model === undefined ? {} : { model: input.model }), ...(input.sku === undefined ? {} : { sku: input.sku }), ...(input.location === undefined ? {} : { location: input.location }), ...(input.condition === undefined ? {} : { condition: input.condition === "used" ? "good" : input.condition === "opened" ? "worn" : input.condition }), ...(input.dimensions === undefined ? {} : { dimensions: toApiDimensions(input.dimensions) }) };
 }
 
 function toApiInventoryUpdate(input: Omit<InventoryUpdateInput, "itemId" | "expectedVersion">): Record<string, unknown> {
-  return { ...(input.name === undefined ? {} : { name: input.name }), ...(input.category === undefined ? {} : { kind: toApiKind(input.category) }), ...(input.description === undefined ? {} : { description: input.description }), ...(input.manufacturer === undefined ? {} : { manufacturer: input.manufacturer }), ...(input.model === undefined ? {} : { model: input.model }), ...(input.sku === undefined ? {} : { sku: input.sku }), ...(input.location === undefined ? {} : { location: input.location }), ...(input.condition === undefined ? {} : { condition: input.condition === "used" ? "good" : input.condition === "opened" ? "worn" : input.condition }), ...(input.dimensions === undefined ? {} : { dimensions: toApiDimensions(input.dimensions) }), ...(input.links === undefined ? {} : { links: input.links.map((link) => ({ supplier: link.label, url: link.url, ...(link.label === undefined ? {} : { label: link.label }) })) }) };
+  return { ...(input.name === undefined ? {} : { name: input.name }), ...(input.category === undefined ? {} : { kind: toApiKind(input.category) }), ...(input.categoryNodeId === undefined ? {} : { categoryNodeId: input.categoryNodeId }), ...(input.description === undefined ? {} : { description: input.description }), ...(input.manufacturer === undefined ? {} : { manufacturer: input.manufacturer }), ...(input.model === undefined ? {} : { model: input.model }), ...(input.sku === undefined ? {} : { sku: input.sku }), ...(input.location === undefined ? {} : { location: input.location }), ...(input.condition === undefined ? {} : { condition: input.condition === "used" ? "good" : input.condition === "opened" ? "worn" : input.condition }), ...(input.dimensions === undefined ? {} : { dimensions: toApiDimensions(input.dimensions) }), ...(input.links === undefined ? {} : { links: input.links.map((link) => ({ supplier: link.label, url: link.url, ...(link.label === undefined ? {} : { label: link.label }) })) }) };
 }
 
 function toMcpStockEvent(event: ApiStockEvent): StockEvent {

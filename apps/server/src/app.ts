@@ -6,11 +6,11 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import cookie from "@fastify/cookie";
 import swagger from "@fastify/swagger";
 import {
-  beginUploadSchema, createBomLineSchema, createInventoryItemSchema, createOfferSchema,
+  beginUploadSchema, createBomLineSchema, createInventoryCategorySchema, createInventoryItemSchema, createOfferSchema,
   createProjectRevisionSchema, createProjectSchema, createReservationSchema,
   createProjectWithInitialRevisionSchema, createWorkItemRevisionSchema, createWorkItemSchema, healthSchema,
-  inventoryListQuerySchema, stockEventInputSchema, updateBomLineSchema,
-  updateInventoryItemSchema, updateProjectSchema, usageInputSchema,
+  inventoryCategoryListQuerySchema, inventoryListQuerySchema, stockEventInputSchema, updateBomLineSchema,
+  updateInventoryCategorySchema, updateInventoryItemSchema, updateProjectSchema, usageInputSchema,
   createCatalogProductSchema, updateCatalogProductSchema,
   createInventoryProductProfileSchema, createInventoryWithProductProfileSchema, updateInventoryProductProfileSchema,
   createBuildConfigurationSnapshotSchema, saveReconciliationDraftSchema, commitReconciliationSchema
@@ -94,11 +94,11 @@ function restRequestFingerprint(request: FastifyRequest, body: unknown = request
   return requestFingerprint({ method: request.method.toUpperCase(), route, params, body });
 }
 
-function requestContext(request: FastifyRequest): RequestContext {
+function requestContext(request: FastifyRequest, fingerprintBody: unknown = request.body): RequestContext {
   const principal = request.principal;
   if (!principal) throw new ApplicationError("forbidden", "Authentication is required");
   const idempotencyKey = requestIdempotencyKey(request);
-  const fingerprint = restRequestFingerprint(request);
+  const fingerprint = restRequestFingerprint(request, fingerprintBody);
   return {
     actor: principal.actor,
     source: principal.source,
@@ -127,9 +127,25 @@ function parseExpectedVersion(request: FastifyRequest): number | undefined {
   const value = request.headers["if-match"];
   const header = Array.isArray(value) ? value[0] : value;
   if (!header) return undefined;
-  const clean = header.replace(/^W\//u, "").replace(/^"|"$/gu, "");
-  const version = Number.parseInt(clean, 10);
-  if (!Number.isInteger(version) || version <= 0) throw new ApplicationError("validation", "If-Match must contain a positive version");
+  let clean = header.trim();
+  const weak = clean.startsWith("W/");
+  if (weak) {
+    clean = clean.slice(2);
+    if (!(clean.startsWith('"') && clean.endsWith('"'))) throw new ApplicationError("validation", "If-Match must contain a positive version");
+  }
+  if (clean.startsWith('"') || clean.endsWith('"')) {
+    if (!(clean.startsWith('"') && clean.endsWith('"'))) throw new ApplicationError("validation", "If-Match must contain a positive version");
+    clean = clean.slice(1, -1);
+  }
+  if (!/^[1-9][0-9]*$/u.test(clean)) throw new ApplicationError("validation", "If-Match must contain a positive version");
+  const version = Number(clean);
+  if (!Number.isSafeInteger(version)) throw new ApplicationError("validation", "If-Match must contain a positive version");
+  return version;
+}
+
+function parseRequiredExpectedVersion(request: FastifyRequest): number {
+  const version = parseExpectedVersion(request);
+  if (version === undefined) throw new ApplicationError("validation", "If-Match is required for this category mutation");
   return version;
 }
 
@@ -410,6 +426,7 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       id: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
       name: { type: "string", minLength: 1, maxLength: 240 },
       kind: { type: "string", enum: ["printer", "tool", "accessory", "consumable", "electronic", "fastener", "filament", "wire", "adhesive", "other"] },
+      categoryNodeId: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$", description: "Optional user-managed category or subcategory assignment." },
       description: { type: "string", maxLength: 5000 },
       manufacturer: { type: "string", maxLength: 200 },
       model: { type: "string", maxLength: 200 },
@@ -487,6 +504,39 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       }
     ]
   };
+  const inventoryCategorySchema = {
+    type: "object", additionalProperties: false,
+    required: ["id", "name", "sortOrder", "archived", "createdAt", "updatedAt", "version"],
+    properties: {
+      id: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+      name: { type: "string", minLength: 1, maxLength: 120 },
+      parentId: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+      sortOrder: { type: "integer", minimum: 0 },
+      archived: { type: "boolean" },
+      createdAt: { type: "string", format: "date-time" },
+      updatedAt: { type: "string", format: "date-time" },
+      version: { type: "integer", minimum: 1 }
+    }
+  };
+  const createInventoryCategorySchema = {
+    type: "object", additionalProperties: false,
+    required: ["name"],
+    properties: {
+      id: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+      name: { type: "string", minLength: 1, maxLength: 120 },
+      parentId: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+      sortOrder: { type: "integer", minimum: 0, default: 0 }
+    }
+  };
+  const updateInventoryCategorySchema = {
+    type: "object", additionalProperties: false, minProperties: 1,
+    properties: {
+      name: { type: "string", minLength: 1, maxLength: 120 },
+      sortOrder: { type: "integer", minimum: 0 }
+    }
+  };
+  const categoryIdParameter = { name: "id", in: "path", required: true, schema: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" } };
+  const categoryVersionParameter = { name: "If-Match", in: "header", required: true, description: "Required category version for optimistic concurrency.", schema: { type: "string", pattern: "^[1-9][0-9]*$" } };
   return {
     openapi: "3.1.0",
     info: { title: "BenchLedger API", version, description: "Evidence-based maker inventory and project workspace API." },
@@ -501,7 +551,10 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       schemas: {
         CreateInventoryItem: createInventoryItemSchema,
         CreateInventoryProductProfileWithoutItem: createInventoryProductProfileWithoutItemSchema,
-        CreateInventoryWithProductProfile: inventoryWithProductProfileSchema
+        CreateInventoryWithProductProfile: inventoryWithProductProfileSchema,
+        InventoryCategory: inventoryCategorySchema,
+        CreateInventoryCategory: createInventoryCategorySchema,
+        UpdateInventoryCategory: updateInventoryCategorySchema
       }
     },
     paths: {
@@ -510,6 +563,20 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       "/auth/login": { post: { security: [], responses: { "200": { description: "Session created" }, "401": { description: "Invalid credentials" } } } },
       "/workspace": { get: { responses: { "200": { description: "Authenticated aggregate workspace snapshot" } } } },
       "/inventory": { get: { responses: { "200": { description: "Inventory page" } } }, post: { responses: { "201": { description: "Inventory item" } } } },
+      "/inventory/categories": {
+        get: { parameters: [
+          { name: "includeArchived", in: "query", required: false, schema: { type: "boolean", default: false } },
+          { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } },
+          { name: "cursor", in: "query", required: false, schema: { type: "string", maxLength: 512 } },
+        ], responses: { "200": { description: "Managed inventory category page" } } },
+        post: { requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CreateInventoryCategory" } } } }, responses: { "201": { description: "Managed inventory category" } } }
+      },
+      "/inventory/categories/{id}": {
+        parameters: [categoryIdParameter],
+        get: { responses: { "200": { description: "Managed inventory category" } } },
+        patch: { parameters: [categoryVersionParameter], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateInventoryCategory" } } } }, responses: { "200": { description: "Updated managed inventory category" } } }
+      },
+      "/inventory/categories/{id}/archive": { parameters: [categoryIdParameter], post: { parameters: [categoryVersionParameter], responses: { "200": { description: "Archived managed inventory category" } } } },
       "/inventory/with-product-profile": {
         post: {
           summary: "Create an inventory item and exact physical product profile atomically",
@@ -791,7 +858,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   app.get(route("/capabilities"), async () => ({
     name: "BenchLedger", version: service.getVersion(), protocol: "rest-v1", demo,
     vocabulary: { confirmed: "physically counted or commissioned stock", inspect_first: "recorded stock requiring a physical count", missing: "no confirmed or inspect-first candidate" },
-    actions: ["inventory.read", "inventory.write", "catalog.read", "catalog.write", "inventory.product_profile.read", "inventory.product_profile.write", "projects.read", "projects.write", "build_configurations.read", "build_configurations.create", "bom.evaluate", "artifacts.version", "offers.compare", "events.subscribe"],
+    actions: ["inventory.read", "inventory.write", "inventory.categories.read", "inventory.categories.write", "catalog.read", "catalog.write", "inventory.product_profile.read", "inventory.product_profile.write", "projects.read", "projects.write", "build_configurations.read", "build_configurations.create", "bom.evaluate", "artifacts.version", "offers.compare", "events.subscribe"],
     approvalBoundaries: ["purchasing", "external publication", "permanent deletion", "credential changes", "printer control"]
   }));
   app.get(route("/openapi.json"), async () => jsonOpenApi(service.getVersion()));
@@ -852,6 +919,24 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     return service.updateCatalogProduct(params.id, parseBody(updateCatalogProductSchema, request.body), parseExpectedVersion(request), requestContext(request));
   });
   app.get(route("/inventory"), async (request) => { requireScope(request, "read", auth); const query = parseBody(inventoryListQuerySchema, request.query); return service.listInventory(query); });
+  app.get(route("/inventory/categories"), async (request) => { requireScope(request, "read", auth); return service.listInventoryCategories(parseBody(inventoryCategoryListQuerySchema, request.query)); });
+  app.post(route("/inventory/categories"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const mutation = await service.createInventoryCategory(parseBody(createInventoryCategorySchema, request.body), requestContext(request)); return reply.code(201).send(mutationBody(mutation)); });
+  app.get(route("/inventory/categories/:id"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; return service.getInventoryCategory(params.id); });
+  app.patch(route("/inventory/categories/:id"), async (request) => {
+    requireScope(request, "write", auth);
+    rejectScopedGlobalAccess(request);
+    const params = request.params as { id: string };
+    const body = parseBody(updateInventoryCategorySchema, request.body);
+    const expectedVersion = parseRequiredExpectedVersion(request);
+    return service.updateInventoryCategory(params.id, body, expectedVersion, requestContext(request, { body, expectedVersion }));
+  });
+  app.post(route("/inventory/categories/:id/archive"), async (request) => {
+    requireScope(request, "write", auth);
+    rejectScopedGlobalAccess(request);
+    const params = request.params as { id: string };
+    const expectedVersion = parseRequiredExpectedVersion(request);
+    return service.archiveInventoryCategory(params.id, expectedVersion, requestContext(request, { body: request.body, expectedVersion }));
+  });
   app.post(route("/inventory"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const mutation = await service.createInventoryItem(parseBody(createInventoryItemSchema, request.body), requestContext(request)); return reply.code(201).send(mutationBody(mutation)); });
   app.post(route("/inventory/with-product-profile"), async (request, reply) => {
     requireScope(request, "write", auth);

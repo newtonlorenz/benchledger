@@ -46,6 +46,14 @@ physical item, product-profile link state, and project build configuration
 separate. Search/read catalog products, then read the physical item's profile;
 `reported` or `suggested` links never prove exact compatibility or stock.
 
+Inventory taxonomy is a separate, optional layer: `list_inventory_categories`
+and `read_inventory_category` are bounded reads; create, rename/reorder, and
+the dedicated archive command use `inventory:write`. Supply `categoryNodeId`
+when assigning an item. `kind` remains the closed semantic item type, category
+parentage is immutable after creation, only one subcategory level is allowed,
+and update/archive commands require an expected version. Project-scoped tokens
+may read categories but cannot mutate this workspace-global taxonomy.
+
 The adapter exposes bounded pages. Continue with the returned cursor instead of
 requesting an unbounded dump. A project resource is similarly scoped:
 

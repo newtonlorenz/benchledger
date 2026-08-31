@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { InventoryItem, StockEvent, BomLine, Reservation, Project, Offer, Artifact, UploadSession, ProjectRevision, WorkItem, WorkItemRevision, ReconciliationLine } from "@benchledger/api-contract";
+import type { InventoryItem, InventoryCategory, StockEvent, BomLine, Reservation, Project, Offer, Artifact, UploadSession, ProjectRevision, WorkItem, WorkItemRevision, ReconciliationLine } from "@benchledger/api-contract";
+import { ApplicationError } from "./errors.js";
 import { ApplicationService, matchesBomConstraints, unsupportedBomConstraintKeys } from "./service.js";
 import { buildReconciliationDocument, type ReconciliationSourceSnapshot } from "./reconciliation.js";
-import type { ApplicationPorts, AuditEvent, AuditInput, EventBusEvent, InventoryListOptions, Page, RequestContext, StockMutation, UpdateInventoryInput } from "./ports.js";
+import type { ApplicationPorts, AuditEvent, AuditInput, EventBusEvent, InventoryCategoryPort, InventoryListOptions, Page, RequestContext, StockMutation, UpdateInventoryInput } from "./ports.js";
 
 const context: RequestContext = { actor: "test", source: "api", correlationId: "corr-1", scopes: new Set(["read", "write"]) };
 const item = (overrides: Partial<InventoryItem> = {}): InventoryItem => ({
@@ -115,6 +116,80 @@ describe("ApplicationService", () => {
     await expect(service.getInventoryItem("missing-item")).rejects.toMatchObject({ code: "not_found" });
     await expect(service.getInventoryItem("bad/id")).rejects.toMatchObject({ code: "validation" });
     await expect(service.listStockEvents("bad/id")).rejects.toMatchObject({ code: "validation" });
+  });
+
+  it("audits category CRUD, preserves immutable parentage, and validates inventory assignments", async () => {
+    const ports = fakePorts();
+    const categories = new Map<string, InventoryCategory>();
+    const top: InventoryCategory = { id: "category-tools", name: "Tools", sortOrder: 0, archived: false, createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1 };
+    categories.set(top.id, top);
+    const categoryPort: InventoryCategoryPort = {
+      listCategories: async () => ({ data: [...categories.values()], limit: 50 }),
+      getCategory: async (id) => categories.get(id) ?? null,
+      createCategory: async (input) => {
+        const created: InventoryCategory = { id: input.id ?? `category-generated-${categories.size}`, name: input.name, ...(input.parentId === undefined ? {} : { parentId: input.parentId }), sortOrder: input.sortOrder ?? 0, archived: false, createdAt: top.createdAt, updatedAt: top.updatedAt, version: 1 };
+        categories.set(created.id, created);
+        return created;
+      },
+      updateCategory: async (id, input, expectedVersion) => {
+        const current = categories.get(id)!;
+        if (expectedVersion !== undefined && expectedVersion !== current.version) throw new ApplicationError("conflict", "stale category");
+        const updated = { ...current, ...(input.name === undefined ? {} : { name: input.name }), ...(input.sortOrder === undefined ? {} : { sortOrder: input.sortOrder }), version: current.version + 1 };
+        categories.set(id, updated);
+        return updated;
+      },
+      archiveCategory: async (id, expectedVersion) => {
+        const current = categories.get(id)!;
+        if (expectedVersion !== undefined && expectedVersion !== current.version) throw new ApplicationError("conflict", "stale category");
+        const updated = { ...current, archived: true, version: current.version + 1 };
+        categories.set(id, updated);
+        return updated;
+      },
+    };
+    Object.assign(ports, { inventoryCategories: categoryPort });
+    const storedCommands = new Map<string, unknown>();
+    Object.assign(ports, {
+      idempotency: {
+        get: async (_actor: string, key: string) => storedCommands.get(key) ?? null,
+        set: async (_actor: string, key: string, value: unknown) => { storedCommands.set(key, value); },
+      },
+    });
+    const service = new ApplicationService(ports);
+    const created = await service.createInventoryCategory({ id: "category-child", name: "Printer parts", parentId: top.id, sortOrder: 0 }, context);
+    expect(created).toMatchObject({ data: { id: "category-child", parentId: "category-tools" }, audit: { action: "inventory.category.create", entityType: "inventory_category" } });
+    const renamed = await service.updateInventoryCategory("category-child", { name: "Parts" }, 1, context);
+    expect(renamed.data).toMatchObject({ name: "Parts", parentId: "category-tools", version: 2 });
+    await expect(service.updateInventoryCategory("category-child", { name: "Stale" }, 1, context)).rejects.toMatchObject({ code: "conflict" });
+    await expect(service.updateInventoryCategory("category-child", { name: "Missing version" }, undefined as unknown as number, context)).rejects.toMatchObject({ code: "validation" });
+    await expect(service.archiveInventoryCategory("category-child", undefined as unknown as number, context)).rejects.toMatchObject({ code: "validation" });
+    const createdItem = await service.createInventoryItem({ id: "category-item", name: "Hex key", kind: "tool", quantity: 1, unit: "each", tags: [], links: [], categoryNodeId: "category-child", evidence: { state: "physically_counted" } }, context);
+    expect(createdItem.data).toMatchObject({ categoryNodeId: "category-child", version: 1 });
+    categories.set("category-child", { ...categories.get("category-child")!, archived: true });
+    await expect(service.createInventoryItem({ id: "bad-item", name: "Bad", kind: "tool", quantity: 1, unit: "each", tags: [], links: [], categoryNodeId: "category-child", evidence: { state: "unknown" } }, context)).rejects.toMatchObject({ code: "validation" });
+    const replayContext = { ...context, idempotencyKey: "category-replay-1" };
+    const first = await service.createInventoryItem({ id: "category-replay-item", name: "Replayable tool", kind: "tool", quantity: 1, unit: "each", tags: [], links: [], categoryNodeId: "category-tools", evidence: { state: "unknown" } }, replayContext);
+    categories.delete("category-tools");
+    const replay = await service.createInventoryItem({ id: "category-replay-item", name: "Replayable tool", kind: "tool", quantity: 1, unit: "each", tags: [], links: [], categoryNodeId: "category-tools", evidence: { state: "unknown" } }, replayContext);
+    expect(first.data.id).toBe(replay.data.id);
+    expect(replay.replayed).toBe(true);
+    const invalidContext = { ...context, idempotencyKey: "category-invalid-1" };
+    await expect(service.createInventoryItem({ id: "invalid-category-item", name: "Invalid", kind: "tool", quantity: 1, unit: "each", tags: [], links: [], categoryNodeId: "missing-category", evidence: { state: "unknown" } }, invalidContext)).rejects.toMatchObject({ code: "not_found" });
+    expect(storedCommands.has("category-invalid-1")).toBe(false);
+
+    const autoCreateContext = { ...context, idempotencyKey: "category-auto-create" };
+    const autoCreated = await service.createInventoryCategory({ name: "Auto category", sortOrder: 100 }, autoCreateContext);
+    expect(await service.createInventoryCategory({ name: "Auto category", sortOrder: 100 }, autoCreateContext)).toMatchObject({ replayed: true, data: autoCreated.data });
+    await expect(service.createInventoryCategory({ name: "Different auto category", sortOrder: 100 }, autoCreateContext)).rejects.toMatchObject({ code: "idempotency_conflict" });
+
+    const updateContext = { ...context, idempotencyKey: "category-update-fingerprint" };
+    const fingerprinted = await service.updateInventoryCategory("category-child", { name: "Fingerprint one" }, 2, updateContext);
+    expect(await service.updateInventoryCategory("category-child", { name: "Fingerprint one" }, 2, updateContext)).toMatchObject({ replayed: true, data: fingerprinted.data });
+    await expect(service.updateInventoryCategory("category-child", { name: "Fingerprint two" }, 2, updateContext)).rejects.toMatchObject({ code: "idempotency_conflict" });
+
+    const archiveContext = { ...context, idempotencyKey: "category-archive-fingerprint" };
+    const archived = await service.archiveInventoryCategory("category-child", 3, archiveContext);
+    expect(await service.archiveInventoryCategory("category-child", 3, archiveContext)).toMatchObject({ replayed: true, data: archived.data });
+    await expect(service.archiveInventoryCategory("category-child", 4, archiveContext)).rejects.toMatchObject({ code: "idempotency_conflict" });
   });
 
   it("audits inventory create/update commands and supports both physical-count adapters", async () => {

@@ -71,6 +71,8 @@ export const inventoryItemSchema = z.object({
   id: idSchema,
   name: z.string().min(1).max(240),
   kind: itemKindSchema,
+  /** Optional managed taxonomy node assignment; legacy `kind` remains closed. */
+  categoryNodeId: idSchema.optional(),
   description: z.string().max(5000).optional(),
   manufacturer: z.string().max(200).optional(),
   model: z.string().max(200).optional(),
@@ -99,8 +101,40 @@ export const inventoryListQuerySchema = z.object({
   cursor: z.string().max(200).optional()
 }).strict();
 
+/** User-managed taxonomy identity; intentionally has no `kind` discriminator. */
+export const inventoryCategorySchema = z.object({
+  id: idSchema,
+  name: z.string().min(1).max(120),
+  parentId: idSchema.optional(),
+  sortOrder: z.number().int().nonnegative(),
+  archived: z.boolean(),
+  createdAt: isoDateSchema,
+  updatedAt: isoDateSchema,
+  version: z.number().int().positive()
+}).strict();
+
+export const inventoryCategoryListQuerySchema = z.object({
+  includeArchived: z.preprocess((value) => value === "true" ? true : value === "false" ? false : value, z.boolean()).default(false),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  cursor: z.string().max(512).optional()
+}).strict();
+
+export const createInventoryCategorySchema = z.object({
+  id: idSchema.optional(),
+  name: z.string().trim().min(1).max(120),
+  parentId: idSchema.optional(),
+  sortOrder: z.number().int().nonnegative().default(0)
+}).strict();
+
+export const updateInventoryCategorySchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  sortOrder: z.number().int().nonnegative().optional()
+}).strict().refine((value) => value.name !== undefined || value.sortOrder !== undefined, {
+  message: "at least one category field must change"
+});
+
 export const createInventoryItemSchema = inventoryItemSchema.pick({
-  name: true, kind: true, description: true, manufacturer: true, model: true,
+  name: true, kind: true, categoryNodeId: true, description: true, manufacturer: true, model: true,
   sku: true, quantity: true, unit: true, location: true, condition: true,
   dimensions: true, tags: true, links: true, evidence: true
 }).extend({
@@ -108,7 +142,7 @@ export const createInventoryItemSchema = inventoryItemSchema.pick({
   availableQuantity: z.number().finite().nonnegative().optional()
 }).strict();
 
-export const updateInventoryItemSchema = createInventoryItemSchema.omit({ id: true }).partial().strict();
+export const updateInventoryItemSchema = createInventoryItemSchema.omit({ id: true }).extend({ categoryNodeId: idSchema.nullable().optional() }).partial().strict();
 
 export const stockEventInputSchema = z.object({
   itemId: idSchema,

@@ -18,6 +18,7 @@ import { ExclusiveBarrier } from "./barrier.js";
 import { ProductionUnitOfWork } from "./unit-of-work.js";
 import { ProductionBuildConfigurationAdapter, ProductionCatalogAdapter } from "./catalog-adapter.js";
 import { ProductionReconciliationAdapter } from "./reconciliation-adapter.js";
+import { ProductionInventoryCategoryAdapter } from "./category-adapter.js";
 
 export interface ProductionRuntimeOptions {
   /** A persistent directory outside the source checkout. */
@@ -98,7 +99,8 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
     const auditRepository = new AuditRepository(database);
     const barrier = new ExclusiveBarrier();
     const unitOfWork = new ProductionUnitOfWork(database, barrier);
-    const inventory = new ProductionInventoryAdapter(database, inventoryRepository, state, unitOfWork);
+    const inventoryCategories = new ProductionInventoryCategoryAdapter(database, unitOfWork);
+    const inventory = new ProductionInventoryAdapter(database, inventoryRepository, state, unitOfWork, inventoryCategories.repository);
     const events = new ProductionEventBus();
     const health = new ProductionHealth(database, artifacts);
     const canonicalCatalog = new CanonicalCatalogRepository(database);
@@ -106,6 +108,7 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
     const projectAdapter = new ProductionProjectAdapter(database, projectRepository, bomRepository, reservationRepository, inventory, state);
     const ports: ApplicationPorts = {
       inventory,
+      inventoryCategories,
       projects: projectAdapter,
       offers: new ProductionOfferAdapter(database, procurementRepository, inventoryRepository, state),
       artifacts: new ProductionArtifactAdapter(artifacts, state, unitOfWork, canonicalCatalog.bindings),
@@ -151,3 +154,4 @@ export * from "./mappers.js";
 export * from "./persistence.js";
 export * from "./unit-of-work.js";
 export * from "./reconciliation-adapter.js";
+export * from "./category-adapter.js";
