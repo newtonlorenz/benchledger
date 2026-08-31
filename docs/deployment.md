@@ -4,6 +4,20 @@ BenchLedger's initial reference deployment is a single-user installation on a
 trusted LAN. It uses one application container and one private persistent data
 directory outside the source checkout.
 
+## Development/test integration
+
+A maintainer may keep a private LAN Docker deployment available for integration
+testing. Treat that endpoint as a development/test target, not production. It is
+appropriate to run read-only smoke checks such as `/api/v1/health`,
+`/api/v1/ready`, `/api/v1/capabilities`, OpenAPI retrieval, and authenticated
+read-token MCP discovery when credentials are already configured in the caller's
+secret store.
+
+Do not record the exact host address in source-controlled files. Do not restart
+containers, rebuild images, run imports, mutate data, rotate credentials, change
+Compose files on the host, or inspect private volumes unless the maintainer gives
+explicit approval for that action.
+
 ## Before deployment
 
 1. Build and test from a clean checkout.

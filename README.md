@@ -143,7 +143,8 @@ Run `npm run public:check` before sharing a branch or source archive.
 
 Focused issues and pull requests are welcome.
 Start with [CONTRIBUTING.md](CONTRIBUTING.md), the
-[Code of Conduct](CODE_OF_CONDUCT.md), and [support guide](SUPPORT.md).
+[Code of Conduct](CODE_OF_CONDUCT.md), [development workflow](docs/development-workflow.md),
+and [support guide](SUPPORT.md).
 
 During development, test the smallest affected surface. The complete release
 gate is:

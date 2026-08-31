@@ -97,5 +97,5 @@ base64.
 > “The synthetic build is mostly supplied. PETG, the H2D, and the ESP32 board
 > are confirmed/commissioned and can be reused. Dupont wires are a plausible
 > delivery but require a physical count before reservation. Four M3 inserts are
-> missing. I can compare observed supplier offers and prepare a EUR shopping
+> missing. I can compare observed supplier offers and prepare a source-currency shopping
 > proposal, but no purchase or printer action is available through MCP.”
