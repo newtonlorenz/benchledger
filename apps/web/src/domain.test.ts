@@ -16,7 +16,7 @@ describe("BenchLedger beginner-friendly domain language", () => {
   it("translates evidence states into language a first-time maker can understand", () => {
     expect(getStockLabel("available")).toEqual({ label: "Ready to use", tone: "good" });
     expect(getStockLabel("inspect-first")).toEqual({ label: "Check quantity", tone: "warn" });
-    expect(getStockLabel("ordered-unverified")).toEqual({ label: "On the way?", tone: "muted" });
+    expect(getStockLabel("ordered-unverified")).toEqual({ label: "Ordered, not verified", tone: "muted" });
     expect(getStockLabel("reserved")).toEqual({ label: "Reserved", tone: "warn" });
     expect(getStockLabel("depleted")).toEqual({ label: "Need to buy", tone: "bad" });
   });
@@ -38,14 +38,16 @@ describe("BenchLedger beginner-friendly domain language", () => {
   it("formats money without leaking internal minor-unit details", () => {
     expect(formatMoney(2499, "EUR")).toBe("€24.99");
     expect(formatMoney(1299, "USD")).toBe("$12.99");
+    expect(formatMoney(789, "GBP")).toBe("£7.89");
   });
 
   it("keeps shopping totals grouped by their source currency", () => {
     expect(sumMoneyByCurrency([
       { priceMinor: 2499, currency: "EUR" },
       { priceMinor: 1299, currency: "USD" },
-      { priceMinor: 380, currency: "EUR" }
-    ])).toEqual({ EUR: 2879, USD: 1299 });
+      { priceMinor: 380, currency: "EUR" },
+      { priceMinor: 789, currency: "GBP" }
+    ])).toEqual({ EUR: 2879, USD: 1299, GBP: 789 });
     expect(sumMoneyByCurrency([])).toEqual({});
   });
 
@@ -71,6 +73,20 @@ describe("BenchLedger beginner-friendly domain language", () => {
     expect(filterInventory(source, "printer", "Filament")).toEqual([]);
     expect(filterInventory(source, "printer", "All").map((item) => item.id)).toEqual(["printer"]);
     expect(filterInventory(source, "printer", undefined).map((item) => item.id)).toEqual(["printer"]);
+  });
+
+  it("filters inventory by kind, evidence, and verified availability", () => {
+    const source: InventoryItem[] = [
+      { ...inventory[0]!, id: "printer", kind: "printer", evidence: "commissioned", availableQuantity: 1 },
+      { ...inventory[2]!, id: "filament", kind: "filament", evidence: "counted", availableQuantity: 540 },
+      { ...inventory[5]!, id: "tool", kind: "tool", evidence: "delivered", state: "inspect-first", availableQuantity: 0 }
+    ];
+
+    expect(filterInventory(source, "", { kind: "filament" }).map((item) => item.id)).toEqual(["filament"]);
+    expect(filterInventory(source, "", { evidence: "commissioned" }).map((item) => item.id)).toEqual(["printer"]);
+    expect(filterInventory(source, "", { available: true }).map((item) => item.id)).toEqual(["printer", "filament"]);
+    expect(filterInventory(source, "", { available: false }).map((item) => item.id)).toEqual(["tool"]);
+    expect(filterInventory(source, "", { category: "Tools", evidence: "counted" })).toEqual([]);
   });
 
   it("distinguishes optional, missing, partial, depleted, ordered, and inspect-first BOM lines", () => {

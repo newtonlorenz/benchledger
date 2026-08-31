@@ -98,6 +98,49 @@ describe("authenticated BenchLedger API adapter", () => {
     expect(JSON.parse(String(init.body))).toMatchObject({ quantity: 4 });
   });
 
+  it("patches editable inventory fields with the current item version", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=edit-token" });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({
+      data: serverItem({
+        name: "ESP32-S3 development board",
+        description: "Controller board for bench prototypes.",
+        manufacturer: "Espressif",
+        model: "DevKitC-1",
+        sku: "ESP32-S3-DEVKITC-1",
+        location: "Electronics drawer 2",
+        tags: ["esp32", "controller"],
+        version: 4
+      })
+    }));
+
+    const adapter = createWorkspaceAdapter();
+    const result = await adapter.updateInventoryItem("item-1", {
+      name: "ESP32-S3 development board",
+      description: "Controller board for bench prototypes.",
+      model: "DevKitC-1",
+      manufacturer: "Espressif",
+      sku: "ESP32-S3-DEVKITC-1",
+      location: "Electronics drawer 2",
+      tags: ["esp32", "controller"]
+    }, 3);
+
+    expect(result).toMatchObject({ name: "ESP32-S3 development board", variant: "DevKitC-1", version: 4 });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toContain("/api/v1/inventory/item-1");
+    expect(init).toMatchObject({ method: "PATCH" });
+    expect(new Headers(init?.headers).get("x-csrf-token")).toBe("edit-token");
+    expect(new Headers(init?.headers).get("if-match")).toBe("3");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      name: "ESP32-S3 development board",
+      description: "Controller board for bench prototypes.",
+      model: "DevKitC-1",
+      manufacturer: "Espressif",
+      sku: "ESP32-S3-DEVKITC-1",
+      location: "Electronics drawer 2",
+      tags: ["esp32", "controller"]
+    });
+  });
+
   it("maps the real page payloads into the UI models and never turns a failed write into a local write", async () => {
     vi.stubGlobal("document", { cookie: "forge_csrf=csrf-from-session" });
     vi.spyOn(globalThis, "fetch")
@@ -468,7 +511,7 @@ describe("web data mappers", () => {
         accent: expected.accent,
         variant: index === 0 ? "Model variant" : index === 1 ? "SKU variant" : expected.kind,
         unit: index % 3 === 0 ? "g" : index % 3 === 1 ? "m" : "each",
-        description: index === 2 ? "No description recorded yet." : `Description ${index}`,
+        description: index === 2 ? "No description recorded." : `Description ${index}`,
         location: index === 3 ? "Unassigned" : `Location ${index}`,
         tags: [`tag-${index}`],
         compatibility: []
@@ -485,6 +528,17 @@ describe("web data mappers", () => {
 
     expect(mapInventoryItem(serverItem({ quantity: 2, availableQuantity: 5, evidence: { state: "physically_counted" } }))).toMatchObject({ reserved: 0, state: "available" });
     expect(mapInventoryItem(serverItem({ quantity: 2, availableQuantity: 0, evidence: { state: "commissioned" } }))).toMatchObject({ reserved: 0, state: "depleted", evidence: "commissioned" });
+    expect(mapInventoryItem(serverItem({
+      kind: "electronic",
+      availableQuantity: 2,
+      evidence: { state: "physically_counted", source: "bench-count", sourceId: "count-42", observedAt: "2026-08-30T12:34:56.000Z", note: "Counted in drawer 2" },
+      version: 7
+    }))).toMatchObject({
+      kind: "electronic",
+      availableQuantity: 2,
+      version: 7,
+      provenance: { source: "bench-count", sourceId: "count-42", observedAt: "2026-08-30T12:34:56.000Z", note: "Counted in drawer 2" }
+    });
   });
 
   it("maps project fallback fields, revision rails, artifact roles, and offer currency", async () => {
@@ -528,7 +582,7 @@ describe("web data mappers", () => {
     expect(snapshot.fetchedAt).toMatch(/2026|T/);
     expect(snapshot.projects[0]?.railStep).toBe(0);
     expect(snapshot.projects.find((project) => project.id === "project-1")).toMatchObject({ subtitle: "Body work item", workItem: "Body", currentRevision: "r02" });
-    expect(snapshot.projects.find((project) => project.id === "project-8")).toMatchObject({ currentRevision: "r09", workItem: "Project setup", description: "Add a plain-language goal to give this project a clear next step." });
+    expect(snapshot.projects.find((project) => project.id === "project-8")).toMatchObject({ currentRevision: "r09", workItem: "Project setup", description: "Add a project goal to define the next task." });
     expect(snapshot.projects.find((project) => project.id === "project-no-revision")).toMatchObject({ currentRevision: "No revision", railStep: 2, workItem: "Project setup" });
     expect(snapshot.projects.find((project) => project.id === "project-idea")).toMatchObject({ status: "Idea", railStep: 0, accent: "orange" });
     expect(snapshot.projects.find((project) => project.id === "project-7")).toMatchObject({ status: "Complete", railStep: 5, accent: "blue" });
@@ -546,7 +600,7 @@ describe("web data mappers", () => {
     expect(snapshot.offers).toEqual([
       expect.objectContaining({ id: "offer-eur", itemId: "item-1", currency: "EUR", pack: "Package size not recorded" }),
       expect.objectContaining({ id: "offer-usd", itemId: "", currency: "USD", pack: "2 pieces" }),
-      expect.objectContaining({ id: "offer-other", currency: "EUR" })
+      expect.objectContaining({ id: "offer-other", currency: "GBP" })
     ]);
   });
 });
@@ -653,6 +707,10 @@ describe("sample workspace adapter", () => {
     const counted = await adapter.recordCount("fast-m3-inserts", 7);
     expect(counted).toMatchObject({ id: "fast-m3-inserts", quantity: 7, state: "available", evidence: "counted" });
     await expect(adapter.recordCount("not-real", 1)).rejects.toMatchObject({ kind: "validation", status: 404 });
+
+    const edited = await adapter.updateInventoryItem("fast-m3-inserts", { name: "M3 heat-set inserts", location: "Fastener drawer", tags: ["m3", "insert"] }, 1);
+    expect(edited).toMatchObject({ name: "M3 heat-set inserts", location: "Fastener drawer", tags: ["m3", "insert"] });
+    await expect(adapter.updateInventoryItem("not-real", { name: "Missing" }, 1)).rejects.toMatchObject({ kind: "validation", status: 404 });
 
     const createdItem = await adapter.createInventoryItem({ name: "JST connector", category: "Electronics", quantity: 10, unit: "each" });
     expect(createdItem).toMatchObject({ name: "JST connector", state: "inspect-first", evidence: "delivered", accent: "teal", location: "Unassigned" });

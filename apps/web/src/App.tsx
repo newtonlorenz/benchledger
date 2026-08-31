@@ -3,7 +3,7 @@ import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import type * as React from "react";
 import { ApiError, createSampleWorkspaceAdapter, createWorkspaceAdapter } from "./api";
 import type { WorkspaceAdapter } from "./api";
-import type { BomInput, CatalogProductDraft, ExactInventoryInput, RevisionInput } from "./api";
+import type { BomInput, CatalogProductDraft, ExactInventoryInput, InventoryUpdateInput, RevisionInput } from "./api";
 import { CatalogInventoryFlow, BuildSetupSummary, OwnedItemCombobox, splitSetupValues } from "./catalog-ui";
 import type { BuildConfigInput, CatalogProduct } from "./domain";
 import {
@@ -223,14 +223,27 @@ function App() {
     setToast(writeFailureMessage(normalized, action));
   };
 
-  const recordCount = async (itemId: string, quantity: number) => {
+  const recordCount = async (itemId: string, quantity: number): Promise<InventoryItem> => {
     try {
       const result = await adapter.recordCount(itemId, quantity);
       setItems((current) => current.map((item) => item.id === itemId ? result : item));
-      setToast(`${result.name} is now counted at ${formatQuantity(result.quantity, result.unit)}.`);
-      setSelectedItemId(undefined);
+      setToast(`Saved physical count: ${formatQuantity(result.quantity, result.unit)} for ${result.name}.`);
+      return result;
     } catch (error: unknown) {
       handleMutationError(error, "recording that count");
+      throw error;
+    }
+  };
+
+  const updateInventoryItem = async (itemId: string, input: Partial<InventoryUpdateInput>, expectedVersion?: number): Promise<InventoryItem> => {
+    try {
+      const result = await adapter.updateInventoryItem(itemId, input, expectedVersion);
+      setItems((current) => current.map((item) => item.id === itemId ? result : item));
+      setToast(`Saved changes to ${result.name}.`);
+      return result;
+    } catch (error: unknown) {
+      handleMutationError(error, "saving that inventory item");
+      throw error;
     }
   };
 
@@ -421,14 +434,14 @@ function App() {
             {page === "overview" && <OverviewPage items={items} projects={projects} expert={expert} sampleMode={sampleMode} onNavigate={navigate} onOpenProject={openProject} onSelectItem={setSelectedItemId} onNewProject={() => setShowNewProject(true)} />}
             {page === "inventory" && <InventoryPage items={items} search={search} expert={expert} onSearch={setSearch} onSelectItem={setSelectedItemId} onNewItem={() => setShowNewItem(true)} />}
             {page === "projects" && selectedProject && <ProjectPage project={selectedProject} projects={projects} items={items} offers={offers} tab={projectTab} expert={expert} sampleMode={sampleMode} onTabChange={setProjectTab} onSelectProject={setSelectedProjectId} onOpenItem={setSelectedItemId} onNavigate={navigate} onToast={setToast} onNewRevision={() => setShowNewRevision(true)} onRetrySetup={pendingRevisionSetup?.projectId === selectedProject.id && pendingRevisionSetup.revisionId === selectedProject.serverRevisionId ? retryRevisionSetup : undefined} onAddBom={() => setShowAddBom(true)} onUpload={uploadArtifact} onReadReconciliation={adapter.readReconciliation} onSaveReconciliation={adapter.saveReconciliationDraft} onCommitReconciliation={adapter.commitReconciliation} onRefreshWorkspace={refreshWorkspace} />}
-            {page === "projects" && !selectedProject && <EmptyState icon="folder" title="No projects yet" description="Start with a name and a plain-language goal. You can add parts and files as the idea becomes real." action="Create first project" onAction={() => setShowNewProject(true)} />}
+            {page === "projects" && !selectedProject && <EmptyState icon="folder" title="No projects yet" description="Start with a name and project goal. You can add parts and files after that." action="Create first project" onAction={() => setShowNewProject(true)} />}
             {page === "capabilities" && <CapabilitiesPage expert={expert} onCopy={setToast} />}
             {page === "settings" && <SettingsPage expert={expert} sampleMode={sampleMode} connection={connection} onExpert={() => setExpert((current) => !current)} onLogout={sampleMode ? returnToPrivateWorkspace : signOut} />}
           </main>
         </div>
       </div>
 
-      {selectedItem && <InventoryDrawer item={selectedItem} expert={expert} onClose={() => setSelectedItemId(undefined)} onCount={recordCount} />}
+      {selectedItem && <InventoryDrawer item={selectedItem} expert={expert} onClose={() => setSelectedItemId(undefined)} onCount={recordCount} onUpdate={updateInventoryItem} />}
       {showNewProject && <NewProjectDialog onClose={() => setShowNewProject(false)} onCreate={createProject} />}
       {showNewRevision && selectedProject && <NewRevisionDialog project={selectedProject} items={items} expert={expert} onClose={() => setShowNewRevision(false)} onCreate={createRevision} />}
       {showAddBom && selectedProject && <AddBomDialog items={items} project={selectedProject} onClose={() => setShowAddBom(false)} onCreate={addBomLine} />}
@@ -467,10 +480,10 @@ function normalizeApiError(error: unknown): ApiError {
 }
 
 function writeFailureMessage(error: ApiError, action: string): string {
-  if (error.kind === "offline") return `We could not finish ${action} because the private service is offline. Nothing was saved.`;
-  if (error.kind === "unauthenticated" || error.kind === "csrf") return `Your session is no longer ready for ${action}. Sign in again; nothing was saved.`;
-  if (error.kind === "validation") return `We could not finish ${action}. Check the details and try again.`;
-  return `We could not finish ${action}. Nothing was saved.`;
+  if (error.kind === "offline") return `Cannot complete ${action}. The private service is offline. Nothing was saved.`;
+  if (error.kind === "unauthenticated" || error.kind === "csrf") return `Cannot complete ${action}. Sign in again. Nothing was saved.`;
+  if (error.kind === "validation") return `Cannot complete ${action}. Check the values and try again.`;
+  return `Cannot complete ${action}. Nothing was saved.`;
 }
 
 function ConnectionScreen({ state, error, demoAvailable, onLogin, onRetry, onSample }: { state: Exclude<ConnectionState, "loading" | "ready" | "sample">; error: ApiError | undefined; demoAvailable: boolean; onLogin: (password: string) => Promise<void>; onRetry: () => void; onSample: () => void }) {
@@ -486,10 +499,10 @@ function ConnectionScreen({ state, error, demoAvailable, onLogin, onRetry, onSam
   };
   const isOffline = state === "offline";
   const isAuth = state === "unauthenticated";
-  const title = isAuth ? "Sign in to your private workspace" : isOffline ? "The private workspace is offline" : "We could not open the workspace";
-  const description = isAuth ? "Your inventory, project files, and supplier observations stay on your connected service." : isOffline ? "BenchLedger cannot reach the service right now. Your private data has not been replaced with sample data." : "The service returned an error before the workspace could be loaded. Nothing was changed.";
+  const title = isAuth ? "Sign in" : isOffline ? "Private service offline" : "Cannot open workspace";
+  const description = isAuth ? "Enter the password for this private workspace." : isOffline ? "BenchLedger cannot reach the private service. It did not replace private data with sample data." : "The service returned an error before it loaded the workspace. Nothing changed.";
   const detail = error && !isAuth && !isOffline ? error.correlationId ? `Reference ${error.correlationId}` : error.message : undefined;
-  return <main className="connection-screen"><section className="connection-card" aria-labelledby="connection-title"><div className="loading-brand"><div className="brand-mark" aria-hidden="true"><span /><span /><span /></div><span>BenchLedger · private workspace</span></div><div className="connection-state-icon"><Icon name={isAuth ? "info" : isOffline ? "link" : "warning"} size={22} /></div><h1 id="connection-title">{title}</h1><p className="connection-description">{description}</p>{detail && <p className="connection-detail" role="alert">{detail}</p>}{(isAuth || state === "error") && <form className="login-form" onSubmit={submit} noValidate><label className="form-field" htmlFor="workspace-password"><span>Workspace password</span><input id="workspace-password" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} aria-describedby={formError ? "workspace-password-error" : undefined} aria-invalid={Boolean(formError)} autoFocus /></label>{formError && <p id="workspace-password-error" className="form-error" role="alert">{formError}</p>}<button className="button button-primary login-submit" type="submit" disabled={submitting}>{submitting ? "Signing in…" : "Open workspace"}<Icon name="arrow-right" size={16} /></button></form>}{!isAuth && <button className="button button-secondary connection-retry" onClick={onRetry}><Icon name="refresh" size={16} /> Try again</button>}{demoAvailable && <div className="sample-choice"><span>Want to explore the interface first?</span><button className="text-button" onClick={onSample}>Open sample workspace <Icon name="arrow-right" size={15} /></button><small>Sample data is clearly labeled and never mixed with your private workspace.</small></div>}</section></main>;
+  return <main className="connection-screen"><section className="connection-card" aria-labelledby="connection-title"><div className="loading-brand"><div className="brand-mark" aria-hidden="true"><span /><span /><span /></div><span>BenchLedger · private workspace</span></div><div className="connection-state-icon"><Icon name={isAuth ? "info" : isOffline ? "link" : "warning"} size={22} /></div><h1 id="connection-title">{title}</h1><p className="connection-description">{description}</p>{detail && <p className="connection-detail" role="alert">{detail}</p>}{(isAuth || state === "error") && <form className="login-form" onSubmit={submit} noValidate><label className="form-field" htmlFor="workspace-password"><span>Workspace password</span><input id="workspace-password" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} aria-describedby={formError ? "workspace-password-error" : undefined} aria-invalid={Boolean(formError)} autoFocus /></label>{formError && <p id="workspace-password-error" className="form-error" role="alert">{formError}</p>}<button className="button button-primary login-submit" type="submit" disabled={submitting}>{submitting ? "Signing in…" : "Sign in"}<Icon name="arrow-right" size={16} /></button></form>}{!isAuth && <button className="button button-secondary connection-retry" onClick={onRetry}><Icon name="refresh" size={16} /> Try again</button>}{demoAvailable && <div className="sample-choice"><span>Sample workspace</span><button className="text-button" onClick={onSample}>Open sample workspace <Icon name="arrow-right" size={15} /></button><small>Sample records are synthetic. BenchLedger does not mix them with private records.</small></div>}</section></main>;
 }
 
 function SampleBanner({ onReturn }: { onReturn: () => void }) {
@@ -524,14 +537,14 @@ function OverviewPage({ items, projects, expert, sampleMode, onNavigate, onOpenP
       : openLine
         ? `${formatQuantity(openLine.remaining || openLine.line.required, openLine.line.unit)} is not covered by confirmed stock yet.`
         : "Every recorded requirement is covered by confirmed stock. Continue with files or validation."
-    : "A plain-language goal is enough to begin. Add the equipment and parts as you go.";
+    : "Enter a project name and goal. Add equipment and parts when you identify them.";
   return <>
-    <PageHeader eyebrow="Workbench" title="Make the next build clear." description="Start with what you have, then move one decision forward." action="New project" onAction={onNewProject} />
+    <PageHeader eyebrow="Workbench" title="Review build status." description="Check inventory and complete the next project task." action="New project" onAction={onNewProject} />
     <BuildRail currentStep={activeProject?.railStep ?? 0} projectName={activeProject?.name} onProject={activeProject ? () => onOpenProject(activeProject.id) : undefined} />
-    <section className="decision-strip"><div className="decision-copy"><span className="decision-kicker"><Icon name="spark" size={15} /> Next useful action</span><h2>{nextActionTitle}</h2><p>{nextActionDescription}</p></div>{activeProject && <button className="button button-secondary" onClick={() => onOpenProject(activeProject.id)}>{nextLine ? "Review project" : "Open dossier"}<Icon name="arrow-right" size={16} /></button>}</section>
+    <section className="decision-strip"><div className="decision-copy"><span className="decision-kicker"><Icon name="spark" size={15} /> Next task</span><h2>{nextActionTitle}</h2><p>{nextActionDescription}</p></div>{activeProject && <button className="button button-secondary" onClick={() => onOpenProject(activeProject.id)}>Review project<Icon name="arrow-right" size={16} /></button>}</section>
     <section className="metric-strip" aria-label="Workspace summary"><Metric value={String(counts.available)} label="Ready to use" detail="counted or commissioned" tone="good" /><Metric value={String(counts["inspect-first"])} label="Need a check" detail="physical count required" tone="warn" /><Metric value={String(projects.length)} label="Projects" detail={`${projects.filter((project) => project.status === "In progress").length} in progress`} tone="info" /><Metric value={String(activeSummary?.missingLines ?? 0)} label="Open buys" detail={activeProject?.name ?? "No active project"} tone="bad" /></section>
-    <div className="overview-grid"><section className="surface project-overview"><SectionHeading eyebrow="Active project" title={activeProject?.name ?? "No active project"} action={activeProject ? "Open dossier" : undefined} onAction={activeProject ? () => onOpenProject(activeProject.id) : undefined} /><div className="project-overview-body">{activeProject ? <><div className="project-overview-copy"><span className="status-pill tone-info"><span className="status-symbol">●</span>{activeProject.status}</span><h3>{activeProject.subtitle}</h3><p>{activeProject.description}</p><div className="dossier-meta"><span><Icon name="layers" size={15} /> {activeProject.workItem}</span><span><Icon name="tag" size={15} /> Revision {activeProject.currentRevision}</span><span><Icon name="clock" size={15} /> Updated {activeProject.updated}</span></div></div><div className="project-progress"><div className="progress-ring" style={{ "--progress": `${Math.round(((activeSummary?.readyLines ?? 0) / (activeSummary?.totalLines || 1)) * 100)}%` } as React.CSSProperties}><strong>{activeSummary?.readyLines ?? 0}</strong><span>ready</span></div><div><strong>{activeSummary?.missingLines ?? 0} parts to source</strong><p>{activeSummary?.inspectLines ?? 0} more need a physical check</p></div></div></> : <EmptyState icon="folder" title="A project gives your inventory a purpose" description="Create one to see reuse, checks, purchases, and files in one place." />}</div></section><section className="surface inventory-overview"><SectionHeading eyebrow="Inventory" title="A quick look at your bench" action="View all" onAction={() => onNavigate("inventory")} /><div className="mini-inventory">{items.slice(0, 5).map((item) => <button className="mini-row" key={item.id} onClick={() => onSelectItem(item.id)}><span className={`item-glyph accent-${item.accent}`}><Icon name={categoryIcons[item.category]} size={16} /></span><span className="mini-row-copy"><strong>{item.name}</strong><small>{item.variant}</small></span><StatusPill state={item.state} compact /></button>)}</div></section></div>
-    <section className="surface activity-section">{sampleMode ? <><SectionHeading eyebrow="Recent learning · sample" title="What changed" /><div className="activity-list">{activity.map((entry) => <div className="activity-row" key={entry.id}><span className={`activity-dot activity-${entry.tone}`} /><div><strong>{entry.title}</strong><span>{entry.detail}</span></div><time>{entry.time}</time></div>)}</div></> : <><SectionHeading eyebrow="Recent learning" title="What changed" /><p className="activity-empty">Recorded project changes will appear here when the connected service provides activity history.</p></>}</section>
+    <div className="overview-grid"><section className="surface project-overview"><SectionHeading eyebrow="Active project" title={activeProject?.name ?? "No active project"} action={activeProject ? "Open project" : undefined} onAction={activeProject ? () => onOpenProject(activeProject.id) : undefined} /><div className="project-overview-body">{activeProject ? <><div className="project-overview-copy"><span className="status-pill tone-info"><span className="status-symbol">●</span>{activeProject.status}</span><h3>{activeProject.subtitle}</h3><p>{activeProject.description}</p><div className="dossier-meta"><span><Icon name="layers" size={15} /> {activeProject.workItem}</span><span><Icon name="tag" size={15} /> Revision {activeProject.currentRevision}</span><span><Icon name="clock" size={15} /> Updated {activeProject.updated}</span></div></div><div className="project-progress"><div className="progress-ring" style={{ "--progress": `${Math.round(((activeSummary?.readyLines ?? 0) / (activeSummary?.totalLines || 1)) * 100)}%` } as React.CSSProperties}><strong>{activeSummary?.readyLines ?? 0}</strong><span>ready</span></div><div><strong>{activeSummary?.missingLines ?? 0} parts to source</strong><p>{activeSummary?.inspectLines ?? 0} more need a physical check</p></div></div></> : <EmptyState icon="folder" title="No project selected" description="Create a project to compare requirements with inventory." />}</div></section><section className="surface inventory-overview"><SectionHeading eyebrow="Inventory" title="Inventory summary" action="View all" onAction={() => onNavigate("inventory")} /><div className="mini-inventory">{items.slice(0, 5).map((item) => <button className="mini-row" key={item.id} onClick={() => onSelectItem(item.id)}><span className={`item-glyph accent-${item.accent}`}><Icon name={categoryIcons[item.category]} size={16} /></span><span className="mini-row-copy"><strong>{item.name}</strong><small>{item.variant}</small></span><StatusPill state={item.state} compact /></button>)}</div></section></div>
+    <section className="surface activity-section">{sampleMode ? <><SectionHeading eyebrow="Sample activity" title="Recent changes" /><div className="activity-list">{activity.map((entry) => <div className="activity-row" key={entry.id}><span className={`activity-dot activity-${entry.tone}`} /><div><strong>{entry.title}</strong><span>{entry.detail}</span></div><time>{entry.time}</time></div>)}</div></> : <><SectionHeading eyebrow="Activity" title="Recent changes" /><p className="activity-empty">Project changes will appear here when the service provides activity history.</p></>}</section>
   </>;
 }
 
@@ -545,16 +558,53 @@ function SectionHeading({ eyebrow, title, action, onAction }: { eyebrow: string;
 
 function InventoryPage({ items, search, expert, onSearch, onSelectItem, onNewItem }: { items: InventoryItem[]; search: string; expert: boolean; onSearch: (value: string) => void; onSelectItem: (id: string) => void; onNewItem: () => void }) {
   const [category, setCategory] = useState<(typeof categoryOptions)[number]>("All");
-  const filtered = filterInventory(items, search, category);
+  const [kind, setKind] = useState("All");
+  const [evidence, setEvidence] = useState<InventoryItem["evidence"] | "All">("All");
+  const [availability, setAvailability] = useState<"All" | "available" | "unavailable">("All");
+  const filtered = filterInventory(items, search, {
+    category,
+    kind,
+    evidence,
+    ...(availability === "All" ? {} : { available: availability === "available" })
+  });
+  const clearFilters = () => {
+    onSearch("");
+    setCategory("All");
+    setKind("All");
+    setEvidence("All");
+    setAvailability("All");
+  };
   return <>
-    <PageHeader eyebrow="Inventory" title="Know what is on the bench." description="Printers, material, tools, and components in one evidence-backed view." action="Add item" onAction={onNewItem} />
+    <PageHeader eyebrow="Inventory" title="Review inventory." description="Check tools, materials, components, quantities, and evidence." action="Add item" onAction={onNewItem} />
     <div className="inventory-summary"><div><strong>{items.length}</strong><span>tracked items</span></div><div><strong>{items.filter((item) => item.category === "Printers").length}</strong><span>printers</span></div><div><strong>{items.filter((item) => item.category === "Filament").length}</strong><span>filaments</span></div><div><strong>{items.filter((item) => ["Electronics", "Wire & cable"].includes(item.category)).length}</strong><span>electronics lines</span></div></div>
-    <section className="surface inventory-section"><div className="inventory-toolbar"><label className="field-search"><Icon name="search" size={17} /><span className="sr-only">Filter inventory</span><input value={search} onChange={(event) => onSearch(event.target.value)} placeholder="Search by name, variant, tag, or location" /></label><label className="category-control"><Icon name="filter" size={15} /><span className="category-control-label">Category</span><select aria-label="Filter inventory by category" value={category} onChange={(event) => setCategory(event.target.value as (typeof categoryOptions)[number])}>{categoryOptions.map((option) => <option key={option} value={option}>{option === "All" ? "All categories" : option}</option>)}</select></label></div>{filtered.length ? <InventoryTable items={filtered} expert={expert} onSelectItem={onSelectItem} /> : <EmptyState icon="search" title="No matching items" description="Try a broader search or clear the category filter." action="Clear search" onAction={() => { onSearch(""); setCategory("All"); }} />}</section>
+    <section className="surface inventory-section">
+      <div className="inventory-toolbar" aria-label="Inventory filters">
+        <label className="field-search"><Icon name="search" size={17} /><span className="sr-only">Filter inventory</span><input value={search} onChange={(event) => onSearch(event.target.value)} placeholder="Search name, model, tag, or location" /></label>
+        <div className="inventory-filter-grid">
+          <InventoryFilter label="Category" value={category} onChange={(value) => setCategory(value as (typeof categoryOptions)[number])} options={categoryOptions.map((option) => ({ value: option, label: option === "All" ? "All categories" : option }))} />
+          <InventoryFilter label="Kind" value={kind} onChange={setKind} options={[{ value: "All", label: "All kinds" }, { value: "printer", label: "Printer" }, { value: "filament", label: "Filament" }, { value: "tool", label: "Tool" }, { value: "accessory", label: "Accessory" }, { value: "electronic", label: "Electronic part" }, { value: "fastener", label: "Fastener" }, { value: "wire", label: "Wire or cable" }]} />
+          <InventoryFilter label="Evidence" value={evidence} onChange={(value) => setEvidence(value as InventoryItem["evidence"] | "All")} options={[{ value: "All", label: "All evidence" }, { value: "counted", label: "Physically counted" }, { value: "commissioned", label: "Commissioned" }, { value: "delivered", label: "Delivered or unknown" }, { value: "ordered", label: "Ordered, not verified" }]} />
+          <InventoryFilter label="Availability" value={availability} onChange={(value) => setAvailability(value as typeof availability)} options={[{ value: "All", label: "All availability" }, { value: "available", label: "Available for reuse" }, { value: "unavailable", label: "Not available" }]} />
+        </div>
+      </div>
+      {filtered.length ? <InventoryTable items={filtered} expert={expert} onSelectItem={onSelectItem} /> : <EmptyState icon="search" title="No matching items" description="Change the search text or filters." action="Clear filters" onAction={clearFilters} />}
+    </section>
   </>;
 }
 
+function InventoryFilter({ label, value, options, onChange }: { label: string; value: string; options: readonly { value: string; label: string }[]; onChange: (value: string) => void }) {
+  return <label className="category-control"><span className="category-control-label">{label}</span><select aria-label={`Filter inventory by ${label.toLowerCase()}`} value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
+}
+
 function InventoryTable({ items, expert, onSelectItem }: { items: InventoryItem[]; expert: boolean; onSelectItem: (id: string) => void }) {
-  return <div className="table-scroll"><table className="data-table inventory-table"><caption className="sr-only">Inventory items</caption><thead><tr><th scope="col">Item</th><th scope="col">Category</th><th scope="col">Quantity</th><th scope="col">Status</th><th scope="col">Location</th>{expert && <th scope="col">Evidence</th>}<th scope="col"><span className="sr-only">Open</span></th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td><button className="table-item" onClick={() => onSelectItem(item.id)}><span className={`item-glyph accent-${item.accent}`}><Icon name={categoryIcons[item.category]} size={16} /></span><span><strong>{item.name}</strong><small>{item.variant}</small>{(item.category === "Filament" || item.category === "Printers") && <small className={`exact-product-state ${item.productProfile?.linkState === "confirmed" ? "is-confirmed" : ""}`}>{exactProductLabel(item)}</small>}</span></button></td><td><span className="category-label"><Icon name={categoryIcons[item.category]} size={14} />{item.category}</span></td><td className="quantity-cell"><strong>{formatQuantity(Math.max(item.quantity - item.reserved, 0), item.unit)}</strong>{item.reserved > 0 && <small>{item.reserved} reserved</small>}</td><td><StatusPill state={item.state} /></td><td><span className="location-label"><Icon name="archive" size={14} />{item.location}</span></td>{expert && <td><span className="evidence-label">{item.evidence}</span>{item.lastCounted && <small className="table-date">{item.lastCounted}</small>}</td>}<td><button className="row-open" onClick={() => onSelectItem(item.id)} aria-label={`Open ${item.name}`}><Icon name="chevron-right" size={17} /></button></td></tr>)}</tbody></table></div>;
+  return <div className="table-scroll"><table className="data-table inventory-table"><caption className="sr-only">Inventory items</caption><thead><tr><th scope="col">Item</th><th scope="col">Category</th><th scope="col">Quantity</th><th scope="col">Status</th><th scope="col">Location</th><th scope="col">Evidence source</th><th scope="col"><span className="sr-only">Open</span></th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td><button className="table-item" onClick={() => onSelectItem(item.id)}><span className={`item-glyph accent-${item.accent}`}><Icon name={categoryIcons[item.category]} size={16} /></span><span><strong>{item.name}</strong><small>{item.variant}</small>{(item.category === "Filament" || item.category === "Printers") && <small className={`exact-product-state ${item.productProfile?.linkState === "confirmed" ? "is-confirmed" : ""}`}>{exactProductLabel(item)}</small>}</span></button></td><td><span className="category-label"><Icon name={categoryIcons[item.category]} size={14} />{item.category}</span></td><td className="quantity-cell"><strong>{formatQuantity(Math.max(item.quantity - item.reserved, 0), item.unit)}</strong>{item.reserved > 0 && <small>{formatQuantity(item.reserved, item.unit)} reserved</small>}</td><td><StatusPill state={item.state} /></td><td><span className="location-label"><Icon name="archive" size={14} />{item.location}</span></td><td><span className="evidence-label">{evidenceLabel(item.evidence)}</span><small className="table-date">{item.provenance?.source ?? "Source not recorded"}{item.lastCounted ? ` · ${item.lastCounted}` : ""}</small>{expert && item.provenance?.sourceId && <small className="table-date">{item.provenance.sourceId}</small>}</td><td><button className="row-open" onClick={() => onSelectItem(item.id)} aria-label={`Open ${item.name}`}><Icon name="chevron-right" size={17} /></button></td></tr>)}</tbody></table></div>;
+}
+
+function evidenceLabel(evidence: InventoryItem["evidence"]): string {
+  if (evidence === "counted") return "Physically counted";
+  if (evidence === "commissioned") return "Commissioned";
+  if (evidence === "ordered") return "Ordered, not verified";
+  return "Delivered or unknown";
 }
 
 function StatusPill({ state, compact = false }: { state: StockState | "optional"; compact?: boolean }) {
@@ -634,7 +684,7 @@ function ProjectPage({ project, projects, items, offers, tab, expert, sampleMode
     }
   };
   return <>
-    <PageHeader eyebrow="Projects / dossier" title={project.name} description={project.subtitle}><select className="project-select" aria-label="Choose project" value={project.id} onChange={(event) => onSelectProject(event.target.value)}>{projects.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select>{onRetrySetup && <button className="button button-secondary" onClick={onRetrySetup}><Icon name="refresh" size={16} /> Retry setup</button>}<button className="button button-secondary" onClick={onNewRevision}><Icon name="plus" size={16} /> New revision</button></PageHeader>
+    <PageHeader eyebrow="Project" title={project.name} description={project.subtitle}><select className="project-select" aria-label="Choose project" value={project.id} onChange={(event) => onSelectProject(event.target.value)}>{projects.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select>{onRetrySetup && <button className="button button-secondary" onClick={onRetrySetup}><Icon name="refresh" size={16} /> Retry setup</button>}<button className="button button-secondary" onClick={onNewRevision}><Icon name="plus" size={16} /> New revision</button></PageHeader>
     <BuildRail currentStep={project.railStep} projectName={`${project.name} · ${project.currentRevision}`} />
     <div className="dossier-layout"><aside className="dossier-column"><div className="dossier-status"><span className={`status-pill tone-${project.status === "Complete" ? "good" : "info"}`}><span className="status-symbol">●</span>{project.status}</span><span className="revision-label">{project.currentRevision}</span></div><h2>{project.workItem}</h2><p>{project.description}</p><div className="dossier-next"><span className="eyebrow">Next action</span><strong>{summary.inspectLines ? "Check the physical stock" : summary.missingLines ? "Source the remaining parts" : "Ready to validate"}</strong><span>{summary.inspectLines ? `${summary.inspectLines} BOM line needs a count before it can be reserved.` : `${summary.missingLines} BOM lines are not covered by confirmed stock.`}</span></div><dl className="dossier-facts"><div><dt>Current revision</dt><dd>{project.currentRevision}</dd></div><div><dt>Build files</dt><dd>{project.artifacts.length} artifacts</dd></div><div><dt>Last changed</dt><dd>{project.updated}</dd></div></dl>{project.buildConfigSnapshot && <BuildSetupSummary input={project.buildConfigSnapshot} printer={configuredPrinter} filament={configuredFilament} expert={expert} />}{expert && <details className="expert-detail" open><summary>Expert context</summary><div className="detail-grid"><div><span>Work item ID</span><code>{project.id}/work-item</code></div><div><span>Revision state</span><code>State is supplied by the connected service.</code></div><div><span>Artifact policy</span><code>Retained revisions are not overwritten.</code></div></div></details>}<button className="text-button dossier-inventory-link" onClick={() => onNavigate("inventory")}>Browse all inventory <Icon name="arrow-right" size={15} /></button></aside><section className="dossier-workspace"><div className="tab-list" role="tablist" aria-label="Project workspace"><button role="tab" aria-selected={tab === "plan"} className={tab === "plan" ? "is-active" : ""} onClick={() => onTabChange("plan")}><Icon name="clipboard" size={16} /> Plan <span>{summary.totalLines}</span></button><button role="tab" aria-selected={tab === "files"} className={tab === "files" ? "is-active" : ""} onClick={() => onTabChange("files")}><Icon name="folder" size={16} /> Files <span>{project.artifacts.length}</span></button><button role="tab" aria-selected={tab === "offers"} className={tab === "offers" ? "is-active" : ""} onClick={() => onTabChange("offers")}><Icon name="tag" size={16} /> Shopping list <span>{summary.missingLines}</span></button>{hasServerRevision && <button role="tab" aria-selected={tab === "reconciliation"} className={tab === "reconciliation" ? "is-active" : ""} onClick={() => onTabChange("reconciliation")}><Icon name="check-circle" size={16} /> Close out <span>{reconciliation?.status === "committed" ? "Done" : "Review"}</span></button>}</div>{tab === "plan" && <ProjectPlan project={project} summary={summary} expert={expert} onOpenItem={onOpenItem} onAddBom={onAddBom} />}{tab === "files" && <ProjectFiles project={project} expert={expert} sampleMode={sampleMode} onUpload={(file, role) => onUpload(project.id, file, role)} />}{tab === "offers" && <ShoppingList project={project} summary={summary} offers={offers} expert={expert} onToast={onToast} onBackToPlan={() => onTabChange("plan")} />}{tab === "reconciliation" && hasServerRevision && <section className="reconciliation-page-surface">{reconciliationLoading && <div className="reconciliation-loading" role="status"><span className="eyebrow">Project close-out</span><strong>Loading the current review…</strong><p>Nothing changes in inventory while this review loads.</p></div>}{reconciliationError && !reconciliationLoading && <div className="reconciliation-loading reconciliation-load-error" role="alert"><span className="eyebrow">Could not load close-out</span><strong>{reconciliationError}</strong><button className="button button-secondary" onClick={() => onTabChange("plan")}>Back to plan</button></div>}{reconciliation && !reconciliationLoading && !reconciliationError && <ReconciliationUI model={reconciliation} expert={expert} onChange={setReconciliation} onRequestPreview={saveReconciliation} onConfirmCommit={commitReconciliation} />}</section>}</section></div>
   </>;
@@ -712,7 +762,7 @@ function ShoppingList({ project, summary, offers, expert, onToast, onBackToPlan 
     return selectedOffer ? [selectedOffer] : [];
   });
   const totalsByCurrency = sumMoneyByCurrency(selectedOffers);
-  const currencies = (["EUR", "USD"] as const).filter((currency) => totalsByCurrency[currency] !== undefined);
+  const currencies = Object.keys(totalsByCurrency).sort() as Array<(typeof selectedOffers)[number]["currency"]>;
   const draftList = rows.length ? rows.map(({ line, offers: lineOffers }) => {
     const selectedOffer = lineOffers.find((offer) => offer.preferred) ?? lineOffers[0];
     return `${line.line.label}: ${formatQuantity(line.remaining || line.line.required, line.line.unit)}${selectedOffer ? ` · ${selectedOffer.supplier} · ${formatMoney(selectedOffer.priceMinor, selectedOffer.currency)}` : ""}`;
@@ -729,7 +779,7 @@ function ShoppingList({ project, summary, offers, expert, onToast, onBackToPlan 
       onToast("Copy was blocked by the browser. Select the list manually instead.");
     }
   };
-  return <section className="surface shopping-section"><div className="shopping-header"><div><span className="eyebrow">Procurement proposal</span><h2>Source the real gaps</h2><p>Prices are observations, not a live cart. BenchLedger will never purchase without your approval.</p></div><div className="shopping-total" aria-label="Estimated total by currency"><span>Estimated total</span>{currencies.length ? <div className="shopping-total-values">{currencies.map((currency) => <span className="shopping-total-line" key={currency}><strong>{formatMoney(totalsByCurrency[currency] ?? 0, currency)}</strong><small>{currency}</small></span>)}</div> : <strong className="shopping-total-empty">No priced offers</strong>}<small>{rows.length} required line{rows.length === 1 ? "" : "s"}</small></div></div>{rows.length ? <div className="shopping-list">{rows.map(({ line, offers: lineOffers }) => <div className="shopping-row" key={line.line.id}><div className="shopping-item"><span className="bom-state-mark mark-bad">!</span><div><strong>{line.line.label}</strong><span>{formatQuantity(line.remaining || line.line.required, line.line.unit)} still needed</span></div></div><div className="offer-stack">{lineOffers.length ? lineOffers.map((offer) => <a className={`offer-row ${offer.preferred ? "is-preferred" : ""}`} href={offer.url} target="_blank" rel="noreferrer" key={offer.id}><span className="offer-supplier">{offer.preferred && <Icon name="check-circle" size={14} />}{offer.supplier}</span><span className="offer-title">{offer.title}<small>{offer.pack} · observed {offer.observed}</small></span><strong>{formatMoney(offer.priceMinor, offer.currency)}</strong><span className="offer-eta">{offer.eta}</span><Icon name="external" size={14} /></a>) : <div className="offer-empty"><Icon name="info" size={15} /> No supplier offer recorded yet. Add one from the item detail.</div>}</div></div>)}</div> : <EmptyState icon="check-circle" title="Nothing to buy yet" description="Every required line is covered by the current project inventory." action="Back to plan" onAction={onBackToPlan} />}{expert && <details className="expert-detail offer-notes" open><summary>How these recommendations are made</summary><p>Matches use the exact recorded variant where available. Prices show the most recent observation date, package quantity, and supplier link. A stale or unverified offer never becomes an automatic purchase.</p></details>}<div className="shopping-actions"><button className="button button-secondary" onClick={() => { void copyDraftList(); }}><Icon name="copy" size={16} /> Copy draft list</button></div></section>;
+  return <section className="surface shopping-section"><div className="shopping-header"><div><span className="eyebrow">Shopping proposal</span><h2>Review required items</h2><p>Each price is a recorded observation. BenchLedger does not place orders.</p></div><div className="shopping-total" aria-label="Estimated total by currency"><span>Estimated total</span>{currencies.length ? <div className="shopping-total-values">{currencies.map((currency) => <span className="shopping-total-line" key={currency}><strong>{formatMoney(totalsByCurrency[currency] ?? 0, currency)}</strong><small>{currency}</small></span>)}</div> : <strong className="shopping-total-empty">No priced offers</strong>}<small>{rows.length} required line{rows.length === 1 ? "" : "s"}</small></div></div>{rows.length ? <div className="shopping-list">{rows.map(({ line, offers: lineOffers }) => <div className="shopping-row" key={line.line.id}><div className="shopping-item"><span className="bom-state-mark mark-bad">!</span><div><strong>{line.line.label}</strong><span>{formatQuantity(line.remaining || line.line.required, line.line.unit)} required</span></div></div><div className="offer-stack">{lineOffers.length ? lineOffers.map((offer) => <a className={`offer-row ${offer.preferred ? "is-preferred" : ""}`} href={offer.url} target="_blank" rel="noreferrer" key={offer.id}><span className="offer-supplier">{offer.preferred && <Icon name="check-circle" size={14} />}{offer.supplier}</span><span className="offer-title">{offer.title}<small>{offer.pack} · price recorded {offer.observed}</small></span><strong>{formatMoney(offer.priceMinor, offer.currency)}</strong><span className="offer-eta">{offer.eta}</span><Icon name="external" size={14} /></a>) : <div className="offer-empty"><Icon name="info" size={15} /> No supplier offer is recorded.</div>}</div></div>)}</div> : <EmptyState icon="check-circle" title="No items required" description="Current inventory covers every required line." action="Back to plan" onAction={onBackToPlan} />}{expert && <details className="expert-detail offer-notes" open><summary>Offer matching rules</summary><p>BenchLedger uses the exact recorded variant when possible. Each offer retains its supplier, source currency, package quantity, and observation date. An offer is never purchase authority.</p></details>}<div className="shopping-actions"><button className="button button-secondary" onClick={() => { void copyDraftList(); }}><Icon name="copy" size={16} /> Copy draft list</button></div></section>;
 }
 
 function CapabilitiesPage({ expert, onCopy }: { expert: boolean; onCopy: (message: string) => void }) {
@@ -738,10 +788,10 @@ function CapabilitiesPage({ expert, onCopy }: { expert: boolean; onCopy: (messag
     try { await navigator.clipboard.writeText(capabilityText); onCopy("Agent context copied to your clipboard."); } catch { onCopy("Select the context block to copy it manually."); }
   };
   return <>
-    <PageHeader eyebrow="Agent access" title="Give an agent the right context." description="BenchLedger exposes the same workspace truth through the frontend, REST API, and MCP." action="Copy context" actionIcon="copy" onAction={copyContext} />
-    <section className="agent-callout"><div className="agent-callout-icon"><Icon name="spark" size={21} /></div><div><strong>Small tools. Clear evidence. Good decisions.</strong><p>An unfamiliar agent should be able to read this page, discover MCP, and answer “Can I build this?” without learning database terms first.</p></div><span className="api-status"><span className="online-dot" /> MCP surface ready</span></section>
+    <PageHeader eyebrow="Agent access" title="Agent workspace context" description="Read the same inventory and project evidence through the web interface, REST API, or MCP." action="Copy context" actionIcon="copy" onAction={copyContext} />
+    <section className="agent-callout"><div className="agent-callout-icon"><Icon name="spark" size={21} /></div><div><strong>Read capabilities before using tools.</strong><p>Use inventory and project evidence to identify reuse, required checks, and missing parts.</p></div><span className="api-status"><span className="online-dot" /> MCP available</span></section>
     <div className="capabilities-layout"><section className="surface context-section"><SectionHeading eyebrow="Technical quickstart" title="Workspace rules" action="Copy" onAction={copyContext} /><pre className="context-block"><code>{capabilityText}</code></pre><div className="context-footer"><span><Icon name="info" size={15} /> Context is read before writes.</span><code>benchledger://capabilities</code></div></section><section className="surface capability-list-section"><SectionHeading eyebrow="Capability map" title="What agents can do" /><div className="capability-list">{capabilityGroups.map((group) => <details key={group.title} className="capability-group" open={expert}><summary><span><strong>{group.title}</strong><small>{group.description}</small></span><span className="capability-count">{group.tools.length} tools <Icon name="chevron-down" size={15} /></span></summary><div className="tool-list">{group.tools.map((tool) => <code key={tool}>{tool}</code>)}</div></details>)}</div></section></div>
-    <section className="surface agent-prompts"><SectionHeading eyebrow="Useful prompts" title="Start with the outcome" /><div className="prompt-list"><Prompt text="Can I build this with what I have?" /><Prompt text="Prepare a sourced shopping list, but don't buy anything." /><Prompt text="Which stock needs a physical count before I reserve it?" /><Prompt text="Read the latest project revision and tell me what changed." /></div></section>
+    <section className="surface agent-prompts"><SectionHeading eyebrow="Example requests" title="Common tasks" /><div className="prompt-list"><Prompt text="Can I build this with what I have?" /><Prompt text="Prepare a sourced shopping list. Do not place an order." /><Prompt text="Which stock needs a physical count before I reserve it?" /><Prompt text="Read the latest project revision and list the changes." /></div></section>
   </>;
 }
 
@@ -749,7 +799,7 @@ function Prompt({ text }: { text: string }) { return <button className="prompt-r
 
 function SettingsPage({ expert, sampleMode, connection, onExpert, onLogout }: { expert: boolean; sampleMode: boolean; connection: ConnectionState; onExpert: () => void; onLogout: () => void }) {
   const connected = connection === "ready";
-  return <><PageHeader eyebrow="Workspace settings" title="A workspace that stays understandable." description="Set the level of detail and connection behavior that suits the way you build." /><div className="settings-layout"><section className="surface settings-section"><SectionHeading eyebrow="Display" title="How BenchLedger speaks" /><div className="setting-row"><div><strong>Detail level</strong><span>Beginner labels stay visible. Expert evidence can be opened in place.</span></div><button className={`mode-toggle setting-control ${expert ? "is-expert" : ""}`} aria-pressed={expert} onClick={onExpert}><span className="mode-dot" />{expert ? "Expert details on" : "Beginner view on"}</button></div><div className="setting-row"><div><strong>Measurements</strong><span>Millimetres for dimensions; grams, metres, or pieces for quantities.</span></div><span className="setting-value">mm · g · m · each</span></div><div className="setting-row"><div><strong>Currency</strong><span>Observed supplier prices are stored with their source and date.</span></div><span className="setting-value">EUR · observed</span></div></section><section className="surface settings-section"><SectionHeading eyebrow="Connection" title="Private API" /><div className="connection-panel"><div className="connection-panel-top"><span className="connection-icon"><Icon name="link" size={18} /></span><div><strong>{sampleMode ? "Sample workspace" : "Local workspace adapter"}</strong><span>{sampleMode ? "Synthetic data only" : "Connected to /api/v1"}</span></div><span className="connection-badge"><span className={`online-dot ${connected || sampleMode ? "" : "is-offline"}`} /> {sampleMode ? "Sample mode" : connected ? "Connected" : "Session needs attention"}</span></div><p>{sampleMode ? "This workspace is intentionally synthetic. Changes stay local to the sample and never represent private inventory." : "Reads and supported writes are sent to the authenticated private service. Failed writes are reported and never stored only in the browser."}</p></div><div className="setting-row setting-row-last"><div><strong>MCP endpoint</strong><span>Agents should use scoped tokens and read the capability manifest first.</span></div><code className="setting-value">benchledger://capabilities</code></div><button className="button button-quiet settings-logout" onClick={onLogout}><Icon name="arrow-left" size={16} /> {sampleMode ? "Close sample workspace" : "Sign out of private workspace"}</button></section><section className="surface settings-section"><SectionHeading eyebrow="Evidence semantics" title="Never smooth away uncertainty" /><div className="evidence-legend"><Legend tone="good" title="Ready to use" text="Counted or commissioned stock can be proposed for reuse." /><Legend tone="warn" title="Check quantity" text="Delivered or uncertain stock needs a physical check first." /><Legend tone="bad" title="Need to buy" text="No confirmed compatible stock covers the requirement." /></div></section></div></>;
+  return <><PageHeader eyebrow="Workspace settings" title="Review workspace settings" description="Set the detail level and review connection information." /><div className="settings-layout"><section className="surface settings-section"><SectionHeading eyebrow="Display" title="Display detail" /><div className="setting-row"><div><strong>Detail level</strong><span>Beginner view shows task labels. Expert view also shows identifiers and technical evidence.</span></div><button className={`mode-toggle setting-control ${expert ? "is-expert" : ""}`} aria-pressed={expert} onClick={onExpert}><span className="mode-dot" />{expert ? "Expert details on" : "Beginner view on"}</button></div><div className="setting-row"><div><strong>Measurements</strong><span>Current display units are millimetres, grams, metres, and pieces. This value is not editable.</span></div><span className="setting-value">mm · g · m · each</span></div><div className="setting-row"><div><strong>Currency</strong><span>Each supplier price keeps its source currency and observation date. This value is not editable.</span></div><span className="setting-value">Source currency</span></div></section><section className="surface settings-section"><SectionHeading eyebrow="Connection" title="Private API" /><div className="connection-panel"><div className="connection-panel-top"><span className="connection-icon"><Icon name="link" size={18} /></span><div><strong>{sampleMode ? "Sample workspace" : "Local workspace adapter"}</strong><span>{sampleMode ? "Synthetic data only" : "Connected to /api/v1"}</span></div><span className="connection-badge"><span className={`online-dot ${connected || sampleMode ? "" : "is-offline"}`} /> {sampleMode ? "Sample mode" : connected ? "Connected" : "Session error"}</span></div><p>{sampleMode ? "This workspace contains synthetic records. Changes remain in the sample workspace." : "The browser sends supported reads and writes to the authenticated private service. It reports failed writes."}</p></div><div className="setting-row setting-row-last"><div><strong>MCP endpoint</strong><span>Use a scoped token. Read the capability manifest before you use tools.</span></div><code className="setting-value">benchledger://capabilities</code></div><button className="button button-quiet settings-logout" onClick={onLogout}><Icon name="arrow-left" size={16} /> {sampleMode ? "Close sample workspace" : "Sign out"}</button></section><section className="surface settings-section"><SectionHeading eyebrow="Evidence states" title="Inventory evidence rules" /><div className="evidence-legend"><Legend tone="good" title="Ready to use" text="A physical count or commissioning record confirms the stock." /><Legend tone="warn" title="Check quantity" text="Count delivered or uncertain stock before you reuse it." /><Legend tone="bad" title="Need to buy" text="Confirmed compatible stock does not cover the requirement." /></div></section></div></>;
 }
 
 function Legend({ tone, title, text }: { tone: StockLabelTone; title: string; text: string }) { return <div className="legend-row"><span className={`legend-mark mark-${tone}`}>{tone === "good" ? "✓" : tone === "warn" ? "?" : "!"}</span><div><strong>{title}</strong><span>{text}</span></div></div>; }
@@ -803,19 +853,116 @@ function useOverlayBehavior(containerRef: React.RefObject<HTMLElement | null>, o
   }, [containerRef]);
 }
 
-function InventoryDrawer({ item, expert, onClose, onCount }: { item: InventoryItem; expert: boolean; onClose: () => void; onCount: (id: string, quantity: number) => Promise<void> }) {
+function InventoryDrawer({ item, expert, onClose, onCount, onUpdate }: { item: InventoryItem; expert: boolean; onClose: () => void; onCount: (id: string, quantity: number) => Promise<InventoryItem>; onUpdate: (id: string, input: Partial<InventoryUpdateInput>, expectedVersion?: number) => Promise<InventoryItem> }) {
   const [quantity, setQuantity] = useState(String(item.quantity));
-  const [saving, setSaving] = useState(false);
+  const [countSaving, setCountSaving] = useState(false);
+  const [countError, setCountError] = useState<string>();
+  const [countSaved, setCountSaved] = useState<string>();
+  const [editing, setEditing] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string>();
+  const [name, setName] = useState(item.name);
+  const [description, setDescription] = useState(item.description);
+  const [model, setModel] = useState(item.model ?? "");
+  const [manufacturer, setManufacturer] = useState(item.manufacturer ?? "");
+  const [sku, setSku] = useState(item.sku ?? "");
+  const [location, setLocation] = useState(item.location === "Unassigned" ? "" : item.location);
+  const [tags, setTags] = useState(item.tags.join(", "));
   const drawerRef = useRef<HTMLElement>(null);
   const drawerTitleId = useId();
+  const availableForReuse = item.availableQuantity ?? Math.max(item.quantity - item.reserved, 0);
   useOverlayBehavior(drawerRef, onClose);
   const submitCount = async () => {
     const parsed = Number(quantity);
-    if (!Number.isFinite(parsed) || parsed < 0) return;
-    setSaving(true);
-    try { await onCount(item.id, parsed); } finally { setSaving(false); }
+    setCountError(undefined);
+    setCountSaved(undefined);
+    if (!quantity.trim() || !Number.isFinite(parsed) || parsed < 0) {
+      setCountError("Enter a quantity of zero or greater.");
+      return;
+    }
+    setCountSaving(true);
+    try {
+      const result = await onCount(item.id, parsed);
+      setQuantity(String(result.quantity));
+      setCountSaved(`Saved ${formatQuantity(result.quantity, result.unit)} as the verified on-hand quantity.`);
+    } catch (error: unknown) {
+      setCountError(normalizeApiError(error).message);
+    } finally {
+      setCountSaving(false);
+    }
   };
-  return <><div className="drawer-scrim" aria-hidden="true" onClick={onClose} /><aside ref={drawerRef} className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby={drawerTitleId} tabIndex={-1}><div className="drawer-header"><span className={`item-glyph accent-${item.accent}`} aria-hidden="true"><Icon name={categoryIcons[item.category]} size={18} /></span><div><span className="eyebrow">{item.category}</span><h2 id={drawerTitleId}>{item.name}</h2></div><button type="button" className="icon-button" aria-label="Close item details" onClick={onClose}><Icon name="close" size={20} /></button></div><div className="drawer-body"><StatusPill state={item.state} /><p className="drawer-description">{item.description}</p>{(item.category === "Filament" || item.category === "Printers") && <div className="exact-product-callout"><strong>{exactProductLabel(item)}</strong><span>{item.productProfile?.linkState === "confirmed" ? "This link can be used for exact setup matching." : "Use Add item to record the exact product after checking the physical item."}</span></div>}<div className="drawer-quantity"><div><span className="eyebrow">Current quantity</span><strong>{formatQuantity(Math.max(item.quantity - item.reserved, 0), item.unit)}</strong><span>{item.reserved ? `${formatQuantity(item.reserved, item.unit)} reserved in projects` : "Nothing reserved"}</span></div><div className="count-form"><label htmlFor="count-quantity">Physical count</label><div><input id="count-quantity" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} /><span>{item.unit}</span></div><button className="button button-secondary" onClick={submitCount} disabled={saving}>{saving ? "Saving…" : "Record count"}</button></div></div><div className="drawer-facts"><div><span>Variant</span><strong>{item.variant}</strong></div><div><span>Location</span><strong>{item.location}</strong></div>{item.manufacturer && <div><span>Manufacturer</span><strong>{item.manufacturer}</strong></div>}{item.sku && <div><span>SKU</span><code>{item.sku}</code></div>}{item.productProfile?.filament?.lotBatch && <div><span>Lot / batch</span><strong>{item.productProfile.filament.lotBatch}</strong></div>}{item.productProfile?.printer?.assetLabel && <div><span>Asset label</span><strong>{item.productProfile.printer.assetLabel}</strong></div>}</div>{expert && <details className="expert-detail" open><summary>Expert evidence</summary><div className="detail-grid"><div><span>Evidence state</span><code>{item.evidence}</code></div><div><span>Exact link state</span><code>{item.productProfile?.linkState ?? "not linked"}</code></div><div><span>Catalog product</span><code>{item.catalogProduct?.id ?? "Not recorded"}</code></div><div><span>Last counted</span><code>{item.lastCounted ?? "Not recorded"}</code></div><div><span>Dimensions</span><code>{item.dimensions ? formatDimensions(item.dimensions) : "Not recorded"}</code></div><div><span>Tags</span><code>{item.tags.join(" · ") || "None"}</code></div></div><div className="compatibility-box"><span>Compatibility notes</span>{item.compatibility.length ? <ul>{item.compatibility.map((note) => <li key={note}>{note}</li>)}</ul> : <p>No compatibility evidence recorded yet.</p>}</div></details>}<div className="drawer-history"><div className="drawer-history-heading"><span className="eyebrow">History</span>{expert && <button className="text-button">View all <Icon name="arrow-right" size={14} /></button>}</div><div className="history-entry"><span className="history-icon"><Icon name="check" size={13} /></span><div><strong>{item.evidence === "counted" ? "Physical count recorded" : "Evidence imported"}</strong><span>{item.lastCounted ?? "Source evidence retained"}</span></div></div></div></div></aside></>;
+
+  const cancelEdit = () => {
+    setName(item.name);
+    setDescription(item.description);
+    setModel(item.model ?? "");
+    setManufacturer(item.manufacturer ?? "");
+    setSku(item.sku ?? "");
+    setLocation(item.location === "Unassigned" ? "" : item.location);
+    setTags(item.tags.join(", "));
+    setEditError(undefined);
+    setEditing(false);
+  };
+
+  const submitEdit = async (event: FormEvent) => {
+    event.preventDefault();
+    setEditError(undefined);
+    if (!name.trim()) {
+      setEditError("Enter an item name.");
+      return;
+    }
+    setEditSaving(true);
+    try {
+      await onUpdate(item.id, {
+        name: name.trim(),
+        description: description.trim(),
+        model: model.trim(),
+        manufacturer: manufacturer.trim(),
+        sku: sku.trim(),
+        location: location.trim(),
+        tags: tags.split(",").map((tag) => tag.trim()).filter(Boolean)
+      }, item.version);
+      setEditing(false);
+    } catch (error: unknown) {
+      setEditError(normalizeApiError(error).message);
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  return <>
+    <div className="drawer-scrim" aria-hidden="true" onClick={onClose} />
+    <aside ref={drawerRef} className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby={drawerTitleId} tabIndex={-1}>
+      <div className="drawer-header"><span className={`item-glyph accent-${item.accent}`} aria-hidden="true"><Icon name={categoryIcons[item.category]} size={18} /></span><div><span className="eyebrow">{item.category}</span><h2 id={drawerTitleId}>{item.name}</h2></div><button type="button" className="icon-button" aria-label="Close item details" onClick={onClose}><Icon name="close" size={20} /></button></div>
+      <div className="drawer-body">
+        <div className="drawer-title-actions"><StatusPill state={item.state} />{!editing && <button type="button" className="button button-secondary" onClick={() => setEditing(true)}>Edit item</button>}</div>
+        {editing ? <form className="inventory-edit-form" onSubmit={(event) => { void submitEdit(event); }} aria-busy={editSaving}>
+          <p className="drawer-section-copy">Edit item identification and storage fields. Change quantity with a physical count.</p>
+          <label className="form-field"><span>Name</span><input autoFocus required value={name} onChange={(event) => setName(event.target.value)} disabled={editSaving} /></label>
+          <label className="form-field"><span>Description</span><textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} disabled={editSaving} /></label>
+          <div className="inventory-edit-grid">
+            <label className="form-field"><span>Model or variant</span><input value={model} onChange={(event) => setModel(event.target.value)} disabled={editSaving} /></label>
+            <label className="form-field"><span>Manufacturer</span><input value={manufacturer} onChange={(event) => setManufacturer(event.target.value)} disabled={editSaving} /></label>
+            <label className="form-field"><span>SKU</span><input value={sku} onChange={(event) => setSku(event.target.value)} disabled={editSaving} /></label>
+            <label className="form-field"><span>Location</span><input value={location} onChange={(event) => setLocation(event.target.value)} disabled={editSaving} /></label>
+          </div>
+          <label className="form-field"><span>Tags</span><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="Separate tags with commas" disabled={editSaving} /></label>
+          {editError && <p className="form-error" role="alert">{editError}</p>}
+          <div className="drawer-form-actions"><button type="button" className="button button-quiet" onClick={cancelEdit} disabled={editSaving}>Cancel</button><button type="submit" className="button button-primary" disabled={!name.trim() || editSaving}>{editSaving ? "Saving…" : "Save changes"}</button></div>
+        </form> : <>
+          <p className="drawer-description">{item.description}</p>
+          {(item.category === "Filament" || item.category === "Printers") && <div className="exact-product-callout"><strong>{exactProductLabel(item)}</strong><span>{item.productProfile?.linkState === "confirmed" ? "Use this link for exact setup matching." : "Check the physical item before you link an exact product."}</span></div>}
+          <div className="drawer-facts"><div><span>Model or variant</span><strong>{item.variant}</strong></div><div><span>Location</span><strong>{item.location}</strong></div>{item.manufacturer && <div><span>Manufacturer</span><strong>{item.manufacturer}</strong></div>}{item.sku && <div><span>SKU</span><code>{item.sku}</code></div>}{item.productProfile?.filament?.lotBatch && <div><span>Lot or batch</span><strong>{item.productProfile.filament.lotBatch}</strong></div>}{item.productProfile?.printer?.assetLabel && <div><span>Asset label</span><strong>{item.productProfile.printer.assetLabel}</strong></div>}</div>
+        </>}
+
+        <section className="drawer-quantity" aria-labelledby="physical-count-heading"><div><span className="eyebrow" id="physical-count-heading">Verified on-hand quantity</span><strong>{formatQuantity(item.quantity, item.unit)}</strong><span>{item.reserved ? `${formatQuantity(item.reserved, item.unit)} reserved; ${formatQuantity(availableForReuse, item.unit)} available for reuse.` : "No quantity is reserved."}</span><p>Enter the quantity that you can physically verify. This action creates a stock event and replaces the recorded on-hand quantity.</p></div><div className="count-form"><label htmlFor="count-quantity">Physical count</label><div><input id="count-quantity" type="number" min="0" step="any" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={countSaving} /><span>{item.unit}</span></div><button type="button" className="button button-secondary" onClick={() => { void submitCount(); }} disabled={countSaving}>{countSaving ? "Saving…" : "Save physical count"}</button>{countError && <p className="form-error" role="alert">{countError}</p>}{countSaved && <p className="form-success" role="status">{countSaved}</p>}</div></section>
+
+        <section className="provenance-panel" aria-labelledby="provenance-heading"><div><span className="eyebrow" id="provenance-heading">Provenance</span><strong>{evidenceLabel(item.evidence)}</strong></div><dl><div><dt>Source</dt><dd>{item.provenance?.source ?? "Not recorded"}</dd></div><div><dt>Observed</dt><dd>{item.provenance?.observedAt ? item.provenance.observedAt.slice(0, 10) : "Not recorded"}</dd></div>{item.provenance?.sourceId && <div><dt>Source record</dt><dd><code>{item.provenance.sourceId}</code></dd></div>}{item.provenance?.note && <div><dt>Note</dt><dd>{item.provenance.note}</dd></div>}</dl></section>
+
+        {expert && <details className="expert-detail" open><summary>Technical evidence</summary><div className="detail-grid"><div><span>Item kind</span><code>{item.kind ?? "Not recorded"}</code></div><div><span>Evidence state</span><code>{item.evidence}</code></div><div><span>Exact link state</span><code>{item.productProfile?.linkState ?? "not linked"}</code></div><div><span>Catalog product</span><code>{item.catalogProduct?.id ?? "Not recorded"}</code></div><div><span>Version</span><code>{item.version ?? "Not recorded"}</code></div><div><span>Dimensions</span><code>{item.dimensions ? formatDimensions(item.dimensions) : "Not recorded"}</code></div><div><span>Tags</span><code>{item.tags.join(" · ") || "None"}</code></div></div><div className="compatibility-box"><span>Compatibility notes</span>{item.compatibility.length ? <ul>{item.compatibility.map((note) => <li key={note}>{note}</li>)}</ul> : <p>No compatibility evidence is recorded.</p>}</div></details>}
+      </div>
+    </aside>
+  </>;
 }
 
 function NewProjectDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (input: Pick<Project, "name" | "description">) => Promise<boolean> }) {
@@ -829,7 +976,7 @@ function NewProjectDialog({ onClose, onCreate }: { onClose: () => void; onCreate
     setSubmitting(true);
     setFormError(undefined);
     try {
-      const created = await onCreate({ name: name.trim(), description: description.trim() || "A new maker project to explore." });
+      const created = await onCreate({ name: name.trim(), description: description.trim() || "Project goal not recorded." });
       if (!created) setFormError("The project was not created. Check the service connection and try again.");
     } catch (error: unknown) {
       setFormError(normalizeApiError(error).message);
@@ -837,7 +984,7 @@ function NewProjectDialog({ onClose, onCreate }: { onClose: () => void; onCreate
       setSubmitting(false);
     }
   };
-  return <Dialog title="Start a project" onClose={onClose}><form onSubmit={(event) => { void submit(event); }}><p className="dialog-intro">Give the idea a name and say what you want to make. You can add exact parts and files once the direction is clearer.</p><label className="form-field"><span>Project name</span><input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Desk sensor enclosure" disabled={submitting} /></label><label className="form-field"><span>What are you making?</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} placeholder="A short description in your own words" disabled={submitting} /></label>{formError && <p className="form-error" role="alert">{formError}</p>}<div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose} disabled={submitting}>Cancel</button><button type="submit" className="button button-primary" disabled={!name.trim() || submitting} aria-busy={submitting}>{submitting ? "Creating…" : "Create project"} {!submitting && <Icon name="arrow-right" size={16} />}</button></div></form></Dialog>;
+  return <Dialog title="Create project" onClose={onClose}><form onSubmit={(event) => { void submit(event); }}><p className="dialog-intro">Enter a project name and goal. You can add parts and files after you create the project.</p><label className="form-field"><span>Project name</span><input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Desk sensor enclosure" disabled={submitting} /></label><label className="form-field"><span>Project goal</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} placeholder="Describe the required result" disabled={submitting} /></label>{formError && <p className="form-error" role="alert">{formError}</p>}<div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose} disabled={submitting}>Cancel</button><button type="submit" className="button button-primary" disabled={!name.trim() || submitting} aria-busy={submitting}>{submitting ? "Creating…" : "Create project"} {!submitting && <Icon name="arrow-right" size={16} />}</button></div></form></Dialog>;
 }
 
 function NewRevisionDialog({ project, items, expert, onClose, onCreate }: { project: Project; items: InventoryItem[]; expert: boolean; onClose: () => void; onCreate: (input: RevisionInput) => Promise<boolean> }) {

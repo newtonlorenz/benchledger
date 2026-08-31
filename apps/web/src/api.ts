@@ -6,6 +6,7 @@ import type {
   BuildConfigSnapshot,
   CatalogKind,
   CatalogProduct,
+  CurrencyCode,
   InventoryItem,
   InventoryProductProfile,
   Offer,
@@ -45,7 +46,7 @@ type ServerBomLine = { id: string; revisionId: string; name: string; itemId?: st
 type ServerArtifact = { id: string; projectId: string; workItemId?: string; revisionId?: string; role: string; filename: string; mediaType: string; byteSize: number; sha256: string; author?: string; source?: string; machineBinding?: Record<string, string>; currentCandidate: boolean; retired: boolean; createdAt: string; version: number };
 type ServerRevision = { id: string; projectId: string; number: number; name: string; notes?: string; status: string; createdAt: string; version: number; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; buildConfigSnapshot?: unknown; buildConfiguration?: unknown };
 type ServerProject = { id: string; name: string; description?: string; status: string; currentRevisionId?: string; createdAt: string; updatedAt: string; version: number; workItems?: ServerWorkItem[]; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; currentRevision?: ServerRevision };
-type ServerOffer = { id: string; itemId?: string; name: string; supplier: string; url: string; priceMinor: number; currency: string; packageQuantity?: number; observedAt: string; staleAfterDays?: number; version: number };
+type ServerOffer = { id: string; itemId?: string; name: string; supplier: string; url: string; priceMinor: number; currency: CurrencyCode; packageQuantity?: number; observedAt: string; staleAfterDays?: number; version: number };
 type ServerWorkspace = { inventory: ServerInventoryItem[]; projects: ServerProject[]; offers: ServerOffer[]; source: "api"; fetchedAt: string };
 type ServerUploadSession = { id: string; artifactId: string; expiresAt: string; maxBytes: number; uploadUrl: string; status: "pending" | "finalized" | "expired" };
 type ServerReconciliationEvidence = { state: string; source?: string; sourceId?: string; observedAt?: string; note?: string; condition?: string; uncertainty?: number };
@@ -66,6 +67,7 @@ type ServerReconciliationCommit = { id: string; projectId: string; projectRevisi
 type ServerReservation = { id: string; lineId: string; itemId: string; quantity: number; status: string; version: number; unit?: string };
 export type RevisionInput = { name: string; notes?: string; status?: string; buildConfig?: BuildConfigInput };
 export type BomInput = { name: string; requiredQuantity: number; unit: BomLine["unit"]; itemId?: string; optional?: boolean; note?: string };
+export type InventoryUpdateInput = Pick<InventoryItem, "name" | "description" | "manufacturer" | "location" | "sku" | "tags"> & { model: string };
 
 export type CatalogProductDraft = {
   kind: CatalogKind;
@@ -120,6 +122,7 @@ export interface WorkspaceAdapter {
   logout(): Promise<void>;
   loadWorkspace(): Promise<WorkspaceSnapshot>;
   recordCount(itemId: string, quantity: number): Promise<InventoryItem>;
+  updateInventoryItem(itemId: string, input: Partial<InventoryUpdateInput>, expectedVersion?: number): Promise<InventoryItem>;
   createInventoryItem(input: { name: string; category: InventoryItem["category"]; quantity: number; unit: InventoryItem["unit"] }): Promise<InventoryItem>;
   searchCatalogProducts(kind: CatalogKind, query?: string): Promise<CatalogProduct[]>;
   createCatalogProduct(input: CatalogProductDraft): Promise<CatalogProduct>;
@@ -658,13 +661,22 @@ export function mapInventoryItem(item: ServerInventoryItem): InventoryItem {
     unit: "mm" as const
   } : undefined;
   return {
-    id: item.id, name: item.name, category,
+    id: item.id, name: item.name, kind: item.kind, category,
     variant: item.model ?? item.sku ?? item.kind,
-    description: item.description ?? "No description recorded yet.", quantity: item.quantity, unit: mapUnit(item.unit),
+    ...(item.model ? { model: item.model } : {}),
+    description: item.description?.trim() || "No description recorded.", quantity: item.quantity, availableQuantity: item.availableQuantity, unit: mapUnit(item.unit),
     reserved: state === "available" ? Math.max(item.quantity - item.availableQuantity, 0) : 0,
-    state, evidence: mapEvidence(item.evidence.state), location: item.location ?? "Unassigned",
+    state, evidence: mapEvidence(item.evidence.state), location: item.location?.trim() || "Unassigned",
     ...(dimensions ? { dimensions } : {}), ...(item.manufacturer ? { manufacturer: item.manufacturer } : {}), ...(item.sku ? { sku: item.sku } : {}),
-    tags: [...item.tags], compatibility: [], ...(item.evidence.observedAt ? { lastCounted: item.evidence.observedAt.slice(0, 10) } : {}), accent: mapAccent(category), serverUnit: item.unit,
+    tags: [...item.tags], compatibility: [],
+    provenance: {
+      ...(item.evidence.source ? { source: item.evidence.source } : {}),
+      ...(item.evidence.sourceId ? { sourceId: item.evidence.sourceId } : {}),
+      ...(item.evidence.observedAt ? { observedAt: item.evidence.observedAt } : {}),
+      ...(item.evidence.note ? { note: item.evidence.note } : {})
+    },
+    version: item.version,
+    ...(item.evidence.observedAt ? { lastCounted: item.evidence.observedAt.slice(0, 10) } : {}), accent: mapAccent(category), serverUnit: item.unit,
     ...(catalogProduct ? { catalogProduct } : {}), ...(productProfile ? { productProfile } : {})
   };
 }
@@ -725,7 +737,7 @@ function mapProject(project: ServerProject): Project {
     id: project.id,
     name: project.name,
     subtitle: workItem?.description ?? project.description ?? "A maker project in the workspace",
-    description: project.description ?? "Add a plain-language goal to give this project a clear next step.",
+    description: project.description ?? "Add a project goal to define the next task.",
     status,
     updated: project.updatedAt.slice(0, 10),
     currentRevision,
@@ -741,7 +753,7 @@ function mapProject(project: ServerProject): Project {
 }
 
 function mapOffer(offer: ServerOffer): Offer {
-  return { id: offer.id, itemId: offer.itemId ?? "", supplier: offer.supplier, title: offer.name, priceMinor: offer.priceMinor, currency: offer.currency === "USD" ? "USD" : "EUR", pack: offer.packageQuantity ? `${offer.packageQuantity} pieces` : "Package size not recorded", eta: "Check supplier", url: offer.url, observed: offer.observedAt.slice(0, 10) };
+  return { id: offer.id, itemId: offer.itemId ?? "", supplier: offer.supplier, title: offer.name, priceMinor: offer.priceMinor, currency: offer.currency, pack: offer.packageQuantity ? `${offer.packageQuantity} pieces` : "Package size not recorded", eta: "Check supplier", url: offer.url, observed: offer.observedAt.slice(0, 10) };
 }
 
 function mutationData<T>(payload: { data?: T }): T {
@@ -1195,12 +1207,26 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     async recordCount(itemId, quantity) {
       const item = state.inventory.find((candidate) => candidate.id === itemId);
       if (!item) throw new ApiError("Inventory item not found", { kind: "validation", status: 404 });
-      const updated = { ...item, quantity, state: "available" as const, evidence: "counted" as const, lastCounted: new Date().toISOString().slice(0, 10) };
+      const observedAt = new Date().toISOString();
+      const updated = { ...item, quantity, availableQuantity: quantity, state: "available" as const, evidence: "counted" as const, provenance: { source: "sample physical count", observedAt }, lastCounted: observedAt.slice(0, 10) };
+      state.inventory = state.inventory.map((candidate) => candidate.id === itemId ? updated : candidate);
+      return updated;
+    },
+    async updateInventoryItem(itemId, input) {
+      const item = state.inventory.find((candidate) => candidate.id === itemId);
+      if (!item) throw new ApiError("Inventory item not found", { kind: "validation", status: 404 });
+      const updated: InventoryItem = {
+        ...item,
+        ...input,
+        ...(input.model === undefined ? {} : { variant: input.model }),
+        tags: input.tags ? [...input.tags] : item.tags,
+        version: (item.version ?? 0) + 1
+      };
       state.inventory = state.inventory.map((candidate) => candidate.id === itemId ? updated : candidate);
       return updated;
     },
     async createInventoryItem(input) {
-      const item: InventoryItem = { id: `sample-item-${Date.now()}`, name: input.name, category: input.category, variant: "Variant to confirm", description: "Added to the sample workspace. Add a measured variant when known.", quantity: input.quantity, unit: input.unit, reserved: 0, state: "inspect-first", evidence: "delivered", location: "Unassigned", tags: [input.category.toLowerCase()], compatibility: [], accent: mapAccent(input.category) };
+      const item: InventoryItem = { id: `sample-item-${Date.now()}`, name: input.name, kind: serverItemKind(input.category), category: input.category, variant: "Variant not recorded", description: "Sample inventory item.", quantity: input.quantity, availableQuantity: 0, unit: input.unit, reserved: 0, state: "inspect-first", evidence: "delivered", provenance: { source: "sample workspace" }, location: "Unassigned", tags: [input.category.toLowerCase()], compatibility: [], accent: mapAccent(input.category), version: 1 };
       state.inventory = [item, ...state.inventory];
       return item;
     },
@@ -1218,14 +1244,17 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
       const item: InventoryItem = {
         id,
         name: catalogProductDisplayName(input.product),
+        kind: input.category === "Filament" ? "filament" : "printer",
         category: input.category,
         variant: [input.product.family, input.product.model, input.product.variant].filter(Boolean).join(" · ") || "Exact product",
         description: input.category === "Filament" ? "Exact filament product with a physical spool profile." : "Exact printer product with an owned asset profile.",
         quantity: input.quantity,
+        availableQuantity: 0,
         unit: input.category === "Filament" ? "g" : "each",
         reserved: 0,
         state: "inspect-first",
         evidence: "delivered",
+        provenance: { source: "sample workspace" },
         location: input.filament?.placement ?? input.printer?.placement ?? "Unassigned",
         ...(input.product.diameterMm === undefined ? {} : { dimensions: { diameter: input.product.diameterMm, unit: "mm" as const } }),
         manufacturer: input.product.manufacturer,
@@ -1233,6 +1262,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
         tags: [input.category.toLowerCase(), "exact-product"],
         compatibility: [],
         accent: mapAccent(input.category),
+        version: 1,
         catalogProduct: { ...input.product },
         productProfile: {
           inventoryItemId: id,
@@ -1340,6 +1370,29 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       const payload = await request<{ data: { event: unknown; item: ServerInventoryItem } }>(`/inventory/${encodeURIComponent(itemId)}/count`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey("count") }, body: JSON.stringify({ quantity }) }, token);
       const item = payload.data?.item;
       if (!item) throw new ApiError("The service returned an incomplete count", { kind: "server", status: 502 });
+      serverUnits.set(item.id, item.unit);
+      const mapped = mapInventoryItem(item);
+      inventoryCache.set(mapped.id, mapped);
+      return mapped;
+    },
+    async updateInventoryItem(itemId, input, expectedVersion) {
+      const token = csrfToken ?? cookieValue("forge_csrf");
+      if (!token) throw new ApiError("Sign in again before you edit inventory", { kind: "csrf", status: 403 });
+      const body = {
+        ...(input.name === undefined ? {} : { name: input.name }),
+        ...(input.description === undefined ? {} : { description: input.description }),
+        ...(input.model === undefined ? {} : { model: input.model }),
+        ...(input.manufacturer === undefined ? {} : { manufacturer: input.manufacturer }),
+        ...(input.sku === undefined ? {} : { sku: input.sku }),
+        ...(input.location === undefined ? {} : { location: input.location }),
+        ...(input.tags === undefined ? {} : { tags: [...input.tags] })
+      };
+      const payload = await request<{ data?: ServerInventoryItem }>(`/inventory/${encodeURIComponent(itemId)}`, {
+        method: "PATCH",
+        headers: expectedVersion === undefined ? {} : { "If-Match": String(expectedVersion) },
+        body: JSON.stringify(body)
+      }, token);
+      const item = mutationData(payload);
       serverUnits.set(item.id, item.unit);
       const mapped = mapInventoryItem(item);
       inventoryCache.set(mapped.id, mapped);
