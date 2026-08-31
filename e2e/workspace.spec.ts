@@ -14,17 +14,32 @@ test("filters, edits, and physically counts evidence-aware inventory", async ({ 
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
 
   await expect(page.getByRole("heading", { name: "Review inventory." })).toBeVisible();
+  await expect(page.locator(".inventory-summary")).toHaveCount(0);
+  const headers = page.getByRole("table").getByRole("columnheader");
+  await expect(headers).toHaveCount(6);
+  await expect(headers.nth(0)).toHaveText("Item");
+  await expect(headers.nth(1)).toHaveText("Category");
+  await expect(headers.nth(2)).toHaveText("Quantity");
+  await expect(headers.nth(3)).toHaveText("Status");
+  await expect(headers.nth(4)).toHaveText("Location");
+  await expect(headers.nth(5)).toHaveText("Open");
+  await expect(page.getByRole("columnheader", { name: "Evidence source", exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Filter inventory by category")).toHaveCount(1);
   await page.getByLabel("Filter inventory by kind").selectOption("electronic");
   await page.getByLabel("Filter inventory by evidence").selectOption("counted");
   await page.getByLabel("Filter inventory by availability").selectOption("available");
   await page.getByLabel("Search inventory").fill("ESP32");
-  await expect(page.getByRole("button", { name: "ESP32 development board electronic" })).toBeVisible();
+  const espRow = page.getByRole("row").filter({ has: page.getByRole("button", { name: "ESP32 development board electronic" }) });
+  await expect(espRow).toBeVisible();
+  await expect(espRow).toContainText("Ready to use");
+  await expect(espRow).not.toContainText("synthetic-demo");
   await expect(page.getByRole("button", { name: "Bambu Lab H2D printer" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "ESP32 development board electronic" }).click();
   const drawer = page.getByRole("dialog", { name: "ESP32 development board" });
   await expect(drawer.getByText("Provenance", { exact: true })).toBeVisible();
+  await expect(drawer).toContainText("Physically counted");
+  await expect(drawer).toContainText("Source");
   await expect(drawer).toContainText("synthetic-demo");
 
   await drawer.getByRole("button", { name: "Edit item" }).click();
@@ -52,6 +67,22 @@ test("filters, edits, and physically counts evidence-aware inventory", async ({ 
   await drawer.getByRole("button", { name: "Save changes" }).click();
   await expect(drawer.getByRole("alert")).toContainText("The item changed on the service. Reload and try again.");
   await expect(drawer.getByRole("button", { name: "Cancel" })).toBeVisible();
+});
+
+test("keeps inventory quantity and status columns usable on mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await signIn(page);
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+
+  const table = page.getByRole("table");
+  await expect(table.getByRole("columnheader", { name: "Quantity", exact: true })).toBeVisible();
+  await expect(table.getByRole("columnheader", { name: "Status", exact: true })).toBeVisible();
+  const horizontalScroll = await page.evaluate(() => {
+    window.scrollTo(500, 0);
+    return window.scrollX;
+  });
+  expect(horizontalScroll).toBe(0);
 });
 
 test("creates a project atomically and finalizes a revisioned artifact", async ({ page }) => {
