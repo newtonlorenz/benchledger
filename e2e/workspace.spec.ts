@@ -81,6 +81,54 @@ test("creates a project atomically and finalizes a revisioned artifact", async (
   await expect(page.getByRole("cell", { name: "r01", exact: true })).toBeVisible();
 });
 
+test("keeps project creation discoverable from a populated Projects view", async ({ page }) => {
+  await signIn(page);
+  await page.getByRole("button", { name: /^Projects/ }).click();
+
+  const trigger = page.getByRole("button", { name: "New project" });
+  await expect(trigger).toBeVisible();
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "Create project" });
+  await expect(dialog).toBeVisible();
+  await expect(page.getByLabel("Project name")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+});
+
+test("keeps an ambiguous project create truthful and safely retryable", async ({ page }) => {
+  await signIn(page);
+  await page.getByRole("button", { name: /^Projects/ }).click();
+
+  const requestKeys: string[] = [];
+  let attempt = 0;
+  await page.route("**/api/v1/projects/with-initial-revision", async (route) => {
+    requestKeys.push(route.request().headers()["idempotency-key"] ?? "");
+    if (attempt++ === 0) {
+      await route.abort("failed");
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.getByRole("button", { name: "New project" }).click();
+  const dialog = page.getByRole("dialog", { name: "Create project" });
+  await dialog.getByLabel("Project name").fill("Ambiguous project");
+  await dialog.getByLabel("Project goal").fill("A project whose response was intentionally lost.");
+  await dialog.getByRole("button", { name: "Create project" }).click();
+
+  await expect(dialog.getByRole("alert")).toContainText("BenchLedger could not confirm whether this project was created.");
+  await expect(dialog.getByRole("alert")).not.toContainText(/Nothing was saved|was not created/iu);
+  await expect(dialog.getByLabel("Project name")).toHaveValue("Ambiguous project");
+  await expect(dialog.getByLabel("Project goal")).toHaveValue("A project whose response was intentionally lost.");
+
+  await dialog.getByRole("button", { name: "Create project" }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(requestKeys).toHaveLength(2);
+  expect(requestKeys[0]).toBe(requestKeys[1]);
+  await page.unroute("**/api/v1/projects/with-initial-revision");
+});
+
 test("keeps modal focus surfaces isolated and restores the workspace on Escape", async ({ page }) => {
   await signIn(page);
   await page.getByRole("button", { name: "New project" }).click();
@@ -107,6 +155,12 @@ test("shows exactly one accessible navigation surface at 390px", async ({ page }
   await page.getByRole("button", { name: "Close navigation" }).click();
   await expect(page.getByRole("button", { name: "Close navigation" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Open navigation" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: /^Projects/ }).click();
+  const projectTrigger = page.getByRole("button", { name: "New project" });
+  await expect(projectTrigger).toBeVisible();
+  expect(await page.evaluate(() => window.scrollX)).toBe(0);
 
   await page.getByLabel("Search inventory").fill("ESP32");
   await expect(page.getByRole("heading", { name: "Review inventory." })).toBeVisible();
