@@ -212,7 +212,10 @@ function mapEvidence(state: string): InventoryItem["evidence"] {
 
 function mapStockState(item: ServerInventoryItem): InventoryItem["state"] {
   if (item.evidence.state === "ordered_unverified") return "ordered-unverified";
-  if (item.evidence.state === "physically_counted" || item.evidence.state === "commissioned") return item.availableQuantity > 0 ? "available" : "depleted";
+  if (item.evidence.state === "physically_counted" || item.evidence.state === "commissioned") {
+    if (item.availableQuantity > 0) return "available";
+    return item.quantity > 0 ? "reserved" : "depleted";
+  }
   return "inspect-first";
 }
 
@@ -648,6 +651,7 @@ function formatBytes(bytes: number): string {
 export function mapInventoryItem(item: ServerInventoryItem): InventoryItem {
   const category = mapCategory(item.kind);
   const state = mapStockState(item);
+  const confirmed = item.evidence.state === "physically_counted" || item.evidence.state === "commissioned";
   const catalogProduct = mapCatalogProduct(item.catalogProduct ?? item.product, category === "Filament" ? "filament" : category === "Printers" ? "printer" : undefined);
   const mappedProfile = mapInventoryProductProfile(item.productProfile, item.id);
   const productProfile = mappedProfile ?? (item.catalogProductId || item.linkState
@@ -665,7 +669,7 @@ export function mapInventoryItem(item: ServerInventoryItem): InventoryItem {
     variant: item.model ?? item.sku ?? item.kind,
     ...(item.model ? { model: item.model } : {}),
     description: item.description?.trim() || "No description recorded.", quantity: item.quantity, availableQuantity: item.availableQuantity, unit: mapUnit(item.unit),
-    reserved: state === "available" ? Math.max(item.quantity - item.availableQuantity, 0) : 0,
+    reserved: confirmed ? Math.max(item.quantity - item.availableQuantity, 0) : 0,
     state, evidence: mapEvidence(item.evidence.state), location: item.location?.trim() || "Unassigned",
     ...(dimensions ? { dimensions } : {}), ...(item.manufacturer ? { manufacturer: item.manufacturer } : {}), ...(item.sku ? { sku: item.sku } : {}),
     tags: [...item.tags], compatibility: [],

@@ -7,6 +7,7 @@ import {
   formatQuantity,
   getLineLabel,
   getStockLabel,
+  inventoryKindOptions,
   sumMoneyByCurrency
 } from "./domain";
 import { inventory, projects } from "./mock-data";
@@ -87,6 +88,21 @@ describe("BenchLedger beginner-friendly domain language", () => {
     expect(filterInventory(source, "", { available: true }).map((item) => item.id)).toEqual(["printer", "filament"]);
     expect(filterInventory(source, "", { available: false }).map((item) => item.id)).toEqual(["tool"]);
     expect(filterInventory(source, "", { category: "Tools", evidence: "counted" })).toEqual([]);
+  });
+
+  it("offers every inventory kind accepted by the public API", () => {
+    expect(inventoryKindOptions.map((option) => option.value)).toEqual([
+      "printer",
+      "tool",
+      "accessory",
+      "consumable",
+      "electronic",
+      "fastener",
+      "filament",
+      "wire",
+      "adhesive",
+      "other"
+    ]);
   });
 
   it("distinguishes optional, missing, partial, depleted, ordered, and inspect-first BOM lines", () => {

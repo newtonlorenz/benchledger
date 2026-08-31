@@ -14,6 +14,7 @@ import {
   formatQuantity,
   getLineLabel,
   getStockLabel,
+  inventoryKindOptions,
   exactProductLabel,
   railSteps,
   sumMoneyByCurrency
@@ -582,7 +583,7 @@ function InventoryPage({ items, search, expert, onSearch, onSelectItem, onNewIte
         <label className="field-search"><Icon name="search" size={17} /><span className="sr-only">Filter inventory</span><input value={search} onChange={(event) => onSearch(event.target.value)} placeholder="Search name, model, tag, or location" /></label>
         <div className="inventory-filter-grid">
           <InventoryFilter label="Category" value={category} onChange={(value) => setCategory(value as (typeof categoryOptions)[number])} options={categoryOptions.map((option) => ({ value: option, label: option === "All" ? "All categories" : option }))} />
-          <InventoryFilter label="Kind" value={kind} onChange={setKind} options={[{ value: "All", label: "All kinds" }, { value: "printer", label: "Printer" }, { value: "filament", label: "Filament" }, { value: "tool", label: "Tool" }, { value: "accessory", label: "Accessory" }, { value: "electronic", label: "Electronic part" }, { value: "fastener", label: "Fastener" }, { value: "wire", label: "Wire or cable" }]} />
+          <InventoryFilter label="Kind" value={kind} onChange={setKind} options={[{ value: "All", label: "All kinds" }, ...inventoryKindOptions]} />
           <InventoryFilter label="Evidence" value={evidence} onChange={(value) => setEvidence(value as InventoryItem["evidence"] | "All")} options={[{ value: "All", label: "All evidence" }, { value: "counted", label: "Physically counted" }, { value: "commissioned", label: "Commissioned" }, { value: "delivered", label: "Delivered or unknown" }, { value: "ordered", label: "Ordered, not verified" }]} />
           <InventoryFilter label="Availability" value={availability} onChange={(value) => setAvailability(value as typeof availability)} options={[{ value: "All", label: "All availability" }, { value: "available", label: "Available for reuse" }, { value: "unavailable", label: "Not available" }]} />
         </div>

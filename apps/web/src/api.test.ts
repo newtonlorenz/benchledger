@@ -521,13 +521,14 @@ describe("web data mappers", () => {
       if (index === 1) expect(mapped.state).toBe("ordered-unverified");
       if (index === 2) expect(mapped.state).toBe("available");
       if (index === 3) expect(mapped.state).toBe("inspect-first");
-      if (index === 5) expect(mapped.state).toBe("depleted");
+      if (index === 5) expect(mapped.state).toBe("reserved");
       if (index === 6) expect(mapped.dimensions).toEqual({ length: 10, width: 20, height: 30, diameter: 4, unit: "mm" });
       if (index === 7) expect(mapped.lastCounted).toBeUndefined();
     }
 
     expect(mapInventoryItem(serverItem({ quantity: 2, availableQuantity: 5, evidence: { state: "physically_counted" } }))).toMatchObject({ reserved: 0, state: "available" });
-    expect(mapInventoryItem(serverItem({ quantity: 2, availableQuantity: 0, evidence: { state: "commissioned" } }))).toMatchObject({ reserved: 0, state: "depleted", evidence: "commissioned" });
+    expect(mapInventoryItem(serverItem({ quantity: 2, availableQuantity: 0, evidence: { state: "commissioned" } }))).toMatchObject({ reserved: 2, state: "reserved", evidence: "commissioned" });
+    expect(mapInventoryItem(serverItem({ quantity: 0, availableQuantity: 0, evidence: { state: "physically_counted" } }))).toMatchObject({ reserved: 0, state: "depleted" });
     expect(mapInventoryItem(serverItem({
       kind: "electronic",
       availableQuantity: 2,

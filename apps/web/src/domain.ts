@@ -300,6 +300,19 @@ export interface InventoryFilters {
   available?: boolean;
 }
 
+export const inventoryKindOptions = [
+  { value: "printer", label: "Printer" },
+  { value: "tool", label: "Tool" },
+  { value: "accessory", label: "Accessory" },
+  { value: "consumable", label: "Consumable" },
+  { value: "electronic", label: "Electronic part" },
+  { value: "fastener", label: "Fastener" },
+  { value: "filament", label: "Filament" },
+  { value: "wire", label: "Wire or cable" },
+  { value: "adhesive", label: "Adhesive" },
+  { value: "other", label: "Other" }
+] as const;
+
 function inventoryKind(item: Pick<InventoryItem, "kind" | "category">): string {
   if (item.kind) return item.kind;
   switch (item.category) {
