@@ -776,6 +776,80 @@ describe("authenticated BenchLedger API adapter", () => {
   });
 });
 
+describe("sample bulk inventory adapter", () => {
+  it("prevalidates every target and applies changes atomically with no-op parity", async () => {
+    const adapter = createSampleWorkspaceAdapter();
+    const page = await adapter.listInventory({ limit: 2 });
+    const first = page.items[0]!;
+    const second = page.items[1]!;
+    const change = { location: "Bulk shelf", condition: "good" as const, tags: { add: ["bulk-tag"], remove: [] } };
+
+    await expect(adapter.bulkUpdateInventory({
+      targets: [{ itemId: first.id, expectedVersion: first.version! }, { itemId: second.id, expectedVersion: second.version! + 1 }],
+      changes: change
+    })).rejects.toMatchObject({ kind: "validation", status: 409, code: "version_conflict" });
+    const afterConflict = await adapter.listInventory({ limit: 2 });
+    expect(afterConflict.items.map((item) => item.location)).toEqual([first.location, second.location]);
+    expect(afterConflict.items.map((item) => item.version)).toEqual([first.version, second.version]);
+
+    const result = await adapter.bulkUpdateInventory({
+      targets: [{ itemId: first.id, expectedVersion: first.version! }, { itemId: second.id, expectedVersion: second.version! }],
+      changes: change
+    });
+    expect(result.updated.map((item) => item.id)).toEqual([first.id, second.id]);
+    expect(result.unchanged).toEqual([]);
+    expect(result.updated.every((item) => item.location === "Bulk shelf" && item.condition === "good" && item.tags.includes("bulk-tag"))).toBe(true);
+    expect(result.audits).toHaveLength(2);
+    expect(result.correlationId).toMatch(/^sample-bulk-/);
+    expect(result.replayed).toBe(false);
+
+    const noOp = await adapter.bulkUpdateInventory({
+      targets: result.updated.map((item) => ({ itemId: item.id, expectedVersion: item.version! })),
+      changes: change
+    });
+    expect(noOp.updated).toEqual([]);
+    expect(noOp.unchanged.map((item) => item.id)).toEqual([first.id, second.id]);
+    expect(noOp.audits).toEqual([]);
+  });
+
+  it("rolls back when a later target would exceed the projected tag cap", async () => {
+    const adapter = createSampleWorkspaceAdapter();
+    const page = await adapter.listInventory({ limit: 2 });
+    const first = page.items[0]!;
+    const second = page.items[1]!;
+    const firstPrepared = await adapter.updateInventoryItem(first.id, { tags: Array.from({ length: 49 }, (_, index) => `first-${index}`) }, first.version);
+    const secondPrepared = await adapter.updateInventoryItem(second.id, { tags: Array.from({ length: 50 }, (_, index) => `second-${index}`) }, second.version);
+
+    await expect(adapter.bulkUpdateInventory({
+      targets: [{ itemId: first.id, expectedVersion: firstPrepared.version! }, { itemId: second.id, expectedVersion: secondPrepared.version! }],
+      changes: { tags: { add: ["new-tag"] } }
+    })).rejects.toMatchObject({ kind: "validation", status: 400, code: "invalid_bulk_changes" });
+
+    const after = await adapter.listInventory({ limit: 2 });
+    expect(after.items.map((item) => item.tags)).toEqual([firstPrepared.tags, secondPrepared.tags]);
+    expect(after.items.map((item) => item.version)).toEqual([firstPrepared.version, secondPrepared.version]);
+  });
+
+  it("matches sample tag add and remove operations without regard to case", async () => {
+    const adapter = createSampleWorkspaceAdapter();
+    const page = await adapter.listInventory({ limit: 1 });
+    const item = page.items[0]!;
+    const seeded = await adapter.updateInventoryItem(item.id, { tags: ["CaseTag"] }, item.version);
+    const duplicate = await adapter.bulkUpdateInventory({
+      targets: [{ itemId: seeded.id, expectedVersion: seeded.version! }],
+      changes: { tags: { add: ["casetag"] } }
+    });
+    expect(duplicate.updated).toEqual([]);
+    expect(duplicate.unchanged[0]?.tags).toEqual(["CaseTag"]);
+
+    const removed = await adapter.bulkUpdateInventory({
+      targets: [{ itemId: seeded.id, expectedVersion: seeded.version! }],
+      changes: { tags: { remove: ["CASETAG"] } }
+    });
+    expect(removed.updated[0]?.tags).toEqual([]);
+  });
+});
+
 describe("web data mappers", () => {
   it("maps every inventory kind, unit, evidence state, and measured dimension", () => {
     const cases: Array<{ kind: string; category: InventoryItem["category"]; accent: InventoryItem["accent"] }> = [

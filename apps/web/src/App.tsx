@@ -3,7 +3,7 @@ import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import type * as React from "react";
 import { ApiError, createSampleWorkspaceAdapter, createWorkspaceAdapter, MAX_INVENTORY_SEARCH_LENGTH } from "./api";
 import type { WorkspaceAdapter } from "./api";
-import type { BomInput, CatalogProductDraft, ExactInventoryInput, InventoryCommissionInput, InventoryKindQuery, InventoryListQuery, InventoryUpdateInput, RevisionInput } from "./api";
+import type { BomInput, CatalogProductDraft, ExactInventoryInput, InventoryBulkUpdateInput, InventoryBulkUpdateResult, InventoryCommissionInput, InventoryKindQuery, InventoryListQuery, InventoryUpdateInput, RevisionInput } from "./api";
 import { CatalogInventoryFlow, BuildSetupSummary, OwnedItemCombobox, splitSetupValues } from "./catalog-ui";
 import type { BuildConfigInput, CatalogProduct } from "./domain";
 import {
@@ -18,7 +18,7 @@ import {
   railSteps,
   sumMoneyByCurrency
 } from "./domain";
-import type { BomLineStatus, InventoryCategory, InventoryEvidenceState, InventoryItem, Project, StockLabelTone, StockState } from "./domain";
+import type { BomLineStatus, InventoryCategory, InventoryCondition, InventoryEvidenceState, InventoryItem, Project, StockLabelTone, StockState } from "./domain";
 import { activity, capabilityGroups, offers as fixtureOffers } from "./mock-data";
 import { Icon } from "./icons";
 import { ReconciliationUI } from "./reconciliation-ui";
@@ -31,6 +31,8 @@ type ProjectTab = "plan" | "files" | "offers" | "reconciliation";
 type ConnectionState = "loading" | "ready" | "sample" | "unauthenticated" | "offline" | "error";
 type PendingRevisionSetup = { readonly projectId: string; readonly revisionId: string; readonly input: BuildConfigInput };
 type ProjectCreateOutcome = "created" | "failed" | "ambiguous";
+type VersionedInventoryItem = InventoryItem & { version: number };
+type BulkInventorySelection = { readonly items: VersionedInventoryItem[]; readonly onResult: (result: InventoryBulkUpdateResult) => void };
 
 const ambiguousProjectCreationMessage = "BenchLedger could not confirm whether this project was created. Your details are still here. Retry safely; the same command will be replayed if it committed.";
 
@@ -108,6 +110,8 @@ function App() {
   const [showNewRevision, setShowNewRevision] = useState(false);
   const [showAddBom, setShowAddBom] = useState(false);
   const [showNewItem, setShowNewItem] = useState(false);
+  const [bulkInventorySelection, setBulkInventorySelection] = useState<BulkInventorySelection>();
+  const [bulkSelectionResetNonce, setBulkSelectionResetNonce] = useState(0);
   const [pendingRevisionSetup, setPendingRevisionSetup] = useState<PendingRevisionSetup>();
   const [catalogQuery, setCatalogQuery] = useState("");
   const [catalogProducts, setCatalogProducts] = useState<CatalogProduct[]>([]);
@@ -182,7 +186,7 @@ function App() {
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? projects[0];
   const selectedItem = items.find((item) => item.id === selectedItemId);
-  const overlayOpen = Boolean(selectedItem || showNewProject || showNewRevision || showAddBom || showNewItem);
+  const overlayOpen = Boolean(selectedItem || showNewProject || showNewRevision || showAddBom || showNewItem || bulkInventorySelection);
 
   const navigate = (nextPage: Page) => {
     setPage(nextPage);
@@ -350,6 +354,37 @@ function App() {
       handleMutationError(error, "saving that inventory item");
       throw error;
     }
+  };
+
+  const bulkUpdateInventory = async (input: InventoryBulkUpdateInput): Promise<InventoryBulkUpdateResult> => {
+    try {
+      const result = await adapter.bulkUpdateInventory(input);
+      const returned = new Map([...result.updated, ...result.unchanged].map((item) => [item.id, item] as const));
+      setItems((current) => current.map((item) => returned.get(item.id) ?? item));
+      return result;
+    } catch (error: unknown) {
+      const normalized = normalizeApiError(error);
+      setConnectionError(normalized);
+      if (!sampleMode && (normalized.kind === "unauthenticated" || normalized.kind === "csrf")) {
+        setConnection("unauthenticated");
+        setItems([]);
+        setProjects([]);
+        setOffers([]);
+      }
+      throw normalized;
+    }
+  };
+
+  const applyBulkInventory = async (input: InventoryBulkUpdateInput): Promise<InventoryBulkUpdateResult> => {
+    const result = await bulkUpdateInventory(input);
+    bulkInventorySelection?.onResult(result);
+    window.setTimeout(() => setInventoryRefreshNonce((current) => current + 1), 0);
+    return result;
+  };
+
+  const closeBulkInventory = () => {
+    setBulkInventorySelection(undefined);
+    setBulkSelectionResetNonce((current) => current + 1);
   };
 
   const createProject = async (input: Pick<Project, "name" | "description">): Promise<ProjectCreateOutcome> => {
@@ -580,7 +615,7 @@ function App() {
 
           <main className="content" id="main-content">
             {page === "overview" && <OverviewPage items={items} projects={projects} expert={expert} sampleMode={sampleMode} onNavigate={navigate} onOpenProject={openProject} onSelectItem={setSelectedItemId} onNewProject={openNewProject} />}
-            {page === "inventory" && <InventoryPage adapter={adapter} categories={categories} search={search} refreshKey={inventoryRefreshNonce} onSearch={(value) => setSearch(value.slice(0, MAX_INVENTORY_SEARCH_LENGTH))} onSessionExpired={handleSessionExpiry} onPageItems={(pageItems) => setItems((current) => { const byId = new Map(current.map((item) => [item.id, item] as const)); pageItems.forEach((item) => byId.set(item.id, item)); return [...byId.values()]; })} onSelectItem={setSelectedItemId} onNewItem={() => setShowNewItem(true)} />}
+            {page === "inventory" && <InventoryPage adapter={adapter} categories={categories} search={search} refreshKey={inventoryRefreshNonce} bulkSelectionResetKey={bulkSelectionResetNonce} onSearch={(value) => setSearch(value.slice(0, MAX_INVENTORY_SEARCH_LENGTH))} onSessionExpired={handleSessionExpiry} onPageItems={(pageItems) => setItems((current) => { const byId = new Map(current.map((item) => [item.id, item] as const)); pageItems.forEach((item) => byId.set(item.id, item)); return [...byId.values()]; })} onSelectItem={setSelectedItemId} onNewItem={() => setShowNewItem(true)} onBulkSelectionChange={(selection, onResult) => setBulkInventorySelection(selection.length ? { items: [...selection], onResult } : undefined)} />}
             {page === "projects" && selectedProject && <ProjectPage project={selectedProject} projects={projects} items={items} offers={offers} tab={projectTab} expert={expert} sampleMode={sampleMode} onTabChange={setProjectTab} onSelectProject={setSelectedProjectId} onOpenItem={setSelectedItemId} onNavigate={navigate} onToast={setToast} onNewProject={openNewProject} onNewRevision={() => setShowNewRevision(true)} onRetrySetup={pendingRevisionSetup?.projectId === selectedProject.id && pendingRevisionSetup.revisionId === selectedProject.serverRevisionId ? retryRevisionSetup : undefined} onAddBom={() => setShowAddBom(true)} onUpload={uploadArtifact} onReadReconciliation={adapter.readReconciliation} onSaveReconciliation={adapter.saveReconciliationDraft} onCommitReconciliation={adapter.commitReconciliation} onRefreshWorkspace={refreshWorkspace} />}
             {page === "projects" && !selectedProject && <EmptyState icon="folder" title="No projects yet" description="Start with a name and project goal. You can add parts and files after that." action="Create first project" onAction={() => setShowNewProject(true)} />}
             {page === "capabilities" && <CapabilitiesPage expert={expert} onCopy={setToast} />}
@@ -594,6 +629,7 @@ function App() {
       {showNewRevision && selectedProject && <NewRevisionDialog project={selectedProject} items={items} expert={expert} onClose={() => setShowNewRevision(false)} onCreate={createRevision} />}
       {showAddBom && selectedProject && <AddBomDialog items={items} project={selectedProject} onClose={() => setShowAddBom(false)} onCreate={addBomLine} />}
       {showNewItem && <NewInventoryDialog categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} catalogQuery={catalogQuery} catalogProducts={catalogProducts} onCatalogQuery={setCatalogQuery} onSearchCatalog={searchCatalogProducts} onCreateCatalogProduct={addCatalogProduct} onCreateExact={addExactInventoryItem} onClose={() => setShowNewItem(false)} onGoSettings={() => { setShowNewItem(false); navigate("settings"); }} onCreate={addInventoryItem} />}
+      {bulkInventorySelection && <BulkInventoryDialog selectedItems={bulkInventorySelection.items} onClose={closeBulkInventory} onDone={closeBulkInventory} onApply={applyBulkInventory} />}
       {toast && <div className="toast" role="status"><Icon name="check-circle" size={18} /><span>{toast}</span><button className="toast-close" aria-label="Dismiss notification" onClick={() => setToast(undefined)}><Icon name="close" size={15} /></button></div>}
     </div>
   );
@@ -722,7 +758,11 @@ function SectionHeading({ eyebrow, title, action, onAction }: { eyebrow: string;
   return <div className="section-heading"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2></div>{action && <button className="text-button" onClick={onAction}>{action}<Icon name="arrow-right" size={14} /></button>}</div>;
 }
 
-function InventoryPage({ adapter, categories, search, refreshKey, onSearch, onSessionExpired, onPageItems, onSelectItem, onNewItem }: { adapter: WorkspaceAdapter; categories: readonly ManagedInventoryCategory[]; search: string; refreshKey: number; onSearch: (value: string) => void; onSessionExpired: (error: unknown) => void; onPageItems: (items: readonly InventoryItem[]) => void; onSelectItem: (id: string) => void; onNewItem: () => void }) {
+function hasObservedInventoryVersion(item: InventoryItem): item is VersionedInventoryItem {
+  return typeof item.version === "number" && Number.isSafeInteger(item.version) && item.version > 0;
+}
+
+function InventoryPage({ adapter, categories, search, refreshKey, bulkSelectionResetKey, onSearch, onSessionExpired, onPageItems, onSelectItem, onNewItem, onBulkSelectionChange }: { adapter: WorkspaceAdapter; categories: readonly ManagedInventoryCategory[]; search: string; refreshKey: number; bulkSelectionResetKey: number; onSearch: (value: string) => void; onSessionExpired: (error: unknown) => void; onPageItems: (items: readonly InventoryItem[]) => void; onSelectItem: (id: string) => void; onNewItem: () => void; onBulkSelectionChange: (items: readonly VersionedInventoryItem[], onResult: (result: InventoryBulkUpdateResult) => void) => void }) {
   const initialUrlState = readInventoryUrlState();
   const [categoryNodeId, setCategoryNodeId] = useState(initialUrlState.categoryNodeId);
   const [kind, setKind] = useState<InventoryKindQuery | "All">(initialUrlState.kind);
@@ -736,6 +776,9 @@ function InventoryPage({ adapter, categories, search, refreshKey, onSearch, onSe
   const [error, setError] = useState<ApiError>();
   const [loadMoreError, setLoadMoreError] = useState<ApiError>();
   const [retryNonce, setRetryNonce] = useState(0);
+  const [selectedTargets, setSelectedTargets] = useState<Map<string, number>>(() => new Map());
+  const [selectionNotice, setSelectionNotice] = useState<string>();
+  const selectAllRef = useRef<HTMLInputElement>(null);
   const requestSequence = useRef(0);
   const baseQuery: InventoryListQuery = {
     limit: 25,
@@ -746,6 +789,101 @@ function InventoryPage({ adapter, categories, search, refreshKey, onSearch, onSe
     ...(availability === "All" ? {} : { available: availability === "available" })
   };
   const filterKey = `${search}|${categoryNodeId}|${kind}|${evidence}|${availability}`;
+  const previousFilterKey = useRef(filterKey);
+
+  const loadedSelectedCount = pageItems.reduce((count, item) => count + (selectedTargets.has(item.id) ? 1 : 0), 0);
+  const allLoadedSelected = pageItems.length > 0 && loadedSelectedCount === pageItems.length;
+  const unversionedItem = pageItems.find((item) => !hasObservedInventoryVersion(item));
+  const unversionedNotice = unversionedItem ? "Some loaded inventory rows cannot be selected for bulk edit because their observed version is unavailable. Reload inventory first." : undefined;
+
+  useEffect(() => {
+    const changed = previousFilterKey.current !== filterKey;
+    previousFilterKey.current = filterKey;
+    setSelectedTargets(new Map());
+    setSelectionNotice(changed ? "Selection cleared because the search or filters changed." : undefined);
+    onBulkSelectionChange([], () => undefined);
+  // The parent callback is an inline state bridge; filter primitives define the reset boundary.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterKey]);
+
+  useEffect(() => {
+    if (bulkSelectionResetKey === 0) return;
+    setSelectedTargets(new Map());
+    setSelectionNotice(undefined);
+  }, [bulkSelectionResetKey]);
+
+  useEffect(() => {
+    if (!selectAllRef.current) return;
+    selectAllRef.current.indeterminate = loadedSelectedCount > 0 && !allLoadedSelected;
+  }, [loadedSelectedCount, allLoadedSelected]);
+
+  const toggleSelected = (itemId: string) => {
+    const item = pageItems.find((candidate) => candidate.id === itemId);
+    if (!item) return;
+    if (!hasObservedInventoryVersion(item)) {
+      setSelectionNotice(`Cannot select ${item.name} for bulk edit because its observed version is unavailable. Reload inventory first.`);
+      return;
+    }
+    if (selectedTargets.has(itemId)) {
+      setSelectedTargets((current) => {
+        const next = new Map(current);
+        next.delete(itemId);
+        return next;
+      });
+      setSelectionNotice(undefined);
+      return;
+    }
+    if (selectedTargets.size >= 100) {
+      setSelectionNotice("You can select up to 100 items at a time.");
+      return;
+    }
+    setSelectedTargets((current) => new Map(current).set(itemId, item.version));
+    setSelectionNotice(undefined);
+  };
+
+  const toggleAllLoaded = () => {
+    if (unversionedItem) {
+      setSelectionNotice(unversionedNotice);
+      return;
+    }
+    if (allLoadedSelected) {
+      setSelectedTargets((current) => {
+        const next = new Map(current);
+        pageItems.forEach((item) => next.delete(item.id));
+        return next;
+      });
+      setSelectionNotice(undefined);
+      return;
+    }
+    const available = Math.max(100 - selectedTargets.size, 0);
+    const eligibleItems = pageItems.filter(hasObservedInventoryVersion);
+    const toAdd = eligibleItems.filter((item) => !selectedTargets.has(item.id)).slice(0, available);
+    setSelectedTargets((current) => {
+      const next = new Map(current);
+      toAdd.forEach((item) => next.set(item.id, item.version));
+      return next;
+    });
+    setSelectionNotice(toAdd.length < eligibleItems.filter((item) => !selectedTargets.has(item.id)).length ? "You can select up to 100 items at a time." : undefined);
+  };
+
+  const openBulkEditor = () => {
+    if (!selectedTargets.size) {
+      setSelectionNotice("Select at least one inventory item to bulk edit.");
+      return;
+    }
+    const selectedEntries = [...selectedTargets.entries()].map(([id, version]) => ({ id, version, item: pageItems.find((candidate) => candidate.id === id) }));
+    const invalidSelectedEntry = selectedEntries.find(({ item }) => !item || !hasObservedInventoryVersion(item));
+    if (invalidSelectedEntry) {
+      const label = invalidSelectedEntry.item?.name ?? invalidSelectedEntry.id;
+      setSelectionNotice(`Cannot bulk edit ${label} because its observed version is unavailable. Reload inventory first.`);
+      return;
+    }
+    const selectedItems: VersionedInventoryItem[] = selectedEntries.map(({ item, version }) => ({ ...item!, version }));
+    onBulkSelectionChange(selectedItems, (result) => {
+      const returned = new Map([...result.updated, ...result.unchanged].map((item) => [item.id, item] as const));
+      setPageItems((current) => current.map((item) => returned.get(item.id) ?? item));
+    });
+  };
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -845,7 +983,10 @@ function InventoryPage({ adapter, categories, search, refreshKey, onSearch, onSe
         </div>
       </div>
       <div className="inventory-page-status" role="status" aria-live="polite">{loading ? "Loading inventory…" : error ? "Inventory could not be loaded." : loadMoreError ? "Showing the loaded items. More items could not be loaded." : total === undefined ? `Showing ${pageItems.length} items` : `Showing ${pageItems.length} of ${total} items`}</div>
-      {error ? <div className="inventory-load-error" role="alert"><span>{error.message}</span><button className="button button-secondary" onClick={() => setRetryNonce((value) => value + 1)}>Try again</button></div> : loading && pageItems.length === 0 ? <div className="inventory-loading" aria-label="Loading inventory">Loading inventory…</div> : pageItems.length ? <><InventoryTable items={pageItems} categories={categories} onSelectItem={onSelectItem} />{loadMoreError && <div className="inventory-load-error" role="alert"><span>{loadMoreError.message}</span><button className="button button-secondary" onClick={() => { void loadMore(); }}>Try again</button></div>}{nextCursor && <div className="inventory-load-more"><button className="button button-secondary" onClick={() => { void loadMore(); }} disabled={loadingMore} aria-busy={loadingMore}>{loadingMore ? "Loading…" : "Load more"}<Icon name="chevron-right" size={16} /></button></div>}</> : <EmptyState icon="search" title="No matching items" description="Change the search text or filters." action="Clear filters" onAction={clearFilters} />}
+      {selectedTargets.size > 0 && <div className="inventory-selection-bar" aria-label="Bulk inventory selection"><div><strong>{selectedTargets.size} selected of {pageItems.length} loaded</strong><span>Select all applies only to the items currently loaded. You can select up to 100.</span></div><button className="button button-secondary" onClick={openBulkEditor}>Bulk edit<Icon name="sliders" size={16} /></button></div>}
+      {unversionedNotice && <p id="inventory-version-notice" className="inventory-selection-notice" role="status" aria-live="polite">{unversionedNotice}</p>}
+      {selectionNotice && <p className="inventory-selection-notice" role="status" aria-live="polite">{selectionNotice}</p>}
+      {error ? <div className="inventory-load-error" role="alert"><span>{error.message}</span><button className="button button-secondary" onClick={() => setRetryNonce((value) => value + 1)}>Try again</button></div> : loading && pageItems.length === 0 ? <div className="inventory-loading" aria-label="Loading inventory">Loading inventory…</div> : pageItems.length ? <><InventoryTable items={pageItems} categories={categories} selectedIds={new Set(selectedTargets.keys())} selectAllRef={selectAllRef} allLoadedSelected={allLoadedSelected} hasUnversionedLoaded={Boolean(unversionedItem)} onToggleAll={toggleAllLoaded} onToggleSelected={toggleSelected} onSelectItem={onSelectItem} />{loadMoreError && <div className="inventory-load-error" role="alert"><span>{loadMoreError.message}</span><button className="button button-secondary" onClick={() => { void loadMore(); }}>Try again</button></div>}{nextCursor && <div className="inventory-load-more"><button className="button button-secondary" onClick={() => { void loadMore(); }} disabled={loadingMore} aria-busy={loadingMore}>{loadingMore ? "Loading…" : "Load more"}<Icon name="chevron-right" size={16} /></button></div>}</> : <EmptyState icon="search" title="No matching items" description="Change the search text or filters." action="Clear filters" onAction={clearFilters} />}
     </section>
   </>;
 }
@@ -858,8 +999,154 @@ function managedInventoryLabel(categories: readonly ManagedInventoryCategory[], 
   return selectedCategoryLabel(categories, item.categoryNodeId) ?? (item.categoryNodeId ? "Managed category unavailable" : "Unassigned legacy item");
 }
 
-function InventoryTable({ items, categories, onSelectItem }: { items: InventoryItem[]; categories: readonly ManagedInventoryCategory[]; onSelectItem: (id: string) => void }) {
-  return <div className="table-scroll"><table className="data-table inventory-table"><caption className="sr-only">Inventory items</caption><thead><tr><th scope="col">Item</th><th scope="col">Category</th><th scope="col">Quantity</th><th scope="col">Status</th><th scope="col">Location</th><th scope="col"><span className="sr-only">Open</span></th></tr></thead><tbody>{items.map((item) => { const categoryLabel = managedInventoryLabel(categories, item); return <tr key={item.id}><td><button className="table-item" onClick={() => onSelectItem(item.id)}><span className={`item-glyph accent-${item.accent}`}><Icon name={categoryIcons[item.category]} size={16} /></span><span><strong>{item.name}</strong><small>{item.variant}</small>{(item.category === "Filament" || item.category === "Printers") && <small className={`exact-product-state ${item.productProfile?.linkState === "confirmed" ? "is-confirmed" : ""}`}>{exactProductLabel(item)}</small>}</span></button></td><td><span className="category-label"><Icon name={categoryIcons[item.category]} size={14} />{categoryLabel}</span></td><td className="quantity-cell"><strong>{formatQuantity(Math.max(item.quantity - item.reserved, 0), item.unit)}</strong>{item.reserved > 0 && <small>{formatQuantity(item.reserved, item.unit)} reserved</small>}</td><td><StatusPill state={item.state} /></td><td><span className="location-label"><Icon name="archive" size={14} />{item.location}</span></td><td><button className="row-open" onClick={() => onSelectItem(item.id)} aria-label={`Open ${item.name}`}><Icon name="chevron-right" size={17} /></button></td></tr>;})}</tbody></table></div>;
+function InventoryTable({ items, categories, selectedIds, selectAllRef, allLoadedSelected, hasUnversionedLoaded, onToggleAll, onToggleSelected, onSelectItem }: { items: InventoryItem[]; categories: readonly ManagedInventoryCategory[]; selectedIds: ReadonlySet<string>; selectAllRef: React.RefObject<HTMLInputElement | null>; allLoadedSelected: boolean; hasUnversionedLoaded: boolean; onToggleAll: () => void; onToggleSelected: (id: string) => void; onSelectItem: (id: string) => void }) {
+  return <div className="table-scroll"><table className="data-table inventory-table"><caption className="sr-only">Inventory items</caption><thead><tr><th scope="col" className="select-column"><input ref={selectAllRef} type="checkbox" className="inventory-checkbox" checked={allLoadedSelected} onChange={onToggleAll} disabled={hasUnversionedLoaded} aria-describedby={hasUnversionedLoaded ? "inventory-version-notice" : undefined} aria-label="Select all loaded inventory items" /></th><th scope="col">Item</th><th scope="col">Category</th><th scope="col">Quantity</th><th scope="col">Status</th><th scope="col">Location</th><th scope="col"><span className="sr-only">Open</span></th></tr></thead><tbody>{items.map((item) => { const categoryLabel = managedInventoryLabel(categories, item); const versionAvailable = hasObservedInventoryVersion(item); const versionNoticeId = `inventory-version-${item.id}`; return <tr key={item.id}><td className="select-column"><input type="checkbox" className="inventory-checkbox" checked={selectedIds.has(item.id)} onChange={() => onToggleSelected(item.id)} disabled={!versionAvailable} aria-describedby={!versionAvailable ? versionNoticeId : undefined} aria-label={`Select ${item.name}`} />{!versionAvailable && <span id={versionNoticeId} className="sr-only">Cannot select for bulk edit because this row has no positive observed version. Reload inventory first.</span>}</td><td><button className="table-item" onClick={() => onSelectItem(item.id)}><span className={`item-glyph accent-${item.accent}`}><Icon name={categoryIcons[item.category]} size={16} /></span><span><strong>{item.name}</strong><small>{item.variant}</small>{(item.category === "Filament" || item.category === "Printers") && <small className={`exact-product-state ${item.productProfile?.linkState === "confirmed" ? "is-confirmed" : ""}`}>{exactProductLabel(item)}</small>}</span></button></td><td><span className="category-label"><Icon name={categoryIcons[item.category]} size={14} />{categoryLabel}</span></td><td className="quantity-cell"><strong>{formatQuantity(Math.max(item.quantity - item.reserved, 0), item.unit)}</strong>{item.reserved > 0 && <small>{formatQuantity(item.reserved, item.unit)} reserved</small>}</td><td><StatusPill state={item.state} /></td><td><span className="location-label"><Icon name="archive" size={14} />{item.location}</span></td><td><button className="row-open" onClick={() => onSelectItem(item.id)} aria-label={`Open ${item.name}`}><Icon name="chevron-right" size={17} /></button></td></tr>; })}</tbody></table></div>;
+}
+
+type BulkInventoryOutcome = {
+  kind: "success" | "noop" | "conflict" | "error";
+  message: string;
+  updated: number;
+  unchanged: number;
+  correlationId?: string;
+};
+
+function splitBulkTags(value: string): string[] {
+  return value.split(/[\n,]/u).map((tag) => tag.trim()).filter(Boolean);
+}
+
+function projectedBulkTags(item: InventoryItem, changes: InventoryBulkUpdateInput["changes"]): string[] {
+  const removed = new Set((changes.tags?.remove ?? []).map((tag) => tag.toLocaleLowerCase()));
+  const tags = item.tags.filter((tag) => !removed.has(tag.toLocaleLowerCase()));
+  const existing = new Set(tags.map((tag) => tag.toLocaleLowerCase()));
+  for (const tag of changes.tags?.add ?? []) {
+    const key = tag.toLocaleLowerCase();
+    if (!existing.has(key)) {
+      existing.add(key);
+      tags.push(tag);
+    }
+  }
+  return tags;
+}
+
+function BulkInventoryDialog({ selectedItems, onClose, onDone, onApply }: { selectedItems: readonly VersionedInventoryItem[]; onClose: () => void; onDone: () => void; onApply: (input: InventoryBulkUpdateInput) => Promise<InventoryBulkUpdateResult> }) {
+  const targetCount = useRef(selectedItems.length).current;
+  const [location, setLocation] = useState("");
+  const [condition, setCondition] = useState<InventoryCondition | "">("");
+  const [tagsAdd, setTagsAdd] = useState("");
+  const [tagsRemove, setTagsRemove] = useState("");
+  const [step, setStep] = useState<"edit" | "confirm" | "result">("edit");
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string>();
+  const [outcome, setOutcome] = useState<BulkInventoryOutcome>();
+
+  const buildChanges = (): InventoryBulkUpdateInput["changes"] => {
+    const add = splitBulkTags(tagsAdd);
+    const remove = splitBulkTags(tagsRemove);
+    const changes: InventoryBulkUpdateInput["changes"] = {};
+    if (location.trim()) changes.location = location.trim();
+    if (condition) changes.condition = condition;
+    if (add.length || remove.length) changes.tags = { ...(add.length ? { add } : {}), ...(remove.length ? { remove } : {}) };
+    return changes;
+  };
+
+  const reviewChanges = (event: FormEvent) => {
+    event.preventDefault();
+    if (saving) return;
+    setFormError(undefined);
+    const changes = buildChanges();
+    if (!Object.keys(changes).length) {
+      setFormError("Choose a location, condition, or tag change before continuing.");
+      return;
+    }
+    if (changes.location && changes.location.length > 240) {
+      setFormError("Location must be 240 characters or fewer.");
+      return;
+    }
+    const add = changes.tags?.add ?? [];
+    const remove = changes.tags?.remove ?? [];
+    const addKeys = new Set(add.map((tag) => tag.toLocaleLowerCase()));
+    const removeKeys = remove.map((tag) => tag.toLocaleLowerCase());
+    if (new Set(add.map((tag) => tag.toLocaleLowerCase())).size !== add.length || new Set(removeKeys).size !== remove.length) {
+      setFormError("Tags must be unique, ignoring capitalization.");
+      return;
+    }
+    if (removeKeys.some((tag) => addKeys.has(tag))) {
+      setFormError("A tag cannot be added and removed in the same edit.");
+      return;
+    }
+    const invalidTagItem = selectedItems.find((item) => {
+      const projected = projectedBulkTags(item, changes);
+      return projected.length > 50 || projected.some((tag) => tag.length > 80);
+    });
+    if (invalidTagItem) {
+      setFormError(`The changes would exceed the 50-tag or 80-character tag limit for ${invalidTagItem.name}.`);
+      return;
+    }
+    setStep("confirm");
+  };
+
+  const confirmChanges = async () => {
+    if (saving) return;
+    setSaving(true);
+    setFormError(undefined);
+    try {
+      const result = await onApply({
+        targets: selectedItems.map((item) => ({ itemId: item.id, expectedVersion: item.version })),
+        changes: buildChanges()
+      });
+      const updated = result.updated.length;
+      const unchanged = result.unchanged.length;
+      setOutcome({
+        kind: updated ? "success" : "noop",
+        message: updated ? `Saved changes to ${updated} item${updated === 1 ? "" : "s"}${unchanged ? `; ${unchanged} unchanged` : ""}.` : `No changes needed. ${unchanged} item${unchanged === 1 ? "" : "s"} unchanged.`,
+        updated,
+        unchanged,
+        correlationId: result.correlationId
+      });
+      setStep("result");
+    } catch (error: unknown) {
+      const normalized = normalizeApiError(error);
+      const conflict = normalized.status === 409 || normalized.code === "version_conflict";
+      setOutcome({
+        kind: conflict ? "conflict" : "error",
+        message: conflict ? "Nothing changed. One or more selected items changed on the service; reload and select them again." : normalized.message,
+        updated: 0,
+        unchanged: 0,
+        ...(normalized.correlationId ? { correlationId: normalized.correlationId } : {})
+      });
+      setStep("result");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const dialogClose = saving ? () => undefined : onClose;
+  return <Dialog title="Bulk edit inventory" onClose={dialogClose}>
+    {step === "edit" && <form className="bulk-inventory-form" onSubmit={reviewChanges} aria-busy={saving}>
+      <p className="dialog-intro">Apply the same storage, condition, or tag changes to <strong>{targetCount} selected item{targetCount === 1 ? "" : "s"}</strong>. Quantity and evidence are not included.</p>
+      <label className="form-field"><span>Location</span><input autoFocus value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Leave blank to keep each location" disabled={saving} /></label>
+      <label className="form-field"><span>Condition</span><select value={condition} onChange={(event) => setCondition(event.target.value as InventoryCondition | "")} disabled={saving}><option value="">Keep each current condition</option><option value="new">New</option><option value="good">Good</option><option value="worn">Worn</option><option value="needs_repair">Needs repair</option><option value="unknown">Unknown</option></select></label>
+      <label className="form-field"><span>Tags to add</span><input value={tagsAdd} onChange={(event) => setTagsAdd(event.target.value)} placeholder="Comma or newline separated" disabled={saving} /></label>
+      <label className="form-field"><span>Tags to remove</span><input value={tagsRemove} onChange={(event) => setTagsRemove(event.target.value)} placeholder="Comma or newline separated" disabled={saving} /></label>
+      {formError && <p className="form-error" role="alert">{formError}</p>}
+      <p className="bulk-inventory-note">Nothing changes until you review and confirm.</p>
+      <div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose} disabled={saving}>Cancel</button><button type="submit" className="button button-primary" disabled={saving}>Review changes<Icon name="arrow-right" size={16} /></button></div>
+    </form>}
+    {step === "confirm" && <section className="bulk-inventory-confirmation" aria-busy={saving}>
+      <p className="dialog-intro">Nothing changes until you confirm.</p>
+      <div className="bulk-inventory-summary"><strong>{targetCount} item{targetCount === 1 ? "" : "s"}</strong>{location.trim() && <span>Location → {location.trim()}</span>}{condition && <span>Condition → {condition.replaceAll("_", " ")}</span>}{(tagsAdd.trim() || tagsRemove.trim()) && <span>Tags → {tagsAdd.trim() ? `add ${splitBulkTags(tagsAdd).join(", ")}` : ""}{tagsAdd.trim() && tagsRemove.trim() ? "; " : ""}{tagsRemove.trim() ? `remove ${splitBulkTags(tagsRemove).join(", ")}` : ""}</span>}</div>
+      <div className="dialog-actions"><button type="button" className="button button-quiet" onClick={() => setStep("edit")} disabled={saving}>Back to changes</button><button type="button" className="button button-primary" onClick={() => { void confirmChanges(); }} disabled={saving} aria-busy={saving}>{saving ? "Applying…" : "Confirm bulk edit"}</button></div>
+      {saving && <p className="bulk-live-status" role="status" aria-live="polite">Applying changes to {targetCount} item{targetCount === 1 ? "" : "s"}…</p>}
+    </section>}
+    {step === "result" && outcome && <section className={`bulk-inventory-result bulk-result-${outcome.kind}`}>
+      <p className="bulk-live-status" role={outcome.kind === "conflict" || outcome.kind === "error" ? "alert" : "status"} aria-live="polite">{outcome.message}</p>
+      {outcome.correlationId && <small className="bulk-correlation">Reference {outcome.correlationId}</small>}
+      {outcome.kind === "conflict" && <p className="bulk-inventory-note">Nothing was saved. Reload inventory and select the current rows before trying again.</p>}
+      {outcome.kind === "error" && <p className="bulk-inventory-note">Nothing was saved. Correct the values or check the service connection.</p>}
+      <div className="dialog-actions">{outcome.kind === "success" || outcome.kind === "noop" ? <button type="button" className="button button-primary" onClick={onDone}>Done</button> : <><button type="button" className="button button-quiet" onClick={() => { setOutcome(undefined); setStep("edit"); }}>Back to changes</button><button type="button" className="button button-secondary" onClick={onClose}>Close</button></>}</div>
+    </section>}
+  </Dialog>;
 }
 
 function evidenceLabel(evidence: InventoryItem["evidence"], serverEvidence?: InventoryItem["serverEvidence"]): string {

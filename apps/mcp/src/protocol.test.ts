@@ -21,6 +21,7 @@ function backend(): BenchLedgerBackend {
       create: async () => { throw new Error("not used"); },
       createWithInitialRevision: async () => { throw new Error("not used"); },
       update: async () => { throw new Error("not used"); },
+      bulkUpdate: async () => { throw new Error("not used"); },
       retire: async () => { throw new Error("not used"); },
       recordStockEvent: async () => { throw new Error("not used"); },
       listStockEvents: async () => emptyPage,

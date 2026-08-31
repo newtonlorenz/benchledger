@@ -32,6 +32,8 @@ import type {
   ExternalLink,
   FinalizeArtifactUploadInput,
   InventoryCreateInput,
+  InventoryBulkCondition,
+  InventoryBulkUpdateInput,
   InventoryCommissionInput,
   InventoryListInput,
   InventoryUpdateInput,
@@ -376,6 +378,43 @@ function links(value: unknown, label: string): readonly ExternalLink[] {
   });
 }
 
+/** Normalize tags at the MCP boundary while preserving the first display spelling. */
+function tagList(value: unknown, label: string, max = 50): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > max) fail(`${label} must contain at most ${max} tags.`);
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const [index, entry] of value.entries()) {
+    const tag = stringValue(entry, `${label}[${index}]`, { max: 80 }).trim();
+    if (tag.length === 0) fail(`${label}[${index}] must not be blank.`);
+    const key = tag.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(tag);
+  }
+  return result;
+}
+
+const INVENTORY_BULK_CONDITIONS = ["new", "good", "worn", "needs_repair", "unknown"] as const satisfies readonly InventoryBulkCondition[];
+
+function inventoryBulkTags(value: unknown, label: string): NonNullable<InventoryBulkUpdateInput["changes"]["tags"]> {
+  const input = record(value, label);
+  keys(input, ["add", "remove"], label);
+  const add = tagList(input.add, `${label}.add`);
+  const remove = tagList(input.remove, `${label}.remove`);
+  if ((add?.length ?? 0) === 0 && (remove?.length ?? 0) === 0) {
+    fail(`${label}.add or ${label}.remove must contain at least one tag.`);
+  }
+  const removed = new Set((remove ?? []).map((tag) => tag.toLocaleLowerCase()));
+  if ((add ?? []).some((tag) => removed.has(tag.toLocaleLowerCase()))) {
+    fail(`${label} cannot add and remove the same tag.`);
+  }
+  return {
+    ...(add === undefined || add.length === 0 ? {} : { add }),
+    ...(remove === undefined || remove.length === 0 ? {} : { remove }),
+  };
+}
+
 function textFields(input: UnknownRecord, label: string, output: Record<string, string | undefined>): void {
   for (const [field, max] of Object.entries({ description: 4096, manufacturer: 256, model: 256, sku: 256, location: 256 })) {
     output[field] = optionalString(input[field], `${label}.${field}`, max);
@@ -431,7 +470,7 @@ export function inventoryWithProductProfileCreate(value: unknown): InventoryWith
 
 export function inventoryUpdate(value: unknown): InventoryUpdateInput {
   const input = record(value, "arguments");
-  keys(input, ["itemId", "expectedVersion", "name", "category", "categoryNodeId", "description", "manufacturer", "model", "sku", "dimensions", "condition", "location", "links"], "arguments");
+  keys(input, ["itemId", "expectedVersion", "name", "category", "categoryNodeId", "description", "manufacturer", "model", "sku", "dimensions", "condition", "location", "tags", "links"], "arguments");
   const result: InventoryUpdateInput = { itemId: id(input.itemId, "arguments.itemId") };
   result.expectedVersion = optionalInteger(input.expectedVersion, "arguments.expectedVersion");
   result.categoryNodeId = input.categoryNodeId === null || input.categoryNodeId === undefined
@@ -442,8 +481,42 @@ export function inventoryUpdate(value: unknown): InventoryUpdateInput {
   Object.assign(result, text);
   result.dimensions = optionalDimensions(input.dimensions, "arguments.dimensions");
   result.condition = optionalEnum(input.condition, "arguments.condition", ["new", "used", "opened", "unknown"] as const);
+  result.tags = tagList(input.tags, "arguments.tags");
   if (input.links !== undefined) result.links = links(input.links, "arguments.links");
   return result;
+}
+
+/** Validate one bounded, explicit optimistic-lock metadata batch. */
+export function inventoryBulkUpdate(value: unknown): InventoryBulkUpdateInput {
+  const input = record(value, "arguments");
+  keys(input, ["targets", "changes"], "arguments");
+  if (!Array.isArray(input.targets) || input.targets.length < 1 || input.targets.length > 100) {
+    fail("arguments.targets must contain between 1 and 100 items.");
+  }
+  const seen = new Set<string>();
+  const targets = input.targets.map((target, index) => {
+    const value = record(target, `arguments.targets[${index}]`);
+    keys(value, ["itemId", "expectedVersion"], `arguments.targets[${index}]`);
+    const itemId = id(value.itemId, `arguments.targets[${index}].itemId`);
+    if (seen.has(itemId)) fail("arguments.targets must contain unique item ids.");
+    seen.add(itemId);
+    return { itemId, expectedVersion: integer(value.expectedVersion, `arguments.targets[${index}].expectedVersion`, 1) };
+  });
+  const changes = record(input.changes, "arguments.changes");
+  keys(changes, ["location", "condition", "tags"], "arguments.changes");
+  const location = changes.location === undefined ? undefined : stringValue(changes.location, "arguments.changes.location", { max: 256 }).trim();
+  if (location !== undefined && location.length === 0) fail("arguments.changes.location must not be blank.");
+  const condition = optionalEnum(changes.condition, "arguments.changes.condition", INVENTORY_BULK_CONDITIONS);
+  const tags = changes.tags === undefined ? undefined : inventoryBulkTags(changes.tags, "arguments.changes.tags");
+  if (location === undefined && condition === undefined && tags === undefined) fail("arguments.changes must contain at least one metadata change.");
+  return {
+    targets,
+    changes: {
+      ...(location === undefined ? {} : { location }),
+      ...(condition === undefined ? {} : { condition }),
+      ...(tags === undefined ? {} : { tags }),
+    },
+  };
 }
 
 export function inventoryCategoryList(value: unknown): PageInput & { includeArchived?: boolean } {

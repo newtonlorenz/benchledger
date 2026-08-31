@@ -34,6 +34,7 @@ import {
   inventoryProductProfileLink,
   inventoryProductProfileRead,
   inventoryList,
+  inventoryBulkUpdate,
   inventoryUpdate,
   id,
   offerList,
@@ -355,7 +356,7 @@ async function authorizeProjectScope(adapter: McpAdapter, name: string, input: u
   if (name === "create_project" || name === "create_project_with_initial_revision") {
     rejectScopedGlobalWrite(context, "A project-scoped token cannot create a new workspace outside its allow-list.");
   }
-  if (name === "create_inventory_item" || name === "create_inventory_with_product_profile" || name === "update_inventory_item" || name === "commission_inventory_item" || name === "record_stock_event" || name === "create_inventory_category" || name === "update_inventory_category" || name === "archive_inventory_category") {
+  if (name === "create_inventory_item" || name === "create_inventory_with_product_profile" || name === "update_inventory_item" || name === "bulk_update_inventory_items" || name === "commission_inventory_item" || name === "record_stock_event" || name === "create_inventory_category" || name === "update_inventory_category" || name === "archive_inventory_category") {
     rejectScopedGlobalWrite(context, "Inventory is workspace-global; project-scoped tokens may read it but cannot mutate it.");
   }
   if (name === "create_catalog_product" || name === "update_catalog_product") {
@@ -399,6 +400,7 @@ export class McpAdapter {
       ["create_inventory_item", (input, context) => this.backend.inventory.create(inventoryCreate(input), context)],
       ["create_inventory_with_product_profile", (input, context) => requireAtomicInventoryBackend(this)(inventoryWithProductProfileCreate(input), context)],
       ["update_inventory_item", (input, context) => this.backend.inventory.update(inventoryUpdate(input), context)],
+      ["bulk_update_inventory_items", (input, context) => this.backend.inventory.bulkUpdate(inventoryBulkUpdate(input), context)],
       ["commission_inventory_item", (input, context) => {
         requireCommissioningIdempotency(context);
         return requireCommissioningBackend(this)(inventoryCommission(input), context);

@@ -15,6 +15,8 @@ import type {
   inventoryProductProfileSchema, printerAssetProfileDetailsSchema, updateCatalogProductSchema,
   updateInventoryProductProfileSchema, createInventoryProductProfileWithoutItemSchema,
   createInventoryWithProductProfileSchema,
+  inventoryConditionSchema, inventoryBulkUpdateChangesSchema, inventoryBulkUpdateSchema,
+  inventoryBulkUpdateTagsSchema, inventoryBulkUpdateTargetSchema,
   reconciliationOutcomeKindSchema, reconciliationEvidenceSchema, reconciliationOutcomeSchema,
   reconciliationLineSchema, reconciliationBasisSchema, reconciliationBasisItemSchema,
   reconciliationBasisReservationSchema, reconciliationBasisBomLineSchema,
@@ -36,6 +38,11 @@ export type InventoryListQuery = z.infer<typeof inventoryListQuerySchema>;
 export type CreateInventoryItem = z.infer<typeof createInventoryItemSchema>;
 export type CommissionInventoryItem = z.infer<typeof commissionInventoryItemSchema>;
 export type UpdateInventoryItem = z.infer<typeof updateInventoryItemSchema>;
+export type InventoryCondition = z.infer<typeof inventoryConditionSchema>;
+export type InventoryBulkUpdateTags = z.infer<typeof inventoryBulkUpdateTagsSchema>;
+export type InventoryBulkUpdateChanges = z.infer<typeof inventoryBulkUpdateChangesSchema>;
+export type InventoryBulkUpdateTarget = z.infer<typeof inventoryBulkUpdateTargetSchema>;
+export type InventoryBulkUpdate = z.infer<typeof inventoryBulkUpdateSchema>;
 export type StockEventInput = z.infer<typeof stockEventInputSchema>;
 export type StockEvent = z.infer<typeof stockEventSchema>;
 export type UsageInput = z.infer<typeof usageInputSchema>;

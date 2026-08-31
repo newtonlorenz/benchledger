@@ -36,6 +36,90 @@ afterEach(async () => {
 });
 
 describe("production runtime mappings", () => {
+  it("applies bounded metadata batches atomically with deterministic no-op and audit behavior", async () => {
+    const runtime = await makeRuntime();
+    const service = new ApplicationService(runtime.ports);
+    for (const itemId of ["bulk-a", "bulk-b"]) {
+      await runtime.ports.inventory.createItem({
+        id: itemId,
+        name: itemId,
+        kind: "tool",
+        quantity: 1,
+        unit: "each",
+        tags: [],
+        links: [],
+        evidence: { state: "physically_counted" },
+      }, context());
+    }
+    const events: string[] = [];
+    service.subscribe((event) => { events.push(event.entityId); });
+    const command = {
+      targets: [{ itemId: "bulk-b", expectedVersion: 1 }, { itemId: "bulk-a", expectedVersion: 1 }],
+      changes: { location: "  Shelf A  ", tags: { add: ["Zed", " zed ", "alpha"] } },
+    };
+    const first = await service.bulkUpdateInventoryItems(command, context({ idempotencyKey: "bulk-production-1", correlationId: "bulk-correlation" }));
+    expect(first.data.updated.map((item) => item.id)).toEqual(["bulk-a", "bulk-b"]);
+    expect(first.data.updated).toMatchObject([
+      { id: "bulk-a", location: "Shelf A", tags: ["Zed", "alpha"], version: 2 },
+      { id: "bulk-b", location: "Shelf A", tags: ["Zed", "alpha"], version: 2 },
+    ]);
+    expect(first.audits).toHaveLength(2);
+    expect(new Set(first.audits.map((audit) => audit.idempotencyKey)).size).toBe(2);
+    expect(events).toEqual(["bulk-a", "bulk-b"]);
+
+    const replay = await service.bulkUpdateInventoryItems({
+      targets: [{ itemId: "bulk-a", expectedVersion: 1 }, { itemId: "bulk-b", expectedVersion: 1 }],
+      changes: { location: "Shelf A", tags: { add: ["alpha", "zed"] } },
+    }, context({ idempotencyKey: "bulk-production-1", correlationId: "different-correlation" }));
+    expect(replay).toMatchObject({ replayed: true, data: first.data, audits: first.audits });
+    expect(events).toHaveLength(2);
+
+    const auditCountBeforeNoop = (await runtime.ports.audit.list(100)).data.length;
+    const noOp = await service.bulkUpdateInventoryItems({ targets: [{ itemId: "bulk-a", expectedVersion: 2 }], changes: { location: "Shelf A" } }, context({ idempotencyKey: "bulk-production-noop" }));
+    expect(noOp).toMatchObject({ data: { updated: [], unchanged: [{ id: "bulk-a", version: 2 }] }, audits: [] });
+    expect((await runtime.ports.audit.list(100)).data).toHaveLength(auditCountBeforeNoop);
+    expect(events).toHaveLength(2);
+
+    await expect(service.bulkUpdateInventoryItems({
+      targets: [{ itemId: "bulk-a", expectedVersion: 2 }, { itemId: "bulk-b", expectedVersion: 999 }],
+      changes: { condition: "good" },
+    }, context({ idempotencyKey: "bulk-production-conflict" }))).rejects.toMatchObject({
+      code: "conflict",
+      details: {
+        staleTargets: [{ itemId: "bulk-b", expectedVersion: 999, actualVersion: 2 }],
+      },
+    });
+    const afterConflictA = await runtime.ports.inventory.getItem("bulk-a");
+    const afterConflictB = await runtime.ports.inventory.getItem("bulk-b");
+    expect(afterConflictA).toMatchObject({ id: "bulk-a", version: 2 });
+    expect(afterConflictB).toMatchObject({ id: "bulk-b", version: 2 });
+    expect(afterConflictA).not.toHaveProperty("condition");
+    expect(afterConflictB).not.toHaveProperty("condition");
+    expect((await runtime.ports.audit.list(100)).data).toHaveLength(auditCountBeforeNoop);
+    expect(events).toHaveLength(2);
+  });
+
+  it("derives non-colliding audit keys for different actors reusing a batch key", async () => {
+    const runtime = await makeRuntime();
+    await runtime.ports.inventory.createItem({
+      id: "bulk-actor-item",
+      name: "Bulk actor item",
+      kind: "tool",
+      quantity: 1,
+      unit: "each",
+      tags: [],
+      links: [],
+      evidence: { state: "physically_counted" },
+    }, context());
+    const service = new ApplicationService(runtime.ports);
+    const first = await service.bulkUpdateInventoryItems({ targets: [{ itemId: "bulk-actor-item", expectedVersion: 1 }], changes: { location: "Actor A" } }, context({ actor: "actor-a", idempotencyKey: "shared-bulk-key" }));
+    const second = await service.bulkUpdateInventoryItems({ targets: [{ itemId: "bulk-actor-item", expectedVersion: 2 }], changes: { location: "Actor B" } }, context({ actor: "actor-b", idempotencyKey: "shared-bulk-key" }));
+
+    expect(first.audits[0]?.idempotencyKey).toMatch(/^bulk:[a-f0-9]{64}$/u);
+    expect(second.audits[0]?.idempotencyKey).toMatch(/^bulk:[a-f0-9]{64}$/u);
+    expect(second.audits[0]?.idempotencyKey).not.toBe(first.audits[0]?.idempotencyKey);
+  });
+
   it("resolves BOM and reservation ancestry from a historical revision", async () => {
     const runtime = await makeRuntime();
     await runtime.ports.inventory.createItem({
