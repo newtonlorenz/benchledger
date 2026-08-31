@@ -288,10 +288,12 @@ describe("production inventory and procurement adapters", () => {
     }, confirmed.version, context());
     expect(updated).toMatchObject({ name: "ESP32 controller updated", version: 2, availableQuantity: 4, location: "drawer B", condition: "good" });
     await expect(runtime.ports.inventory.updateItem(confirmed.id, { name: "stale" }, confirmed.version, context())).rejects.toMatchObject({ code: "conflict" });
-    const recounted = await runtime.ports.inventory.updateItem(confirmed.id, { quantity: 6, evidence: { state: "physically_counted", note: "recounted" } }, updated.version, context());
-    expect(recounted).toMatchObject({ quantity: 6, availableQuantity: 6, version: 3 });
+    await expect(runtime.ports.inventory.updateItem(confirmed.id, { quantity: 6 }, updated.version, context())).rejects.toMatchObject({ code: "validation" });
 
     const inventory = runtime.ports.inventory as ProductionInventoryAdapter;
+    const recounted = await inventory.recordPhysicalCount(confirmed.id, 6, context(), "recounted");
+    expect(recounted).toMatchObject({ item: { quantity: 6, availableQuantity: 6, version: 3 } });
+
     const count = await inventory.recordPhysicalCount(confirmed.id, 5, context({ idempotencyKey: "physical-adapter" }), "bench recount");
     const replay = await inventory.recordPhysicalCount(confirmed.id, 5, context({ idempotencyKey: "physical-adapter" }), "ignored retry");
     expect(count.event).toMatchObject({ type: "count", quantity: 5, note: "bench recount", actor: "coverage-agent", source: "api" });

@@ -133,7 +133,7 @@ export const updateInventoryCategorySchema = z.object({
   message: "at least one category field must change"
 });
 
-export const createInventoryItemSchema = inventoryItemSchema.pick({
+const createInventoryItemShape = inventoryItemSchema.pick({
   name: true, kind: true, categoryNodeId: true, description: true, manufacturer: true, model: true,
   sku: true, quantity: true, unit: true, location: true, condition: true,
   dimensions: true, tags: true, links: true, evidence: true
@@ -142,7 +142,20 @@ export const createInventoryItemSchema = inventoryItemSchema.pick({
   availableQuantity: z.number().finite().nonnegative().optional()
 }).strict();
 
-export const updateInventoryItemSchema = createInventoryItemSchema.omit({ id: true }).extend({ categoryNodeId: idSchema.nullable().optional() }).partial().strict();
+function validateInventoryQuantityInvariant(value: { readonly quantity: number; readonly availableQuantity?: number | undefined }, ctx: z.RefinementCtx): void {
+  if (value.availableQuantity !== undefined && value.availableQuantity > value.quantity) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["availableQuantity"],
+      message: "availableQuantity cannot exceed quantity"
+    });
+  }
+}
+
+export const createInventoryItemSchema = createInventoryItemShape.superRefine(validateInventoryQuantityInvariant);
+
+const updateInventoryItemShape = createInventoryItemShape.omit({ id: true, quantity: true, availableQuantity: true, unit: true, evidence: true });
+export const updateInventoryItemSchema = updateInventoryItemShape.extend({ categoryNodeId: idSchema.nullable().optional() }).partial().strict();
 
 export const stockEventInputSchema = z.object({
   itemId: idSchema,

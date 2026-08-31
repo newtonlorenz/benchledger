@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createBomLineSchema, updateBomLineSchema } from "./schemas.js";
+import { createBomLineSchema, createInventoryItemSchema, updateBomLineSchema, updateInventoryItemSchema } from "./schemas.js";
 
 const constraints = {
   kind: "electronic",
@@ -29,5 +29,33 @@ describe("REST BOM constraint schema", () => {
   it("rejects unknown and non-string constraint values at the REST boundary", () => {
     expect(() => createBomLineSchema.parse({ name: "Controller", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: { unsupported: "value" } })).toThrow();
     expect(() => updateBomLineSchema.parse({ constraints: { kind: 42 } })).toThrow();
+  });
+});
+
+describe("REST inventory quantity invariants", () => {
+  it("rejects available confirmed stock above the total quantity", () => {
+    expect(() => createInventoryItemSchema.parse({
+      name: "ESP32 board",
+      kind: "electronic",
+      quantity: 2,
+      availableQuantity: 3,
+      unit: "each",
+      tags: [],
+      links: [],
+      evidence: { state: "physically_counted" }
+    })).toThrow(/availableQuantity.*quantity/i);
+  });
+
+  it("rejects ledger-controlled fields from generic PATCH updates", () => {
+    const forbidden = [
+      { quantity: 2 },
+      { availableQuantity: 2 },
+      { evidence: { state: "physically_counted" } },
+      { unit: "each" }
+    ];
+    for (const field of forbidden) expect(() => updateInventoryItemSchema.parse(field)).toThrow();
+    expect(updateInventoryItemSchema.parse({ name: "Renamed", location: "drawer-B", tags: ["board"] })).toMatchObject({
+      name: "Renamed", location: "drawer-B", tags: ["board"]
+    });
   });
 });

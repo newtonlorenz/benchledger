@@ -13,6 +13,11 @@ import { attempt, clone, nowIso, page } from "./utils.js";
 
 const ENTITY = "inventory_item";
 
+function ensureDescriptiveUpdate(input: UpdateInventoryInput): void {
+  const controlledField = Object.keys(input).find((field) => ["quantity", "availableQuantity", "evidence", "unit"].includes(field));
+  if (controlledField !== undefined) throw new DomainError("invalid_update", `${controlledField} is controlled by stock events`);
+}
+
 function isSearchMatch(item: ApiInventoryItem, query: string | undefined): boolean {
   if (query === undefined || query.trim().length === 0) return true;
   const needle = query.trim().toLocaleLowerCase();
@@ -60,6 +65,22 @@ function initialCountEvent(item: InventoryItem, quantity: number, version: numbe
   });
 }
 
+function initialAllocationEvent(item: InventoryItem, quantity: number, version: number): StockEvent {
+  return createStockEvent({
+    id: `${item.id}-initial-allocation`,
+    itemId: item.id,
+    kind: "allocate",
+    quantity,
+    unit: item.unit,
+    reason: "Initial inventory allocation",
+    source: "import",
+    evidence: { apiItemVersion: version, bootstrap: true },
+    idempotencyKey: `inventory:${item.id}:initial-allocation`,
+    occurredAt: item.createdAt,
+    createdAt: item.createdAt
+  });
+}
+
 export class ProductionInventoryAdapter implements InventoryPort {
   constructor(
     private readonly database: BenchDatabase,
@@ -100,8 +121,11 @@ export class ProductionInventoryAdapter implements InventoryPort {
         this.state.setInitialVersion(ENTITY, created.id);
         if (this.categoryAssignments !== undefined && input.categoryNodeId !== undefined) this.categoryAssignments.setItemCategoryNode(created.id, input.categoryNodeId, created.createdAt);
         if (isConfirmedEvidence(input.evidence.state)) {
-          const count = initialCountEvent(created, input.availableQuantity ?? input.quantity, 1);
+          const count = initialCountEvent(created, input.quantity, 1);
           this.repository.appendStockEvent(count);
+          const availableQuantity = input.availableQuantity ?? input.quantity;
+          const initiallyAllocated = input.quantity - availableQuantity;
+          if (initiallyAllocated > 0) this.repository.appendStockEvent(initialAllocationEvent(created, initiallyAllocated, 1));
         }
         return this.toApi(created);
       });
@@ -132,6 +156,7 @@ export class ProductionInventoryAdapter implements InventoryPort {
 
   async updateItem(id: string, input: UpdateInventoryInput, expectedVersion: number | undefined): Promise<ApiInventoryItem> {
     return this.unitOfWork.exclusive(() => attempt(() => {
+      ensureDescriptiveUpdate(input);
       const current = this.repository.get(id);
       if (current === undefined || current.retiredAt !== undefined) throw new DomainError("inventory_not_found", `inventory item ${id} does not exist`);
       const currentApi = this.toApi(current);
@@ -142,24 +167,6 @@ export class ProductionInventoryAdapter implements InventoryPort {
         this.repository.upsert(updated);
         if (this.categoryAssignments !== undefined && input.categoryNodeId !== undefined) this.categoryAssignments.setItemCategoryNode(id, input.categoryNodeId ?? undefined, updated.updatedAt);
         const nextVersion = this.state.bumpVersion(ENTITY, id);
-        if (input.quantity !== undefined || input.evidence !== undefined) {
-          if (isConfirmedEvidence(merged.evidence.state)) {
-            const count = createStockEvent({
-              id: `${id}-version-${nextVersion}-count`,
-              itemId: id,
-              kind: "count",
-              quantity: merged.quantity,
-              unit: updated.unit,
-              reason: "Inventory record updated",
-              source: "api",
-              evidence: { apiItemVersion: nextVersion },
-              idempotencyKey: `inventory:${id}:version:${nextVersion}:count`,
-              occurredAt: updated.updatedAt,
-              createdAt: updated.updatedAt
-            });
-            this.repository.appendStockEvent(count);
-          }
-        }
         return this.toApi(updated, nextVersion);
       });
     }));
