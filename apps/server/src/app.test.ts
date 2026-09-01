@@ -454,6 +454,7 @@ describe("BenchLedger HTTP API", () => {
             schema: { type: "string", minLength: 8, maxLength: 200 }
           })]
         }
+      });
       expect(document.paths["/mcp"]).toMatchObject({ post: { security: [{ bearerAuth: [] }] } });
       expect(document.paths["/auth/access"]).toMatchObject({
         patch: {
