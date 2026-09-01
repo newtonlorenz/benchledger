@@ -445,6 +445,16 @@ describe("BenchLedger HTTP API", () => {
       });
       expect(inventoryGet.description).toMatch(/categoryNodeId and unassigned=true are mutually exclusive/i);
       expect(document).toMatchObject({ security: [{ bearerAuth: [] }, { cookieAuth: [] }] });
+      expect(document.paths["/inventory/bulk"]).toMatchObject({
+        patch: {
+          parameters: [expect.objectContaining({
+            name: "Idempotency-Key",
+            in: "header",
+            required: true,
+            schema: { type: "string", minLength: 8, maxLength: 200 }
+          })]
+        }
+      });
       const payload = {
         project: { id: "atomic-project", name: "Atomic project", description: "One command", status: "planning" },
         revision: { id: "atomic-revision", name: "Initial", notes: "Starting point", status: "concept" }
@@ -1112,6 +1122,52 @@ describe("BenchLedger HTTP API", () => {
     expect(failed.statusCode).toBe(200);
     expect(failed.json()).toMatchObject({ result: { isError: true, structuredContent: { error: { code: "CONFLICT" } } } });
     await expect(runtime.ports.projects.getProject("mcp-orphan")).resolves.toBeNull();
+    await app.close();
+  });
+
+  it("replays a header-less MCP bulk metadata call through the application backend", async () => {
+    const runtime = createSyntheticRuntime();
+    const published: string[] = [];
+    runtime.ports.events.subscribe((event) => { if (event.type === "inventory.item.bulk_update") published.push(event.entityId); });
+    const app = await createApp({ demo: true, runtime, auth: { sessionSecret: "s".repeat(48), secureCookies: false, bearerTokens: [bearerRecord("mcp-bulk-writer", ["read", "write"])] }, logger: false });
+    const headers = { authorization: "Bearer mcp-bulk-writer" };
+    const call = (id: string, argumentsValue: Record<string, unknown>) => app.inject({ method: "POST", url: "/api/v1/mcp", headers, payload: { jsonrpc: "2.0", id, method: "tools/call", params: { name: "bulk_update_inventory_items", arguments: argumentsValue } } });
+    const argumentsValue = {
+      targets: [{ itemId: "wire-dupont", expectedVersion: 1 }, { itemId: "board-esp32", expectedVersion: 1 }],
+      changes: { location: "  Bulk shelf  ", condition: "good" },
+    };
+
+    const first = await call("bulk-first", argumentsValue);
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toMatchObject({ result: { isError: false, structuredContent: {
+      updated: [{ itemId: "board-esp32", version: 2 }, { itemId: "wire-dupont", version: 2 }],
+      unchanged: [],
+      replayed: false,
+      auditIds: expect.any(Array),
+      correlationId: expect.any(String),
+    } } });
+
+    const replay = await call("bulk-replay", {
+      targets: [...argumentsValue.targets].reverse(),
+      changes: { location: "Bulk shelf", condition: "good" },
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toMatchObject({ result: { isError: false, structuredContent: {
+      updated: [{ itemId: "board-esp32", version: 2 }, { itemId: "wire-dupont", version: 2 }],
+      unchanged: [],
+      replayed: true,
+    } } });
+
+    const changed = await call("bulk-changed", {
+      ...argumentsValue,
+      changes: { location: "Different shelf", condition: "good" },
+    });
+    expect(changed.statusCode).toBe(200);
+    expect(changed.json()).toMatchObject({ result: { isError: true, structuredContent: { error: { code: "CONFLICT" } } } });
+
+    expect(published).toEqual(["board-esp32", "wire-dupont"]);
+    const audits = await runtime.ports.audit.list(100);
+    expect(audits.data.filter((event) => event.action === "inventory.item.bulk_update")).toHaveLength(2);
     await app.close();
   });
 

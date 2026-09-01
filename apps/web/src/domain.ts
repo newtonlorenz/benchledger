@@ -157,6 +157,9 @@ export type InventoryEvidenceState =
   | "consumed"
   | "unknown";
 
+/** Condition values accepted by the descriptive inventory bulk-edit command. */
+export type InventoryCondition = "new" | "good" | "worn" | "needs_repair" | "unknown";
+
 export interface Dimensions {
   length?: number;
   width?: number;
@@ -189,6 +192,7 @@ export interface InventoryItem {
   dimensions?: Dimensions;
   manufacturer?: string;
   sku?: string;
+  condition?: InventoryCondition;
   tags: string[];
   compatibility: string[];
   provenance?: {

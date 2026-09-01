@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
-import { ApplicationError, type ApplicationService, type Mutation, type Page as AppPage, type RequestContext } from "@benchledger/application";
+import { ApplicationError, inventoryBulkUpdateFingerprint, type ApplicationService, type Mutation, type Page as AppPage, type RequestContext } from "@benchledger/application";
 import type {
   Artifact as ApiArtifact,
   BomGap,
@@ -17,6 +17,7 @@ import type {
   CreateWorkItemRevision,
   Dimension,
   InventoryItem as ApiInventoryItem,
+  InventoryBulkUpdate as ApiInventoryBulkUpdate,
   Offer as ApiOffer,
   Project as ApiProject,
   ProjectRevision as ApiProjectRevision,
@@ -57,6 +58,8 @@ import type {
   EvidenceSummary,
   BenchLedgerBackend,
   InventoryCreateInput,
+  InventoryBulkUpdateInput,
+  InventoryBulkUpdateResult,
   InventoryCategory,
   InventoryCategoryCreateInput,
   InventoryCategoryUpdateInput,
@@ -309,6 +312,19 @@ export function createApplicationBackend(service: ApplicationService, options: P
       update: async (input, context) => {
         const { itemId, expectedVersion, ...changes } = input;
         return mutationResult(await service.updateInventoryItem(itemId, toApiInventoryUpdate(changes), expectedVersion, appContext(context)), "item", toMcpInventoryItem);
+      },
+      bulkUpdate: async (input: InventoryBulkUpdateInput, context): Promise<InventoryBulkUpdateResult> => {
+        const commandContext = context.idempotencyKey === undefined
+          ? { ...context, idempotencyKey: mcpBulkIdempotencyKey(context, input) }
+          : context;
+        const mutation = await service.bulkUpdateInventoryItems(input, appContext(commandContext));
+        return {
+          updated: mutation.data.updated.map((item) => ({ itemId: item.id, version: item.version })),
+          unchanged: mutation.data.unchanged.map((item) => ({ itemId: item.id, version: item.version })),
+          auditIds: mutation.audits.map((audit) => audit.id),
+          correlationId: mutation.correlationId,
+          replayed: mutation.replayed,
+        };
       },
       commission: async (input: InventoryCommissionInput, context) => {
         const mutation = await service.commissionInventoryItem(input.itemId, toApiInventoryCommission(input), input.expectedVersion, appContext(context));
@@ -586,6 +602,20 @@ function appContext(context: McpRequestContext): RequestContext {
     ...(context.idempotencyKey === undefined ? {} : { idempotencyKey: context.idempotencyKey }),
     ...(context.fingerprint === undefined ? {} : { fingerprint: context.fingerprint }),
   };
+}
+
+/**
+ * Bulk metadata is the one MCP command whose application contract requires an
+ * idempotency key. Stdio clients have no HTTP header to carry one, so derive a
+ * bounded actor- and command-scoped key from the same canonical payload the
+ * application uses for replay fingerprints. Explicit host keys always win.
+ */
+function mcpBulkIdempotencyKey(context: McpRequestContext, input: InventoryBulkUpdateInput): string {
+  const fingerprint = inventoryBulkUpdateFingerprint(input as unknown as ApiInventoryBulkUpdate);
+  const digest = createHash("sha256")
+    .update(`${context.actorId}\u0000inventory.item.bulk_update\u0000${fingerprint}`)
+    .digest("hex");
+  return `mcp:bulk:${digest}`;
 }
 
 /**
@@ -884,6 +914,7 @@ function toMcpInventoryItem(item: ApiInventoryItem): InventoryItem {
     ...(item.dimensions === undefined ? {} : { dimensions: toMcpDimensions(item.dimensions) }),
     ...(item.condition === undefined ? {} : { condition: item.condition === "good" ? "used" : item.condition === "worn" || item.condition === "needs_repair" ? "opened" : item.condition }),
     ...(item.location === undefined ? {} : { location: item.location }),
+    ...(item.tags.length === 0 ? {} : { tags: [...item.tags] }),
     links: item.links.map((link) => ({ label: link.label ?? link.supplier, url: link.url, kind: "supplier" as const })),
     version: item.version,
   };
@@ -937,7 +968,7 @@ function toApiInventoryCreate(input: InventoryCreateInput): CreateInventoryItem 
 }
 
 function toApiInventoryUpdate(input: Omit<InventoryUpdateInput, "itemId" | "expectedVersion">): Record<string, unknown> {
-  return { ...(input.name === undefined ? {} : { name: input.name }), ...(input.category === undefined ? {} : { kind: toApiKind(input.category) }), ...(input.categoryNodeId === undefined ? {} : { categoryNodeId: input.categoryNodeId }), ...(input.description === undefined ? {} : { description: input.description }), ...(input.manufacturer === undefined ? {} : { manufacturer: input.manufacturer }), ...(input.model === undefined ? {} : { model: input.model }), ...(input.sku === undefined ? {} : { sku: input.sku }), ...(input.location === undefined ? {} : { location: input.location }), ...(input.condition === undefined ? {} : { condition: input.condition === "used" ? "good" : input.condition === "opened" ? "worn" : input.condition }), ...(input.dimensions === undefined ? {} : { dimensions: toApiDimensions(input.dimensions) }), ...(input.links === undefined ? {} : { links: input.links.map((link) => ({ supplier: link.label, url: link.url, ...(link.label === undefined ? {} : { label: link.label }) })) }) };
+  return { ...(input.name === undefined ? {} : { name: input.name }), ...(input.category === undefined ? {} : { kind: toApiKind(input.category) }), ...(input.categoryNodeId === undefined ? {} : { categoryNodeId: input.categoryNodeId }), ...(input.description === undefined ? {} : { description: input.description }), ...(input.manufacturer === undefined ? {} : { manufacturer: input.manufacturer }), ...(input.model === undefined ? {} : { model: input.model }), ...(input.sku === undefined ? {} : { sku: input.sku }), ...(input.location === undefined ? {} : { location: input.location }), ...(input.condition === undefined ? {} : { condition: input.condition === "used" ? "good" : input.condition === "opened" ? "worn" : input.condition }), ...(input.tags === undefined ? {} : { tags: [...input.tags] }), ...(input.dimensions === undefined ? {} : { dimensions: toApiDimensions(input.dimensions) }), ...(input.links === undefined ? {} : { links: input.links.map((link) => ({ supplier: link.label, url: link.url, ...(link.label === undefined ? {} : { label: link.label }) })) }) };
 }
 
 function toMcpStockEvent(event: ApiStockEvent): StockEvent {

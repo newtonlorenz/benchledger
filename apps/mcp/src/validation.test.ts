@@ -24,6 +24,7 @@ import {
   inventoryCategoryCreate,
   inventoryCategoryList,
   inventoryCategoryUpdate,
+  inventoryBulkUpdate,
   inventoryWithProductProfileCreate,
   inventoryList,
   inventoryUpdate,
@@ -142,7 +143,19 @@ describe("MCP validation boundary", () => {
       links: [{ label: "Manufacturer", url: "https://maker.example/petg" }],
     });
     expect(created).toMatchObject({ name: "PETG HF", categoryNodeId: longCategoryId, quantity: { value: 1000, unit: "gram" }, condition: "opened", links: [{ label: "Manufacturer" }] });
-    expect(inventoryUpdate({ itemId: "filament-1", expectedVersion: 3, categoryNodeId: longCategoryId, model: "PETG HF v2", links: [] })).toMatchObject({ itemId: "filament-1", expectedVersion: 3, categoryNodeId: longCategoryId, model: "PETG HF v2", links: [] });
+    expect(inventoryUpdate({ itemId: "filament-1", expectedVersion: 3, categoryNodeId: longCategoryId, model: "PETG HF v2", tags: [" PETG ", "petg", "black"], links: [] })).toMatchObject({ itemId: "filament-1", expectedVersion: 3, categoryNodeId: longCategoryId, model: "PETG HF v2", tags: ["PETG", "black"], links: [] });
+    expect(inventoryBulkUpdate({
+      targets: [{ itemId: "item-2", expectedVersion: 3 }, { itemId: "item-1", expectedVersion: 4 }],
+      changes: { location: " drawer ", condition: "needs_repair", tags: { add: [" Blue ", "blue"], remove: ["Old"] } },
+    })).toEqual({
+      targets: [{ itemId: "item-2", expectedVersion: 3 }, { itemId: "item-1", expectedVersion: 4 }],
+      changes: { location: "drawer", condition: "needs_repair", tags: { add: ["Blue"], remove: ["Old"] } },
+    });
+    expectInvalid(() => inventoryBulkUpdate({ targets: [{ itemId: "item-1", expectedVersion: 1 }, { itemId: "item-1", expectedVersion: 1 }], changes: { location: "drawer" } }), /unique/);
+    expectInvalid(() => inventoryBulkUpdate({ targets: [{ itemId: "item-1", expectedVersion: 1 }], changes: {} }), /at least one/);
+    expectInvalid(() => inventoryBulkUpdate({ targets: [{ itemId: "item-1", expectedVersion: 1 }], changes: { location: " " } }));
+    expectInvalid(() => inventoryBulkUpdate({ targets: [{ itemId: "item-1", expectedVersion: 1 }], changes: { tags: { add: ["Blue"], remove: [" blue "] } } }), /same tag/);
+    expectInvalid(() => inventoryBulkUpdate({ targets: Array.from({ length: 101 }, (_, index) => ({ itemId: `item-${index}`, expectedVersion: 1 })), changes: { location: "drawer" } }));
     expectInvalid(() => inventoryList({ availability: "maybe" }));
     expectInvalid(() => inventoryCreate({ name: "x", category: "tool", quantity: { value: 1, unit: "piece" }, evidence: { state: "unknown", source: "x", recordedAt: "now" }, links: [{ label: "bad", url: "file:///secret" }] }));
     expectInvalid(() => inventoryUpdate({ itemId: "item-1", links: [{ label: "bad", url: "https://example.test/a" }, { label: "bad", url: "https://example.test/b" }], unexpected: true }));

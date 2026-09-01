@@ -9,13 +9,13 @@ import type {
   UpdateInventoryProductProfile, BuildConfigurationSnapshot, CreateBuildConfigurationSnapshot,
   ArtifactBuildConfigurationBinding, CommissionInventoryItem, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory
 } from "@benchledger/api-contract";
-import { ApplicationError, parseInventoryCursor } from "@benchledger/application";
+import { ApplicationError, applyInventoryBulkChanges, normalizeInventoryBulkChanges, parseInventoryCursor } from "@benchledger/application";
 import type {
   ApplicationPorts, ArtifactDownload, ArtifactPort, AuditEvent, AuditInput, AuditPort,
   BeginUploadInput, EventBusEvent, EventBusPort, HealthPort, IdempotencyPort,
   BuildConfigurationListOptions, BuildConfigurationPort, CatalogPort, CatalogProductListOptions,
   InventoryCategoryListOptions, InventoryCategoryPort, InventoryListOptions, InventoryPort, OfferPort, Page, ProjectListOptions, ProjectPort, RequestContext,
-  ReservationDetails, StockMutation, UnitOfWorkOperation, UnitOfWorkPort, UpdateInventoryInput, UploadSessionDetails, UsageInput
+  InventoryBulkUpdate, InventoryBulkUpdateResult, ReservationDetails, StockMutation, UnitOfWorkOperation, UnitOfWorkPort, UpdateInventoryInput, UploadSessionDetails, UsageInput
 } from "@benchledger/application";
 import { BUILTIN_INVENTORY_CATEGORIES, compareInventoryCategoryKeys, normalizeInventoryCategoryKey, normalizeInventoryCategoryName } from "@benchledger/domain";
 
@@ -219,6 +219,44 @@ class MemoryInventory implements InventoryPort {
     } as InventoryItem;
     this.items.set(itemId, next);
     return Promise.resolve(clone(next));
+  }
+
+  bulkUpdateItems(input: InventoryBulkUpdate, _ctx: RequestContext): Promise<InventoryBulkUpdateResult> {
+    if (!Number.isSafeInteger(input.targets.length) || input.targets.length < 1 || input.targets.length > 100) {
+      throw new ApplicationError("validation", "Bulk inventory updates require between 1 and 100 targets");
+    }
+    const changes = normalizeInventoryBulkChanges(input.changes);
+    const targets = [...input.targets].sort((left, right) => left.itemId.localeCompare(right.itemId));
+    const seen = new Set<string>();
+    const staleTargets: Array<{ readonly itemId: string; readonly expectedVersion: number; readonly actualVersion: number }> = [];
+    const prepared = targets.map((target) => {
+      if (seen.has(target.itemId)) throw new ApplicationError("validation", "Bulk targets must contain unique item ids");
+      seen.add(target.itemId);
+      if (!Number.isSafeInteger(target.expectedVersion) || target.expectedVersion <= 0) throw new ApplicationError("validation", "Bulk targets require a positive expected version");
+      const current = this.items.get(target.itemId);
+      if (current === undefined || current.retiredAt !== undefined) throw new ApplicationError("not_found", `Inventory item '${target.itemId}' was not found`);
+      if (current.version !== target.expectedVersion) {
+        staleTargets.push({ itemId: target.itemId, expectedVersion: target.expectedVersion, actualVersion: current.version });
+      }
+      const applied = applyInventoryBulkChanges(current, changes);
+      return { target, current, applied };
+    });
+    if (staleTargets.length > 0) {
+      throw new ApplicationError("conflict", "One or more inventory items changed since they were read", { staleTargets });
+    }
+    const updated: InventoryItem[] = [];
+    const unchanged: InventoryItem[] = [];
+    for (const entry of prepared) {
+      if (!entry.applied.changed) {
+        unchanged.push(clone(entry.current));
+        continue;
+      }
+      const now = iso();
+      const next = { ...entry.applied.item, updatedAt: now, version: entry.current.version + 1 };
+      this.items.set(entry.current.id, next);
+      updated.push(clone(next));
+    }
+    return Promise.resolve({ updated: updated.sort((left, right) => left.id.localeCompare(right.id)), unchanged: unchanged.sort((left, right) => left.id.localeCompare(right.id)) });
   }
 
   async recordPhysicalCount(itemId: string, quantity: number, ctx: RequestContext, note?: string): Promise<StockMutation> {

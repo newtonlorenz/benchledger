@@ -4,6 +4,7 @@ import {
   createProjectRevisionSchema, createProjectSchema, createReservationSchema,
   createProjectWithInitialRevisionSchema, createWorkItemRevisionSchema, createWorkItemSchema, idSchema, inventoryListQuerySchema,
   commissionInventoryItemSchema, stockEventInputSchema, updateBomLineSchema, updateInventoryCategorySchema, updateInventoryItemSchema,
+  inventoryBulkUpdateSchema,
   updateProjectSchema, catalogProductSchema, createCatalogProductSchema,
   updateCatalogProductSchema, inventoryProductProfileSchema,
   createInventoryProductProfileSchema, updateInventoryProductProfileSchema,
@@ -17,7 +18,7 @@ import type {
   Artifact, BomGap, BomGapCandidate, BomLine, CreateBomLine, CreateInventoryItem, CreateOffer, CreateProject,
   CreateProjectRevision, CreateReservation, CreateWorkItem, CreateWorkItemRevision,
   CreateProjectWithInitialRevision, InventoryItem, InventoryListQuery, Offer, Project, ProjectRevision, ProjectWithInitialRevision, Reservation,
-  StockEventInput, CommissionInventoryItem, UploadSession, WorkItem, WorkItemRevision, CatalogProduct, CreateCatalogProduct,
+  InventoryBulkUpdate, StockEventInput, CommissionInventoryItem, UploadSession, WorkItem, WorkItemRevision, CatalogProduct, CreateCatalogProduct,
   UpdateCatalogProduct, InventoryProductProfile, CreateInventoryProductProfile,
   UpdateInventoryProductProfile, BuildConfigurationSnapshot, CreateBuildConfigurationSnapshot,
   ReconciliationDraft, ReconciliationCommit, CommitReconciliation, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory
@@ -25,13 +26,14 @@ import type {
 import { ApplicationError, conflict, notFound } from "./errors.js";
 import { parseInventoryCursor } from "./inventory-pagination.js";
 import type {
-  ApplicationPorts, ArtifactDownload, AuditInput, BeginUploadInput, EventBusEvent,
-  GapEvaluation, InventoryListOptions, Mutation, Page, ProjectListOptions, RequestContext,
+  ApplicationPorts, ArtifactDownload, AuditEvent, AuditInput, BeginUploadInput, BulkMutation, EventBusEvent,
+  GapEvaluation, InventoryBulkUpdateResult, InventoryListOptions, Mutation, Page, ProjectListOptions, RequestContext,
   ReservationDetails, StockMutation, UpdateInventoryInput, UploadSessionDetails, UsageInput,
   CatalogProductListOptions, BuildConfigurationListOptions, InventoryCategoryListOptions, InventoryCategoryPort
 } from "./ports.js";
 import { z } from "zod";
 import { buildReconciliationDocument, reconciliationCommitId, reconciliationDraftId, type ReconciliationSourceSnapshot } from "./reconciliation.js";
+import { canonicalInventoryBulkUpdate, inventoryBulkUpdateFingerprint, normalizeInventoryBulkChanges } from "./inventory-bulk.js";
 
 const CONFIRMED_EVIDENCE = new Set(["physically_counted", "commissioned"]);
 const COMMISSIONABLE_EVIDENCE = new Set(["delivered_uncounted", "ordered_unverified"]);
@@ -788,6 +790,32 @@ export class ApplicationService {
       await this.validateInventoryCategoryReferences(parsed.categoryNodeId);
       const item = await this.ports.inventory.updateItem(itemId, parsed, expectedVersion, ctx);
       return { value: item, entityId: item.id, version: item.version };
+    });
+  }
+
+  async bulkUpdateInventoryItems(input: unknown, ctx: RequestContext): Promise<BulkMutation<InventoryBulkUpdateResult>> {
+    if (ctx.idempotencyKey === undefined) throw new ApplicationError("validation", "Bulk inventory updates require an idempotency key");
+    const parsed = inventoryBulkUpdateSchema.parse(input) as InventoryBulkUpdate;
+    const execution: InventoryBulkUpdate = {
+      targets: [...parsed.targets].sort((left, right) => left.itemId.localeCompare(right.itemId)),
+      changes: normalizeInventoryBulkChanges(parsed.changes),
+    };
+    const canonical = canonicalInventoryBulkUpdate(execution);
+    // Bulk retries must hash the parsed canonical command rather than a raw
+    // transport body. This keeps whitespace, tag order/duplicates, and target
+    // order from changing the meaning of one actor-scoped idempotency key.
+    const commandContext = { ...ctx, fingerprint: inventoryBulkUpdateFingerprint(canonical) };
+    return this.mutateBulk(commandContext, async () => {
+      const result = await this.ports.inventory.bulkUpdateItems(execution, commandContext);
+      const updated = result.updated.map((item) => inventoryItemSchema.parse(item)).sort((left, right) => left.id.localeCompare(right.id));
+      const unchanged = result.unchanged.map((item) => inventoryItemSchema.parse(item)).sort((left, right) => left.id.localeCompare(right.id));
+      const targetIds = new Set(execution.targets.map((target) => target.itemId));
+      const resultIds = [...updated, ...unchanged].map((item) => item.id);
+      const resultIdSet = new Set(resultIds);
+      if (resultIds.length !== resultIdSet.size || resultIdSet.size !== targetIds.size || resultIds.some((itemId) => !targetIds.has(itemId))) {
+        throw new ApplicationError("integrity_error", "Bulk inventory results must contain each requested item exactly once");
+      }
+      return { updated, unchanged };
     });
   }
 
@@ -1614,6 +1642,78 @@ export class ApplicationService {
       } catch {
         // Event subscribers are best-effort; the committed audit/idempotency
         // record remains the source of truth for replay and reconciliation.
+      }
+    }
+    return committed.mutation;
+  }
+
+  /**
+   * Audited orchestration for one atomic inventory batch. The inventory port
+   * owns the all-or-nothing state transition; this layer adds one idempotency
+   * record and one audit/event pair for each actually changed item.
+   */
+  private async mutateBulk(
+    ctx: RequestContext,
+    operation: () => Promise<InventoryBulkUpdateResult>,
+  ): Promise<BulkMutation<InventoryBulkUpdateResult>> {
+    const action = "inventory.item.bulk_update";
+    const fingerprint = ctx.fingerprint ?? action;
+    let committed: {
+      readonly mutation: BulkMutation<InventoryBulkUpdateResult>;
+      readonly events: readonly EventBusEvent[];
+    };
+    committed = await this.ports.unitOfWork.run(async () => {
+      if (ctx.idempotencyKey) {
+        const prior = await this.ports.idempotency.get(ctx.actor, ctx.idempotencyKey);
+        if (prior !== null) {
+          const stored = prior as { readonly action?: string; readonly fingerprint?: string; readonly mutation?: BulkMutation<InventoryBulkUpdateResult> };
+          if (stored.mutation) {
+            if (stored.action !== action || (stored.fingerprint !== undefined && stored.fingerprint !== fingerprint)) {
+              throw new ApplicationError("idempotency_conflict", "Idempotency key was already used for a different command");
+            }
+            return { mutation: { ...stored.mutation, replayed: true }, events: [] };
+          }
+          throw new ApplicationError("idempotency_conflict", "Idempotency key belongs to a different mutation shape");
+        }
+      }
+
+      const data = await operation();
+      const audits: AuditEvent[] = [];
+      for (const item of data.updated) {
+        const auditIdempotencyKey = ctx.idempotencyKey === undefined
+          ? undefined
+          : `bulk:${createHash("sha256").update(`${ctx.actor}:${ctx.idempotencyKey}:${item.id}`).digest("hex")}`;
+        audits.push(await this.ports.audit.append({
+          action,
+          actor: ctx.actor,
+          source: ctx.source,
+          correlationId: ctx.correlationId,
+          ...(auditIdempotencyKey === undefined ? {} : { idempotencyKey: auditIdempotencyKey }),
+          entityType: "inventory_item",
+          entityId: item.id,
+          version: item.version,
+        }));
+      }
+      const mutation: BulkMutation<InventoryBulkUpdateResult> = { data, audits, correlationId: ctx.correlationId, replayed: false };
+      if (ctx.idempotencyKey) await this.ports.idempotency.set(ctx.actor, ctx.idempotencyKey, { action, fingerprint, mutation });
+      const events = audits.map((audit) => ({
+        id: audit.id,
+        type: action,
+        entityType: audit.entityType,
+        entityId: audit.entityId,
+        ...(audit.version === undefined ? {} : { version: audit.version }),
+        correlationId: ctx.correlationId,
+        at: audit.createdAt,
+      } satisfies EventBusEvent));
+      return { mutation, events };
+    });
+
+    for (const event of committed.events) {
+      try {
+        this.ports.events.publish(event);
+      } catch {
+        // Delivery is post-commit and best-effort, matching single-item
+        // mutation semantics.
       }
     }
     return committed.mutation;

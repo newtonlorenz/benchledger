@@ -18,6 +18,7 @@ export const itemKindSchema = z.enum([
 ]);
 
 export const quantityUnitSchema = z.enum(["each", "gram", "millimetre", "millilitre", "metre", "set"]);
+export const inventoryConditionSchema = z.enum(["new", "good", "worn", "needs_repair", "unknown"]);
 export const stockEvidenceSchema = z.enum([
   "physically_counted",
   "commissioned",
@@ -81,7 +82,7 @@ export const inventoryItemSchema = z.object({
   availableQuantity: z.number().finite().nonnegative(),
   unit: quantityUnitSchema,
   location: z.string().max(240).optional(),
-  condition: z.enum(["new", "good", "worn", "needs_repair", "unknown"]).optional(),
+  condition: inventoryConditionSchema.optional(),
   dimensions: dimensionSchema.optional(),
   tags: z.array(z.string().min(1).max(80)).max(50),
   links: z.array(supplierLinkSchema).max(30),
@@ -169,6 +170,75 @@ export const commissionInventoryItemSchema = z.object({
 
 const updateInventoryItemShape = createInventoryItemShape.omit({ id: true, quantity: true, availableQuantity: true, unit: true, evidence: true });
 export const updateInventoryItemSchema = updateInventoryItemShape.extend({ categoryNodeId: idSchema.nullable().optional() }).partial().strict();
+
+const inventoryBulkTagInputSchema = z.string().trim().min(1).max(80);
+
+function normalizeInventoryTags(tags: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const tag of tags) {
+    const value = tag.trim();
+    const key = value.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(value);
+  }
+  return normalized;
+}
+
+export const inventoryBulkUpdateTagsSchema = z.object({
+  add: z.array(inventoryBulkTagInputSchema).max(50).optional(),
+  remove: z.array(inventoryBulkTagInputSchema).max(50).optional()
+}).strict().superRefine((value, context) => {
+  const add = normalizeInventoryTags(value.add ?? []);
+  const remove = normalizeInventoryTags(value.remove ?? []);
+  if (add.length === 0 && remove.length === 0) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "tags.add or tags.remove must contain at least one tag" });
+  }
+  const removed = new Set(remove.map((tag) => tag.toLocaleLowerCase()));
+  if (add.some((tag) => removed.has(tag.toLocaleLowerCase()))) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "A tag cannot be both added and removed" });
+  }
+}).transform((value) => {
+  const add = normalizeInventoryTags(value.add ?? []);
+  const remove = normalizeInventoryTags(value.remove ?? []);
+  return {
+    ...(add.length === 0 ? {} : { add }),
+    ...(remove.length === 0 ? {} : { remove })
+  };
+});
+
+export const inventoryBulkUpdateChangesSchema = z.object({
+  location: z.string().trim().min(1).max(240).optional(),
+  condition: inventoryConditionSchema.optional(),
+  tags: inventoryBulkUpdateTagsSchema.optional()
+}).strict().superRefine((value, context) => {
+  if (value.location === undefined && value.condition === undefined && value.tags === undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "At least one bulk metadata change is required" });
+  }
+});
+
+export const inventoryBulkUpdateTargetSchema = z.object({
+  itemId: idSchema,
+  expectedVersion: z.number().int().positive()
+}).strict();
+
+export const inventoryBulkUpdateSchema = z.object({
+  targets: z.array(inventoryBulkUpdateTargetSchema).min(1).max(100),
+  changes: inventoryBulkUpdateChangesSchema
+}).strict().superRefine((value, context) => {
+  const seen = new Set<string>();
+  for (const [index, target] of value.targets.entries()) {
+    if (seen.has(target.itemId)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["targets", index, "itemId"], message: "Bulk targets must contain unique item ids" });
+    }
+    seen.add(target.itemId);
+  }
+});
+
+/** Descriptive aliases for callers that prefer the operation-first naming. */
+export const bulkUpdateInventoryItemsSchema = inventoryBulkUpdateSchema;
+export const bulkInventoryUpdateSchema = inventoryBulkUpdateSchema;
 
 export const stockEventInputSchema = z.object({
   itemId: idSchema,

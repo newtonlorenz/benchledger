@@ -1,7 +1,8 @@
 import type {
   Artifact, BomGap, BomLine, CreateBomLine, CreateInventoryItem, CreateOffer,
   CreateProject, CreateProjectRevision, CreateProjectWithInitialRevision, CreateReservation, CreateWorkItem,
-  CreateWorkItemRevision, InventoryItem, InventoryListQuery, Offer, Project,
+  CreateWorkItemRevision, InventoryBulkUpdate as ApiInventoryBulkUpdate, InventoryBulkUpdateChanges as ApiInventoryBulkUpdateChanges,
+  InventoryBulkUpdateTarget as ApiInventoryBulkUpdateTarget, InventoryItem, InventoryListQuery, Offer, Project,
   ProjectRevision, ProjectWithInitialRevision, Reservation, StockEvent, StockEventInput, UploadSession,
   WorkItem, WorkItemRevision, CatalogProduct as ApiCatalogProduct,
   CreateCatalogProduct as ApiCreateCatalogProduct, UpdateCatalogProduct as ApiUpdateCatalogProduct,
@@ -160,6 +161,15 @@ export interface UpdateInventoryInput {
   readonly evidence?: InventoryItem["evidence"];
 }
 
+export type InventoryBulkUpdate = ApiInventoryBulkUpdate;
+export type InventoryBulkUpdateChanges = ApiInventoryBulkUpdateChanges;
+export type InventoryBulkUpdateTarget = ApiInventoryBulkUpdateTarget;
+
+export interface InventoryBulkUpdateResult {
+  readonly updated: readonly InventoryItem[];
+  readonly unchanged: readonly InventoryItem[];
+}
+
 export interface StockMutation {
   readonly event: StockEvent;
   readonly item: InventoryItem;
@@ -175,6 +185,8 @@ export interface InventoryPort {
    */
   rollbackCreatedItem?(itemId: string): Promise<void>;
   updateItem(id: string, input: UpdateInventoryInput, expectedVersion: number | undefined, ctx: RequestContext): Promise<InventoryItem>;
+  /** Preflight and apply one bounded metadata batch atomically. */
+  bulkUpdateItems(input: InventoryBulkUpdate, ctx: RequestContext): Promise<InventoryBulkUpdateResult>;
   /** Record an observed physical count and promote its evidence atomically. */
   recordPhysicalCount?(itemId: string, quantity: number, ctx: RequestContext, note?: string): Promise<StockMutation>;
   /** Record an observed count that deliberately promotes uncertain evidence to commissioned. */
@@ -393,6 +405,13 @@ export interface ApplicationPorts {
 export interface Mutation<T> {
   readonly data: T;
   readonly audit: AuditEvent;
+  readonly correlationId: string;
+  readonly replayed: boolean;
+}
+
+export interface BulkMutation<T> {
+  readonly data: T;
+  readonly audits: readonly AuditEvent[];
   readonly correlationId: string;
   readonly replayed: boolean;
 }

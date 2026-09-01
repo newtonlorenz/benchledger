@@ -47,6 +47,7 @@ and invalid hashes. Mutating tools use optimistic versions where applicable.
 | --- | --- | --- | --- |
 | Inventory | `read_inventory_summary`, `list_inventory`, `read_inventory_item`, `list_stock_events` | `inventory:read` | No |
 | Inventory | `create_inventory_item`, `update_inventory_item`, `commission_inventory_item`, `record_stock_event` | `inventory:write` | Yes |
+| Inventory | `bulk_update_inventory_items` | `inventory:write` | Yes; explicit 1–100 optimistic-version targets |
 | Inventory taxonomy | `list_inventory_categories`, `read_inventory_category` | `inventory:read` | No |
 | Inventory taxonomy | `create_inventory_category`, `update_inventory_category`, `archive_inventory_category` | `inventory:write` | Yes; update/archive require an expected version |
 | Exact inventory | `create_inventory_with_product_profile` | `inventory:write` + `catalog:write` | Yes |
@@ -86,6 +87,7 @@ profiles when present.
 | --- | --- | --- |
 | See what I have | Inventory dashboard and item detail | `read_inventory_summary` → `list_inventory` → item resource |
 | Organize inventory | Settings category manager; inventory table, category filter, and item drawer show managed assignments | `list_inventory_categories` → `create_inventory_category` / `update_inventory_category` / `archive_inventory_category`; pass `categoryNodeId` when creating or updating an item; `kind` remains the separate semantic filter |
+| Correct metadata across loaded items | Explicit inventory selection and confirmation dialog | `bulk_update_inventory_items` with 1–100 `{itemId, expectedVersion}` targets; location, canonical condition, or normalized tag add/remove only; atomic preflight, deterministic updated/unchanged results, and no-op rows emit no audit/event |
 | Count uncertain stock | Item count form and stock timeline | `read_inventory_item` → `record_stock_event(kind=count_correction)` |
 | Commission delivered or ordered stock | Item commissioning action with observed quantity and provenance | `read_inventory_item` → `commission_inventory_item` |
 | Add an exact printer or spool | Exact-product guided add | catalog search/read → `create_inventory_with_product_profile` |
@@ -106,6 +108,17 @@ current item version. REST callers must also send `If-Match` and
 `Idempotency-Key`; retries with the same key and identical payload replay the
 same mutation, while a different payload or stale version is rejected. The
 append-only count event retains the prior delivery/order evidence for audit.
+
+The REST equivalent is `PATCH /api/v1/inventory/bulk` with a required
+`Idempotency-Key`. Targets are explicit optimistic-lock pairs, not an
+all-matching query. The REST response is `{data:{updated,unchanged},audits,
+correlationId,replayed}` with full inventory items in both arrays, sorted by
+item id. MCP deliberately returns bounded `{itemId,version}` references in
+`updated` and `unchanged`, together with `auditIds`, `correlationId`, and
+`replayed`. A replay with the same actor and canonical payload returns the
+stored result without repeating writes, audits, or events. No-op rows do not
+increment versions or emit audit/events. Quantity, evidence, identity, profile,
+retirement, partial, undo, and import operations are outside this command.
 
 ## Artifact transfer contract
 

@@ -9,7 +9,7 @@ import {
   beginUploadSchema, commissionInventoryItemSchema, createBomLineSchema, createInventoryCategorySchema, createInventoryItemSchema, createOfferSchema,
   createProjectRevisionSchema, createProjectSchema, createReservationSchema,
   createProjectWithInitialRevisionSchema, createWorkItemRevisionSchema, createWorkItemSchema, healthSchema,
-  inventoryCategoryListQuerySchema, inventoryListQuerySchema, stockEventInputSchema, updateBomLineSchema,
+  inventoryBulkUpdateSchema, inventoryCategoryListQuerySchema, inventoryListQuerySchema, stockEventInputSchema, updateBomLineSchema,
   updateInventoryCategorySchema, updateInventoryItemSchema, updateProjectSchema, usageInputSchema,
   createCatalogProductSchema, updateCatalogProductSchema,
   createInventoryProductProfileSchema, createInventoryWithProductProfileSchema, updateInventoryProductProfileSchema,
@@ -418,6 +418,37 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       profile: { $ref: "#/components/schemas/CreateInventoryProductProfileWithoutItem" }
     }
   };
+  const inventoryBulkUpdateSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["targets", "changes"],
+    properties: {
+      targets: {
+        type: "array", minItems: 1, maxItems: 100,
+        items: {
+          type: "object", additionalProperties: false, required: ["itemId", "expectedVersion"],
+          properties: {
+            itemId: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+            expectedVersion: { type: "integer", minimum: 1 }
+          }
+        }
+      },
+      changes: {
+        type: "object", additionalProperties: false, minProperties: 1,
+        properties: {
+          location: { type: "string", minLength: 1, maxLength: 240 },
+          condition: { type: "string", enum: ["new", "good", "worn", "needs_repair", "unknown"] },
+          tags: {
+            type: "object", additionalProperties: false, minProperties: 1,
+            properties: {
+              add: { type: "array", minItems: 1, maxItems: 50, items: { type: "string", minLength: 1, maxLength: 80 } },
+              remove: { type: "array", minItems: 1, maxItems: 50, items: { type: "string", minLength: 1, maxLength: 80 } }
+            }
+          }
+        }
+      }
+    }
+  };
   const createInventoryItemSchema = {
     type: "object",
     additionalProperties: false,
@@ -576,6 +607,7 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       schemas: {
         CreateInventoryItem: createInventoryItemSchema,
         CommissionInventoryItem: commissionInventoryItemSchema,
+        InventoryBulkUpdate: inventoryBulkUpdateSchema,
         CreateInventoryProductProfileWithoutItem: createInventoryProductProfileWithoutItemSchema,
         CreateInventoryWithProductProfile: inventoryWithProductProfileSchema,
         InventoryCategory: inventoryCategorySchema,
@@ -603,6 +635,21 @@ function jsonOpenApi(version: string): Record<string, unknown> {
         patch: { parameters: [categoryVersionParameter], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateInventoryCategory" } } } }, responses: { "200": { description: "Updated managed inventory category" } } }
       },
       "/inventory/categories/{id}/archive": { parameters: [categoryIdParameter], post: { parameters: [categoryVersionParameter], responses: { "200": { description: "Archived managed inventory category" } } } },
+      "/inventory/bulk": {
+        patch: {
+          summary: "Apply one bounded metadata batch to explicit inventory items",
+          description: "Targets carry explicit optimistic versions. The server preflights every target and commits location, condition, and tag add/remove changes atomically; no-op targets keep their version and produce no audit or event.",
+          parameters: [{
+            name: "Idempotency-Key",
+            in: "header",
+            required: true,
+            description: "Stable command identity used to safely replay an identical bulk update.",
+            schema: { type: "string", minLength: 8, maxLength: 200 }
+          }],
+          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/InventoryBulkUpdate" } } } },
+          responses: { "200": { description: "Bulk inventory mutation with per-item audits" }, "400": { description: "Invalid request or missing idempotency key" }, "403": { description: "CSRF, write-scope, or project-scoped denial" }, "409": { description: "Version, idempotency, or atomic commit conflict" } }
+        }
+      },
       "/inventory/with-product-profile": {
         post: {
           summary: "Create an inventory item and exact physical product profile atomically",
@@ -990,6 +1037,11 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     rejectScopedGlobalAccess(request);
     const mutation = await service.createInventoryWithProductProfile(parseBody(createInventoryWithProductProfileSchema, request.body), requestContext(request));
     return reply.code(201).send(mutationBody(mutation));
+  });
+  app.patch(route("/inventory/bulk"), async (request) => {
+    requireScope(request, "write", auth);
+    rejectScopedGlobalAccess(request);
+    return service.bulkUpdateInventoryItems(parseBody(inventoryBulkUpdateSchema, request.body), requestContext(request));
   });
   app.get(route("/inventory/:id"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; return service.getInventoryItem(params.id); });
   app.post(route("/inventory/:id/count"), async (request, reply) => {

@@ -85,6 +85,7 @@ function backend(): BenchLedgerBackend {
   };
   const inventoryItem: InventoryItem = {
     id: "item-esp32",
+    version: 1,
     name: "ESP32 development board",
     category: "electronics",
     quantity: { value: 2, unit: "piece" },
@@ -117,6 +118,7 @@ function backend(): BenchLedgerBackend {
       get: async () => inventoryItem,
       create: async (input) => ({ id: "created-item", version: 1, item: { ...inventoryItem, name: input.name } }),
       update: async () => ({ id: inventoryItem.id, version: 2, item: inventoryItem }),
+      bulkUpdate: async () => ({ updated: [], unchanged: [{ itemId: inventoryItem.id, version: inventoryItem.version }], auditIds: [], correlationId: "bulk-correlation", replayed: false }),
       commission: async (input) => ({ id: input.itemId, version: 2, item: { ...inventoryItem, evidence: { ...inventoryItem.evidence, state: "commissioned" }, availability: "confirmed" } }),
       recordStockEvent: async (input) => ({
         eventId: "event-1",
@@ -265,6 +267,29 @@ describe("McpAdapter", () => {
     expect(archived).toMatchObject({ isError: false, structuredContent: { category: { archived: true } } });
   });
 
+  it("dispatches normalized bounded bulk metadata updates and denies them to scoped tokens", async () => {
+    const received: unknown[] = [];
+    const unscopedBackend = backend();
+    unscopedBackend.inventory.bulkUpdate = async (input) => {
+      received.push(input);
+      return { updated: [], unchanged: [], auditIds: [], correlationId: "bulk-correlation", replayed: false };
+    };
+    const result = await new McpAdapter(unscopedBackend).callTool("bulk_update_inventory_items", {
+      targets: [{ itemId: "item-esp32", expectedVersion: 1 }],
+      changes: { location: " bench ", tags: { add: [" PETG ", "petg"] } },
+    }, context);
+    expect(result).toMatchObject({ isError: false, structuredContent: { updated: [], unchanged: [], auditIds: [], correlationId: "bulk-correlation", replayed: false } });
+    expect(received[0]).toEqual({
+      targets: [{ itemId: "item-esp32", expectedVersion: 1 }],
+      changes: { location: "bench", tags: { add: ["PETG"] } },
+    });
+    const scoped = { ...context, projectIds: ["project-1"] as const };
+    await expect(new McpAdapter(backend()).callTool("bulk_update_inventory_items", {
+      targets: [{ itemId: "item-esp32", expectedVersion: 1 }],
+      changes: { location: "bench" },
+    }, scoped)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "FORBIDDEN" } } });
+  });
+
   it("rejects project-scoped category writes while preserving category reads", async () => {
     const adapter = new McpAdapter(backend());
     const scoped = { actorId: "project-agent", scopes: ["inventory:read", "inventory:write"] as const, projectIds: ["project-1"] };
@@ -343,6 +368,7 @@ describe("McpAdapter", () => {
     expect(inventoryUpdate?.inputSchema.properties.categoryNodeId).toMatchObject({ oneOf: expect.arrayContaining([expect.objectContaining({ type: "string", maxLength: 160 }), expect.objectContaining({ type: "null" })]) });
     expect(names).not.toContain("retire_inventory_item");
     expect(names).not.toContain("freeze_artifact_revision");
+    expect(names).toContain("bulk_update_inventory_items");
     expect(names).not.toEqual(expect.arrayContaining(["run_shell", "execute_sql", "fetch_url", "purchase", "start_print"]));
     expect(adapter.capabilityDocument()).toMatchObject({ scopeBehavior: { inventory: expect.stringContaining("shared"), offers: expect.stringContaining("itemId") } });
 
@@ -526,6 +552,7 @@ describe("McpAdapter", () => {
       ["create_inventory_item", { name: "Wire", category: "wire", quantity: { value: 1, unit: "metre" }, evidence: { state: "physical_count", source: "count", recordedAt: "2026-08-30" } }],
       ["create_inventory_with_product_profile", { item: { name: "PETG HF", category: "filament", quantity: { value: 1000, unit: "gram" }, evidence: { state: "delivery", source: "order-1", recordedAt: "2026-08-30" } }, profile: { catalogProductId: "catalog-filament-1", profileType: "filament_spool", linkState: "reported", details: { openedState: "sealed" } } }],
       ["update_inventory_item", { itemId: "item-esp32", name: "ESP32" }],
+      ["bulk_update_inventory_items", { targets: [{ itemId: "item-esp32", expectedVersion: 1 }], changes: { condition: "good" } }],
       ["record_stock_event", { itemId: "item-esp32", kind: "receipt", quantity: { value: 1, unit: "piece" } }],
       ["list_stock_events", { itemId: "item-esp32", limit: 5 }],
       ["search_catalog_products", { query: "petg", kind: "filament", limit: 5 }],

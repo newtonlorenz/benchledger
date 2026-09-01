@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commissionInventoryItemSchema, createBomLineSchema, createInventoryItemSchema, inventoryListQuerySchema, updateBomLineSchema, updateInventoryItemSchema } from "./schemas.js";
+import { commissionInventoryItemSchema, createBomLineSchema, createInventoryItemSchema, inventoryBulkUpdateSchema, inventoryListQuerySchema, updateBomLineSchema, updateInventoryItemSchema } from "./schemas.js";
 
 const constraints = {
   kind: "electronic",
@@ -80,5 +80,38 @@ describe("REST inventory commissioning contract", () => {
       unit: "each",
       evidence: { state: "delivered_uncounted", source: "bench-test" }
     })).toThrow();
+  });
+});
+
+describe("REST inventory bulk-update schema", () => {
+  const valid = {
+    targets: [
+      { itemId: "item-b", expectedVersion: 2 },
+      { itemId: "item-a", expectedVersion: 1 },
+    ],
+    changes: {
+      location: "  Shelf A  ",
+      tags: { add: ["  PETG", "petg", "black"], remove: ["old"] },
+    },
+  };
+
+  it("normalizes and deduplicates metadata changes while preserving explicit target versions", () => {
+    expect(inventoryBulkUpdateSchema.parse(valid)).toEqual({
+      targets: valid.targets,
+      changes: {
+        location: "Shelf A",
+        tags: { add: ["PETG", "black"], remove: ["old"] },
+      },
+    });
+  });
+
+  it.each([
+    ["duplicate target ids", { ...valid, targets: [{ itemId: "item-a", expectedVersion: 1 }, { itemId: "item-a", expectedVersion: 2 }] }],
+    ["missing opt-in change", { ...valid, changes: {} }],
+    ["empty location", { ...valid, changes: { location: "   " } }],
+    ["add/remove overlap", { ...valid, changes: { tags: { add: ["Shelf"], remove: [" shelf "] } } }],
+    ["more than one hundred targets", { ...valid, targets: Array.from({ length: 101 }, (_, index) => ({ itemId: `item-${index}`, expectedVersion: 1 })) }],
+  ])("rejects %s", (_label, input) => {
+    expect(() => inventoryBulkUpdateSchema.parse(input)).toThrow();
   });
 });

@@ -29,13 +29,13 @@ test("filters, edits, and physically counts evidence-aware inventory", async ({ 
   await expect(page.getByRole("heading", { name: "Review inventory." })).toBeVisible();
   await expect(page.locator(".inventory-summary")).toHaveCount(0);
   const headers = page.getByRole("table").getByRole("columnheader");
-  await expect(headers).toHaveCount(6);
-  await expect(headers.nth(0)).toHaveText("Item");
-  await expect(headers.nth(1)).toHaveText("Category");
-  await expect(headers.nth(2)).toHaveText("Quantity");
-  await expect(headers.nth(3)).toHaveText("Status");
-  await expect(headers.nth(4)).toHaveText("Location");
-  await expect(headers.nth(5)).toHaveText("Open");
+  await expect(headers).toHaveCount(7);
+  await expect(headers.nth(1)).toHaveText("Item");
+  await expect(headers.nth(2)).toHaveText("Category");
+  await expect(headers.nth(3)).toHaveText("Quantity");
+  await expect(headers.nth(4)).toHaveText("Status");
+  await expect(headers.nth(5)).toHaveText("Location");
+  await expect(headers.nth(6)).toHaveText("Open");
   await expect(page.getByRole("columnheader", { name: "Evidence source", exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Filter inventory by category")).toBeVisible();
   await page.getByLabel("Filter inventory by category").selectOption("__unassigned__");
@@ -156,6 +156,191 @@ test("loads server-backed continuation pages, resets filters, and ignores stale 
   await expect(page.getByRole("button", { name: "Open Slow result" })).toHaveCount(0);
 });
 
+test("selects loaded inventory across pages, caps the selection surface, and clears it when filters change", async ({ page }) => {
+  await signIn(page);
+  const rows = Array.from({ length: 30 }, (_, index) => inventoryRecord(`tool-${String(index).padStart(2, "0")}`, `Tool ${String(index).padStart(2, "0")}`));
+  await page.route("**/api/v1/inventory**", async (route) => {
+    const requestUrl = new URL(route.request().url());
+    if (route.request().method() !== "GET" || requestUrl.pathname !== "/api/v1/inventory") return route.continue();
+    const query = requestUrl.searchParams.get("q") ?? "";
+    const filtered = query ? rows.filter((item) => item.name.toLocaleLowerCase().includes(query.toLocaleLowerCase())) : rows;
+    const offset = requestUrl.searchParams.get("cursor") === "25" ? 25 : 0;
+    const data = filtered.slice(offset, offset + 25);
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data, limit: 25, total: filtered.length, ...(offset + data.length < filtered.length ? { nextCursor: String(offset + data.length) } : {}) }) });
+  });
+
+  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await expect(page.locator(".inventory-page-status")).toHaveText("Showing 25 of 30 items");
+  await page.getByLabel("Select all loaded inventory items").check();
+  await expect(page.locator(".inventory-selection-bar")).toContainText("25 selected of 25 loaded");
+  await page.getByRole("button", { name: "Load more" }).click();
+  await expect(page.locator(".inventory-selection-bar")).toContainText("25 selected of 30 loaded");
+  await page.getByLabel("Select Tool 29").check();
+  await expect(page.locator(".inventory-selection-bar")).toContainText("26 selected of 30 loaded");
+
+  await page.locator(".field-search input").fill("Tool 00");
+  await expect(page.locator(".inventory-page-status")).toHaveText("Showing 1 of 1 items");
+  await expect(page.locator(".inventory-selection-bar")).toHaveCount(0);
+  await expect(page.locator(".inventory-selection-notice")).toContainText("Selection cleared");
+  await expect(page.getByLabel("Select Tool 00")).toBeVisible();
+});
+
+test("blocks bulk selection for rows without an observed version", async ({ page }) => {
+  await signIn(page);
+  const unversioned = { ...inventoryRecord("legacy-item", "Legacy item"), version: undefined };
+  const versioned = inventoryRecord("current-item", "Current item");
+  let bulkRequests = 0;
+  await page.route("**/api/v1/inventory**", async (route) => {
+    const requestUrl = new URL(route.request().url());
+    if (route.request().method() !== "GET" || requestUrl.pathname !== "/api/v1/inventory") return route.continue();
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [unversioned, versioned], limit: 25, total: 2 }) });
+  });
+  await page.route("**/api/v1/inventory/bulk", async (route) => {
+    bulkRequests += 1;
+    await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: { code: "unexpected", message: "Bulk request should not be sent." } }) });
+  });
+
+  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await expect(page.getByLabel("Select Legacy item")).toBeDisabled();
+  await expect(page.getByLabel("Select all loaded inventory items")).toBeDisabled();
+  await expect(page.locator(".inventory-selection-notice")).toContainText("observed version is unavailable");
+  await page.getByLabel("Select Current item").check();
+  const dialog = page.getByRole("dialog", { name: "Bulk edit inventory" });
+  await page.getByRole("button", { name: "Bulk edit" }).click();
+  await expect(dialog).toContainText("1 selected item");
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  expect(bulkRequests).toBe(0);
+});
+
+test("confirms bulk inventory changes and refreshes returned rows", async ({ page }) => {
+  await signIn(page);
+  const serverRows = Array.from({ length: 30 }, (_, index) => inventoryRecord(`tool-${String(index).padStart(2, "0")}`, `Tool ${String(index).padStart(2, "0")}`));
+  let refreshes = 0;
+  let requestBody: { targets: Array<{ itemId: string; expectedVersion: number }>; changes: Record<string, unknown> } | undefined;
+  await page.route("**/api/v1/inventory**", async (route) => {
+    const requestUrl = new URL(route.request().url());
+    if (route.request().method() !== "GET" || requestUrl.pathname !== "/api/v1/inventory") return route.continue();
+    refreshes += 1;
+    const offset = requestUrl.searchParams.get("cursor") === "25" ? 25 : 0;
+    const data = serverRows.slice(offset, offset + 25);
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data, limit: 25, total: serverRows.length, ...(offset + data.length < serverRows.length ? { nextCursor: String(offset + data.length) } : {}) }) });
+  });
+  await page.route("**/api/v1/inventory/bulk", async (route) => {
+    if (route.request().method() !== "PATCH") return route.continue();
+    requestBody = route.request().postDataJSON() as typeof requestBody;
+    const updated = requestBody.targets.map((target) => {
+      const index = serverRows.findIndex((item) => item.id === target.itemId);
+      const next = { ...serverRows[index]!, location: "Bulk shelf", condition: "good", tags: ["bulk"], version: target.expectedVersion + 1 };
+      serverRows[index] = next;
+      return next;
+    });
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: { updated, unchanged: [] }, audits: updated.map((item) => ({ id: `audit-${item.id}` })), correlationId: "e2e-bulk", replayed: false }) });
+  });
+
+  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await expect(page.locator(".inventory-page-status")).toHaveText("Showing 25 of 30 items");
+  await page.getByLabel("Select Tool 00").check();
+  await page.getByLabel("Select Tool 01").check();
+  await page.getByRole("button", { name: "Bulk edit" }).click();
+  const dialog = page.getByRole("dialog", { name: "Bulk edit inventory" });
+  await expect(dialog).toContainText("2 selected");
+  await dialog.getByLabel("Location").fill("Bulk shelf");
+  await dialog.getByLabel("Condition").selectOption("good");
+  await dialog.getByLabel("Tags to add").fill("bulk");
+  await dialog.getByRole("button", { name: "Review changes" }).click();
+  await expect(dialog).toContainText("Nothing changes until you confirm.");
+  await dialog.getByRole("button", { name: "Confirm bulk edit" }).click();
+  await expect(dialog.getByRole("status")).toContainText("Saved changes to 2 items");
+  expect(requestBody).toEqual({
+    targets: [{ itemId: "tool-00", expectedVersion: 1 }, { itemId: "tool-01", expectedVersion: 1 }],
+    changes: { location: "Bulk shelf", condition: "good", tags: { add: ["bulk"] } }
+  });
+  await dialog.getByRole("button", { name: "Done" }).click();
+  await expect(page.getByRole("button", { name: "Open Tool 00" })).toBeVisible();
+  await expect(page.locator(".inventory-table tbody tr").filter({ hasText: "Tool 00" })).toContainText("Bulk shelf");
+  expect(refreshes).toBeGreaterThan(1);
+});
+
+test("reports bulk no-op and conflict states without discarding the edit", async ({ page }) => {
+  await signIn(page);
+  const item = inventoryRecord("bulk-item", "Bulk item");
+  let mode: "noop" | "conflict" = "noop";
+  await page.route("**/api/v1/inventory**", async (route) => {
+    const requestUrl = new URL(route.request().url());
+    if (route.request().method() !== "GET" || requestUrl.pathname !== "/api/v1/inventory") return route.continue();
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [item], limit: 25, total: 1 }) });
+  });
+  await page.route("**/api/v1/inventory/bulk", async (route) => {
+    if (route.request().method() !== "PATCH") return route.continue();
+    if (mode === "conflict") {
+      await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: { code: "version_conflict", message: "Inventory changed since it was selected; nothing was changed." } }) });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: { updated: [], unchanged: [item] }, audits: [], correlationId: "e2e-noop", replayed: false }) });
+  });
+
+  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await page.getByLabel("Select Bulk item").check();
+  await page.getByRole("button", { name: "Bulk edit" }).click();
+  let dialog = page.getByRole("dialog", { name: "Bulk edit inventory" });
+  await dialog.getByLabel("Location").fill("Same place");
+  await dialog.getByRole("button", { name: "Review changes" }).click();
+  await dialog.getByRole("button", { name: "Confirm bulk edit" }).click();
+  await expect(dialog.getByRole("status")).toContainText("No changes needed");
+  await dialog.getByRole("button", { name: "Done" }).click();
+
+  await page.getByLabel("Select Bulk item").check();
+  await page.getByRole("button", { name: "Bulk edit" }).click();
+  dialog = page.getByRole("dialog", { name: "Bulk edit inventory" });
+  await dialog.getByLabel("Location").fill("Changed place");
+  await dialog.getByRole("button", { name: "Review changes" }).click();
+  mode = "conflict";
+  await dialog.getByRole("button", { name: "Confirm bulk edit" }).click();
+  await expect(dialog.getByRole("alert")).toContainText("Nothing changed");
+  await dialog.getByRole("button", { name: "Back to changes" }).click();
+  await expect(dialog.getByLabel("Location")).toHaveValue("Changed place");
+});
+
+test("keeps an ambiguous bulk edit unresolved and retries the same command safely", async ({ page }) => {
+  await signIn(page);
+  const item = inventoryRecord("bulk-ambiguous-item", "Ambiguous bulk item");
+  const requestKeys: string[] = [];
+  let attempt = 0;
+  await page.route("**/api/v1/inventory**", async (route) => {
+    const requestUrl = new URL(route.request().url());
+    if (route.request().method() !== "GET" || requestUrl.pathname !== "/api/v1/inventory") return route.continue();
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [item], limit: 25, total: 1 }) });
+  });
+  await page.route("**/api/v1/inventory/bulk", async (route) => {
+    if (route.request().method() !== "PATCH") return route.continue();
+    requestKeys.push(route.request().headers()["idempotency-key"] ?? "");
+    if (attempt++ === 0) {
+      // The service may have committed before this response was lost.
+      await route.abort("failed");
+      return;
+    }
+    const updated = { ...item, location: "Recovered shelf", condition: "good", tags: ["recovered"], version: 2 };
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: { updated: [updated], unchanged: [] }, audits: [{ id: "audit-ambiguous" }], correlationId: "e2e-ambiguous", replayed: true }) });
+  });
+
+  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await page.getByLabel("Select Ambiguous bulk item").check();
+  await page.getByRole("button", { name: "Bulk edit" }).click();
+  const dialog = page.getByRole("dialog", { name: "Bulk edit inventory" });
+  await dialog.getByLabel("Location").fill("Recovered shelf");
+  await dialog.getByRole("button", { name: "Review changes" }).click();
+  await dialog.getByRole("button", { name: "Confirm bulk edit" }).click();
+  const unresolved = dialog.getByRole("alert");
+  await expect(unresolved).toContainText("could not confirm whether this bulk edit was applied");
+  await expect(unresolved).not.toContainText("Nothing was saved");
+  await expect(dialog.getByRole("button", { name: "Retry safely" })).toBeVisible();
+
+  await dialog.getByRole("button", { name: "Retry safely" }).click();
+  await expect(dialog.getByRole("status")).toContainText("Saved changes to 1 item");
+  expect(requestKeys).toHaveLength(2);
+  expect(requestKeys[0]).toBe(requestKeys[1]);
+});
+
 test("keeps inventory quantity and status columns usable on mobile", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await signIn(page);
@@ -163,6 +348,7 @@ test("keeps inventory quantity and status columns usable on mobile", async ({ pa
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
 
   const table = page.getByRole("table");
+  await expect(table.getByLabel("Select all loaded inventory items")).toBeVisible();
   await expect(table.getByRole("columnheader", { name: "Quantity", exact: true })).toBeVisible();
   await expect(table.getByRole("columnheader", { name: "Status", exact: true })).toBeVisible();
   const horizontalScroll = await page.evaluate(() => {

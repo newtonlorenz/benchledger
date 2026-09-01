@@ -130,6 +130,23 @@ audit information when available, and the resulting state. Pass the returned
 `expectedVersion` on the next mutable update. A conflict means another surface
 changed the record; read again rather than overwriting it.
 
+For bounded catalog corrections, use `bulk_update_inventory_items` with 1–100
+explicit `{itemId, expectedVersion}` targets. Supply at least one of a
+non-empty location, canonical condition (`new`, `good`, `worn`, `needs_repair`,
+or `unknown`), or normalized tag `{add,remove}` patch; all targets preflight as
+one atomic operation. The response separates deterministic `updated` and
+`unchanged` `{itemId,version}` references and includes bounded audit and
+correlation metadata. No-op rows do not increment versions or create
+audit/events, and an idempotent retry returns the stored result without
+repeating them.
+When the host has no HTTP idempotency header (for example, stdio), the
+application bridge derives a bounded actor/action/payload key; an explicit
+host key remains authoritative.
+The single-item `update_inventory_item` command accepts a full replacement
+`tags` array (normalized and deduplicated). Quantity, evidence, identity,
+profile, retirement, partial, undo, and import changes remain unsupported by
+these metadata tools.
+
 Use `record_usage` directly only for a deliberate narrow event outside normal
 project close-out. Do not replace the atomic reconciliation command with a loose
 series of usage and reservation-release writes.

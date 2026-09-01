@@ -1,8 +1,8 @@
 import { createId, createStockEvent, DomainError } from "@benchledger/domain";
 import type { CommissionInventoryItem, InventoryItem as ApiInventoryItem, CreateInventoryItem, StockEvent as ApiStockEvent, StockEventInput } from "@benchledger/api-contract";
 import type { InventoryItem, StockEvent } from "@benchledger/domain";
-import { parseInventoryCursor } from "@benchledger/application";
-import type { InventoryListOptions, InventoryPort, Page, RequestContext, StockMutation, UnitOfWorkPort, UpdateInventoryInput } from "@benchledger/application";
+import { ApplicationError, applyInventoryBulkChanges, normalizeInventoryBulkChanges, parseInventoryCursor } from "@benchledger/application";
+import type { InventoryBulkUpdate, InventoryBulkUpdateResult, InventoryListOptions, InventoryPort, Page, RequestContext, StockMutation, UnitOfWorkPort, UpdateInventoryInput } from "@benchledger/application";
 import { InventoryRepository } from "@benchledger/database";
 import type { BenchDatabase, InventoryCategoryRepository } from "@benchledger/database";
 import { RuntimeState } from "./persistence.js";
@@ -185,6 +185,63 @@ export class ProductionInventoryAdapter implements InventoryPort {
         if (this.categoryAssignments !== undefined && input.categoryNodeId !== undefined) this.categoryAssignments.setItemCategoryNode(id, input.categoryNodeId ?? undefined, updated.updatedAt);
         const nextVersion = this.state.bumpVersion(ENTITY, id);
         return this.toApi(updated, nextVersion);
+      });
+    }));
+  }
+
+  async bulkUpdateItems(input: InventoryBulkUpdate, _ctx: RequestContext): Promise<InventoryBulkUpdateResult> {
+    return this.unitOfWork.exclusive(() => attempt(() => {
+      if (!Number.isSafeInteger(input.targets.length) || input.targets.length < 1 || input.targets.length > 100) {
+        throw new ApplicationError("validation", "Bulk inventory updates require between 1 and 100 targets");
+      }
+      const changes = normalizeInventoryBulkChanges(input.changes);
+      const targets = [...input.targets].sort((left, right) => left.itemId.localeCompare(right.itemId));
+      const seen = new Set<string>();
+      return this.database.transaction(() => {
+        const staleTargets: Array<{ readonly itemId: string; readonly expectedVersion: number; readonly actualVersion: number }> = [];
+        const prepared = targets.map((target) => {
+          if (seen.has(target.itemId)) throw new ApplicationError("validation", "Bulk targets must contain unique item ids");
+          seen.add(target.itemId);
+          if (!Number.isSafeInteger(target.expectedVersion) || target.expectedVersion <= 0) {
+            throw new ApplicationError("validation", "Bulk targets require a positive expected version");
+          }
+          const current = this.repository.get(target.itemId);
+          if (current === undefined || current.retiredAt !== undefined) throw new DomainError("inventory_not_found", `inventory item ${target.itemId} does not exist`);
+          const actualVersion = this.state.getVersion(ENTITY, target.itemId);
+          if (actualVersion !== target.expectedVersion) {
+            staleTargets.push({ itemId: target.itemId, expectedVersion: target.expectedVersion, actualVersion });
+          }
+          const currentApi = this.toApi(current);
+          const applied = applyInventoryBulkChanges(currentApi, changes);
+          return { target, current, currentApi, applied };
+        });
+        if (staleTargets.length > 0) {
+          throw new ApplicationError("conflict", "One or more inventory items changed since they were read", { staleTargets });
+        }
+
+        const updated: ApiInventoryItem[] = [];
+        const unchanged: ApiInventoryItem[] = [];
+        for (const entry of prepared) {
+          if (!entry.applied.changed) {
+            unchanged.push(entry.currentApi);
+            continue;
+          }
+          const metadata = entry.applied.item;
+          const merged = mergeInventoryInput(entry.currentApi, {
+            ...(changes.location === undefined ? {} : { location: changes.location }),
+            ...(changes.condition === undefined ? {} : { condition: changes.condition }),
+            ...(changes.tags === undefined ? {} : { tags: metadata.tags }),
+          });
+          const now = nowIso();
+          const native = nativeItemFromApi(merged, entry.target.itemId, now, entry.current);
+          this.repository.upsert(native);
+          const version = this.state.bumpVersion(ENTITY, entry.target.itemId);
+          updated.push(this.toApi(native, version));
+        }
+        return {
+          updated: updated.sort((left, right) => left.id.localeCompare(right.id)),
+          unchanged: unchanged.sort((left, right) => left.id.localeCompare(right.id)),
+        };
       });
     }));
   }

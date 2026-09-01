@@ -84,6 +84,18 @@ const inventoryWithProductProfileProperty: JsonObject = object({
   item: inventoryItemCreateProperty,
   profile: inventoryProductProfileCreateProperty,
 }, ["item", "profile"]);
+const inventoryBulkTargetProperty: JsonObject = object({
+  itemId: idProperty("Explicit inventory item identifier."),
+  expectedVersion: { ...integer("Current item version required for this atomic batch."), minimum: 1 },
+}, ["itemId", "expectedVersion"]);
+const inventoryBulkChangesProperty: JsonObject = object({
+  location: string("Replacement physical location; must not be blank."),
+  condition: enumString(["new", "good", "worn", "needs_repair", "unknown"], "Replacement item condition."),
+  tags: { ...object({
+    add: { ...array(string("Tag to add; tags are normalized case-insensitively.")), minItems: 1, maxItems: 50 },
+    remove: { ...array(string("Tag to remove; tags are normalized case-insensitively.")), minItems: 1, maxItems: 50 },
+  }), minProperties: 1 },
+}, []);
 const inventoryCommissionProperty: JsonObject = {
   type: "object",
   additionalProperties: false,
@@ -190,7 +202,8 @@ export const TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
   tool("read_inventory_item", "Read one inventory item, including dimensions, links, evidence, and current quantity.", "inventory:read", false, { itemId: idProperty("Inventory item identifier.") }, ["itemId"]),
   tool("create_inventory_item", "Add a catalog item or stock record with an explicit evidence state.", "inventory:write", true, inventoryItemCreateProperty.properties as Record<string, JsonValue>, ["name", "category", "quantity", "evidence"]),
   tool("create_inventory_with_product_profile", "Atomically create one physical printer or filament inventory item and its exact product profile. Requires both inventory:write and catalog:write; retries with the same idempotency key are safe and failed profile/audit writes are compensated.", "inventory:write", true, inventoryWithProductProfileProperty.properties as Record<string, JsonValue>, ["item", "profile"]),
-  tool("update_inventory_item", "Update descriptive inventory metadata and optionally assign a user-managed category using optimistic versioning.", "inventory:write", true, { itemId: idProperty("Inventory item identifier."), expectedVersion: integer(), name: string(), category: string(), categoryNodeId: nullableCategoryIdProperty("Optional category assignment; null clears it."), description: string(), manufacturer: string(), model: string(), sku: string(), dimensions: object({ length: number(), width: number(), height: number(), diameter: number(), unit: string(), source: string(), uncertainty: number() }), condition: string(), location: string(), links: array(object({ label: string(), url: string() }, ["label", "url"])) }, ["itemId"]),
+  tool("update_inventory_item", "Update descriptive inventory metadata and optionally assign a user-managed category using optimistic versioning; tags replace the full normalized tag list when supplied.", "inventory:write", true, { itemId: idProperty("Inventory item identifier."), expectedVersion: integer(), name: string(), category: string(), categoryNodeId: nullableCategoryIdProperty("Optional category assignment; null clears it."), description: string(), manufacturer: string(), model: string(), sku: string(), dimensions: object({ length: number(), width: number(), height: number(), diameter: number(), unit: string(), source: string(), uncertainty: number() }), condition: string(), location: string(), tags: { ...array(string("Replacement searchable tag.")), maxItems: 50 }, links: array(object({ label: string(), url: string() }, ["label", "url"])) }, ["itemId"]),
+  tool("bulk_update_inventory_items", "Apply one bounded atomic metadata batch to explicit inventory items with optimistic versions. Supports only location, canonical condition, and normalized tag add/remove; all targets preflight together and no-op targets are not versioned or audited.", "inventory:write", true, { targets: { ...array(inventoryBulkTargetProperty), minItems: 1, maxItems: 100 }, changes: inventoryBulkChangesProperty }, ["targets", "changes"]),
   tool("commission_inventory_item", "Promote delivered or ordered inventory to commissioned only with an observed quantity and provenance; records an append-only count event and preserves prior evidence. Supply expectedVersion and a distinct idempotency key in the request context.", "inventory:write", true, inventoryCommissionProperty.properties as Record<string, JsonValue>, ["itemId", "expectedVersion", "quantity", "evidence"]),
   tool("record_stock_event", "Record one append-only receipt, count correction, allocation, use, return, loss, or disposal event.", "inventory:write", true, { itemId: idProperty("Inventory item identifier."), kind: string(), quantity: quantityProperty, note: string() }, ["itemId", "kind", "quantity"]),
   tool("list_stock_events", "List the append-only stock event history for one item.", "inventory:read", false, { ...pageProperties, itemId: idProperty("Inventory item identifier.") }, ["itemId"]),
@@ -290,13 +303,13 @@ export const CAPABILITY_DOCUMENT: JsonObject = {
   scopeBehavior: {
     projectTokens: "A token with projectIds may address only those projects. Project list results are allow-list filtered; workspace-wide aggregate endpoints are rejected.",
     indirectProjectIds: "Revision, work-item, BOM-line, reservation, artifact, and upload identifiers are resolved from durable host state before dispatch. If ancestry cannot be proven, the request is rejected; request-local ID caches are never authoritative.",
-    inventory: "The inventory catalog and user-managed category taxonomy are shared workspace context. Project-scoped tokens may read inventory, categories, and stock history for matching, but cannot create, update, retire, commission, count, record stock events, or mutate categories. Uncertain delivery/order evidence can be promoted only through commission_inventory_item with an observed quantity, commissioned provenance, expectedVersion, and a distinct idempotency key; the prior evidence remains in the append-only count event.",
+    inventory: "The inventory catalog and user-managed category taxonomy are shared workspace context. Project-scoped tokens may read inventory, categories, and stock history for matching, but cannot create, update, bulk-update, retire, commission, count, record stock events, or mutate categories. Uncertain delivery/order evidence can be promoted only through commission_inventory_item with an observed quantity, commissioned provenance, expectedVersion, and a distinct idempotency key; the prior evidence remains in the append-only count event. Bulk metadata edits require 1-100 explicit itemId/expectedVersion targets and leave no-op rows unaudited.",
     atomicInventoryProfile: "create_inventory_with_product_profile requires both inventory:write and catalog:write on an unscoped token. Its item and profile commit as one audited, idempotent command; a failed profile, audit, idempotency, or binding step compensates the just-created records.",
     catalog: "Exact catalog products are shared workspace context. Project-scoped tokens may search and read products for in-scope snapshots, but only unscoped catalog tokens may create or correct products.",
     profiles: "Physical product profiles are workspace-global. Profile reads and writes require catalog scope and are not available to project-scoped tokens; reported and suggested links never imply confirmed stock or compatibility.",
     buildConfigurations: "Snapshots require projects:write/read and are authorized through durable project-revision ancestry. They are immutable; corrections create a superseding snapshot.",
     reconciliation: "Close-out drafts use bom:write and remain review-only until commit_reconciliation. Project-scoped tokens may save and commit only for an allow-listed revision; no inventory:write scope is granted.",
-    commandIdempotency: "When the MCP host supplies idempotency metadata, each logical write gets its own stable key. Reuse a key only for an ambiguous retry with the identical payload. Draft save and commit are distinct commands and must use different keys.",
+    commandIdempotency: "When the MCP host supplies idempotency metadata, each logical write gets its own stable key. Header-less bulk_update_inventory_items calls derive a bounded actor/action/canonical-payload key; an explicit host key remains authoritative. Reuse a key only for an ambiguous retry with the identical payload. Draft save and commit are distinct commands and must use different keys.",
     offers: "Supplier offer observations are shared workspace context. Project-scoped tokens may list offers only with an itemId, but cannot record offer snapshots.",
   },
   approvalBoundaries: [
@@ -320,6 +333,7 @@ export const CAPABILITY_DOCUMENT: JsonObject = {
     "refresh_context",
     "read_inventory_summary",
     "list_inventory",
+    "bulk_update_inventory_items (only for an explicit, confirmed metadata batch)",
     "read_project or create_project_with_initial_revision",
     "create_project_revision (only for an existing project or later revision)",
     "search_catalog_products",

@@ -8,6 +8,7 @@ import type {
   CatalogProduct,
   CurrencyCode,
   InventoryItem,
+  InventoryCondition,
   InventoryEvidenceState,
   InventoryProductProfile,
   Offer,
@@ -32,7 +33,7 @@ import type { CategoryCreateInput, CategoryUpdateInput, ManagedInventoryCategory
 type ServerHealth = { status: "ok" | "degraded"; service: string; version: string; demo: boolean; now: string };
 type ServerInventoryItem = {
   id: string; name: string; kind: string; categoryNodeId?: string; description?: string; manufacturer?: string; model?: string; sku?: string;
-  quantity: number; availableQuantity: number; unit: string; location?: string;
+  quantity: number; availableQuantity: number; unit: string; location?: string; condition?: string;
   dimensions?: { lengthMm?: number; widthMm?: number; heightMm?: number; diameterMm?: number; measured?: boolean; uncertaintyMm?: number };
   tags: string[];
   links: Array<{ supplier: string; url: string; label?: string; currentPriceMinor?: number; currency?: string; observedAt?: string; packageQuantity?: number }>;
@@ -144,6 +145,30 @@ export interface InventoryPage {
   total?: number;
   nextCursor?: string;
 }
+export interface InventoryBulkTarget {
+  itemId: string;
+  expectedVersion: number;
+}
+export interface InventoryBulkTagChanges {
+  add?: readonly string[];
+  remove?: readonly string[];
+}
+export interface InventoryBulkChanges {
+  location?: string;
+  condition?: InventoryCondition;
+  tags?: InventoryBulkTagChanges;
+}
+export interface InventoryBulkUpdateInput {
+  targets: readonly InventoryBulkTarget[];
+  changes: InventoryBulkChanges;
+}
+export interface InventoryBulkUpdateResult {
+  updated: InventoryItem[];
+  unchanged: InventoryItem[];
+  audits: string[];
+  correlationId: string;
+  replayed: boolean;
+}
 export interface WorkspaceAdapter {
   clearAuthenticatedState(): void;
   checkHealth(): Promise<ServerHealth>;
@@ -152,6 +177,7 @@ export interface WorkspaceAdapter {
   logout(): Promise<void>;
   loadWorkspace(): Promise<WorkspaceSnapshot>;
   listInventory(query: InventoryListQuery): Promise<InventoryPage>;
+  bulkUpdateInventory(input: InventoryBulkUpdateInput): Promise<InventoryBulkUpdateResult>;
   recordCount(itemId: string, quantity: number): Promise<InventoryItem>;
   commissionInventoryItem(itemId: string, input: InventoryCommissionInput, expectedVersion: number): Promise<InventoryItem>;
   updateInventoryItem(itemId: string, input: Partial<InventoryUpdateInput>, expectedVersion?: number): Promise<InventoryItem>;
@@ -252,6 +278,10 @@ function mapServerEvidence(state: string): InventoryEvidenceState {
   return state === "physically_counted" || state === "commissioned" || state === "delivered_uncounted"
     || state === "ordered_unverified" || state === "allocated" || state === "consumed" || state === "unknown"
     ? state : "unknown";
+}
+
+function mapInventoryCondition(value: string | undefined): InventoryCondition | undefined {
+  return value === "new" || value === "good" || value === "worn" || value === "needs_repair" || value === "unknown" ? value : undefined;
 }
 
 function mapStockState(item: ServerInventoryItem): InventoryItem["state"] {
@@ -696,6 +726,7 @@ function formatBytes(bytes: number): string {
 export function mapInventoryItem(item: ServerInventoryItem): InventoryItem {
   const category = mapCategory(item.kind);
   const state = mapStockState(item);
+  const condition = mapInventoryCondition(item.condition);
   const confirmed = item.evidence.state === "physically_counted" || item.evidence.state === "commissioned";
   const catalogProduct = mapCatalogProduct(item.catalogProduct ?? item.product, category === "Filament" ? "filament" : category === "Printers" ? "printer" : undefined);
   const mappedProfile = mapInventoryProductProfile(item.productProfile, item.id);
@@ -717,6 +748,7 @@ export function mapInventoryItem(item: ServerInventoryItem): InventoryItem {
     reserved: confirmed ? Math.max(item.quantity - item.availableQuantity, 0) : 0,
     state, evidence: mapEvidence(item.evidence.state), serverEvidence: mapServerEvidence(item.evidence.state), location: item.location?.trim() || "Unassigned",
     ...(dimensions ? { dimensions } : {}), ...(item.manufacturer ? { manufacturer: item.manufacturer } : {}), ...(item.sku ? { sku: item.sku } : {}),
+    ...(condition ? { condition } : {}),
     tags: [...item.tags], compatibility: [],
     provenance: {
       ...(item.evidence.source ? { source: item.evidence.source } : {}),
@@ -844,6 +876,94 @@ function mutationData<T>(payload: { data?: T }): T {
   return payload.data;
 }
 
+const inventoryConditionValues: readonly InventoryCondition[] = ["new", "good", "worn", "needs_repair", "unknown"];
+
+function bulkValidationError(message: string, code: "invalid_bulk_targets" | "invalid_bulk_target" | "invalid_bulk_changes"): ApiError {
+  return new ApiError(message, { kind: "validation", status: 400, code });
+}
+
+function normalizedBulkTags(value: unknown, field: "add" | "remove"): string[] {
+  if (!Array.isArray(value) || value.length > 50) throw bulkValidationError(`Bulk tag ${field} values are invalid`, "invalid_bulk_changes");
+  const tags = value.map((tag) => typeof tag === "string" ? tag.trim() : "");
+  if (tags.some((tag) => !tag || tag.length > 80)) throw bulkValidationError(`Bulk tag ${field} values are invalid`, "invalid_bulk_changes");
+  const keys = tags.map((tag) => tag.toLocaleLowerCase());
+  if (new Set(keys).size !== tags.length) throw bulkValidationError(`Bulk tag ${field} values must be unique`, "invalid_bulk_changes");
+  return tags;
+}
+
+export function prepareBulkInventoryInput(input: InventoryBulkUpdateInput): InventoryBulkUpdateInput {
+  const candidate = input as unknown as { targets?: unknown; changes?: unknown };
+  if (!Array.isArray(candidate.targets) || candidate.targets.length < 1 || candidate.targets.length > 100) {
+    throw bulkValidationError("Select between 1 and 100 inventory items", "invalid_bulk_targets");
+  }
+  const seen = new Set<string>();
+  const targets = candidate.targets.map((target): InventoryBulkTarget => {
+    const record = asRecord(target);
+    if (!record || typeof record.itemId !== "string" || !record.itemId.trim()) throw bulkValidationError("Each bulk target needs an item ID", "invalid_bulk_target");
+    if (seen.has(record.itemId)) throw bulkValidationError("Bulk targets must contain each item only once", "invalid_bulk_target");
+    seen.add(record.itemId);
+    if (typeof record.expectedVersion !== "number" || !Number.isSafeInteger(record.expectedVersion) || record.expectedVersion <= 0) {
+      throw bulkValidationError("Each bulk target needs a positive expected version", "invalid_bulk_target");
+    }
+    return { itemId: record.itemId, expectedVersion: record.expectedVersion };
+  });
+
+  const changeRecord = asRecord(candidate.changes);
+  if (!changeRecord) throw bulkValidationError("Bulk changes are invalid", "invalid_bulk_changes");
+  const allowedKeys = new Set(["location", "condition", "tags"]);
+  if (Object.keys(changeRecord).some((key) => !allowedKeys.has(key))) throw bulkValidationError("Bulk edits are limited to location, condition, and tag add/remove", "invalid_bulk_changes");
+  const changes: InventoryBulkChanges = {};
+  if (changeRecord.location !== undefined) {
+    if (typeof changeRecord.location !== "string" || !changeRecord.location.trim() || changeRecord.location.trim().length > 240) {
+      throw bulkValidationError("Location must be non-empty", "invalid_bulk_changes");
+    }
+    changes.location = changeRecord.location.trim();
+  }
+  if (changeRecord.condition !== undefined) {
+    if (typeof changeRecord.condition !== "string" || !inventoryConditionValues.includes(changeRecord.condition as InventoryCondition)) {
+      throw bulkValidationError("Condition is invalid", "invalid_bulk_changes");
+    }
+    changes.condition = changeRecord.condition as InventoryCondition;
+  }
+  if (changeRecord.tags !== undefined) {
+    const tagsRecord = asRecord(changeRecord.tags);
+    if (!tagsRecord || Object.keys(tagsRecord).some((key) => key !== "add" && key !== "remove")) throw bulkValidationError("Tags must contain only add/remove values", "invalid_bulk_changes");
+    const tags: InventoryBulkTagChanges = {};
+    if (tagsRecord.add !== undefined) tags.add = normalizedBulkTags(tagsRecord.add, "add");
+    if (tagsRecord.remove !== undefined) tags.remove = normalizedBulkTags(tagsRecord.remove, "remove");
+    if (Object.keys(tags).length === 0) throw bulkValidationError("Provide tags to add or remove", "invalid_bulk_changes");
+    const added = new Set((tags.add ?? []).map((tag) => tag.toLocaleLowerCase()));
+    if ((tags.remove ?? []).some((tag) => added.has(tag.toLocaleLowerCase()))) {
+      throw bulkValidationError("A tag cannot be added and removed in the same bulk edit", "invalid_bulk_changes");
+    }
+    changes.tags = tags;
+  }
+  if (Object.keys(changes).length === 0) throw bulkValidationError("Provide at least one bulk change", "invalid_bulk_changes");
+  return { targets, changes };
+}
+
+function mapBulkInventoryResult(payload: unknown): InventoryBulkUpdateResult {
+  const root = asRecord(payload);
+  const data = asRecord(root?.data);
+  const updated = data?.updated;
+  const unchanged = data?.unchanged;
+  if (!Array.isArray(updated) || !Array.isArray(unchanged) || !Array.isArray(root?.audits) || typeof root?.correlationId !== "string" || typeof root?.replayed !== "boolean") {
+    throw new ApiError("The service returned an incomplete bulk inventory result", { kind: "server", status: 502 });
+  }
+  const audits = root.audits.map((audit) => {
+    const record = asRecord(audit);
+    if (!record || typeof record.id !== "string" || !record.id) throw new ApiError("The service returned an incomplete bulk inventory audit", { kind: "server", status: 502 });
+    return record.id;
+  });
+  return {
+    updated: updated.map((item) => mapInventoryItem(item as ServerInventoryItem)),
+    unchanged: unchanged.map((item) => mapInventoryItem(item as ServerInventoryItem)),
+    audits,
+    correlationId: root.correlationId,
+    replayed: root.replayed
+  };
+}
+
 function serverUnitFor(item: InventoryItem): string {
   if (item.serverUnit) return item.serverUnit;
   if (item.unit === "g") return "gram";
@@ -885,6 +1005,10 @@ type PendingExactInventoryCommand = {
 type PendingCategoryCommand = {
   readonly key: string;
   readonly body: UnknownRecord;
+};
+type PendingBulkInventoryCommand = {
+  readonly key: string;
+  readonly body: InventoryBulkUpdateInput;
 };
 type ReconciliationDraftRequestBody = ReturnType<typeof reconciliationDraftBody>;
 type ReconciliationCommitRequestBody = ReturnType<typeof reconciliationCommitBody>;
@@ -1318,7 +1442,14 @@ async function binaryRequest<T>(url: string, body: ArrayBuffer, csrfToken: strin
 }
 
 function syntheticSnapshot(): WorkspaceSnapshot {
-  return { inventory: structuredClone(fallbackInventory), projects: structuredClone(fallbackProjects), offers: structuredClone(fallbackOffers), source: "synthetic", fetchedAt: new Date().toISOString() };
+  const inventory = structuredClone(fallbackInventory).map((item) => ({
+    ...item,
+    // Legacy public fixtures predate optimistic concurrency. Give each
+    // synthetic record an explicit observed baseline at the adapter boundary
+    // so clients never have to invent a version for a bulk target.
+    version: typeof item.version === "number" && Number.isSafeInteger(item.version) && item.version > 0 ? item.version : 1
+  }));
+  return { inventory, projects: structuredClone(fallbackProjects), offers: structuredClone(fallbackOffers), source: "synthetic", fetchedAt: new Date().toISOString() };
 }
 
 function compareInventoryItems(left: Pick<InventoryItem, "name" | "id">, right: Pick<InventoryItem, "name" | "id">): number {
@@ -1368,6 +1499,34 @@ function sampleInventoryPage(items: readonly InventoryItem[], query: InventoryLi
   return { items: selected.map((item) => structuredClone(item)), limit: query.limit, total: filtered.length, ...(nextOffset === undefined ? {} : { nextCursor: String(nextOffset) }) };
 }
 
+function sampleBulkTags(item: InventoryItem, changes: InventoryBulkChanges): string[] {
+  const removedTags = new Set((changes.tags?.remove ?? []).map((tag) => tag.toLocaleLowerCase()));
+  const tags = item.tags.filter((tag) => !removedTags.has(tag.toLocaleLowerCase()));
+  const existingTags = new Set(tags.map((tag) => tag.toLocaleLowerCase()));
+  for (const tag of changes.tags?.add ?? []) {
+    const key = tag.toLocaleLowerCase();
+    if (!existingTags.has(key)) {
+      tags.push(tag);
+      existingTags.add(key);
+    }
+  }
+  if (tags.length > 50 || tags.some((tag) => tag.length > 80)) {
+    throw bulkValidationError("Bulk edits cannot produce more than 50 tags or tags longer than 80 characters", "invalid_bulk_changes");
+  }
+  return tags;
+}
+
+function applySampleBulkChanges(item: InventoryItem, changes: InventoryBulkChanges): InventoryItem {
+  const tags = sampleBulkTags(item, changes);
+  return {
+    ...item,
+    ...(changes.location === undefined ? {} : { location: changes.location }),
+    ...(changes.condition === undefined ? {} : { condition: changes.condition }),
+    tags,
+    version: item.version! + 1
+  };
+}
+
 /** Explicit sample-only adapter. The UI enables it only after the service reports demo mode. */
 export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
   const state = syntheticSnapshot();
@@ -1391,6 +1550,32 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     async logout() {},
     async loadWorkspace() { return state; },
     async listInventory(query) { return sampleInventoryPage(state.inventory, query); },
+    async bulkUpdateInventory(input) {
+      const prepared = prepareBulkInventoryInput(input);
+      const currentById = new Map(state.inventory.map((item) => [item.id, item] as const));
+      for (const target of prepared.targets) {
+        const current = currentById.get(target.itemId);
+        if (!current) throw new ApiError("Inventory item not found", { kind: "validation", status: 404 });
+        if (typeof current.version !== "number" || !Number.isSafeInteger(current.version) || current.version <= 0 || current.version !== target.expectedVersion) throw new ApiError("Inventory changed since it was selected; nothing was changed", { kind: "validation", status: 409, code: "version_conflict" });
+      }
+      const correlationId = `sample-bulk-${Date.now()}`;
+      const updated: InventoryItem[] = [];
+      const unchanged: InventoryItem[] = [];
+      const audits: string[] = [];
+      const nextById = new Map<string, InventoryItem>();
+      for (const target of prepared.targets) {
+        const item = currentById.get(target.itemId)!;
+        const changed = applySampleBulkChanges(item, prepared.changes);
+        const changedFields = changed.location !== item.location || changed.condition !== item.condition || changed.tags.some((tag, index) => tag !== item.tags[index]) || changed.tags.length !== item.tags.length;
+        const result = changedFields ? changed : item;
+        (changedFields ? updated : unchanged).push(structuredClone(result));
+        if (changedFields) audits.push(`sample-audit-${correlationId}-${item.id}`);
+        nextById.set(item.id, result);
+      }
+      const nextInventory = state.inventory.map((item) => nextById.get(item.id) ?? item);
+      state.inventory = nextInventory;
+      return { updated, unchanged, audits, correlationId, replayed: false };
+    },
     async recordCount(itemId, quantity) {
       const item = state.inventory.find((candidate) => candidate.id === itemId);
       if (!item) throw new ApiError("Inventory item not found", { kind: "validation", status: 404 });
@@ -1597,6 +1782,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
   const pendingExactInventoryCommands = new Map<string, PendingExactInventoryCommand>();
   const pendingInventoryCommands = new Map<string, PendingInventoryCommand>();
   const pendingCategoryCommands = new Map<string, PendingCategoryCommand>();
+  const pendingBulkInventoryCommands = new Map<string, PendingBulkInventoryCommand>();
   const pendingReconciliationDraftCommands = new Map<string, PendingReconciliationCommand<ReconciliationDraftRequestBody>>();
   const pendingReconciliationCommitCommands = new Map<string, PendingReconciliationCommand<ReconciliationCommitRequestBody>>();
   const adapter: WorkspaceAdapter = {
@@ -1664,6 +1850,30 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         ...(typeof record?.total === "number" ? { total: record.total } : {}),
         ...(typeof record?.nextCursor === "string" ? { nextCursor: record.nextCursor } : {})
       };
+    },
+    async bulkUpdateInventory(input) {
+      const body = prepareBulkInventoryInput(input);
+      const token = csrfToken ?? cookieValue("forge_csrf");
+      if (!token) throw new ApiError("Your session needs a fresh CSRF token before editing inventory", { kind: "csrf", status: 403 });
+      const commandId = JSON.stringify(body);
+      const pending = pendingBulkInventoryCommands.get(commandId);
+      const command = pending ?? { key: idempotencyKey("inventory-bulk"), body };
+      if (pending === undefined) pendingBulkInventoryCommands.set(commandId, command);
+      try {
+        const payload = await request<unknown>("/inventory/bulk", {
+          method: "PATCH",
+          headers: { "Idempotency-Key": command.key },
+          body: JSON.stringify(command.body)
+        }, token);
+        const result = mapBulkInventoryResult(payload);
+        result.updated.forEach((item) => inventoryCache.set(item.id, item));
+        result.unchanged.forEach((item) => inventoryCache.set(item.id, item));
+        if (pendingBulkInventoryCommands.get(commandId)?.key === command.key) pendingBulkInventoryCommands.delete(commandId);
+        return result;
+      } catch (error: unknown) {
+        if (!mutationFailureIsAmbiguous(error) && pendingBulkInventoryCommands.get(commandId)?.key === command.key) pendingBulkInventoryCommands.delete(commandId);
+        throw error;
+      }
     },
     async recordCount(itemId, quantity) {
       const token = csrfToken ?? cookieValue("forge_csrf");

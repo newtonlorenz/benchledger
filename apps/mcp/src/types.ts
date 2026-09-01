@@ -136,6 +136,8 @@ export interface InventoryItem {
   dimensions?: Dimensions;
   condition?: "new" | "used" | "opened" | "unknown";
   location?: string;
+  /** Searchable tags; omitted by legacy hosts that do not expose tags. */
+  tags?: readonly string[];
   links: readonly ExternalLink[];
   version?: number;
 }
@@ -253,7 +255,39 @@ export interface InventoryUpdateInput {
   dimensions?: Dimensions;
   condition?: InventoryItem["condition"];
   location?: string;
+  tags?: readonly string[];
   links?: readonly InventoryLinkInput[];
+}
+
+export type InventoryBulkCondition = "new" | "good" | "worn" | "needs_repair" | "unknown";
+
+export interface InventoryBulkUpdateChanges {
+  location?: string;
+  condition?: InventoryBulkCondition;
+  tags?: { add?: readonly string[]; remove?: readonly string[] };
+}
+
+export interface InventoryBulkUpdateTarget {
+  itemId: string;
+  expectedVersion: number;
+}
+
+export interface InventoryBulkUpdateInput {
+  targets: readonly InventoryBulkUpdateTarget[];
+  changes: InventoryBulkUpdateChanges;
+}
+
+export interface InventoryBulkUpdateItemRef {
+  itemId: string;
+  version: number;
+}
+
+export interface InventoryBulkUpdateResult {
+  updated: readonly InventoryBulkUpdateItemRef[];
+  unchanged: readonly InventoryBulkUpdateItemRef[];
+  auditIds: readonly string[];
+  correlationId?: string;
+  replayed?: boolean;
 }
 
 export interface InventoryCommissionInput {
@@ -715,6 +749,7 @@ export interface InventoryBackend {
   /** Atomically create a physical inventory item and its exact product profile. */
   createWithProductProfile?(input: InventoryWithProductProfileCreateInput, context: McpRequestContext): Promise<InventoryWithProductProfileResult>;
   update(input: InventoryUpdateInput, context: McpRequestContext): Promise<WriteResult<InventoryItem>>;
+  bulkUpdate(input: InventoryBulkUpdateInput, context: McpRequestContext): Promise<InventoryBulkUpdateResult>;
   /** Promote uncertain evidence through an observed quantity and append-only event. */
   commission?(input: InventoryCommissionInput, context: McpRequestContext): Promise<WriteResult<InventoryItem>>;
   recordStockEvent(input: RecordStockEventInput, context: McpRequestContext): Promise<StockEventResult>;

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ApplicationService } from "@benchledger/application";
+import { McpAdapter } from "./adapter.js";
 import { createApplicationBackend } from "./application-backend.js";
+import { McpProtocol } from "./protocol.js";
 import type { McpRequestContext } from "./types.js";
 
 const context: McpRequestContext = { actorId: "bridge-test", scopes: ["inventory:read", "inventory:write", "artifacts:read", "artifacts:write"] };
@@ -60,6 +62,12 @@ function serviceStub(): ApplicationService {
   };
   return {
     listInventory: async () => ({ data: [item], limit: 10 }),
+    bulkUpdateInventoryItems: vi.fn(async () => ({
+      data: { updated: [{ ...item, location: "updated drawer", version: 2 }], unchanged: [] },
+      audits: [{ id: "audit-bulk", action: "inventory.item.bulk_update", actor: "bridge-test", source: "mcp", correlationId: "bulk-correlation", entityType: "inventory_item", entityId: item.id, version: 2, createdAt: "2026-08-30T10:01:00.000Z" }],
+      correlationId: "bulk-correlation",
+      replayed: false,
+    })),
     listInventoryCategories: async () => ({ data: [category], limit: 10 }),
     getInventoryCategory: async () => category,
     createInventoryCategory: async (input: { name: string }) => ({ data: { ...category, id: "category-created", name: input.name }, audit: { id: "audit-category", entityId: "category-created", version: 1 }, correlationId: "bridge-test", replayed: false }),
@@ -88,6 +96,26 @@ describe("createApplicationBackend", () => {
     await expect(backend.inventoryCategories?.create({ name: "Printer parts", sortOrder: 0 }, context)).resolves.toMatchObject({ category: { id: "category-created", name: "Printer parts" }, auditId: "audit-category" });
     await expect(backend.inventoryCategories?.update({ categoryId: "category-tools", expectedVersion: 1, name: "Workshop tools" }, context)).resolves.toMatchObject({ category: { name: "Workshop tools", version: 2 } });
     await expect(backend.inventoryCategories?.archive({ categoryId: "category-tools", expectedVersion: 1 }, context)).resolves.toMatchObject({ category: { archived: true } });
+  });
+
+  it("maps the atomic bulk metadata mutation and preserves audit/replay metadata", async () => {
+    const service = serviceStub() as ApplicationService & { bulkUpdateInventoryItems: ReturnType<typeof vi.fn> };
+    const backend = createApplicationBackend(service);
+    const result = await backend.inventory.bulkUpdate({
+      targets: [{ itemId: "filament-petg", expectedVersion: 1 }],
+      changes: { location: "updated drawer", tags: { add: ["new-tag"] } },
+    }, { ...context, idempotencyKey: "bulk-mcp-key" });
+    expect(service.bulkUpdateInventoryItems).toHaveBeenCalledWith({
+      targets: [{ itemId: "filament-petg", expectedVersion: 1 }],
+      changes: { location: "updated drawer", tags: { add: ["new-tag"] } },
+    }, expect.objectContaining({ actor: context.actorId, source: "mcp", idempotencyKey: "bulk-mcp-key" }));
+    expect(result).toMatchObject({
+      updated: [{ itemId: "filament-petg", version: 2 }],
+      unchanged: [],
+      auditIds: ["audit-bulk"],
+      correlationId: "bulk-correlation",
+      replayed: false,
+    });
   });
 
   it("returns separate short-lived capabilities for upload and finalize", async () => {

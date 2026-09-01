@@ -25,6 +25,11 @@ function fakePorts(seed = item()): ApplicationPorts {
       getItem: async (id) => id === inventory.id ? inventory : null,
       createItem: async (input) => ({ ...item(), ...input, id: input.id ?? "new-item", tags: [...input.tags], links: [...input.links], availableQuantity: input.evidence.state === "physically_counted" ? input.quantity : 0, createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1 }),
       updateItem: async (_id, input: UpdateInventoryInput) => { inventory = { ...inventory, ...input, ...(input.tags ? { tags: [...input.tags] } : {}), ...(input.links ? { links: [...input.links] } : {}), ...(input.dimensions ? { dimensions: input.dimensions } : {}), updatedAt: "2026-08-30T00:00:00.000Z", version: inventory.version + 1 } as InventoryItem; return inventory; },
+      bulkUpdateItems: async (input) => {
+        const updated = { ...inventory, ...(input.changes.location === undefined ? {} : { location: input.changes.location }), ...(input.changes.condition === undefined ? {} : { condition: input.changes.condition }), updatedAt: "2026-08-30T00:00:00.000Z", version: inventory.version + 1 };
+        inventory = updated;
+        return { updated: [updated], unchanged: [] };
+      },
       recordStockEvent: async (input) => { const event: StockEvent = { ...input, id: "event-1", actor: "test", source: "api", createdAt: "2026-08-30T00:00:00.000Z", itemVersion: inventory.version + 1 }; inventory = { ...inventory, quantity: inventory.quantity + input.quantity, availableQuantity: inventory.availableQuantity + input.quantity, version: inventory.version + 1 }; return { event, item: inventory }; },
       listStockEvents: async () => ({ data: [], limit: 50 })
     },
@@ -230,6 +235,43 @@ describe("ApplicationService", () => {
     await expect(service.recordPhysicalCount("item-1", 1, context, "each")).rejects.toMatchObject({ code: "validation" });
     ports.inventory.getItem = async () => null;
     await expect(service.recordPhysicalCount("item-1", 1, context)).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("bulk-updates explicit inventory targets with per-item audits and canonical replay", async () => {
+    const ports = fakePorts();
+    const service = new ApplicationService(ports);
+    const records = new Map<string, unknown>();
+    ports.idempotency.get = async (_actor, key) => records.get(key) ?? null;
+    ports.idempotency.set = async (_actor, key, value) => { records.set(key, value); };
+    const published: EventBusEvent[] = [];
+    ports.events.publish = (event) => { published.push(event); };
+    const command = {
+      targets: [{ itemId: "item-1", expectedVersion: 1 }],
+      changes: { location: "  Shelf A  ", tags: { add: ["PETG", "petg"] } },
+    };
+    const firstContext = { ...context, idempotencyKey: "bulk-metadata-1", fingerprint: "caller-fingerprint-that-must-not-win" };
+    const first = await service.bulkUpdateInventoryItems(command, firstContext);
+    expect(first).toMatchObject({
+      data: { updated: [{ id: "item-1", version: 2 }], unchanged: [] },
+      audits: [{ action: "inventory.item.bulk_update", entityId: "item-1", version: 2, idempotencyKey: expect.stringMatching(/^bulk:[a-f0-9]{64}$/) }],
+      replayed: false,
+    });
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({ type: "inventory.item.bulk_update", entityId: "item-1", version: 2 });
+
+    const replay = await service.bulkUpdateInventoryItems(command, { ...firstContext, fingerprint: "a-different-caller-fingerprint" });
+    expect(replay).toMatchObject({ replayed: true, data: first.data, audits: first.audits });
+    expect(published).toHaveLength(1);
+  });
+
+  it("does not audit or publish when every bulk target is unchanged", async () => {
+    const ports = fakePorts();
+    ports.inventory.bulkUpdateItems = async () => ({ updated: [], unchanged: [item()] });
+    const service = new ApplicationService(ports);
+    const command = { targets: [{ itemId: "item-1", expectedVersion: 1 }], changes: { location: "same" } };
+    const result = await service.bulkUpdateInventoryItems(command, { ...context, idempotencyKey: "bulk-noop-1" });
+    expect(result).toMatchObject({ data: { updated: [], unchanged: [{ id: "item-1" }] }, audits: [], replayed: false });
+    expect((ports.audit as { readonly events?: readonly AuditEvent[] }).events ?? []).toHaveLength(0);
   });
 
   it("covers project, work-item, revision, and BOM command/query flows", async () => {
