@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { CategoryManager, CategorySelection, categoryTree, categoryDisplayLabel } from "./category-ui";
+import { CategoryManager, CategorySelection, categoryTree, categoryDisplayLabel, inventoryCategoryFilterOptions } from "./category-ui";
 import type { ManagedInventoryCategory } from "./category-ui";
 
 const categories: ManagedInventoryCategory[] = [
@@ -18,6 +18,14 @@ describe("managed category UI", () => {
       ["category-tools", []]
     ]);
     expect(categoryDisplayLabel(categories[1]!, categories[0])).toBe("Printers / Printer parts");
+  });
+
+  it("builds inventory filter options from managed category ids and tree labels", () => {
+    expect(inventoryCategoryFilterOptions(categories)).toEqual([
+      { value: "category-printers", label: "Printers" },
+      { value: "category-printer-parts", label: "Printers / Printer parts" },
+      { value: "category-tools", label: "Tools" }
+    ]);
   });
 
   it("renders an accessible manager with add, rename, reorder, archive and child actions", () => {

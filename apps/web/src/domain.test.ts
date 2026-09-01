@@ -90,6 +90,23 @@ describe("BenchLedger beginner-friendly domain language", () => {
     expect(filterInventory(source, "", { category: "Tools", evidence: "counted" })).toEqual([]);
   });
 
+  it("filters by managed category assignment independently from semantic kind", () => {
+    const source: InventoryItem[] = [
+      { ...inventory[5]!, id: "tool-in-cabinet", kind: "tool", categoryNodeId: "category-cabinet", category: "Tools" },
+      { ...inventory[5]!, id: "tool-in-drawer", kind: "tool", categoryNodeId: "category-drawer", category: "Tools" },
+      { ...inventory[8]!, id: "electronic-in-cabinet", kind: "electronic", categoryNodeId: "category-cabinet", category: "Electronics" }
+    ];
+
+    expect(filterInventory(source, "", { categoryNodeId: "category-cabinet" }).map((item) => item.id)).toEqual([
+      "tool-in-cabinet",
+      "electronic-in-cabinet"
+    ]);
+    expect(filterInventory(source, "", { kind: "tool" }).map((item) => item.id)).toEqual([
+      "tool-in-cabinet",
+      "tool-in-drawer"
+    ]);
+  });
+
   it("offers every inventory kind accepted by the public API", () => {
     expect(inventoryKindOptions.map((option) => option.value)).toEqual([
       "printer",

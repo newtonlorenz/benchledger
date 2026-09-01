@@ -526,7 +526,7 @@ function App() {
 
           <main className="content" id="main-content">
             {page === "overview" && <OverviewPage items={items} projects={projects} expert={expert} sampleMode={sampleMode} onNavigate={navigate} onOpenProject={openProject} onSelectItem={setSelectedItemId} onNewProject={openNewProject} />}
-            {page === "inventory" && <InventoryPage items={items} categories={categories} search={search} expert={expert} onSearch={setSearch} onSelectItem={setSelectedItemId} onNewItem={() => setShowNewItem(true)} />}
+            {page === "inventory" && <InventoryPage items={items} categories={categories} search={search} onSearch={setSearch} onSelectItem={setSelectedItemId} onNewItem={() => setShowNewItem(true)} />}
             {page === "projects" && selectedProject && <ProjectPage project={selectedProject} projects={projects} items={items} offers={offers} tab={projectTab} expert={expert} sampleMode={sampleMode} onTabChange={setProjectTab} onSelectProject={setSelectedProjectId} onOpenItem={setSelectedItemId} onNavigate={navigate} onToast={setToast} onNewProject={openNewProject} onNewRevision={() => setShowNewRevision(true)} onRetrySetup={pendingRevisionSetup?.projectId === selectedProject.id && pendingRevisionSetup.revisionId === selectedProject.serverRevisionId ? retryRevisionSetup : undefined} onAddBom={() => setShowAddBom(true)} onUpload={uploadArtifact} onReadReconciliation={adapter.readReconciliation} onSaveReconciliation={adapter.saveReconciliationDraft} onCommitReconciliation={adapter.commitReconciliation} onRefreshWorkspace={refreshWorkspace} />}
             {page === "projects" && !selectedProject && <EmptyState icon="folder" title="No projects yet" description="Start with a name and project goal. You can add parts and files after that." action="Create first project" onAction={() => setShowNewProject(true)} />}
             {page === "capabilities" && <CapabilitiesPage expert={expert} onCopy={setToast} />}
@@ -655,19 +655,19 @@ function SectionHeading({ eyebrow, title, action, onAction }: { eyebrow: string;
 }
 
 function InventoryPage({ items, categories, search, onSearch, onSelectItem, onNewItem }: { items: InventoryItem[]; categories: readonly ManagedInventoryCategory[]; search: string; onSearch: (value: string) => void; onSelectItem: (id: string) => void; onNewItem: () => void }) {
-  const [category, setCategory] = useState<(typeof categoryOptions)[number]>("All");
+  const [categoryNodeId, setCategoryNodeId] = useState("");
   const [kind, setKind] = useState("All");
   const [evidence, setEvidence] = useState<InventoryItem["evidence"] | "All">("All");
   const [availability, setAvailability] = useState<"All" | "available" | "unavailable">("All");
   const filtered = filterInventory(items, search, {
-    category,
+    ...(categoryNodeId === UNASSIGNED_CATEGORY_FILTER ? { categoryNodeId: null } : categoryNodeId ? { categoryNodeId } : {}),
     kind,
     evidence,
     ...(availability === "All" ? {} : { available: availability === "available" })
   });
   const clearFilters = () => {
     onSearch("");
-    setCategory("All");
+    setCategoryNodeId("");
     setKind("All");
     setEvidence("All");
     setAvailability("All");
@@ -678,7 +678,7 @@ function InventoryPage({ items, categories, search, onSearch, onSelectItem, onNe
       <div className="inventory-toolbar" aria-label="Inventory filters">
         <label className="field-search"><Icon name="search" size={17} /><span className="sr-only">Filter inventory</span><input value={search} onChange={(event) => onSearch(event.target.value)} placeholder="Search name, model, tag, or location" /></label>
         <div className="inventory-filter-grid">
-          <InventoryFilter label="Category" value={category} onChange={(value) => setCategory(value as (typeof categoryOptions)[number])} options={categoryOptions.map((option) => ({ value: option, label: option === "All" ? "All categories" : option }))} />
+          <InventoryFilter label="Category" value={categoryNodeId} onChange={setCategoryNodeId} options={[{ value: "", label: "All categories" }, ...inventoryCategoryFilterOptions(categories), { value: UNASSIGNED_CATEGORY_FILTER, label: "Unassigned legacy items" }]} />
           <InventoryFilter label="Kind" value={kind} onChange={setKind} options={[{ value: "All", label: "All kinds" }, ...inventoryKindOptions]} />
           <InventoryFilter label="Evidence" value={evidence} onChange={(value) => setEvidence(value as InventoryItem["evidence"] | "All")} options={[{ value: "All", label: "All evidence" }, { value: "counted", label: "Physically counted" }, { value: "commissioned", label: "Commissioned" }, { value: "delivered", label: "Delivered or unknown" }, { value: "ordered", label: "Ordered, not verified" }]} />
           <InventoryFilter label="Availability" value={availability} onChange={(value) => setAvailability(value as typeof availability)} options={[{ value: "All", label: "All availability" }, { value: "available", label: "Available for reuse" }, { value: "unavailable", label: "Not available" }]} />

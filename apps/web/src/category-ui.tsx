@@ -62,6 +62,19 @@ export function categoryDisplayLabel(category: ManagedInventoryCategory, parent?
   return parent ? `${parent.name} / ${category.name}` : category.name;
 }
 
+export interface InventoryCategoryFilterOption {
+  readonly value: string;
+  readonly label: string;
+}
+
+/** Build the category filter from the same active tree shown by the selectors. */
+export function inventoryCategoryFilterOptions(categories: readonly ManagedInventoryCategory[]): readonly InventoryCategoryFilterOption[] {
+  return categoryTree(categories).flatMap(({ category, children }) => [
+    { value: category.id, label: category.name },
+    ...children.map((child) => ({ value: child.id, label: categoryDisplayLabel(child, category) }))
+  ]);
+}
+
 interface CategoryManagerProps {
   readonly categories: readonly ManagedInventoryCategory[];
   readonly onCreate: (input: CategoryCreateInput) => Promise<ManagedInventoryCategory | undefined>;

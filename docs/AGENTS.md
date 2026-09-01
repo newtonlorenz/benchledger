@@ -76,6 +76,15 @@ subcategory level. Rename/reorder with an expected version; parentage is fixed
 after creation, and archiving is a separate expected-version command that is
 blocked while active children or active inventory references remain.
 
+For the web UI, open **Settings → Manage inventory categories** to add a
+top-level category and, if useful, one level of subcategories. Then open
+**Inventory → Add item**: choose the semantic item type first and the managed
+category second. The category selector and inventory Category filter use the
+managed category tree and `categoryNodeId`; the separate Kind filter continues
+to use `kind`. If the add form has no active categories, choose **Open Settings**
+from that form, create one, and return to Inventory. Existing legacy items may
+be unassigned until edited.
+
 All list responses are bounded pages. Follow `nextCursor`; never request an
 unbounded database dump. Read the project resources for context, BOM, and
 artifact metadata when working in a project.
