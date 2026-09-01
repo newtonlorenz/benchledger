@@ -850,6 +850,37 @@ describe("sample bulk inventory adapter", () => {
   });
 });
 
+describe("authenticated bulk mutation retries", () => {
+  it("reuses the retained command key after an ambiguous response", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-bulk-retry" });
+    const requestKeys: string[] = [];
+    const requestBodies: string[] = [];
+    const retriedItem = serverItem({ id: "item-1", location: "Bulk shelf", condition: "good", tags: ["bulk"], version: 2 });
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async (_input, init) => {
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        requestBodies.push(String(init?.body));
+        // Simulate a committed server mutation whose response was lost.
+        return Promise.reject(new TypeError("response lost after commit"));
+      })
+      .mockImplementationOnce(async (_input, init) => {
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        requestBodies.push(String(init?.body));
+        return jsonResponse({ data: { updated: [retriedItem], unchanged: [] }, audits: [{ id: "audit-bulk-retry" }], correlationId: "bulk-retry", replayed: true });
+      });
+
+    const adapter = createWorkspaceAdapter();
+    const input = { targets: [{ itemId: "item-1", expectedVersion: 1 }], changes: { location: "Bulk shelf", condition: "good" as const, tags: { add: ["bulk"] } } };
+    await expect(adapter.bulkUpdateInventory(input)).rejects.toMatchObject({ kind: "offline" });
+    await expect(adapter.bulkUpdateInventory(input)).resolves.toMatchObject({ replayed: true, updated: [{ id: "item-1", location: "Bulk shelf", version: 2 }] });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(requestKeys[0]).toMatch(/^web-inventory-bulk-/);
+    expect(requestKeys[1]).toBe(requestKeys[0]);
+    expect(requestBodies[1]).toBe(requestBodies[0]);
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("x-csrf-token")).toBe("csrf-bulk-retry");
+  });
+});
+
 describe("web data mappers", () => {
   it("maps every inventory kind, unit, evidence state, and measured dimension", () => {
     const cases: Array<{ kind: string; category: InventoryItem["category"]; accent: InventoryItem["accent"] }> = [

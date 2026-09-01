@@ -242,7 +242,7 @@ kbd { display: inline-block; padding: 1px 5px; border: 1px solid var(--line); bo
 .bulk-inventory-summary span { color: var(--ink-soft); font-size: .72rem; }
 .bulk-live-status { margin-top: 15px; color: var(--ink-soft); font-size: .77rem; }
 .bulk-result-success .bulk-live-status, .bulk-result-noop .bulk-live-status { color: var(--moss-dark); }
-.bulk-result-conflict .bulk-live-status, .bulk-result-error .bulk-live-status { color: oklch(47% .11 28); }
+.bulk-result-conflict .bulk-live-status, .bulk-result-error .bulk-live-status, .bulk-result-ambiguous .bulk-live-status { color: oklch(47% .11 28); }
 .bulk-correlation { display: block; margin-top: 8px; color: var(--ink-muted); font-size: .66rem; }
 
 .dossier-layout { display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 25px; align-items: start; }

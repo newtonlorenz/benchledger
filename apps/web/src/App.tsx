@@ -1004,7 +1004,7 @@ function InventoryTable({ items, categories, selectedIds, selectAllRef, allLoade
 }
 
 type BulkInventoryOutcome = {
-  kind: "success" | "noop" | "conflict" | "error";
+  kind: "success" | "noop" | "conflict" | "error" | "ambiguous";
   message: string;
   updated: number;
   unchanged: number;
@@ -1108,9 +1108,14 @@ function BulkInventoryDialog({ selectedItems, onClose, onDone, onApply }: { sele
     } catch (error: unknown) {
       const normalized = normalizeApiError(error);
       const conflict = normalized.status === 409 || normalized.code === "version_conflict";
+      const ambiguous = !conflict && isAmbiguousMutation(normalized);
       setOutcome({
-        kind: conflict ? "conflict" : "error",
-        message: conflict ? "Nothing changed. One or more selected items changed on the service; reload and select them again." : normalized.message,
+        kind: conflict ? "conflict" : ambiguous ? "ambiguous" : "error",
+        message: conflict
+          ? "Nothing changed. One or more selected items changed on the service; reload and select them again."
+          : ambiguous
+            ? "BenchLedger could not confirm whether this bulk edit was applied. Retry safely to replay the same command, or close this dialog and verify the rows before making another change."
+            : normalized.message,
         updated: 0,
         unchanged: 0,
         ...(normalized.correlationId ? { correlationId: normalized.correlationId } : {})
@@ -1140,11 +1145,12 @@ function BulkInventoryDialog({ selectedItems, onClose, onDone, onApply }: { sele
       {saving && <p className="bulk-live-status" role="status" aria-live="polite">Applying changes to {targetCount} item{targetCount === 1 ? "" : "s"}…</p>}
     </section>}
     {step === "result" && outcome && <section className={`bulk-inventory-result bulk-result-${outcome.kind}`}>
-      <p className="bulk-live-status" role={outcome.kind === "conflict" || outcome.kind === "error" ? "alert" : "status"} aria-live="polite">{outcome.message}</p>
+      <p className="bulk-live-status" role={outcome.kind === "conflict" || outcome.kind === "error" || outcome.kind === "ambiguous" ? "alert" : "status"} aria-live="polite">{outcome.message}</p>
       {outcome.correlationId && <small className="bulk-correlation">Reference {outcome.correlationId}</small>}
+      {outcome.kind === "ambiguous" && <p className="bulk-inventory-note">Retry safely reuses the retained idempotency key for this exact edit. Do not change the values if you want the service to replay the same command.</p>}
       {outcome.kind === "conflict" && <p className="bulk-inventory-note">Nothing was saved. Reload inventory and select the current rows before trying again.</p>}
       {outcome.kind === "error" && <p className="bulk-inventory-note">Nothing was saved. Correct the values or check the service connection.</p>}
-      <div className="dialog-actions">{outcome.kind === "success" || outcome.kind === "noop" ? <button type="button" className="button button-primary" onClick={onDone}>Done</button> : <><button type="button" className="button button-quiet" onClick={() => { setOutcome(undefined); setStep("edit"); }}>Back to changes</button><button type="button" className="button button-secondary" onClick={onClose}>Close</button></>}</div>
+      <div className="dialog-actions">{outcome.kind === "success" || outcome.kind === "noop" ? <button type="button" className="button button-primary" onClick={onDone}>Done</button> : outcome.kind === "ambiguous" ? <><button type="button" className="button button-primary" onClick={() => { void confirmChanges(); }} disabled={saving} aria-busy={saving}>Retry safely</button><button type="button" className="button button-secondary" onClick={onClose}>Close</button></> : <><button type="button" className="button button-quiet" onClick={() => { setOutcome(undefined); setStep("edit"); }}>Back to changes</button><button type="button" className="button button-secondary" onClick={onClose}>Close</button></>}</div>
     </section>}
   </Dialog>;
 }

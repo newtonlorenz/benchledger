@@ -301,6 +301,46 @@ test("reports bulk no-op and conflict states without discarding the edit", async
   await expect(dialog.getByLabel("Location")).toHaveValue("Changed place");
 });
 
+test("keeps an ambiguous bulk edit unresolved and retries the same command safely", async ({ page }) => {
+  await signIn(page);
+  const item = inventoryRecord("bulk-ambiguous-item", "Ambiguous bulk item");
+  const requestKeys: string[] = [];
+  let attempt = 0;
+  await page.route("**/api/v1/inventory**", async (route) => {
+    const requestUrl = new URL(route.request().url());
+    if (route.request().method() !== "GET" || requestUrl.pathname !== "/api/v1/inventory") return route.continue();
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [item], limit: 25, total: 1 }) });
+  });
+  await page.route("**/api/v1/inventory/bulk", async (route) => {
+    if (route.request().method() !== "PATCH") return route.continue();
+    requestKeys.push(route.request().headers()["idempotency-key"] ?? "");
+    if (attempt++ === 0) {
+      // The service may have committed before this response was lost.
+      await route.abort("failed");
+      return;
+    }
+    const updated = { ...item, location: "Recovered shelf", condition: "good", tags: ["recovered"], version: 2 };
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: { updated: [updated], unchanged: [] }, audits: [{ id: "audit-ambiguous" }], correlationId: "e2e-ambiguous", replayed: true }) });
+  });
+
+  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await page.getByLabel("Select Ambiguous bulk item").check();
+  await page.getByRole("button", { name: "Bulk edit" }).click();
+  const dialog = page.getByRole("dialog", { name: "Bulk edit inventory" });
+  await dialog.getByLabel("Location").fill("Recovered shelf");
+  await dialog.getByRole("button", { name: "Review changes" }).click();
+  await dialog.getByRole("button", { name: "Confirm bulk edit" }).click();
+  const unresolved = dialog.getByRole("alert");
+  await expect(unresolved).toContainText("could not confirm whether this bulk edit was applied");
+  await expect(unresolved).not.toContainText("Nothing was saved");
+  await expect(dialog.getByRole("button", { name: "Retry safely" })).toBeVisible();
+
+  await dialog.getByRole("button", { name: "Retry safely" }).click();
+  await expect(dialog.getByRole("status")).toContainText("Saved changes to 1 item");
+  expect(requestKeys).toHaveLength(2);
+  expect(requestKeys[0]).toBe(requestKeys[1]);
+});
+
 test("keeps inventory quantity and status columns usable on mobile", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await signIn(page);
