@@ -112,18 +112,30 @@ For a beginner, use plain language and explain one next action:
 > I already have? Check the inventory, show what needs a physical count, and
 > list only the genuinely missing parts. Do not buy anything.”
 
-The agent should call `calculate_bom_gaps` and explain every result as one of:
+The agent should call `calculate_bom_gaps` and explain every required result as
+one of four decisions:
 
-- **Supplied:** physically confirmed or commissioned stock meets the line.
-- **Inspect first:** an item looks relevant, but quantity or condition is not
-  currently confirmed.
-- **Partial:** confirmed stock covers only part of the requirement.
-- **Missing:** no compatible stock is recorded.
-- **Optional:** useful but not required to complete the stated build.
+- **Ready:** physically confirmed or commissioned stock meets the line.
+- **Check:** a relevant item exists but its quantity, condition, identity, or
+  compatibility still needs inspection. Partial confirmed coverage is Check
+  only while an inspect-first candidate may cover the remaining quantity.
+- **Decide:** the requirement is under-specified. Resolve the returned
+  `missingDecisions` before searching suppliers.
+- **Source:** the requirement is sufficiently specified and confirmed stock
+  does not cover it, so a shopping proposal may be prepared. A confirmed
+  partial line is Source for its remaining quantity when no inspect-first
+  candidate could cover that shortfall.
 
-Each returned line also carries its required/optional flag. Readiness outcome
-totals cover required lines only; `optional` is a separate total even when an
-optional line happens to be supplied or needs inspection.
+Optional lines remain separately identified and never authorize Source. A BOM
+line may record `constraints.specification` with a required `status`, resolved
+`decisions`, and exact `missingDecisions`. An insufficient power-supply line
+must resolve current/load and connector before it can become Source. An exact
+item ID does not override conditional compatibility, and ordered or otherwise
+unverified stock remains Check rather than a purchase recommendation.
+
+Each returned line also carries its required/optional flag. Ready, Check,
+Decide, and Source totals cover required lines only; `optional` is a separate
+total even when an optional line happens to be supplied or needs inspection.
 
 Never turn an order, delivery message, or old price into a present stock count.
 When a delivery or order has been physically checked, use

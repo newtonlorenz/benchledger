@@ -346,7 +346,105 @@ describe("ApplicationService", () => {
       expect.objectContaining({ lineId: "bom-partial", status: "partially_supplied", suppliedQuantity: 1, inspectQuantity: 0, missingQuantity: 1 }),
       expect.objectContaining({ lineId: "bom-optional", status: "optional", suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 1 })
     ]));
-    expect(result.totals).toMatchObject({ partialLines: 1, optionalLines: 1 });
+    expect(result.totals).toEqual({
+      requiredLines: 1,
+      suppliedLines: 0,
+      inspectFirstLines: 0,
+      partialLines: 1,
+      missingLines: 0,
+      optionalLines: 1,
+      readyLines: 0,
+      checkLines: 0,
+      decideLines: 0,
+      sourceLines: 1,
+    });
+  });
+
+  it("returns a concrete specify-first decision for an under-specified power supply", async () => {
+    const ports = fakePorts();
+    const service = new ApplicationService(ports);
+    await service.createBomLine("rev-1", {
+      id: "bom-power-supply",
+      name: "12 V power supply",
+      requiredQuantity: 1,
+      unit: "each",
+      optional: false,
+      alternatives: [],
+      constraints: { specification: { status: "insufficient", decisions: { current_or_load: "5 A" }, missingDecisions: ["voltage"] } },
+    }, context);
+
+    const result = await service.evaluateBomGaps("rev-1");
+
+    expect(result.lines[0]).toMatchObject({
+      status: "specify_first",
+      decision: "decide",
+      missingDecisions: ["voltage", "connector"],
+      suppliedQuantity: 0,
+      inspectQuantity: 0,
+      missingQuantity: 1,
+    });
+    expect(result.lines[0]?.reasons.join(" ")).toMatch(/specif|current|connector/i);
+    expect(result.totals).toMatchObject({ requiredLines: 1, decideLines: 1, sourceLines: 0, missingLines: 0 });
+  });
+
+  it("does not allocate confirmed stock while an explicit specification blocker remains", async () => {
+    const ports = fakePorts(item({ id: "power-supply", name: "12 V supply", quantity: 1, availableQuantity: 1, unit: "each" }));
+    const service = new ApplicationService(ports);
+    await service.createBomLine("rev-1", {
+      id: "bom-power-supply-confirmed",
+      name: "Power supply",
+      itemId: "power-supply",
+      requiredQuantity: 1,
+      unit: "each",
+      optional: false,
+      alternatives: [],
+      constraints: { specification: { status: "insufficient", missingDecisions: ["current_or_load", "connector"] } },
+    }, context);
+
+    const result = await service.evaluateBomGaps("rev-1");
+
+    expect(result.lines[0]).toMatchObject({ status: "specify_first", decision: "decide", suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 1 });
+    expect(result.lines[0]?.candidates[0]).toMatchObject({ itemId: "power-supply", suppliedQuantity: 0, availableQuantity: 1 });
+  });
+
+  it("keeps optional specification blockers separate from required readiness totals", async () => {
+    const service = new ApplicationService(fakePorts());
+    await service.createBomLine("rev-1", {
+      id: "bom-optional-power",
+      name: "Optional power supply",
+      requiredQuantity: 1,
+      unit: "each",
+      optional: true,
+      alternatives: [],
+      constraints: { specification: { status: "insufficient", missingDecisions: ["current_or_load", "connector"] } },
+    }, context);
+
+    const result = await service.evaluateBomGaps("rev-1");
+
+    expect(result.lines[0]).toMatchObject({ optional: true, status: "optional", decision: "decide", missingDecisions: ["current_or_load", "connector"] });
+    expect(result.totals).toMatchObject({ requiredLines: 0, optionalLines: 1, decideLines: 0, sourceLines: 0 });
+  });
+
+  it.each([
+    ["exact item", { itemId: "item-1" }],
+    ["SKU", { constraints: { sku: "PSU-12V-5A" } }],
+    ["exact model", { constraints: { manufacturer: "Acme", model: "PSU-1205" } }],
+  ])("allows a sufficiently identified %s requirement to be sourced when stock is absent", async (_label, identity) => {
+    const ports = fakePorts();
+    const service = new ApplicationService(ports);
+    await service.createBomLine("rev-1", {
+      name: "Controller",
+      requiredQuantity: 1,
+      unit: "each",
+      optional: false,
+      alternatives: [],
+      ...identity,
+    }, context);
+
+    const result = await service.evaluateBomGaps("rev-1");
+
+    expect(result.lines[0]).toMatchObject({ status: "missing", decision: "source", missingQuantity: 1 });
+    expect(result.totals).toMatchObject({ sourceLines: 1, decideLines: 0, missingLines: 1 });
   });
 
   it("keeps an optional supplied line out of every required total", async () => {
@@ -357,7 +455,7 @@ describe("ApplicationService", () => {
     const result = await service.evaluateBomGaps("rev-1");
 
     expect(result.lines).toEqual([expect.objectContaining({ lineId: "bom-optional-supplied", optional: true, status: "supplied", suppliedQuantity: 1 })]);
-    expect(result.totals).toEqual({ requiredLines: 0, suppliedLines: 0, inspectFirstLines: 0, partialLines: 0, missingLines: 0, optionalLines: 1 });
+    expect(result.totals).toEqual({ requiredLines: 0, suppliedLines: 0, inspectFirstLines: 0, partialLines: 0, missingLines: 0, optionalLines: 1, readyLines: 0, checkLines: 0, decideLines: 0, sourceLines: 0 });
   });
 
   it("allocates one shared confirmed item to only one BOM line in stable line-id order", async () => {
@@ -765,6 +863,49 @@ describe("ApplicationService", () => {
 
     expect(result.lines[0]).toMatchObject({ status: "inspect_first", suppliedQuantity: 0, inspectQuantity: 1, missingQuantity: 0, matchedItemIds: [alternative.id] });
     await expect(service.createReservation("rev-1", { lineId: "bom-1", itemId: alternative.id, quantity: 1 }, context)).rejects.toMatchObject({ code: "validation" });
+  });
+
+  it("does not let an exact item ID override a conditional compatibility decision", async () => {
+    const ports = fakePorts(item({ id: "item-1", name: "Possible board", kind: "electronic", unit: "each" }));
+    const service = new ApplicationService(ports);
+    await service.createBomLine("rev-1", {
+      name: "Requested board",
+      itemId: "item-1",
+      requiredQuantity: 1,
+      unit: "each",
+      optional: false,
+      alternatives: [{ itemId: "item-1", compatible: "conditional", reason: "verify voltage" }],
+      constraints: {},
+    }, context);
+
+    const result = await service.evaluateBomGaps("rev-1");
+
+    expect(result.lines[0]).toMatchObject({ status: "inspect_first", suppliedQuantity: 0, inspectQuantity: 1, missingQuantity: 0 });
+    expect(result.lines[0]?.candidates[0]).toMatchObject({ relationship: "uncertain_alternative", compatibility: "conditional" });
+    await expect(service.createReservation("rev-1", { lineId: "bom-1", itemId: "item-1", quantity: 1 }, context)).rejects.toMatchObject({ code: "validation" });
+  });
+
+  it("keeps a partial shortfall in Check while an inspect-first candidate may cover it", async () => {
+    const confirmed = item({ id: "confirmed-part", name: "Controller", quantity: 1, availableQuantity: 1, unit: "each" });
+    const uncertain = item({ id: "uncertain-part", name: "Possible controller", quantity: 1, availableQuantity: 0, unit: "each", evidence: { state: "delivered_uncounted" } });
+    const ports = fakePorts(confirmed);
+    ports.inventory.listItems = async () => ({ data: [confirmed, uncertain], limit: 200 });
+    ports.inventory.getItem = async (id) => [confirmed, uncertain].find((candidate) => candidate.id === id) ?? null;
+    const service = new ApplicationService(ports);
+    await service.createBomLine("rev-1", {
+      name: "Controller",
+      itemId: confirmed.id,
+      requiredQuantity: 3,
+      unit: "each",
+      optional: false,
+      alternatives: [{ itemId: uncertain.id, compatible: "confirmed" }],
+      constraints: {},
+    }, context);
+
+    const result = await service.evaluateBomGaps("rev-1");
+
+    expect(result.lines[0]).toMatchObject({ status: "partially_supplied", decision: "check", suppliedQuantity: 1, inspectQuantity: 1, missingQuantity: 1 });
+    expect(result.totals).toMatchObject({ partialLines: 1, checkLines: 1, sourceLines: 0 });
   });
 
   it("counts a confirmed alternative as supplied", async () => {

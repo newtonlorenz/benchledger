@@ -5,6 +5,26 @@ export type StockState =
   | "reserved"
   | "depleted";
 
+export type BomSpecificationDecision =
+  | "identity"
+  | "purpose"
+  | "voltage"
+  | "current_or_load"
+  | "connector"
+  | "compatibility"
+  | "dimensions";
+
+export type BomSpecificationDecisions = Readonly<Partial<Record<BomSpecificationDecision, string>>>;
+
+export interface BomSpecification {
+  status: "sufficient" | "insufficient";
+  decisions?: BomSpecificationDecisions;
+  missingDecisions?: readonly BomSpecificationDecision[];
+}
+
+export type BomCompatibility = "confirmed" | "conditional" | "unknown";
+export type BomDecision = "ready" | "check" | "decide" | "source";
+
 export type InventoryCategory =
   | "Printers"
   | "Filament"
@@ -229,6 +249,44 @@ export interface BomLine {
   unit: "each" | "g" | "m";
   optional?: boolean;
   note?: string;
+  constraints?: {
+    kind?: string;
+    manufacturer?: string;
+    model?: string;
+    sku?: string;
+    tag?: string;
+    nameIncludes?: string;
+    specification?: BomSpecification;
+  };
+  /** Alternatives retain compatibility evidence; an uncertain alternative is
+   * still a Check item even when its ID exactly matches itemId. */
+  alternatives?: readonly { itemId: string; compatible?: BomCompatibility; reason?: string }[];
+}
+
+export interface ProjectGapLine {
+  lineId: string;
+  status: "supplied" | "inspect_first" | "specify_first" | "partially_supplied" | "missing" | "optional";
+  decision: BomDecision;
+  missingDecisions?: readonly BomSpecificationDecision[];
+  suppliedQuantity: number;
+  inspectQuantity: number;
+  missingQuantity: number;
+  matchedItemIds: readonly string[];
+  reasons: readonly string[];
+}
+
+export interface ProjectGapEvaluation {
+  lines: readonly ProjectGapLine[];
+  totals: {
+    requiredLines: number;
+    optionalLines: number;
+    readyLines: number;
+    checkLines: number;
+    decideLines: number;
+    sourceLines: number;
+    partialLines: number;
+    missingLines: number;
+  };
 }
 
 export interface Artifact {
@@ -260,6 +318,11 @@ export interface Project {
   accent: "orange" | "teal" | "blue";
   /** API revision identifier retained for revision, BOM, and artifact writes. */
   serverRevisionId?: string;
+  /** Canonical application-service readiness returned by the workspace API. */
+  gapEvaluation?: ProjectGapEvaluation;
+  /** Connected readiness was invalidated and could not be reloaded. Source
+   * recommendations remain disabled until a canonical evaluation returns. */
+  readinessUnavailable?: boolean;
   buildConfigSnapshot?: BuildConfigSnapshot;
 }
 
@@ -429,7 +492,9 @@ export interface BomLineStatus {
   item?: InventoryItem;
   supplied: number;
   remaining: number;
-  state: "ready" | "inspect-first" | "partial" | "missing" | "optional";
+  state: "ready" | "inspect-first" | "specify-first" | "partial" | "missing" | "optional";
+  decision: BomDecision;
+  missingDecisions?: readonly BomSpecificationDecision[];
 }
 
 export interface ProjectSummary {
@@ -438,37 +503,137 @@ export interface ProjectSummary {
   inspectLines: number;
   missingLines: number;
   optionalLines: number;
+  readyDecisionLines: number;
+  checkLines: number;
+  decideLines: number;
+  sourceLines: number;
+  partialLines: number;
+  readinessUnavailable: boolean;
   lineStatuses: BomLineStatus[];
 }
 
-export function calculateProjectSummary(project: Project, items: InventoryItem[]): ProjectSummary {
-  const lineStatuses = project.bom.map((line): BomLineStatus => {
-    const item = line.itemId ? items.find((candidate) => candidate.id === line.itemId) : undefined;
-    const available = item ? Math.max(item.quantity - item.reserved, 0) : 0;
-    const supplied = Math.min(line.required, available);
-    const remaining = Math.max(line.required - supplied, 0);
+const POWER_SUPPLY_NAME = /\b(?:power\s+supply|power\s+adapter|dc\s+adapter|ac\s+adapter|wall\s+adapter|mains\s+adapter)\b/i;
+const POWER_SUPPLY_DECISIONS: readonly BomSpecificationDecision[] = ["current_or_load", "connector"];
 
-    if (line.optional && !item) {
-      return { line, supplied, remaining, state: "optional" };
-    }
-    if (!item || item.state === "depleted" || item.state === "ordered-unverified") {
-      return item
-        ? { line, item, supplied, remaining, state: supplied > 0 ? "partial" : "missing" }
-        : { line, supplied, remaining, state: supplied > 0 ? "partial" : "missing" };
-    }
-    if (item.state === "inspect-first") {
-      return { line, item, supplied, remaining, state: "inspect-first" };
-    }
-    if (remaining > 0) return { line, item, supplied, remaining, state: "partial" };
-    return { line, item, supplied, remaining, state: "ready" };
+function specificationForLine(line: BomLine): { sufficient: boolean; missingDecisions: readonly BomSpecificationDecision[] } {
+  const specification = line.constraints?.specification;
+  if (specification !== undefined) {
+    const decisions = specification.decisions ?? {};
+    const mandatoryMissing = POWER_SUPPLY_NAME.test(line.label)
+      ? POWER_SUPPLY_DECISIONS.filter((decision) => {
+        const value = decisions[decision];
+        return typeof value !== "string" || value.trim().length === 0;
+      })
+      : [];
+    const missingDecisions = [...new Set([...(specification.missingDecisions ?? []), ...mandatoryMissing])];
+    return { sufficient: specification.status === "sufficient" && missingDecisions.length === 0, missingDecisions };
+  }
+  if (POWER_SUPPLY_NAME.test(line.label)) return { sufficient: false, missingDecisions: POWER_SUPPLY_DECISIONS };
+  return { sufficient: true, missingDecisions: [] };
+}
+
+function decisionForLine(line: BomLine, state: BomLineStatus["state"], sufficient: boolean, needsCheck: boolean): BomDecision {
+  if (state === "ready") return "ready";
+  if (state === "inspect-first") return "check";
+  if (state === "partial") return needsCheck ? "check" : "source";
+  if (state === "specify-first") return "decide";
+  return sufficient ? "source" : "decide";
+}
+
+function summaryFromCanonicalGaps(project: Project, items: InventoryItem[], gaps: ProjectGapEvaluation): ProjectSummary {
+  const gapByLineId = new Map(gaps.lines.map((gap) => [gap.lineId, gap] as const));
+  const stateFor = (gap: ProjectGapLine): BomLineStatus["state"] => {
+    if (gap.status === "supplied") return "ready";
+    if (gap.status === "inspect_first") return "inspect-first";
+    if (gap.status === "specify_first") return "specify-first";
+    if (gap.status === "partially_supplied") return "partial";
+    return gap.status;
+  };
+  const lineStatuses = project.bom.flatMap((line): BomLineStatus[] => {
+    const gap = gapByLineId.get(line.id);
+    if (gap === undefined) return [];
+    const item = gap.matchedItemIds.map((id) => items.find((candidate) => candidate.id === id)).find((candidate): candidate is InventoryItem => candidate !== undefined);
+    return [{
+      line,
+      ...(item === undefined ? {} : { item }),
+      supplied: gap.suppliedQuantity,
+      remaining: Math.max(gap.missingQuantity + gap.inspectQuantity, 0),
+      state: stateFor(gap),
+      decision: gap.decision,
+      ...(gap.missingDecisions === undefined ? {} : { missingDecisions: gap.missingDecisions.slice() }),
+    }];
+  });
+  return {
+    totalLines: gaps.totals.requiredLines + gaps.totals.optionalLines,
+    readyLines: gaps.totals.readyLines,
+    inspectLines: lineStatuses.filter((line) => line.state === "inspect-first" && line.line.optional !== true).length,
+    missingLines: gaps.totals.missingLines + gaps.totals.partialLines,
+    optionalLines: gaps.totals.optionalLines,
+    readyDecisionLines: gaps.totals.readyLines,
+    checkLines: gaps.totals.checkLines,
+    decideLines: gaps.totals.decideLines,
+    sourceLines: gaps.totals.sourceLines,
+    partialLines: gaps.totals.partialLines,
+    readinessUnavailable: false,
+    lineStatuses,
+  };
+}
+
+export function calculateProjectSummary(project: Project, items: InventoryItem[]): ProjectSummary {
+  if (project.gapEvaluation !== undefined) return summaryFromCanonicalGaps(project, items, project.gapEvaluation);
+  const lineStatuses = project.bom.map((line): BomLineStatus => {
+    const candidateIds = [...new Set([line.itemId, ...(line.alternatives ?? []).map((alternative) => alternative.itemId)].filter((id): id is string => Boolean(id)))];
+    const candidates = candidateIds.flatMap((id) => {
+      const candidate = items.find((item) => item.id === id);
+      return candidate === undefined ? [] : [candidate];
+    });
+    const specification = specificationForLine(line);
+    const needsInspection = (item: InventoryItem): boolean => item.state === "inspect-first"
+      || item.state === "ordered-unverified"
+      || (line.alternatives ?? []).some((alternative) => alternative.itemId === item.id && alternative.compatible !== undefined && alternative.compatible !== "confirmed");
+    const confirmedCandidates = candidates.filter((item) => !needsInspection(item));
+    const inspectCandidates = candidates.filter(needsInspection);
+    const confirmedAvailable = confirmedCandidates.reduce((total, item) => total + (item.state === "depleted" ? 0 : Math.max(item.availableQuantity ?? item.quantity - item.reserved, 0)), 0);
+    const supplied = specification.sufficient ? Math.min(line.required, confirmedAvailable) : 0;
+    const inspectAvailable = inspectCandidates.reduce((total, item) => total + Math.max(item.availableQuantity ?? item.quantity - item.reserved, item.quantity - item.reserved, 0), 0);
+    const inspectQuantity = Math.min(Math.max(line.required - supplied, 0), inspectAvailable);
+    const missingQuantity = Math.max(line.required - supplied - inspectQuantity, 0);
+    const item = confirmedCandidates[0] ?? inspectCandidates[0];
+    const baseState: BomLineStatus["state"] = missingQuantity === 0 && inspectQuantity === 0
+      ? "ready"
+      : supplied > 0 && missingQuantity > 0
+        ? "partial"
+        : inspectQuantity > 0
+          ? "inspect-first"
+          : "missing";
+    const state: BomLineStatus["state"] = line.optional === true && supplied === 0 && inspectQuantity === 0
+      ? "optional"
+      : !specification.sufficient && inspectQuantity === 0
+        ? "specify-first"
+        : baseState;
+    return {
+      line,
+      ...(item === undefined ? {} : { item }),
+      supplied,
+      remaining: Math.max(inspectQuantity + missingQuantity, 0),
+      state,
+      decision: decisionForLine(line, state, specification.sufficient, inspectQuantity > 0),
+      ...(specification.missingDecisions.length === 0 ? {} : { missingDecisions: specification.missingDecisions.slice() })
+    };
   });
 
   return {
     totalLines: lineStatuses.length,
-    readyLines: lineStatuses.filter((line) => line.state === "ready").length,
-    inspectLines: lineStatuses.filter((line) => line.state === "inspect-first").length,
-    missingLines: lineStatuses.filter((line) => ["missing", "partial"].includes(line.state)).length,
-    optionalLines: lineStatuses.filter((line) => line.state === "optional").length,
+    readyLines: lineStatuses.filter((line) => line.line.optional !== true && line.state === "ready").length,
+    inspectLines: lineStatuses.filter((line) => line.line.optional !== true && line.state === "inspect-first").length,
+    missingLines: lineStatuses.filter((line) => line.line.optional !== true && ["missing", "partial"].includes(line.state)).length,
+    optionalLines: lineStatuses.filter((line) => line.line.optional === true).length,
+    readyDecisionLines: lineStatuses.filter((line) => line.line.optional !== true && line.decision === "ready").length,
+    checkLines: lineStatuses.filter((line) => line.line.optional !== true && line.decision === "check").length,
+    decideLines: lineStatuses.filter((line) => line.line.optional !== true && line.decision === "decide").length,
+    sourceLines: project.readinessUnavailable === true ? 0 : lineStatuses.filter((line) => line.line.optional !== true && line.decision === "source").length,
+    partialLines: lineStatuses.filter((line) => line.line.optional !== true && line.state === "partial").length,
+    readinessUnavailable: project.readinessUnavailable === true,
     lineStatuses
   };
 }
@@ -479,6 +644,8 @@ export function getLineLabel(state: BomLineStatus["state"]): { label: string; to
       return { label: "Ready to use", tone: "good" };
     case "inspect-first":
       return { label: "Check quantity", tone: "warn" };
+    case "specify-first":
+      return { label: "Specify first", tone: "warn" };
     case "partial":
       return { label: "Partly covered", tone: "warn" };
     case "missing":

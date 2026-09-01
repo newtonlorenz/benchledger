@@ -543,8 +543,12 @@ describe("McpAdapter", () => {
     const definition = adapter.listTools().find((tool) => tool.name === "create_bom_line");
     const properties = definition?.inputSchema.properties as Record<string, any>;
     const constraints = properties.constraints as Record<string, any>;
-    expect(Object.keys(constraints.properties)).toEqual(["kind", "manufacturer", "model", "sku", "tag", "nameIncludes"]);
+    expect(Object.keys(constraints.properties)).toEqual(["kind", "manufacturer", "model", "sku", "tag", "nameIncludes", "specification"]);
     expect(constraints.additionalProperties).toBe(false);
+    expect(constraints.properties.specification).toMatchObject({
+      required: ["status"],
+      properties: { status: { enum: ["sufficient", "insufficient"] } },
+    });
 
     const result = await adapter.callTool("create_bom_line", {
       projectRevisionId: "project-revision-1",
@@ -617,6 +621,7 @@ describe("McpAdapter", () => {
     expect(adapter.listResources()).toHaveLength(3);
     expect(adapter.listResourceTemplates()).toHaveLength(11);
     expect(adapter.capabilityDocument()).toMatchObject({ product: "BenchLedger" });
+    expect(JSON.stringify(adapter.capabilityDocument()).length).toBeLessThan(48 * 1024);
   });
 
   it("reads each documented resource, enforces scope, and supports bounded results", async () => {

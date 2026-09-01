@@ -30,7 +30,15 @@ const nullableIdProperty = (description: string): JsonObject => ({ oneOf: [idPro
 const categoryIdProperty = (description = "Stable managed category identifier."): JsonObject => ({ ...string(description), maxLength: 160 });
 const nullableCategoryIdProperty = (description: string): JsonObject => ({ oneOf: [categoryIdProperty(description), { type: "null" }] });
 const quantityProperty: JsonObject = object({ value: number("Positive amount."), unit: string("Canonical unit: piece, gram, millimetre, millilitre, metre, roll, or set.") }, ["value", "unit"]);
-const bomConstraintsProperty: JsonObject = object(Object.fromEntries(BOM_CONSTRAINT_KEYS.map((key) => [key, string(`Match inventory ${key}.`)])));
+const bomSpecificationProperty: JsonObject = { ...object({
+  status: enumString(["sufficient", "insufficient"]),
+  decisions: object(Object.fromEntries(["identity", "purpose", "voltage", "current_or_load", "connector", "compatibility", "dimensions"].map((key) => [key, string()]))),
+  missingDecisions: { ...array(enumString(["identity", "purpose", "voltage", "current_or_load", "connector", "compatibility", "dimensions"])), minItems: 1, maxItems: 7 },
+}, ["status"]), description: "Insufficient requires missingDecisions; sufficient requires decisions. Power supplies require current_or_load and connector." };
+const bomConstraintsProperty: JsonObject = object({
+  ...Object.fromEntries(BOM_CONSTRAINT_KEYS.map((key) => [key, string(`Match inventory ${key}.`)])),
+  specification: bomSpecificationProperty,
+});
 const bomAlternativeProperty: JsonObject = object({ itemId: idProperty("Alternative inventory item."), compatible: string("Compatibility evidence: confirmed, conditional, or unknown."), reason: string("Why this alternative is or is not compatible.") }, ["itemId", "compatible"]);
 
 const catalogFilamentProperty: JsonObject = object({
@@ -238,7 +246,7 @@ export const TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
   tool("update_bom_line", "Update one BOM requirement using optimistic versioning and evidence-bearing alternatives.", "bom:write", true, { bomLineId: idProperty("BOM line identifier."), expectedVersion: integer(), description: string(), quantity: number(), unit: string(), requirement: string(), itemId: idProperty("Exact inventory item, when known."), alternatives: array(bomAlternativeProperty), compatibleItemIds: array(string("Deprecated IDs-only alternative list; use alternatives for compatibility evidence.")), constraints: bomConstraintsProperty, notes: string() }, ["bomLineId"]),
   tool("retire_bom_line", "Retire a BOM requirement without erasing its history.", "bom:write", true, { bomLineId: idProperty("BOM line identifier."), expectedVersion: integer() }, ["bomLineId", "expectedVersion"]),
   tool("restore_bom_line", "Restore a retired BOM requirement with optimistic versioning.", "bom:write", true, { bomLineId: idProperty("BOM line identifier."), expectedVersion: integer() }, ["bomLineId", "expectedVersion"]),
-  tool("calculate_bom_gaps", "Evaluate each BOM line as supplied, inspect-first, partial, missing, or optional, with match reasons.", "bom:read", false, { projectRevisionId: idProperty("Project revision identifier.") }, ["projectRevisionId"]),
+  tool("calculate_bom_gaps", "Evaluate each BOM line as supplied, inspect-first, specify-first, partial, missing, or optional. Under-specified lines are Decide and never become buy recommendations; sufficiently specified gaps are Source.", "bom:read", false, { projectRevisionId: idProperty("Project revision identifier.") }, ["projectRevisionId"]),
   tool("create_reservation", "Reserve confirmed stock for one BOM line; uncertain stock is never silently reserved.", "bom:write", true, { projectRevisionId: idProperty("Project revision identifier."), bomLineId: idProperty("BOM line identifier."), itemId: idProperty("Inventory item identifier."), quantity: quantityProperty }, ["projectRevisionId", "bomLineId", "itemId", "quantity"]),
   tool("release_reservation", "Release one stock reservation with optimistic version checking.", "bom:write", true, { reservationId: idProperty("Reservation identifier."), expectedVersion: integer() }, ["reservationId"]),
   tool("record_usage", "Record actual consumption against a project and optional reservation.", "bom:write", true, { projectRevisionId: idProperty("Project revision identifier."), reservationId: idProperty("Optional reservation identifier."), itemId: idProperty("Inventory item identifier."), quantity: quantityProperty, note: string() }, ["projectRevisionId", "itemId", "quantity"]),
@@ -292,7 +300,8 @@ export const CAPABILITY_DOCUMENT: JsonObject = {
   summary: "Evidence-first inventory and versioned project workspace for 3D printing and electronics.",
   resources: RESOURCES as unknown as JsonValue,
   resourceTemplates: RESOURCE_TEMPLATES as unknown as JsonValue,
-  tools: TOOL_DEFINITIONS as unknown as JsonValue,
+  tools: TOOL_DEFINITIONS.map(({ name, description, requiredScope, mutating }) => ({ name, description, requiredScope, mutating })) as unknown as JsonValue,
+  toolDiscovery: "Call tools/list for authoritative bounded input schemas; this capability resource keeps only the compact tool index.",
   browserAccess: {
     modes: {
       lan_open: "Browser session routes do not require a workspace password. Use only on a trusted LAN: anyone who can reach the configured interface and port can use the browser workspace as an authenticated user, including write actions available to that session.",

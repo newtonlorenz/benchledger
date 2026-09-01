@@ -17,7 +17,7 @@ import {
   workspaceSecurityMutationSchema
 } from "@benchledger/api-contract";
 import { ApplicationError, ApplicationService } from "@benchledger/application";
-import type { ApplicationPorts, BeginUploadInput, BuildConfigurationListOptions, CatalogProductListOptions, Mutation, Page, ProjectListOptions, RequestContext } from "@benchledger/application";
+import type { ApplicationPorts, BeginUploadInput, BuildConfigurationListOptions, CatalogProductListOptions, GapEvaluation, Mutation, Page, ProjectListOptions, RequestContext } from "@benchledger/application";
 import { createProductionRuntime } from "@benchledger/runtime";
 import { createApplicationMcpProtocol, createMcpHttpHandler } from "@benchledger/mcp";
 import type { McpRequestContext, Scope as McpScope } from "@benchledger/mcp";
@@ -805,6 +805,8 @@ interface WorkspaceProject extends ApiProject {
   readonly currentRevision?: ApiProjectRevision & {
     readonly bom: readonly ApiBomLine[];
     readonly artifacts: readonly ApiArtifact[];
+    /** Canonical application-service readiness used by the browser. */
+    readonly gapEvaluation: GapEvaluation;
     /** Latest immutable setup captured for this current revision, if any. */
     readonly buildConfigSnapshot?: ApiBuildConfigurationSnapshot;
   };
@@ -880,15 +882,17 @@ async function workspaceSnapshot(service: ApplicationService): Promise<Workspace
     ]);
     if (project.currentRevisionId === undefined) return { ...project, workItems, bom: [], artifacts };
     const revision = await service.getProjectRevision(project.currentRevisionId);
-    const [bom, revisionArtifacts] = await Promise.all([
+    const [bom, revisionArtifacts, gapEvaluation] = await Promise.all([
       service.listBomLines(revision.id),
-      service.listArtifacts(project.id, undefined, revision.id)
+      service.listArtifacts(project.id, undefined, revision.id),
+      service.evaluateBomGaps(revision.id),
     ]);
     const latestConfiguration = await service.getLatestBuildConfiguration(revision.id);
     const currentRevision = {
       ...revision,
       bom,
       artifacts: revisionArtifacts,
+      gapEvaluation,
       ...(latestConfiguration === null ? {} : { buildConfigSnapshot: latestConfiguration })
     };
     return { ...project, workItems, bom, artifacts, currentRevision };

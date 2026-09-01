@@ -468,7 +468,14 @@ export interface BomLine {
 
 export const BOM_CONSTRAINT_KEYS = ["kind", "manufacturer", "model", "sku", "tag", "nameIncludes"] as const;
 export type BomConstraintKey = typeof BOM_CONSTRAINT_KEYS[number];
-export type BomConstraints = Readonly<Partial<Record<BomConstraintKey, string>>>;
+export type BomSpecificationDecision = "identity" | "purpose" | "voltage" | "current_or_load" | "connector" | "compatibility" | "dimensions";
+export type BomSpecificationDecisions = Readonly<Partial<Record<BomSpecificationDecision, string>>>;
+export interface BomSpecification {
+  status: "sufficient" | "insufficient";
+  decisions?: BomSpecificationDecisions;
+  missingDecisions?: readonly BomSpecificationDecision[];
+}
+export type BomConstraints = Readonly<Partial<Record<BomConstraintKey, string>> & { specification?: BomSpecification }>;
 export type BomCompatibility = "confirmed" | "conditional" | "unknown";
 
 export interface BomAlternative {
@@ -526,6 +533,10 @@ export interface BomEvaluation {
     inspectFirst: number;
     partial: number;
     missing: number;
+    ready: number;
+    check: number;
+    decide: number;
+    source: number;
   };
 }
 
@@ -534,10 +545,12 @@ export interface BomEvaluationLine {
   description: string;
   requested: Quantity;
   requirement: "required" | "optional";
-  state: "supplied" | "inspect_first" | "partial" | "missing" | "optional";
+  state: "supplied" | "inspect_first" | "specify_first" | "partial" | "missing" | "optional";
+  decision: "ready" | "check" | "decide" | "source";
+  missingDecisions?: readonly BomSpecificationDecision[];
   supplied: Quantity;
   matches: readonly BomMatch[];
-  recommendedAction: "reuse" | "inspect" | "buy" | "none";
+  recommendedAction: "reuse" | "inspect" | "specify" | "buy" | "none";
   explanation: string;
 }
 

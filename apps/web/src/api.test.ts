@@ -338,19 +338,41 @@ describe("authenticated BenchLedger API adapter", () => {
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "0.1.0", demo: false, now: "2026-08-30T10:00:00.000Z" }))
       .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", source: "ui", scopes: ["read", "write"] }))
-      .mockResolvedValueOnce(jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00.000Z", inventory: [{ id: "printer-h2d", name: "Bambu Lab H2D", kind: "printer", quantity: 1, availableQuantity: 1, unit: "each", tags: ["3d-printing"], links: [], evidence: { state: "commissioned" }, createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 }], projects: [{ id: "project-1", name: "Desk light", description: "A small light", status: "planning", createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1, workItems: [{ id: "work-1", projectId: "project-1", name: "Enclosure", kind: "part", description: "Printed enclosure", createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 }], bom: [], artifacts: [], currentRevision: { id: "revision-1", projectId: "project-1", number: 2, name: "Fit pass", status: "CAD complete", notes: "Check the USB cutout", createdAt: "2026-08-30T10:00:00.000Z", version: 1, bom: [{ id: "bom-1", revisionId: "revision-1", name: "ESP32 board", itemId: "board-esp32", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 }], artifacts: [{ id: "artifact-1", projectId: "project-1", revisionId: "revision-1", role: "step", filename: "enclosure.step", mediaType: "model/step", byteSize: 2048, sha256: "a".repeat(64), currentCandidate: true, retired: false, createdAt: "2026-08-30T10:00:00.000Z", version: 1 }] } }], offers: [] }));
+      .mockResolvedValueOnce(jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00.000Z", inventory: [{ id: "printer-h2d", name: "Bambu Lab H2D", kind: "printer", quantity: 1, availableQuantity: 1, unit: "each", tags: ["3d-printing"], links: [], evidence: { state: "commissioned" }, createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 }], projects: [{ id: "project-1", name: "Desk light", description: "A small light", status: "planning", createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1, workItems: [{ id: "work-1", projectId: "project-1", name: "Enclosure", kind: "part", description: "Printed enclosure", createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 }], bom: [], artifacts: [], currentRevision: { id: "revision-1", projectId: "project-1", number: 2, name: "Fit pass", status: "CAD complete", notes: "Check the USB cutout", createdAt: "2026-08-30T10:00:00.000Z", version: 1, bom: [{ id: "bom-1", revisionId: "revision-1", name: "ESP32 board", itemId: "board-esp32", requiredQuantity: 1, unit: "each", optional: false, constraints: { specification: { status: "insufficient", missingDecisions: ["voltage", "connector"] } }, alternatives: [{ itemId: "board-esp32", compatible: "conditional", reason: "Check logic level" }], createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 }], artifacts: [{ id: "artifact-1", projectId: "project-1", revisionId: "revision-1", role: "step", filename: "enclosure.step", mediaType: "model/step", byteSize: 2048, sha256: "a".repeat(64), currentCandidate: true, retired: false, createdAt: "2026-08-30T10:00:00.000Z", version: 1 }] } }], offers: [] }));
 
     const adapter = createWorkspaceAdapter();
     const snapshot = await adapter.loadWorkspace();
     expect(snapshot.source).toBe("api");
     expect(snapshot.inventory[0]).toMatchObject({ id: "printer-h2d", category: "Printers", unit: "each", state: "available" });
     expect(snapshot.projects[0]).toMatchObject({ id: "project-1", name: "Desk light", status: "In progress", workItem: "Enclosure", currentRevision: "r02", serverRevisionId: "revision-1" });
-    expect(snapshot.projects[0]?.bom[0]).toMatchObject({ label: "ESP32 board", itemId: "board-esp32", required: 1 });
+    expect(snapshot.projects[0]?.bom[0]).toMatchObject({ label: "ESP32 board", itemId: "board-esp32", required: 1, constraints: { specification: { status: "insufficient", missingDecisions: ["voltage", "connector"] } }, alternatives: [{ itemId: "board-esp32", compatible: "conditional", reason: "Check logic level" }] });
     expect(snapshot.projects[0]?.artifacts[0]).toMatchObject({ name: "enclosure.step", role: "STEP", revision: "r02", size: "2 KB" });
 
     const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("network down"));
     await expect(adapter.createProject({ name: "No local fallback", description: "must fail" })).rejects.toMatchObject({ kind: "offline" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects source readiness that still carries unresolved specification decisions", async () => {
+    const bom = { id: "bom-invalid", revisionId: "revision-1", name: "Controller", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 };
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "0.1.0", demo: false, now: "2026-08-30T10:00:00.000Z" }))
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", source: "ui", scopes: ["read", "write"] }))
+      .mockResolvedValueOnce(jsonResponse({
+        source: "api",
+        fetchedAt: "2026-08-30T10:00:00.000Z",
+        inventory: [],
+        projects: [serverProject({ currentRevision: serverRevision({
+          bom: [bom],
+          gapEvaluation: {
+            lines: [{ lineId: "bom-invalid", status: "missing", decision: "source", missingDecisions: ["identity"], suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 1, matchedItemIds: [], reasons: [] }],
+            totals: { requiredLines: 1, optionalLines: 0, readyLines: 0, checkLines: 0, decideLines: 0, sourceLines: 1, partialLines: 0, missingLines: 0 },
+          },
+        }) })],
+        offers: [],
+      }));
+
+    await expect(createWorkspaceAdapter().loadWorkspace()).rejects.toMatchObject({ kind: "server", status: 502, code: "invalid_gap_evaluation" });
   });
 
   it("rehydrates exact product IDs and persisted setup for a fresh workspace load", async () => {
@@ -404,7 +426,17 @@ describe("authenticated BenchLedger API adapter", () => {
         revision: { id: "revision-new", projectId: "project-new", number: 1, name: "Initial concept", status: "concept", createdAt: "2026-08-30T10:00:00.000Z", version: 1 }
       } }))
       .mockResolvedValueOnce(jsonResponse({ data: { id: "revision-next", projectId: "project-new", number: 2, name: "Fit pass", status: "CAD complete", createdAt: "2026-08-30T10:00:00.000Z", version: 1 } }))
-      .mockResolvedValueOnce(jsonResponse({ data: { id: "bom-new", revisionId: "revision-next", name: "ESP32 board", itemId: "board-esp32", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 } }));
+      .mockResolvedValueOnce(jsonResponse({ data: { id: "bom-new", revisionId: "revision-next", name: "ESP32 board", itemId: "board-esp32", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 } }))
+      .mockResolvedValueOnce(jsonResponse({
+        revisionId: "revision-next",
+        lines: [{ lineId: "bom-new", status: "missing", decision: "source", suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 1, matchedItemIds: [], reasons: ["No confirmed stock covers the remaining quantity."] }],
+        totals: { requiredLines: 1, optionalLines: 0, readyLines: 0, checkLines: 0, decideLines: 0, sourceLines: 1, partialLines: 0, missingLines: 1 },
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        revisionId: "revision-next",
+        lines: [{ lineId: "bom-new", status: "supplied", decision: "ready", suppliedQuantity: 1, inspectQuantity: 0, missingQuantity: 0, matchedItemIds: ["board-esp32"], reasons: ["Physically confirmed stock covers this requirement."] }],
+        totals: { requiredLines: 1, optionalLines: 0, readyLines: 1, checkLines: 0, decideLines: 0, sourceLines: 0, partialLines: 0, missingLines: 0 },
+      }));
 
     const adapter = createWorkspaceAdapter();
     await adapter.login("correct-password");
@@ -414,13 +446,18 @@ describe("authenticated BenchLedger API adapter", () => {
     expect(revised).toMatchObject({ currentRevision: "r02", serverRevisionId: "revision-next", bom: [] });
     const withBom = await adapter.createBomLine(created.id, { name: "ESP32 board", requiredQuantity: 1, unit: "each", itemId: "board-esp32" });
     expect(withBom.bom[0]).toMatchObject({ label: "ESP32 board", itemId: "board-esp32" });
+    expect(withBom.gapEvaluation).toMatchObject({ lines: [{ lineId: "bom-new", decision: "source" }], totals: { sourceLines: 1 } });
+    await expect(adapter.refreshProjectReadiness()).resolves.toMatchObject([{ id: created.id, gapEvaluation: { lines: [{ lineId: "bom-new", decision: "ready" }], totals: { readyLines: 1, sourceLines: 0 } } }]);
     expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
       "/api/v1/auth/login",
       "/api/v1/projects/with-initial-revision",
       "/api/v1/projects/project-new/revisions",
-      "/api/v1/project-revisions/revision-next/bom"
+      "/api/v1/project-revisions/revision-next/bom",
+      "/api/v1/project-revisions/revision-next/gaps",
+      "/api/v1/project-revisions/revision-next/gaps"
     ]);
-    for (const [, init] of fetchMock.mock.calls.slice(1)) expect(new Headers(init?.headers).get("x-csrf-token")).toBe("csrf-project");
+    for (const [, init] of fetchMock.mock.calls.slice(1, 4)) expect(new Headers(init?.headers).get("x-csrf-token")).toBe("csrf-project");
+    expect(new Headers(fetchMock.mock.calls[4]?.[1]?.headers).get("x-csrf-token")).toBeNull();
   });
 
   it("reuses a revision command key after an ambiguous response, then releases it for a later revision", async () => {

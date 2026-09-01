@@ -66,7 +66,12 @@ preview/commit patterns; do not create a parallel MCP or web implementation.
   fixtures. **Proposed.**
 - [ ] `BL-AW-007` → `REQ-007`: distinguish missing stock from missing
   specification with `specify_first` decisions and shopping exclusions.
-  **Proposed.**
+  **Partially implemented on the current feature branch:** BOM requirements can
+  persist explicit sufficient/insufficient specification decisions; gap reads
+  expose Ready/Check/Decide/Source outcomes and exact missing decisions; and
+  under-specified, inspect-first, and optional requirements are excluded from
+  Source/shopping. Broader structured search and guided specification editing
+  remain separate slices.**
 - [ ] `BL-AW-008` → `REQ-008`: maker-specific profiles, package/unit
   conversions, and explicit quantity semantics. **Partial foundation only:**
   exact printer/filament product and physical-profile records exist, but the

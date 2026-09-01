@@ -324,15 +324,40 @@ describe("BenchLedger HTTP API", () => {
     const line = await app.inject({ method: "POST", url: `/api/v1/project-revisions/${revisionId}/bom`, headers: { cookie, "x-csrf-token": csrf }, payload: { name: "ESP32", itemId: "board-esp32", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} } });
     expect(line.statusCode).toBe(201);
     const lineData = line.json<{ data: { id: string; version: number } }>().data;
+    const undecidedPower = await app.inject({
+      method: "POST",
+      url: `/api/v1/project-revisions/${revisionId}/bom`,
+      headers: { cookie, "x-csrf-token": csrf },
+      payload: {
+        name: "12 V power supply",
+        requiredQuantity: 1,
+        unit: "each",
+        optional: false,
+        alternatives: [],
+        constraints: { specification: { status: "insufficient", missingDecisions: ["current_or_load", "connector"] } },
+      },
+    });
+    expect(undecidedPower.statusCode).toBe(201);
+    const undecidedPowerId = undecidedPower.json<{ data: { id: string } }>().data.id;
     const gaps = await app.inject({ method: "GET", url: `/api/v1/project-revisions/${revisionId}/gaps`, headers: { cookie } });
     expect(gaps.statusCode).toBe(200);
-    expect(gaps.json<{ lines: Array<{ status: string }> }>().lines[0]?.status).toBe("supplied");
+    const gapBody = gaps.json<{ lines: Array<{ lineId: string; status: string; decision?: string; missingDecisions?: string[]; reasons: string[] }>; totals: Record<string, number> }>();
+    expect(gapBody.lines.find((gap) => gap.lineId === lineData.id)?.status).toBe("supplied");
+    expect(gapBody.lines.find((gap) => gap.lineId === undecidedPowerId)).toMatchObject({
+      status: "specify_first",
+      decision: "decide",
+      missingDecisions: ["current_or_load", "connector"],
+    });
+    expect(gapBody.lines.find((gap) => gap.lineId === undecidedPowerId)?.reasons).not.toContain("No confirmed stock covers the remaining quantity.");
+    expect(gapBody.totals).toMatchObject({ requiredLines: 2, readyLines: 1, checkLines: 0, decideLines: 1, sourceLines: 0, optionalLines: 0 });
     const retired = await app.inject({ method: "DELETE", url: `/api/v1/bom-lines/${lineData.id}`, headers: { cookie, "x-csrf-token": csrf, "if-match": String(lineData.version) } });
     expect(retired.statusCode).toBe(200);
     expect(retired.json()).toMatchObject({ data: { id: lineData.id, optional: false, version: 2 }, audit: { action: "project.bom_line.retire" } });
     expect(retired.json<{ data: { retiredAt?: string } }>().data.retiredAt).toBeDefined();
-    expect((await app.inject({ method: "GET", url: `/api/v1/project-revisions/${revisionId}/bom`, headers: { cookie } })).json()).toEqual([]);
-    expect((await app.inject({ method: "GET", url: `/api/v1/project-revisions/${revisionId}/bom?includeRetired=true`, headers: { cookie } })).json()).toEqual([expect.objectContaining({ id: lineData.id, retiredAt: expect.any(String) })]);
+    expect((await app.inject({ method: "GET", url: `/api/v1/project-revisions/${revisionId}/bom`, headers: { cookie } })).json()).toEqual([expect.objectContaining({ id: undecidedPowerId })]);
+    const allLines = (await app.inject({ method: "GET", url: `/api/v1/project-revisions/${revisionId}/bom?includeRetired=true`, headers: { cookie } })).json<unknown[]>();
+    expect(allLines).toHaveLength(2);
+    expect(allLines).toEqual(expect.arrayContaining([expect.objectContaining({ id: lineData.id, retiredAt: expect.any(String) }), expect.objectContaining({ id: undecidedPowerId })]));
     const restored = await app.inject({ method: "POST", url: `/api/v1/bom-lines/${lineData.id}/restore`, headers: { cookie, "x-csrf-token": csrf, "if-match": "2" } });
     expect(restored.statusCode).toBe(200);
     expect(restored.json()).toMatchObject({ data: { id: lineData.id, optional: false, version: 3 }, audit: { action: "project.bom_line.restore" } });
@@ -648,8 +673,8 @@ describe("BenchLedger HTTP API", () => {
     const line = await app.inject({ method: "POST", url: `/api/v1/project-revisions/${revisionId}/bom`, headers: { cookie, "x-csrf-token": csrf }, payload: { name: "ESP32", itemId: "board-esp32", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} } });
     expect(line.statusCode).toBe(201);
     const enriched = await app.inject({ method: "GET", url: "/api/v1/workspace", headers: { cookie } });
-    const aggregateProject = enriched.json<{ projects: Array<{ id: string; currentRevision?: { bom: Array<{ id: string }>; artifacts: unknown[] }; bom: unknown[]; artifacts: unknown[] }> }>().projects.find((entry) => entry.id === projectId);
-    expect(aggregateProject).toMatchObject({ currentRevision: { bom: [{ id: expect.any(String) }], artifacts: expect.any(Array) }, bom: expect.any(Array), artifacts: expect.any(Array) });
+    const aggregateProject = enriched.json<{ projects: Array<{ id: string; currentRevision?: { bom: Array<{ id: string }>; artifacts: unknown[]; gapEvaluation: { lines: Array<{ lineId: string; decision: string }>; totals: { readyLines: number } } }; bom: unknown[]; artifacts: unknown[] }> }>().projects.find((entry) => entry.id === projectId);
+    expect(aggregateProject).toMatchObject({ currentRevision: { bom: [{ id: expect.any(String) }], artifacts: expect.any(Array), gapEvaluation: { lines: [{ decision: "ready" }], totals: { readyLines: 1 } } }, bom: expect.any(Array), artifacts: expect.any(Array) });
     const count = await app.inject({ method: "POST", url: "/api/v1/inventory/wire-dupont/count", headers: { cookie, "x-csrf-token": csrf, "idempotency-key": "count-wire-dupont" }, payload: { quantity: 1, note: "Counted in parts drawer" } });
     expect(count.statusCode).toBe(201);
     expect(count.json()).toMatchObject({ data: { item: { id: "wire-dupont", quantity: 1, availableQuantity: 1, evidence: { state: "physically_counted" } } } });

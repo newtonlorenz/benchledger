@@ -212,6 +212,48 @@ describe("production runtime mappings", () => {
     await expect(reopenedService.listBomLines(revision.id)).resolves.toEqual([expect.objectContaining({ id: line.id, version: 3 })]);
   });
 
+  it("preserves BOM specification decisions after reopening the production runtime", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "benchledger-bom-specification-"));
+    directories.push(dataDir);
+    const first = await createProductionRuntime({ dataDir, maxUploadBytes: 1024 * 1024, maxStorageBytes: 4 * 1024 * 1024 });
+    runtimes.push(first);
+    const project = await first.ports.projects.createProject({ id: "specification-project", name: "Specification project", status: "planning" }, context());
+    const revision = await first.ports.projects.createProjectRevision(project.id, { id: "specification-revision", name: "Initial", status: "concept" }, context());
+    const line = await first.ports.projects.createBomLine(revision.id, {
+      id: "specification-line",
+      name: "12 V power supply",
+      requiredQuantity: 1,
+      unit: "each",
+      optional: false,
+      constraints: {
+        specification: {
+          status: "insufficient",
+          missingDecisions: ["current_or_load", "connector"],
+        },
+      },
+      alternatives: [],
+    }, context());
+
+    await first.close();
+    runtimes.splice(runtimes.indexOf(first), 1);
+    const reopened = await createProductionRuntime({ dataDir, maxUploadBytes: 1024 * 1024, maxStorageBytes: 4 * 1024 * 1024 });
+    runtimes.push(reopened);
+    const reopenedService = new ApplicationService(reopened.ports);
+
+    await expect(reopenedService.getBomLine(line.id)).resolves.toMatchObject({
+      constraints: {
+        specification: {
+          status: "insufficient",
+          missingDecisions: ["current_or_load", "connector"],
+        },
+      },
+    });
+    await expect(reopenedService.evaluateBomGaps(revision.id)).resolves.toMatchObject({
+      lines: [{ lineId: line.id, status: "specify_first", decision: "decide", missingDecisions: ["current_or_load", "connector"] }],
+      totals: { requiredLines: 1, readyLines: 0, checkLines: 0, decideLines: 1, sourceLines: 0, optionalLines: 0 },
+    });
+  });
+
   it("resolves upload session ancestry after the session is persisted", async () => {
     const runtime = await makeRuntime();
     const session = await runtime.ports.artifacts.beginUpload({

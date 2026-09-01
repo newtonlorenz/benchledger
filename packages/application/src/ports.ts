@@ -451,5 +451,9 @@ export interface GapEvaluation {
     readonly partialLines: number;
     readonly missingLines: number;
     readonly optionalLines: number;
+    readonly readyLines: number;
+    readonly checkLines: number;
+    readonly decideLines: number;
+    readonly sourceLines: number;
   };
 }

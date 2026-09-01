@@ -170,10 +170,10 @@ describe("BOM matching, reservation and procurement edges", () => {
     const result = evaluateBom([descriptive, optional], [{ item: baseItem, balance: balance(baseItem.id, 1) }], new Map([[descriptive.id, 1234], [optional.id, 999]]));
     expect(result.revisionId).toBe("rev-edge");
     expect(result.lines[0]?.status).toBe("partial");
-    expect(result.lines[1]?.status).toBe("missing");
+    expect(result.lines[1]?.status).toBe("optional");
     expect(result.summary.optionalMissingLines).toBe(1);
-    expect(result.summary.estimatedMissingCostMinor).toBe(2233);
-    expect(result.shoppingList.map((line) => line.reason)).toEqual(["partial", "optional"]);
+    expect(result.summary.estimatedMissingCostMinor).toBe(1234);
+    expect(result.shoppingList.map((line) => line.reason)).toEqual(["partial"]);
     expect(evaluateBom([], []).revisionId).toBe("");
   });
 

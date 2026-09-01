@@ -78,7 +78,7 @@ and invalid hashes. Mutating tools use optimistic versions where applicable.
 | Catalog | `create_catalog_product`, `update_catalog_product`, `link_inventory_product_profile` | `catalog:write` | Yes |
 | Projects | `list_projects`, `read_project`, `read_work_item`, `read_project_revision`, `read_work_item_revision` | `projects:read` | No |
 | Projects | `create_project`, `create_project_with_initial_revision`, `update_project`, `retire_project`, `create_work_item`, `create_project_revision`, `create_work_item_revision` | `projects:write` | Yes |
-| BOM | `list_bom_lines`, `calculate_bom_gaps` | `bom:read` | No |
+| BOM | `list_bom_lines`, `calculate_bom_gaps` (Ready/Check/Decide/Source plus exact missing specification decisions) | `bom:read` | No |
 | BOM | `create_bom_line`, `update_bom_line`, `retire_bom_line`, `restore_bom_line`, `create_reservation`, `release_reservation`, `record_usage` | `bom:write` | Yes |
 | Reconciliation | `read_reconciliation` | `bom:read` | No |
 | Reconciliation | `save_reconciliation_draft`, `commit_reconciliation` | `bom:write` | Draft save / commit |
@@ -127,7 +127,7 @@ profiles when present.
 | Commission delivered or ordered stock | Item commissioning action with observed quantity and provenance | `read_inventory_item` → `commission_inventory_item` |
 | Add an exact printer or spool | Exact-product guided add; reported printers remain inspect-first until explicitly commissioned | catalog search/read → `create_inventory_with_product_profile` |
 | Start a project | Guided project setup | `create_project_with_initial_revision` → `create_work_item`; use `create_project_revision` for later planning baselines |
-| Understand a build gap | BOM editor and gap panel | `list_bom_lines` → `calculate_bom_gaps` |
+| Understand a build gap | BOM editor and gap panel | `list_bom_lines` → `calculate_bom_gaps`; Decide before supplier lookup, Check recorded candidates, and shop only Source lines |
 | Hold confirmed parts | Reservation panel | `create_reservation` → read BOM/gaps again |
 | Add a CAD revision | Artifact upload flow | `begin_artifact_upload` → scoped HTTP PUT → `finalize_artifact_upload` |
 | Record exact build setup | Project build-configuration form | catalog/profile reads → `create_build_configuration` |

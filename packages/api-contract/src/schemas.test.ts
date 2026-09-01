@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commissionInventoryItemSchema, createBomLineSchema, createInventoryItemSchema, inventoryBulkUpdateSchema, inventoryItemSchema, inventoryListQuerySchema, updateBomLineSchema, updateInventoryItemSchema } from "./schemas.js";
+import { bomSpecificationSchema, commissionInventoryItemSchema, createBomLineSchema, createInventoryItemSchema, inventoryBulkUpdateSchema, inventoryItemSchema, inventoryListQuerySchema, updateBomLineSchema, updateInventoryItemSchema } from "./schemas.js";
 
 const constraints = {
   kind: "electronic",
@@ -29,6 +29,24 @@ describe("REST BOM constraint schema", () => {
   it("rejects unknown and non-string constraint values at the REST boundary", () => {
     expect(() => createBomLineSchema.parse({ name: "Controller", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: { unsupported: "value" } })).toThrow();
     expect(() => updateBomLineSchema.parse({ constraints: { kind: 42 } })).toThrow();
+  });
+
+  it("accepts only the closed specification decision vocabulary", () => {
+    const incomplete = { status: "insufficient", missingDecisions: ["current_or_load", "connector"] } as const;
+    const sufficient = { status: "sufficient", decisions: { voltage: "12 V", current_or_load: "5 A", connector: "5.5 x 2.1 mm barrel, centre-positive" } } as const;
+    expect(bomSpecificationSchema.parse(incomplete)).toEqual(incomplete);
+    expect(bomSpecificationSchema.parse(sufficient)).toEqual(sufficient);
+    expect(createBomLineSchema.parse({
+      name: "12 V power supply",
+      requiredQuantity: 1,
+      unit: "each",
+      optional: false,
+      alternatives: [],
+      constraints: { specification: incomplete },
+    }).constraints.specification).toEqual(incomplete);
+    expect(() => bomSpecificationSchema.parse({ status: "insufficient", missingDecisions: ["unknown_decision"] })).toThrow();
+    expect(() => bomSpecificationSchema.parse({ status: "sufficient", missingDecisions: ["connector"] })).toThrow();
+    expect(() => bomSpecificationSchema.parse({ status: "sufficient" })).toThrow();
   });
 });
 

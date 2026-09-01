@@ -31,6 +31,7 @@ import type {
   CatalogProduct as ApiCatalogProduct,
   InventoryProductProfile as ApiInventoryProductProfile,
 } from "@benchledger/api-contract";
+import { bomSpecificationSchema } from "@benchledger/api-contract";
 import { McpAdapterError } from "./errors.js";
 import { McpAdapter } from "./adapter.js";
 import { McpProtocol } from "./protocol.js";
@@ -1091,8 +1092,14 @@ function toMcpBomAlternative(alternative: ApiBomLine["alternatives"][number]): B
 }
 
 function toMcpBomConstraints(value: ApiBomLine["constraints"]): BomConstraints {
-  const result: Partial<Record<BomConstraintKey, string>> = {};
+  const result: Partial<Record<BomConstraintKey, string>> & { specification?: BomConstraints["specification"] } = {};
   for (const [key, candidate] of Object.entries(value)) {
+    if (key === "specification") {
+      const specification = bomSpecificationSchema.safeParse(candidate);
+      if (!specification.success) throw new McpAdapterError("BACKEND_ERROR", "The BOM specification decision is malformed.");
+      result.specification = specification.data;
+      continue;
+    }
     if (!(BOM_CONSTRAINT_KEYS as readonly string[]).includes(key) || typeof candidate !== "string") {
       throw new McpAdapterError("BACKEND_ERROR", `The BOM contains unsupported constraint '${key}'.`);
     }
@@ -1101,16 +1108,24 @@ function toMcpBomConstraints(value: ApiBomLine["constraints"]): BomConstraints {
   return result;
 }
 
-function toApiBomConstraints(value: BomConstraints | undefined): Record<string, string> {
+function toApiBomConstraints(value: BomConstraints | undefined): ApiBomLine["constraints"] {
   if (value === undefined) return {};
-  const result: Record<string, string> = {};
+  const result: Record<string, unknown> = {};
   for (const [key, candidate] of Object.entries(value)) {
+    if (key === "specification") {
+      const specification = bomSpecificationSchema.safeParse(candidate);
+      if (!specification.success) {
+        throw new McpAdapterError("INVALID_ARGUMENT", "BOM specification must be a bounded decision object.");
+      }
+      result[key] = specification.data;
+      continue;
+    }
     if (!(BOM_CONSTRAINT_KEYS as readonly string[]).includes(key) || typeof candidate !== "string") {
       throw new McpAdapterError("INVALID_ARGUMENT", `BOM constraint '${key}' is unsupported; use one of: ${BOM_CONSTRAINT_KEYS.join(", ")}.`);
     }
     result[key] = candidate;
   }
-  return result;
+  return result as ApiBomLine["constraints"];
 }
 
 function toApiBomAlternatives(input: { alternatives?: readonly BomAlternative[]; compatibleItemIds?: readonly string[] }): ApiBomLine["alternatives"] {
@@ -1172,8 +1187,49 @@ function toApiBomUpdate(input: Omit<BomLineUpdateInput, "bomLineId" | "expectedV
   return { ...(input.description === undefined ? {} : { name: input.description }), ...(input.quantity === undefined ? {} : { requiredQuantity: input.quantity }), ...(input.unit === undefined ? {} : { unit: toApiUnit(input.unit) }), ...(input.requirement === undefined ? {} : { optional: input.requirement === "optional" }), ...(input.itemId === undefined ? {} : { itemId: input.itemId }), ...((input.alternatives !== undefined || input.compatibleItemIds !== undefined) ? { alternatives: toApiBomAlternatives(input) } : {}), ...(input.constraints === undefined ? {} : { constraints: toApiBomConstraints(input.constraints) }), ...(input.notes === undefined ? {} : { notes: input.notes }) };
 }
 
-function toMcpBomEvaluation(value: { revisionId: string; lines: readonly BomGap[]; totals: { requiredLines: number; suppliedLines: number; inspectFirstLines: number; partialLines: number; missingLines: number; optionalLines: number } }, input: BomEvaluationInput): BomEvaluation {
-  return { projectRevisionId: value.revisionId, generatedAt: new Date().toISOString(), lines: value.lines.map((line) => ({ bomLineId: line.lineId, description: line.name, requested: { value: line.requiredQuantity, unit: fromApiUnit(line.unit) }, requirement: line.optional === true ? "optional" : "required", state: line.status === "partially_supplied" ? "partial" : line.status === "inspect_first" ? "inspect_first" : line.status, supplied: { value: line.suppliedQuantity, unit: fromApiUnit(line.unit) }, matches: line.matchedItemIds.map((itemId) => toMcpBomMatch(line, itemId)), recommendedAction: line.status === "supplied" ? "reuse" : line.status === "inspect_first" ? "inspect" : line.status === "optional" ? "none" : "buy", explanation: line.reasons.join(" ") })), totals: { required: value.totals.requiredLines, optional: value.totals.optionalLines, supplied: value.totals.suppliedLines, inspectFirst: value.totals.inspectFirstLines, partial: value.totals.partialLines, missing: value.totals.missingLines } };
+function toMcpBomEvaluation(value: { revisionId: string; lines: readonly BomGap[]; totals: { requiredLines: number; suppliedLines: number; inspectFirstLines: number; partialLines: number; missingLines: number; optionalLines: number; readyLines?: number; checkLines?: number; decideLines?: number; sourceLines?: number } }, _input: BomEvaluationInput): BomEvaluation {
+  const decisionFor = (line: BomGap): NonNullable<BomGap["decision"]> => {
+    if (line.decision !== undefined) return line.decision;
+    if (line.status === "supplied") return "ready";
+    if (line.status === "inspect_first") return "check";
+    if (line.status === "partially_supplied") return line.inspectQuantity > 0 ? "check" : "source";
+    if (line.status === "specify_first") return "decide";
+    return "source";
+  };
+  return {
+    projectRevisionId: value.revisionId,
+    generatedAt: new Date().toISOString(),
+    lines: value.lines.map((line) => {
+      const decision = decisionFor(line);
+      const state = line.status === "partially_supplied" ? "partial" : line.status === "inspect_first" ? "inspect_first" : line.status;
+      const recommendedAction = decision === "ready" ? "reuse" : decision === "check" ? "inspect" : decision === "decide" ? "specify" : line.status === "optional" ? "none" : "buy";
+      return {
+        bomLineId: line.lineId,
+        description: line.name,
+        requested: { value: line.requiredQuantity, unit: fromApiUnit(line.unit) },
+        requirement: line.optional === true ? "optional" : "required",
+        state,
+        decision,
+        ...(line.missingDecisions === undefined ? {} : { missingDecisions: line.missingDecisions }),
+        supplied: { value: line.suppliedQuantity, unit: fromApiUnit(line.unit) },
+        matches: line.matchedItemIds.map((itemId) => toMcpBomMatch(line, itemId)),
+        recommendedAction,
+        explanation: line.reasons.join(" "),
+      };
+    }),
+    totals: {
+      required: value.totals.requiredLines,
+      optional: value.totals.optionalLines,
+      supplied: value.totals.suppliedLines,
+      inspectFirst: value.totals.inspectFirstLines,
+      partial: value.totals.partialLines,
+      missing: value.totals.missingLines,
+      ready: value.totals.readyLines ?? value.lines.filter((line) => line.optional !== true && decisionFor(line) === "ready").length,
+      check: value.totals.checkLines ?? value.lines.filter((line) => line.optional !== true && decisionFor(line) === "check").length,
+      decide: value.totals.decideLines ?? value.lines.filter((line) => line.optional !== true && decisionFor(line) === "decide").length,
+      source: value.totals.sourceLines ?? value.lines.filter((line) => line.optional !== true && decisionFor(line) === "source").length,
+    },
+  };
 }
 
 function toApiReservation(input: ReservationInput): CreateReservation {

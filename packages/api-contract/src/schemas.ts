@@ -393,13 +393,60 @@ export const bomAlternativeSchema = z.object({
  * this object strict prevents an unrecognised field from being persisted and
  * later interpreted as a broader inventory match by another adapter.
  */
+/**
+ * A requirement-level specification decision. This deliberately lives beside,
+ * but not inside, inventory matching constraints: it describes what the maker
+ * still needs to decide and must never make an inventory item appear
+ * compatible by itself.
+ */
+export const bomSpecificationDecisionSchema = z.enum([
+  "identity",
+  "purpose",
+  "voltage",
+  "current_or_load",
+  "connector",
+  "compatibility",
+  "dimensions",
+]);
+const bomSpecificationDecisionValueSchema = z.string().trim().min(1).max(240);
+const bomSpecificationDecisionsSchema = z.object({
+  identity: bomSpecificationDecisionValueSchema.optional(),
+  purpose: bomSpecificationDecisionValueSchema.optional(),
+  voltage: bomSpecificationDecisionValueSchema.optional(),
+  current_or_load: bomSpecificationDecisionValueSchema.optional(),
+  connector: bomSpecificationDecisionValueSchema.optional(),
+  compatibility: bomSpecificationDecisionValueSchema.optional(),
+  dimensions: bomSpecificationDecisionValueSchema.optional(),
+}).strict();
+
+export const bomSpecificationSchema = z.object({
+  status: z.enum(["sufficient", "insufficient"]),
+  decisions: bomSpecificationDecisionsSchema.optional(),
+  missingDecisions: z.array(bomSpecificationDecisionSchema).min(1).max(7).optional(),
+}).strict().superRefine((value, ctx) => {
+  const missing = value.missingDecisions ?? [];
+  if (value.status === "insufficient" && missing.length === 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["missingDecisions"], message: "Insufficient specifications must name at least one missing decision" });
+  }
+  if (value.status === "sufficient" && missing.length > 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["missingDecisions"], message: "Sufficient specifications cannot include missing decisions" });
+  }
+  if (value.status === "sufficient" && Object.keys(value.decisions ?? {}).length === 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["decisions"], message: "Sufficient specifications must record at least one resolved decision" });
+  }
+  if (new Set(missing).size !== missing.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["missingDecisions"], message: "Missing decisions must be unique" });
+  }
+});
+
 export const bomConstraintsSchema = z.object({
   kind: z.string().optional(),
   manufacturer: z.string().optional(),
   model: z.string().optional(),
   sku: z.string().optional(),
   tag: z.string().optional(),
-  nameIncludes: z.string().optional()
+  nameIncludes: z.string().optional(),
+  specification: bomSpecificationSchema.optional(),
 }).strict();
 
 export const bomLineSchema = z.object({
@@ -425,7 +472,8 @@ export const createBomLineSchema = bomLineSchema.pick({
 }).extend({ id: idSchema.optional() }).strict();
 export const updateBomLineSchema = createBomLineSchema.omit({ id: true }).partial().strict();
 
-export const gapStatusSchema = z.enum(["supplied", "inspect_first", "partially_supplied", "missing", "optional"]);
+export const gapStatusSchema = z.enum(["supplied", "inspect_first", "specify_first", "partially_supplied", "missing", "optional"]);
+export const bomDecisionSchema = z.enum(["ready", "check", "decide", "source"]);
 export const bomGapCandidateSchema = z.object({
   itemId: idSchema,
   relationship: z.enum(["exact", "confirmed_alternative", "uncertain_alternative", "constraint_match"]),
@@ -440,6 +488,9 @@ export const bomGapSchema = z.object({
   name: z.string(),
   optional: z.boolean().optional(),
   status: gapStatusSchema,
+  /** Beginner-facing grouping derived from the structured gap state. */
+  decision: bomDecisionSchema.optional(),
+  missingDecisions: z.array(bomSpecificationDecisionSchema).max(7).optional(),
   requiredQuantity: z.number().finite().nonnegative(),
   suppliedQuantity: z.number().finite().nonnegative(),
   inspectQuantity: z.number().finite().nonnegative(),

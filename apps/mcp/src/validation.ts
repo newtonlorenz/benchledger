@@ -10,6 +10,7 @@ import {
   updateInventoryProductProfileSchema,
   saveReconciliationDraftSchema,
   commitReconciliationSchema,
+  bomSpecificationSchema,
 } from "@benchledger/api-contract";
 import { BOM_CONSTRAINT_KEYS } from "./types.js";
 import type {
@@ -692,6 +693,11 @@ function optionalBomConstraints(value: unknown, label: string): BomLineCreateInp
   const parsed = optionalJsonObject(value, label);
   if (parsed === undefined) return undefined;
   for (const [key, candidate] of Object.entries(parsed)) {
+    if (key === "specification") {
+      const specification = bomSpecificationSchema.safeParse(candidate);
+      if (!specification.success) fail(`${label}.specification is invalid.`);
+      continue;
+    }
     if (!(BOM_CONSTRAINT_KEYS as readonly string[]).includes(key)) fail(`${label}.${key} is unsupported; use one of: ${BOM_CONSTRAINT_KEYS.join(", ")}.`);
     if (typeof candidate !== "string") fail(`${label}.${key} must be a string.`);
   }

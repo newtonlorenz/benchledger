@@ -1,4 +1,5 @@
 import { createBomLine, createId, createProject, createProjectRevision, createWorkItem, createWorkItemRevision, DomainError } from "@benchledger/domain";
+import { bomSpecificationSchema } from "@benchledger/api-contract";
 import type {
   BomConstraints, BomLine, Project, ProjectRevision, Reservation, WorkItem, WorkItemRevision
 } from "@benchledger/domain";
@@ -41,10 +42,16 @@ function number(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function bomMetadata(value: Readonly<Record<string, unknown>>): { readonly constraints?: Readonly<Record<string, string>>; readonly alternatives?: readonly ApiBomLine["alternatives"][number][]; readonly retired?: boolean; readonly createdAt?: string; readonly updatedAt?: string } {
+function bomMetadata(value: Readonly<Record<string, unknown>>): { readonly constraints?: ApiBomLine["constraints"]; readonly alternatives?: readonly ApiBomLine["alternatives"][number][]; readonly retired?: boolean; readonly createdAt?: string; readonly updatedAt?: string } {
   const constraintsRecord = record(value.constraints);
-  const constraints: Record<string, string> = {};
-  for (const [key, candidate] of Object.entries(constraintsRecord)) if (typeof candidate === "string") constraints[key] = candidate;
+  const constraints: Record<string, unknown> = {};
+  for (const [key, candidate] of Object.entries(constraintsRecord)) {
+    if (typeof candidate === "string") constraints[key] = candidate;
+    else if (key === "specification") {
+      if (!bomSpecificationSchema.safeParse(candidate).success) throw new Error("BOM specification decision is malformed");
+      constraints[key] = candidate;
+    }
+  }
   const alternatives: ApiBomLine["alternatives"] | undefined = Array.isArray(value.alternatives)
     ? value.alternatives.flatMap((candidate) => {
       const item = record(candidate);
@@ -56,7 +63,7 @@ function bomMetadata(value: Readonly<Record<string, unknown>>): { readonly const
   const createdAt = text(value.createdAt);
   const updatedAt = text(value.updatedAt);
   return {
-    ...(Object.keys(constraints).length === 0 ? {} : { constraints }),
+    ...(Object.keys(constraints).length === 0 ? {} : { constraints: constraints as ApiBomLine["constraints"] }),
     ...(alternatives === undefined ? {} : { alternatives }),
     ...(value.retired === true ? { retired: true } : {}),
     ...(createdAt === undefined ? {} : { createdAt }),
@@ -74,7 +81,7 @@ function currentRevisionId(revisions: readonly { readonly id: string; readonly n
  * relies on the application matcher to fail closed on unknown keys.
  */
 type LegacyCreateBomLineInput = Omit<CreateBomLine, "constraints"> & {
-  constraints?: Readonly<Record<string, string>>;
+  constraints?: ApiBomLine["constraints"];
 };
 
 function nativeBomFromApi(revisionId: string, input: CreateBomLine | LegacyCreateBomLineInput, id: string): BomLine {

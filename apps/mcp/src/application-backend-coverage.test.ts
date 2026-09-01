@@ -379,6 +379,36 @@ describe("createApplicationBackend translation coverage", () => {
     ]);
   });
 
+  it("maps specify-first gaps to Decide and never recommends buying them", async () => {
+    const service = serviceFixture();
+    service.evaluateBomGaps.mockResolvedValueOnce({
+      revisionId: "revision-1",
+      lines: [{
+        lineId: "bom-power-supply",
+        name: "12 V power supply",
+        optional: false,
+        status: "specify_first",
+        decision: "decide",
+        missingDecisions: ["current_or_load", "connector"],
+        requiredQuantity: 1,
+        suppliedQuantity: 0,
+        inspectQuantity: 0,
+        missingQuantity: 1,
+        unit: "each",
+        matchedItemIds: [],
+        reasons: ["Specify load/current and connector before sourcing."],
+        alternatives: [],
+        candidates: [],
+      }],
+      totals: { requiredLines: 1, suppliedLines: 0, inspectFirstLines: 0, partialLines: 0, missingLines: 0, optionalLines: 0, decideLines: 1, sourceLines: 0 },
+    });
+
+    const evaluation = await createApplicationBackend(service).bom.evaluate({ projectRevisionId: "revision-1" }, context);
+
+    expect(evaluation.lines[0]).toMatchObject({ state: "specify_first", decision: "decide", recommendedAction: "specify", missingDecisions: ["current_or_load", "connector"] });
+    expect(evaluation.totals).toMatchObject({ decide: 1, source: 0 });
+  });
+
   it("maps project, revision, BOM, reservations, usage, and context branches", async () => {
     const service = serviceFixture();
     const backend = createApplicationBackend(service);

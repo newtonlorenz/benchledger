@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  bomGapSchema, createBomLineSchema, createInventoryCategorySchema, createInventoryItemSchema, createOfferSchema,
+  bomGapSchema, bomSpecificationDecisionSchema, bomSpecificationSchema, createBomLineSchema, createInventoryCategorySchema, createInventoryItemSchema, createOfferSchema,
   createProjectRevisionSchema, createProjectSchema, createReservationSchema,
   createProjectWithInitialRevisionSchema, createWorkItemRevisionSchema, createWorkItemSchema, idSchema, inventoryListQuerySchema,
   commissionInventoryItemSchema, stockEventInputSchema, updateBomLineSchema, updateInventoryCategorySchema, updateInventoryItemSchema,
@@ -53,12 +53,10 @@ const WORKSPACE_SECURITY_ENTITY_ID = "workspace";
  * reservation, and evaluation. This is an internal compatibility path only;
  * new external requests are validated by the strict boundary schemas.
  */
-const legacyCreateBomLineSchema = createBomLineSchema.extend({
-  constraints: z.record(z.string(), z.string()).default({})
-}).strict();
-const legacyUpdateBomLineSchema = updateBomLineSchema.extend({
-  constraints: z.record(z.string(), z.string()).optional()
-}).strict();
+const legacyBomConstraintValueSchema = z.union([z.string(), bomSpecificationSchema]);
+const legacyBomConstraintsSchema = z.record(z.string(), legacyBomConstraintValueSchema).default({});
+const legacyCreateBomLineSchema = createBomLineSchema.extend({ constraints: legacyBomConstraintsSchema }).strict();
+const legacyUpdateBomLineSchema = updateBomLineSchema.extend({ constraints: legacyBomConstraintsSchema.optional() }).strict();
 
 /**
  * Constraint keys are deliberately allow-listed at the API boundary. BOM
@@ -69,15 +67,20 @@ export const SUPPORTED_BOM_CONSTRAINT_KEYS: ReadonlySet<string> = new Set([
   "kind", "manufacturer", "model", "sku", "tag", "nameIncludes"
 ]);
 
-export function unsupportedBomConstraintKeys(constraints: Readonly<Record<string, string | undefined>> | undefined): readonly string[] {
+const SPECIFICATION_CONSTRAINT_KEY = "specification";
+
+type BomConstraintValue = string | z.infer<typeof bomSpecificationSchema>;
+
+export function unsupportedBomConstraintKeys(constraints: Readonly<Record<string, BomConstraintValue | undefined>> | undefined): readonly string[] {
   if (constraints === undefined) return [];
-  return Object.keys(constraints).filter((key) => !SUPPORTED_BOM_CONSTRAINT_KEYS.has(key));
+  return Object.keys(constraints).filter((key) => key !== SPECIFICATION_CONSTRAINT_KEY && !SUPPORTED_BOM_CONSTRAINT_KEYS.has(key));
 }
 
-export function matchesBomConstraints(item: InventoryItem, constraints: Readonly<Record<string, string | undefined>> | undefined): boolean {
+export function matchesBomConstraints(item: InventoryItem, constraints: Readonly<Record<string, BomConstraintValue | undefined>> | undefined): boolean {
   if (constraints === undefined) return true;
   if (unsupportedBomConstraintKeys(constraints).length > 0) return false;
   return Object.entries(constraints).every(([key, expected]) => {
+    if (key === SPECIFICATION_CONSTRAINT_KEY) return bomSpecificationSchema.safeParse(expected).success;
     if (typeof expected !== "string") return false;
     if (key === "kind") return item.kind === expected;
     if (key === "manufacturer") return item.manufacturer?.toLowerCase() === expected.toLowerCase();
@@ -89,6 +92,10 @@ export function matchesBomConstraints(item: InventoryItem, constraints: Readonly
   });
 }
 
+function hasInventoryMatchConstraints(constraints: Readonly<Record<string, BomConstraintValue | undefined>> | undefined): boolean {
+  return Object.keys(constraints ?? {}).some((key) => SUPPORTED_BOM_CONSTRAINT_KEYS.has(key));
+}
+
 type BomCandidateKind = "exact" | "confirmed_alternative" | "uncertain_alternative" | "constraint_match";
 
 interface BomCandidate {
@@ -98,7 +105,7 @@ interface BomCandidate {
 
 type LegacyBomLineInput = Omit<CreateBomLine, "constraints"> & {
   /** @deprecated Accepted only for internal callers reading legacy records. */
-  constraints?: Readonly<Record<string, string>>;
+  constraints?: Readonly<Record<string, BomConstraintValue>>;
 };
 
 function bomCandidateRelationship(kind: BomCandidateKind): BomGapCandidate["relationship"] {
@@ -131,11 +138,18 @@ function bomCandidateReason(line: BomLine, candidate: BomCandidate): string {
  * reserved until a concrete inventory identity is attached to the line.
  */
 function bomCandidateKind(line: BomLine, item: InventoryItem): BomCandidateKind | undefined {
-  if (line.itemId === item.id) return "exact";
   const alternatives = line.alternatives.filter((alternative) => alternative.itemId === item.id);
+  if (line.itemId === item.id) {
+    // A contradictory conditional/unknown alternative must not be silently
+    // upgraded to an exact, reservable match just because the same ID is also
+    // present in itemId. Keep the relationship inspect-first until a human
+    // resolves the compatibility decision.
+    if (alternatives.some((alternative) => alternative.compatible !== "confirmed")) return "uncertain_alternative";
+    return "exact";
+  }
   if (alternatives.some((alternative) => alternative.compatible === "confirmed")) return "confirmed_alternative";
   if (alternatives.length > 0) return "uncertain_alternative";
-  if (line.itemId === undefined && Object.keys(line.constraints ?? {}).length > 0) return "constraint_match";
+  if (line.itemId === undefined && hasInventoryMatchConstraints(line.constraints)) return "constraint_match";
   return undefined;
 }
 
@@ -146,6 +160,58 @@ function canSupplyBomCandidate(candidate: BomCandidate): boolean {
 function canReserveBomItem(line: BomLine, item: InventoryItem): boolean {
   const kind = bomCandidateKind(line, item);
   return kind === "exact" || kind === "confirmed_alternative";
+}
+
+type BomSpecificationDecision = z.infer<typeof bomSpecificationDecisionSchema>;
+type BomSpecification = z.infer<typeof bomSpecificationSchema>;
+
+const POWER_SUPPLY_NAME = /\b(?:power\s+supply|power\s+adapter|dc\s+adapter|ac\s+adapter|wall\s+adapter|mains\s+adapter)\b/i;
+const LEGACY_POWER_SUPPLY_DECISIONS: readonly BomSpecificationDecision[] = ["current_or_load", "connector"];
+
+function bomSpecification(line: BomLine): { readonly sufficient: boolean; readonly missingDecisions: readonly BomSpecificationDecision[] } {
+  const raw = line.constraints?.[SPECIFICATION_CONSTRAINT_KEY];
+  if (raw !== undefined) {
+    const explicit = bomSpecificationSchema.safeParse(raw);
+    if (!explicit.success) throw new ApplicationError("integrity_error", `BOM line ${line.id} contains a malformed specification decision.`);
+    const decisions = explicit.data.decisions ?? {};
+    const mandatoryMissing = POWER_SUPPLY_NAME.test(line.name)
+      ? LEGACY_POWER_SUPPLY_DECISIONS.filter((decision) => {
+        const value = decisions[decision];
+        return typeof value !== "string" || value.trim().length === 0;
+      })
+      : [];
+    const missingDecisions = [...new Set([...(explicit.data.missingDecisions ?? []), ...mandatoryMissing])];
+    return {
+      sufficient: explicit.data.status === "sufficient" && missingDecisions.length === 0,
+      missingDecisions,
+    };
+  }
+
+  // Older records have no specification marker. Keep the compatibility
+  // fallback narrow: a clearly power-supply-like requirement cannot be
+  // sourced safely until load/current and connector are stated.
+  if (POWER_SUPPLY_NAME.test(line.name)) {
+    return { sufficient: false, missingDecisions: LEGACY_POWER_SUPPLY_DECISIONS };
+  }
+
+  // Exact identities are sufficient for a source proposal even when the
+  // physical row is absent. This is deliberately limited to fields that
+  // identify one product, not free-text names or alternatives.
+  const hasExactIdentity = line.itemId !== undefined
+    || (typeof line.constraints?.sku === "string" && line.constraints.sku.trim().length > 0)
+    || (typeof line.constraints?.model === "string" && line.constraints.model.trim().length > 0);
+  if (hasExactIdentity) return { sufficient: true, missingDecisions: [] };
+
+  return { sufficient: true, missingDecisions: [] };
+}
+
+function bomDecision(line: BomLine, status: BomGap["status"], sufficient: boolean, inspectQuantity: number): BomGap["decision"] {
+  if (status === "supplied") return "ready";
+  if (status === "inspect_first") return "check";
+  if (status === "partially_supplied") return inspectQuantity > 0 ? "check" : "source";
+  if (status === "specify_first") return "decide";
+  if (status === "optional") return sufficient ? "source" : "decide";
+  return sufficient ? "source" : "decide";
 }
 
 function compareStableId(left: string, right: string): number {
@@ -1203,7 +1269,7 @@ export class ApplicationService {
         const candidates = candidatesByLine.get(line) ?? [];
         const confirmed = candidates.filter((candidate) => canSupplyBomCandidate(candidate) && CONFIRMED_EVIDENCE.has(candidate.item.evidence.state));
         recordCandidateFacts(line, confirmed, "confirmed");
-        const suppliedQuantity = allocate(line, confirmed, line.requiredQuantity, "confirmed");
+        const suppliedQuantity = bomSpecification(line).sufficient ? allocate(line, confirmed, line.requiredQuantity, "confirmed") : 0;
         allocations.set(line, { suppliedQuantity, inspectQuantity: 0 });
       }
       for (const line of allocationLines) {
@@ -1211,6 +1277,8 @@ export class ApplicationService {
         const uncertain = candidates.filter((candidate) => !canSupplyBomCandidate(candidate) || !CONFIRMED_EVIDENCE.has(candidate.item.evidence.state));
         recordCandidateFacts(line, uncertain, "inspect");
         const suppliedQuantity = allocations.get(line)?.suppliedQuantity ?? 0;
+        // A recorded candidate that needs a physical or compatibility check
+        // remains Check even when sourcing specifications are incomplete.
         const inspectQuantity = allocate(line, uncertain, Math.max(line.requiredQuantity - suppliedQuantity, 0), "inspect");
         allocations.set(line, { suppliedQuantity, inspectQuantity });
       }
@@ -1222,12 +1290,15 @@ export class ApplicationService {
         const suppliedQuantity = allocations.get(line)?.suppliedQuantity ?? 0;
         const inspectQuantity = allocations.get(line)?.inspectQuantity ?? 0;
         const missingQuantity = Math.max(line.requiredQuantity - suppliedQuantity - inspectQuantity, 0);
+        const specification = bomSpecification(line);
         let status: BomGap["status"];
         if (line.optional && suppliedQuantity === 0 && inspectQuantity === 0) status = "optional";
+        else if (!specification.sufficient && inspectQuantity === 0) status = "specify_first";
         else if (missingQuantity === 0 && inspectQuantity === 0) status = "supplied";
         else if (suppliedQuantity > 0 && missingQuantity > 0) status = "partially_supplied";
         else if (inspectQuantity > 0) status = "inspect_first";
         else status = "missing";
+        const decision = bomDecision(line, status, specification.sufficient, inspectQuantity);
         const candidateResults = candidates.map((candidate) => {
           const fact = candidateFacts.get(`${line.id}\u0000${candidate.item.id}`);
           if (fact === undefined) {
@@ -1239,15 +1310,18 @@ export class ApplicationService {
           ...(suppliedQuantity > 0 ? ["Physically confirmed stock covers part or all of this requirement."] : []),
           ...(uncertain.some((candidate) => !canSupplyBomCandidate(candidate)) ? ["Some matching stock needs an explicit compatibility decision before use."] : []),
           ...(uncertain.some((candidate) => canSupplyBomCandidate(candidate) && !CONFIRMED_EVIDENCE.has(candidate.item.evidence.state)) ? ["Some matching stock is recorded but needs a physical count before use."] : []),
-          ...(missingQuantity > 0 ? ["No confirmed stock covers the remaining quantity."] : []),
-          ...(candidates.length === 0 ? ["No matching inventory item was found for this line."] : []),
-          ...(line.itemId === undefined && line.alternatives.length === 0 && Object.keys(line.constraints ?? {}).length > 0 ? ["Potential matches were selected using the line constraints."] : [])
+          ...(decision === "decide" ? [`Specify ${specification.missingDecisions.join(" and ")} before sourcing this requirement.`] : []),
+          ...(decision !== "decide" && missingQuantity > 0 ? ["No confirmed stock covers the remaining quantity."] : []),
+          ...(decision !== "decide" && candidates.length === 0 ? ["No matching inventory item was found for this line."] : []),
+          ...(line.itemId === undefined && line.alternatives.length === 0 && hasInventoryMatchConstraints(line.constraints) ? ["Potential matches were selected using the line constraints."] : [])
         ];
         const result = {
           lineId: line.id,
           name: line.name,
           optional: line.optional,
           status,
+          decision,
+          ...(specification.missingDecisions.length === 0 ? {} : { missingDecisions: [...specification.missingDecisions] }),
           requiredQuantity: line.requiredQuantity,
           suppliedQuantity,
           inspectQuantity,
@@ -1269,7 +1343,11 @@ export class ApplicationService {
           inspectFirstLines: gaps.filter((gap) => gap.optional !== true && gap.status === "inspect_first").length,
           partialLines: gaps.filter((gap) => gap.optional !== true && gap.status === "partially_supplied").length,
           missingLines: gaps.filter((gap) => gap.optional !== true && gap.status === "missing").length,
-          optionalLines: gaps.filter((gap) => gap.optional === true).length
+          optionalLines: gaps.filter((gap) => gap.optional === true).length,
+          readyLines: gaps.filter((gap) => gap.optional !== true && gap.decision === "ready").length,
+          checkLines: gaps.filter((gap) => gap.optional !== true && gap.decision === "check").length,
+          decideLines: gaps.filter((gap) => gap.optional !== true && gap.decision === "decide").length,
+          sourceLines: gaps.filter((gap) => gap.optional !== true && gap.decision === "source").length,
         }
       }
     });

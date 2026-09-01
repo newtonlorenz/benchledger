@@ -1,3 +1,4 @@
+import { bomSpecificationSchema } from "@benchledger/api-contract";
 import type {
   CreateInventoryItem, InventoryItem as ApiInventoryItem, StockEvent as ApiStockEvent,
   StockEventInput, Project as ApiProject, WorkItem as ApiWorkItem, ProjectRevision as ApiProjectRevision,
@@ -32,7 +33,7 @@ export interface InventoryApiMetadata {
 }
 
 export interface BomApiMetadata {
-  readonly constraints?: Readonly<Record<string, string>>;
+  readonly constraints?: ApiBomLine["constraints"];
   readonly alternatives?: readonly ApiBomLine["alternatives"][number][];
   readonly retired?: boolean;
   readonly createdAt?: string;
@@ -469,17 +470,34 @@ export function apiBomLineFromNative(line: BomLine, metadata: BomApiMetadata, ve
   };
 }
 
-export function nativeConstraintsFromApi(constraints: Readonly<Record<string, string | undefined>>): BomConstraints {
+export function nativeConstraintsFromApi(constraints: Readonly<Record<string, unknown>>): BomConstraints {
+  const values = constraints as Readonly<{
+    kind?: unknown;
+    manufacturer?: unknown;
+    model?: unknown;
+    variantIncludes?: unknown;
+    machineId?: unknown;
+    tag?: unknown;
+  }>;
   const result: BomConstraints = {};
-  const category = constraints.kind;
-  if (category !== undefined && ["printer", "tool", "accessory", "consumable", "electronic", "fastener", "filament", "wire", "adhesive", "other"].includes(category)) {
+  const category = values.kind;
+  if (typeof category === "string" && ["printer", "tool", "accessory", "consumable", "electronic", "fastener", "filament", "wire", "adhesive", "other"].includes(category)) {
     result.category = mapApiKindToCategory(category as ApiInventoryItem["kind"]);
   }
-  if (constraints.manufacturer !== undefined) result.manufacturer = constraints.manufacturer;
-  if (constraints.model !== undefined) result.model = constraints.model;
-  if (constraints.variantIncludes !== undefined) result.variantIncludes = constraints.variantIncludes;
-  if (constraints.machineId !== undefined) result.machineId = constraints.machineId;
-  if (constraints.tag !== undefined) result.tags = [constraints.tag];
+  if (typeof values.manufacturer === "string") result.manufacturer = values.manufacturer;
+  if (typeof values.model === "string") result.model = values.model;
+  if (typeof values.variantIncludes === "string") result.variantIncludes = values.variantIncludes;
+  if (typeof values.machineId === "string") result.machineId = values.machineId;
+  if (typeof values.tag === "string") result.tags = [values.tag];
+  const specification = bomSpecificationSchema.safeParse(constraints.specification);
+  if (specification.success) {
+    const decisions = Object.fromEntries(Object.entries(specification.data.decisions ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+    result.specification = {
+      status: specification.data.status,
+      ...(Object.keys(decisions).length === 0 ? {} : { decisions }),
+      ...(specification.data.missingDecisions === undefined ? {} : { missingDecisions: [...specification.data.missingDecisions] }),
+    };
+  }
   return result;
 }
 
