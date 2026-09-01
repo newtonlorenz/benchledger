@@ -370,7 +370,19 @@ describe("McpAdapter", () => {
     expect(names).not.toContain("freeze_artifact_revision");
     expect(names).toContain("bulk_update_inventory_items");
     expect(names).not.toEqual(expect.arrayContaining(["run_shell", "execute_sql", "fetch_url", "purchase", "start_print"]));
-    expect(adapter.capabilityDocument()).toMatchObject({ scopeBehavior: { inventory: expect.stringContaining("shared"), offers: expect.stringContaining("itemId") } });
+    expect(adapter.capabilityDocument()).toMatchObject({
+      browserAccess: {
+        modes: {
+          lan_open: expect.stringContaining("trusted LAN"),
+          password: expect.stringContaining("workspace password"),
+        },
+        initialization: expect.stringContaining("durable setting wins"),
+        demo: expect.stringContaining("password-protected"),
+        sessionInvalidation: expect.stringContaining("invalidates existing browser sessions"),
+        mcpBoundary: expect.stringContaining("always requires a scoped bearer token"),
+      },
+      scopeBehavior: { inventory: expect.stringContaining("shared"), offers: expect.stringContaining("itemId") },
+    });
 
     const reconciliation = adapter.listTools().find((tool) => tool.name === "save_reconciliation_draft");
     expect(reconciliation?.inputSchema).toMatchObject({

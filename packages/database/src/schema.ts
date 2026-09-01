@@ -182,6 +182,21 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 
 CREATE INDEX IF NOT EXISTS audit_log_entity_idx ON audit_log(entity_type, entity_id, occurred_at, id);
+
+`;
+
+/** Durable singleton access state. The hash column is storage-only and is
+ * never included in API projections. */
+export const WORKSPACE_SECURITY_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS forge_workspace_security (
+  singleton_id INTEGER PRIMARY KEY NOT NULL CHECK (singleton_id = 1),
+  mode TEXT NOT NULL CHECK (mode IN ('lan_open', 'password')),
+  password_hash TEXT,
+  version INTEGER NOT NULL CHECK (version > 0),
+  credential_revision INTEGER NOT NULL CHECK (credential_revision > 0),
+  updated_at TEXT NOT NULL,
+  CHECK ((mode = 'lan_open' AND password_hash IS NULL) OR (mode = 'password' AND password_hash IS NOT NULL))
+);
 `;
 
 /** Additive user-managed inventory taxonomy. It is not a replacement for the
@@ -336,4 +351,4 @@ CREATE INDEX IF NOT EXISTS reconciliation_commits_draft_idx ON reconciliation_co
  * real startup sequence so legacy category tables can be upgraded and their
  * persisted normalized keys backfilled before the unique/order indexes exist.
  */
-export const SCHEMA_SQL = `${BASE_SCHEMA_SQL}\n${CATALOG_SCHEMA_SQL}\n${RECONCILIATION_SCHEMA_SQL}`;
+export const SCHEMA_SQL = `${BASE_SCHEMA_SQL}\n${WORKSPACE_SECURITY_SCHEMA_SQL}\n${CATALOG_SCHEMA_SQL}\n${RECONCILIATION_SCHEMA_SQL}`;

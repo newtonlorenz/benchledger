@@ -4,6 +4,24 @@ BenchLedger's initial reference deployment is a single-user installation on a
 trusted LAN. It uses one application container and one private persistent data
 directory outside the source checkout.
 
+## Browser access mode
+
+The browser workspace supports two administrator-controlled modes:
+
+- `lan_open` does not ask for a workspace password when creating a browser
+  session. This is not an authentication boundary: anyone who can reach the
+  configured interface and port can use the browser workspace as an
+  authenticated user, including write actions available to that session. Use
+  it only on a trusted LAN; never expose it to the public internet or an
+  untrusted network.
+- `password` requires the configured workspace password for browser sessions.
+
+These modes affect browser sessions only. The `/api/v1/mcp` endpoint always
+requires a scoped bearer token; LAN reachability and a browser session never
+grant MCP access. Changing the mode or workspace password invalidates existing
+browser sessions and requires the browser to sign in again. Credential and
+authentication-setting changes remain explicit human-approval actions.
+
 ## Development/test integration
 
 A maintainer may keep a private LAN Docker deployment available for integration
@@ -22,23 +40,46 @@ explicit approval for that action.
 
 1. Build and test from a clean checkout.
 2. Create a private data directory with restricted ownership.
-3. Generate a high-entropy session secret and a built-in scrypt admin password
-   hash with `hashAdminPassword` from `apps/server/src/auth.ts`. If an Argon2id
-   hash is required, the host must supply a tested `passwordVerifier` adapter;
-   the default server does not pretend to verify Argon2id.
-4. Set a storage quota below the host's safely available capacity.
-5. Bind the port to the intended LAN interface only. In the example Compose
+3. Generate a high-entropy session secret. For a fresh trusted-LAN install,
+   leave `BENCHLEDGER_ADMIN_PASSWORD_HASH` unset to initialize the browser in
+   `lan_open` mode. To initialize password protection, provide a built-in
+   scrypt admin password hash generated with `hashAdminPassword` from
+   `apps/server/src/auth.ts`; if an Argon2id hash is required, the host must
+   supply a tested `passwordVerifier` adapter because the default server does
+   not pretend to verify Argon2id.
+4. If upgrading an installation that already has
+   `BENCHLEDGER_ADMIN_PASSWORD_HASH`, keep it configured for the first startup
+   after the upgrade. The existing installation remains password-protected and
+   imports that hash into durable settings once. After initialization, the
+   durable Settings value wins; manage the browser mode and password there.
+   Keep the hash in the private secret store, never in source control or logs.
+5. Set a storage quota below the host's safely available capacity.
+6. Bind the port to the intended LAN interface only. In the example Compose
    file, set `BENCHLEDGER_BIND_ADDRESS` to that exact address; the safe default
    is loopback and no public LAN address is hardcoded.
-6. Set `BENCHLEDGER_PUBLIC_BASE_URL` to the exact HTTP(S) origin that agents
+7. Set `BENCHLEDGER_PUBLIC_BASE_URL` to the exact HTTP(S) origin that agents
    can reach (for example `http://benchledger.local:8792`). It must not contain a
    path, credentials, query, or fragment; the server never trusts a request
    Host header when constructing transfer links.
-7. Keep `BENCHLEDGER_SECURE_COOKIES=false` for the documented plain-HTTP LAN
+8. Keep `BENCHLEDGER_SECURE_COOKIES=false` for the documented plain-HTTP LAN
    deployment. Set it to `true` only after TLS is configured and verified.
-8. Configure MCP tokens with lowercase SHA-256 digests in the read/write hash
+9. Configure MCP tokens with lowercase SHA-256 digests in the read/write hash
    environment variables. A write token intentionally includes read access but
    not admin access. Never put plaintext bearer tokens in `.env` or logs.
+
+### Migration and rollback
+
+The durable browser access setting is authoritative after initialization. A
+fresh deployment with no password hash can therefore remain in `lan_open` mode
+until an administrator selects `password` and sets a workspace password in
+Settings. A migrated deployment with an imported hash remains in `password`
+mode until an administrator explicitly selects `lan_open`.
+
+If rolling back to code from before durable browser settings existed, restore
+`BENCHLEDGER_ADMIN_PASSWORD_HASH` from the private secret store before starting
+the older code. Older code cannot read a Settings-managed password or mode. Do
+not use a rollback to silently change the access mode; verify the browser
+session behavior after the rollback.
 
 ## Start
 
@@ -96,8 +137,14 @@ container after the command completes.
 ## Verification
 
 - Check `/api/v1/health` and `/api/v1/ready` independently.
-- Sign in and complete a synthetic inventory count.
+- Confirm the intended browser access mode: a fresh no-hash private-LAN install
+  should open in `lan_open`, while a migrated hash-configured install should
+  require its password. In either case, changing the mode or password should
+  invalidate the existing browser session.
+- Sign in and complete a synthetic inventory count when password mode is active.
 - Verify an MCP read token cannot write at `/api/v1/mcp`.
+- Verify `/api/v1/mcp` still rejects requests without a scoped bearer token even
+  when the browser is in `lan_open` mode.
 - Upload/download a synthetic artifact and compare its SHA-256. Use the
   `X-Bench-Transfer-Token` header returned by MCP; capabilities are scoped to
   one action and expire, and ordinary browser session routes remain separate.

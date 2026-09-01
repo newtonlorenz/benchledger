@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -13,7 +13,8 @@ import {
   updateInventoryCategorySchema, updateInventoryItemSchema, updateProjectSchema, usageInputSchema,
   createCatalogProductSchema, updateCatalogProductSchema,
   createInventoryProductProfileSchema, createInventoryWithProductProfileSchema, updateInventoryProductProfileSchema,
-  createBuildConfigurationSnapshotSchema, saveReconciliationDraftSchema, commitReconciliationSchema
+  createBuildConfigurationSnapshotSchema, saveReconciliationDraftSchema, commitReconciliationSchema,
+  workspaceSecurityMutationSchema
 } from "@benchledger/api-contract";
 import { ApplicationError, ApplicationService } from "@benchledger/application";
 import type { ApplicationPorts, BeginUploadInput, BuildConfigurationListOptions, CatalogProductListOptions, Mutation, Page, ProjectListOptions, RequestContext } from "@benchledger/application";
@@ -25,7 +26,9 @@ import type {
   Offer as ApiOffer, Project as ApiProject, ProjectRevision as ApiProjectRevision,
   WorkItem as ApiWorkItem, CatalogProduct as ApiCatalogProduct,
   BuildConfigurationSnapshot as ApiBuildConfigurationSnapshot,
-  InventoryProductProfile as ApiInventoryProductProfile
+  InventoryProductProfile as ApiInventoryProductProfile,
+  WorkspaceSecurityStatus as ApiWorkspaceSecurityStatus,
+  WorkspaceSecurityMutation
 } from "@benchledger/api-contract";
 import { AuthManager, type AuthConfig, type AuthScope, type Principal, hashBearerToken } from "./auth.js";
 import { createMemoryRuntime, createSyntheticRuntime, type MemoryRuntime } from "./memory-store.js";
@@ -62,7 +65,7 @@ export interface RuntimeHandle {
   readonly close?: () => Promise<void>;
 }
 
-const PUBLIC_PATHS = new Set(["/api/v1/health", "/api/v1/ready", "/api/v1/auth/login", "/api/v1/openapi.json", "/api/v1/capabilities"]);
+const PUBLIC_PATHS = new Set(["/api/v1/health", "/api/v1/ready", "/api/v1/auth/login", "/api/v1/auth/access", "/api/v1/auth/lan-session", "/api/v1/openapi.json", "/api/v1/capabilities"]);
 const UUID_OR_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
 
 function randomSecret(): string {
@@ -153,6 +156,57 @@ function parseBody<T>(schema: { safeParse: (value: unknown) => { success: true; 
   const result = schema.safeParse(body);
   if (!result.success) throw new ApplicationError("validation", "Request body is invalid", { issues: result.error.issues });
   return result.data;
+}
+
+type WorkspaceSecurityRequest = WorkspaceSecurityMutation;
+
+type AttemptWindow = { readonly count: number; readonly resetAt: number };
+const AUTH_ATTEMPT_LIMIT = 5;
+const AUTH_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
+const PASSWORD_HASH_CONCURRENCY_LIMIT = 2;
+
+function securityFingerprint(operation: WorkspaceSecurityRequest, secret: string): string {
+  // Do not JSON-serialize a security request: password text and encoded hashes
+  // must never enter an audit, idempotency, or request log payload. Streaming
+  // each value into the digest keeps retries deterministic without retaining a
+  // serialized credential representation.
+  const hash = createHmac("sha256", secret);
+  const frame = (value: string): void => {
+    const bytes = Buffer.byteLength(value, "utf8");
+    hash.update(String(bytes));
+    hash.update(":");
+    hash.update(value, "utf8");
+  };
+  frame(operation.operation);
+  frame(String(operation.expectedVersion));
+  frame(operation.operation === "enable" ? "" : operation.currentPassword);
+  frame(operation.operation === "disable" ? "" : operation.newPassword);
+  return hash.digest("hex");
+}
+
+/** Accept the UI's mode form and the operation-first agent form at one strict boundary. */
+function parseWorkspaceSecurityRequest(body: unknown, headerVersion: number | undefined): WorkspaceSecurityRequest {
+  if (body === null || typeof body !== "object" || Array.isArray(body)) throw new ApplicationError("validation", "Workspace security request is invalid");
+  const record = body as Record<string, unknown>;
+  const bodyVersion = record.expectedVersion;
+  if (headerVersion !== undefined && bodyVersion !== undefined && bodyVersion !== headerVersion) throw new ApplicationError("validation", "If-Match must match expectedVersion");
+  const expectedVersion = headerVersion ?? bodyVersion;
+  if (typeof expectedVersion !== "number" || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1) throw new ApplicationError("validation", "If-Match or expectedVersion must contain a positive version");
+  if (record.operation !== undefined) {
+    return parseBody(workspaceSecurityMutationSchema, { ...record, expectedVersion });
+  }
+  const mode = record.mode;
+  if (mode !== "password" && mode !== "lan_open") throw new ApplicationError("validation", "Workspace security mode is invalid");
+  const allowed = mode === "password" && record.currentPassword === undefined ? new Set(["mode", "newPassword"]) : mode === "password" ? new Set(["mode", "currentPassword", "newPassword"]) : new Set(["mode", "currentPassword"]);
+  if (Object.keys(record).some((key) => !allowed.has(key) && key !== "expectedVersion")) throw new ApplicationError("validation", "Workspace security request contains unsupported fields");
+  if (mode === "lan_open") {
+    return parseBody(workspaceSecurityMutationSchema, { operation: "disable", currentPassword: record.currentPassword, expectedVersion });
+  }
+  const newPassword = record.newPassword;
+  if (record.currentPassword === undefined) {
+    return parseBody(workspaceSecurityMutationSchema, { operation: "enable", newPassword, expectedVersion });
+  }
+  return parseBody(workspaceSecurityMutationSchema, { operation: "change_password", currentPassword: record.currentPassword, newPassword, expectedVersion });
 }
 
 /**
@@ -618,7 +672,42 @@ function jsonOpenApi(version: string): Record<string, unknown> {
     paths: {
       "/health": { get: { security: [], responses: { "200": { description: "Service health" } } } },
       "/ready": { get: { security: [], responses: { "200": { description: "Readiness checks" }, "503": { description: "Not ready" } } } },
-      "/auth/login": { post: { security: [], responses: { "200": { description: "Session created" }, "401": { description: "Invalid credentials" } } } },
+      "/auth/login": { post: { security: [], responses: { "200": { description: "Session created" }, "401": { description: "Invalid credentials" }, "429": { description: "Too many attempts" } } } },
+      "/auth/access": {
+        get: { security: [], responses: { "200": { description: "Workspace access mode (mode, passwordConfigured, and version only)" } } },
+        patch: {
+          security: [{ cookieAuth: [] }],
+          summary: "Update browser workspace access mode (operation form)",
+          description: "UI-only unscoped administrator session. Requires CSRF, Idempotency-Key, and an operation-first body with expectedVersion (If-Match may also carry the same version). A successful mutation rotates the browser session and invalidates prior sessions.",
+          parameters: [
+            { in: "header", name: "If-Match", required: false, schema: { type: "string", pattern: "^(W/)?\\\"?[1-9][0-9]*\\\"?$" }, description: "Optional when expectedVersion is present in the body; if both are supplied they must match." },
+            { in: "header", name: "Idempotency-Key", required: true, schema: { type: "string", minLength: 8, maxLength: 200 } }
+          ],
+          requestBody: { required: true, content: { "application/json": { schema: { oneOf: [
+            { type: "object", additionalProperties: false, required: ["operation", "newPassword", "expectedVersion"], properties: { operation: { const: "enable" }, newPassword: { type: "string", minLength: 12, maxLength: 512 }, expectedVersion: { type: "integer", minimum: 1 } } },
+            { type: "object", additionalProperties: false, required: ["operation", "currentPassword", "expectedVersion"], properties: { operation: { const: "disable" }, currentPassword: { type: "string", minLength: 12, maxLength: 512 }, expectedVersion: { type: "integer", minimum: 1 } } },
+            { type: "object", additionalProperties: false, required: ["operation", "currentPassword", "newPassword", "expectedVersion"], properties: { operation: { const: "change_password" }, currentPassword: { type: "string", minLength: 12, maxLength: 512 }, newPassword: { type: "string", minLength: 12, maxLength: 512 }, expectedVersion: { type: "integer", minimum: 1 } } }
+          ] } } } },
+          responses: { "200": { description: "Updated workspace access mode and fresh session" }, "400": { description: "Invalid operation" }, "401": { description: "Current password is invalid" }, "403": { description: "UI administrator session required" }, "409": { description: "Stale access version or idempotency conflict" }, "429": { description: "Too many attempts" } }
+        }
+      },
+      "/auth/lan-session": { post: { security: [], responses: { "200": { description: "Explicit LAN session" }, "403": { description: "Password mode is enabled" } } } },
+      "/auth/security": {
+        post: {
+          security: [{ cookieAuth: [] }],
+          summary: "Update browser workspace access mode (operation form)",
+          parameters: [
+            { in: "header", name: "If-Match", required: false, schema: { type: "string", pattern: "^(W/)?\\\"?[1-9][0-9]*\\\"?$" }, description: "Required when expectedVersion is omitted from the body." },
+            { in: "header", name: "Idempotency-Key", required: true, schema: { type: "string", minLength: 8, maxLength: 200 } }
+          ],
+          requestBody: { required: true, content: { "application/json": { schema: { oneOf: [
+            { type: "object", additionalProperties: false, required: ["operation", "newPassword", "expectedVersion"], properties: { operation: { const: "enable" }, newPassword: { type: "string", minLength: 12, maxLength: 512 }, expectedVersion: { type: "integer", minimum: 1 } } },
+            { type: "object", additionalProperties: false, required: ["operation", "currentPassword", "expectedVersion"], properties: { operation: { const: "disable" }, currentPassword: { type: "string", minLength: 12, maxLength: 512 }, expectedVersion: { type: "integer", minimum: 1 } } },
+            { type: "object", additionalProperties: false, required: ["operation", "currentPassword", "newPassword", "expectedVersion"], properties: { operation: { const: "change_password" }, currentPassword: { type: "string", minLength: 12, maxLength: 512 }, newPassword: { type: "string", minLength: 12, maxLength: 512 }, expectedVersion: { type: "integer", minimum: 1 } } }
+          ] } } } },
+          responses: { "200": { description: "Updated workspace access mode and fresh session" }, "400": { description: "Invalid operation" }, "401": { description: "Current password is invalid" }, "403": { description: "UI administrator session required" }, "409": { description: "Stale access version or idempotency conflict" }, "429": { description: "Too many attempts" } }
+        }
+      },
       "/workspace": { get: { responses: { "200": { description: "Authenticated aggregate workspace snapshot" } } } },
       "/inventory": { get: { description: "Returns a bounded inventory page; categoryNodeId and unassigned=true are mutually exclusive.", parameters: inventoryQueryParameters, responses: { "200": { description: "Inventory page" } } }, post: { responses: { "201": { description: "Inventory item" } } } },
       "/inventory/categories": {
@@ -700,7 +789,7 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       "/transfers/uploads/{id}": { put: { security: [{ transferAuth: [] }], responses: { "200": { description: "Uploaded bytes" }, "403": { description: "Invalid or expired transfer capability" }, "410": { description: "Expired transfer capability" } } } },
       "/transfers/uploads/{id}/finalize": { post: { security: [{ transferAuth: [] }], responses: { "200": { description: "Finalized artifact" }, "403": { description: "Invalid or expired transfer capability" }, "410": { description: "Expired transfer capability" } } } },
       "/transfers/artifacts/{id}/download": { get: { security: [{ transferAuth: [] }], responses: { "200": { description: "Artifact bytes" }, "403": { description: "Invalid or expired transfer capability" }, "410": { description: "Expired transfer capability" } } } },
-      "/mcp": { post: { responses: { "200": { description: "Authenticated MCP JSON-RPC response" } } } },
+      "/mcp": { post: { security: [{ bearerAuth: [] }], responses: { "200": { description: "Authenticated MCP JSON-RPC response" } } } },
       "/events": { get: { responses: { "200": { description: "Server-sent state events" } } } }
     }
   };
@@ -845,24 +934,65 @@ function errorStatus(error: ApplicationError): number {
   }
 }
 
+class WorkspaceSecurityRateLimitError extends Error {
+  readonly retryAfterSeconds: number;
+
+  constructor(message: string, retryAfterSeconds: number) {
+    super(message);
+    this.name = "WorkspaceSecurityRateLimitError";
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+function workspaceSecurityError(error: unknown): { readonly code: string; readonly status: number; readonly message: string; readonly details?: Readonly<Record<string, unknown>>; readonly retryAfterSeconds?: number } | null {
+  if (!(error instanceof Error)) return null;
+  if (error.name === "WorkspaceSecurityAuthenticationError") return { code: "invalid_credentials", status: 401, message: "Current workspace password is invalid" };
+  if (error instanceof WorkspaceSecurityRateLimitError) return { code: "rate_limited", status: 429, message: error.message, retryAfterSeconds: error.retryAfterSeconds };
+  if (error.name === "RuntimeConflict") return { code: "conflict", status: 409, message: error.message, ...((error as Error & { readonly details?: Readonly<Record<string, unknown>> }).details ? { details: (error as Error & { readonly details?: Readonly<Record<string, unknown>> }).details } : {}) };
+  return null;
+}
+
 export async function createApp(options: ServerOptions = {}): Promise<FastifyInstance> {
   const demo = options.demo ?? false;
+  // The bootstrap hash is supplied by the process entrypoint/runtime. Keeping
+  // it out of createApp's environment reads allows durable state to become the
+  // source of truth after the first startup.
+  const adminPasswordHash = options.auth?.adminPasswordHash;
+  const sessionSecret = options.auth?.sessionSecret ?? process.env.BENCHLEDGER_SESSION_SECRET ?? (demo ? randomSecret() : "");
   const publicBaseUrl = publicBaseUrlFromEnvironment(options.publicBaseUrl ?? process.env.BENCHLEDGER_PUBLIC_BASE_URL, demo);
   const artifactTransfer = new ArtifactTransferManager(publicBaseUrl);
+  let activePasswordHashes = 0;
   const runtime: RuntimeHandle | undefined = options.runtime ?? (options.ports ? undefined : demo ? createSyntheticRuntime() : await createProductionRuntime({
     dataDir: options.dataDir ?? process.env.BENCHLEDGER_DATA_DIR ?? "",
     ...(options.maxUploadBytes === undefined ? {} : { maxUploadBytes: options.maxUploadBytes }),
-    ...(options.maxStorageBytes === undefined ? {} : { maxStorageBytes: options.maxStorageBytes })
+    ...(options.maxStorageBytes === undefined ? {} : { maxStorageBytes: options.maxStorageBytes }),
+    ...(adminPasswordHash === undefined ? {} : { workspacePasswordHash: adminPasswordHash }),
+    ...(options.auth?.passwordVerifier === undefined ? {} : { workspacePasswordVerifier: options.auth.passwordVerifier })
   }));
   const ports = options.ports ?? runtime?.ports;
   if (!ports) throw new Error("createApp requires application ports");
   const service = options.service ?? new ApplicationService(ports, options.version ?? "0.1.0");
   const suppliedBearerTokens = options.auth?.bearerTokens ?? [];
-  const adminPasswordHash = options.auth?.adminPasswordHash ?? process.env.BENCHLEDGER_ADMIN_PASSWORD_HASH;
+  const workspaceSecurity = ports.workspaceSecurity;
+  let credentialRevision = 1;
+  const fallbackSecurityStatus = {
+    mode: demo || adminPasswordHash !== undefined ? "password" as const : "lan_open" as const,
+    passwordConfigured: demo || adminPasswordHash !== undefined,
+    version: 1
+  };
+  if (workspaceSecurity !== undefined) credentialRevision = (await service.getWorkspaceSecurityStatus()).version;
+  const readWorkspaceSecurity = async (): Promise<ApiWorkspaceSecurityStatus> => {
+    const durable = workspaceSecurity === undefined ? fallbackSecurityStatus : await service.getWorkspaceSecurityStatus();
+    // Demo workspaces always retain their protected sample boundary, even if
+    // a production runtime was injected for an integration test.
+    return demo ? { ...durable, mode: "password", passwordConfigured: true } : durable;
+  };
   const authConfig: AuthConfig = {
-    sessionSecret: options.auth?.sessionSecret ?? process.env.BENCHLEDGER_SESSION_SECRET ?? (demo ? randomSecret() : ""),
+    sessionSecret,
     ...(adminPasswordHash ? { adminPasswordHash } : {}),
     ...(options.auth?.passwordVerifier ? { passwordVerifier: options.auth.passwordVerifier } : {}),
+    ...(workspaceSecurity === undefined ? {} : { workspacePasswordVerifier: (password: string) => service.verifyWorkspacePassword(password) }),
+    credentialRevision: () => credentialRevision,
     ...(demo ? { demo: true, demoPassword: options.auth?.demoPassword ?? process.env.BENCHLEDGER_DEMO_PASSWORD ?? "demo-password-please-change" } : {}),
     ...(suppliedBearerTokens.length > 0 ? { bearerTokens: suppliedBearerTokens } : {}),
     secureCookies: options.auth?.secureCookies ?? false,
@@ -878,7 +1008,65 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   }
   app.decorateRequest("principal", undefined as unknown as Principal);
   app.decorateRequest("correlationId", "");
-  const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+  // One budget covers login and current-password reauthentication attempts so
+  // an attacker cannot bypass the limit by alternating the two endpoints.
+  const passwordAttempts = new Map<string, AttemptWindow>();
+  const passwordHashAttempts = new Map<string, AttemptWindow>();
+  let activePasswordVerifications = 0;
+
+  const rateLimitWindow = (attempts: Map<string, AttemptWindow>, key: string, label: string): void => {
+    const current = attempts.get(key);
+    const now = Date.now();
+    if (current?.resetAt !== undefined && current.resetAt > now && current.count >= AUTH_ATTEMPT_LIMIT) {
+      throw new WorkspaceSecurityRateLimitError(`Too many ${label} attempts; try again later`, Math.max(1, Math.ceil((current.resetAt - now) / 1000)));
+    }
+    if (current !== undefined && current.resetAt <= now) attempts.delete(key);
+  };
+
+  const recordFailedAttempt = (attempts: Map<string, AttemptWindow>, key: string): void => {
+    const current = attempts.get(key);
+    const now = Date.now();
+    attempts.set(key, { count: (current?.resetAt !== undefined && current.resetAt > now ? current.count : 0) + 1, resetAt: current?.resetAt !== undefined && current.resetAt > now ? current.resetAt : now + AUTH_ATTEMPT_WINDOW_MS });
+  };
+
+  const verifyPasswordWithThrottle = async (operation: () => Promise<boolean>, label: string): Promise<boolean> => {
+    if (activePasswordVerifications >= PASSWORD_HASH_CONCURRENCY_LIMIT) throw new WorkspaceSecurityRateLimitError(`Too many ${label} requests; try again later`, 1);
+    activePasswordVerifications += 1;
+    try {
+      return await operation();
+    } finally {
+      activePasswordVerifications -= 1;
+    }
+  };
+
+  const runCurrentPasswordMutation = async <T>(clientKey: string, operation: () => Promise<T>): Promise<T> => {
+    rateLimitWindow(passwordAttempts, clientKey, "current-password");
+    if (activePasswordVerifications >= PASSWORD_HASH_CONCURRENCY_LIMIT) throw new WorkspaceSecurityRateLimitError("Too many current-password verification requests; try again later", 1);
+    activePasswordVerifications += 1;
+    try {
+      return await operation();
+    } finally {
+      activePasswordVerifications -= 1;
+    }
+  };
+
+  const runPasswordHashMutation = async <T>(clientKey: string, operation: () => Promise<T>): Promise<T> => {
+    rateLimitWindow(passwordHashAttempts, clientKey, "password hashing");
+    if (activePasswordHashes >= PASSWORD_HASH_CONCURRENCY_LIMIT) throw new WorkspaceSecurityRateLimitError("Too many password hashing requests; try again later", 1);
+    activePasswordHashes += 1;
+    try {
+      const result = await operation();
+      recordFailedAttempt(passwordHashAttempts, clientKey);
+      return result;
+    } catch (error: unknown) {
+      // A wrong current password is rejected before the runtime hashes the
+      // replacement, so it must not consume the hashing budget.
+      if (!(error instanceof Error) || error.name !== "WorkspaceSecurityAuthenticationError") recordFailedAttempt(passwordHashAttempts, clientKey);
+      throw error;
+    } finally {
+      activePasswordHashes -= 1;
+    }
+  };
 
   app.addHook("onRequest", async (request, reply) => {
     const correlationId = validCorrelation(Array.isArray(request.headers["x-correlation-id"]) ? request.headers["x-correlation-id"][0] : request.headers["x-correlation-id"]);
@@ -904,7 +1092,14 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
       return reply;
     }
     if (!request.url.startsWith("/api/v1")) return;
-    if (PUBLIC_PATHS.has(path)) return;
+    // An explicitly supplied Authorization header is never ignored, including
+    // on public discovery/auth bootstrap routes. This prevents a malformed
+    // header from silently falling through to a cookie or public response.
+    if (request.headers.authorization !== undefined && !auth.authenticate(request)) {
+      await reply.code(401).send({ error: { code: "unauthenticated", message: "Authentication is required", correlationId } });
+      return reply;
+    }
+    if (PUBLIC_PATHS.has(path) && (path !== "/api/v1/auth/access" || request.method === "GET")) return;
     const principal = auth.authenticate(request);
     if (!principal) {
       await reply.code(401).send({ error: { code: "unauthenticated", message: "Authentication is required", correlationId } });
@@ -921,6 +1116,11 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     if (error instanceof ApplicationError) {
       const applicationError = error as ApplicationError;
       return reply.code(errorStatus(applicationError)).send({ error: { code: applicationError.code, message: applicationError.message, ...(applicationError.details ? { details: applicationError.details } : {}), correlationId: request.correlationId } });
+    }
+    const securityError = workspaceSecurityError(error);
+    if (securityError !== null) {
+      if (securityError.retryAfterSeconds !== undefined) reply.header("retry-after", String(securityError.retryAfterSeconds));
+      return reply.code(securityError.status).send({ error: { code: securityError.code, message: securityError.message, ...(securityError.details ? { details: securityError.details } : {}), correlationId: request.correlationId } });
     }
     if (error && typeof error === "object" && "validation" in error) {
       return reply.code(400).send({ error: { code: "validation", message: "Request is invalid", correlationId: request.correlationId } });
@@ -943,6 +1143,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   });
   app.get(route("/capabilities"), async () => ({
     name: "BenchLedger", version: service.getVersion(), protocol: "rest-v1", demo,
+    authentication: { accessModes: ["lan_open", "password"], access: "/api/v1/auth/access", explicitLanSession: "/api/v1/auth/lan-session", bearerRequiredForMcp: true },
     vocabulary: { confirmed: "physically counted or commissioned stock", inspect_first: "recorded stock requiring a physical count", missing: "no confirmed or inspect-first candidate" },
     actions: ["inventory.read", "inventory.write", "inventory.categories.read", "inventory.categories.write", "catalog.read", "catalog.write", "inventory.product_profile.read", "inventory.product_profile.write", "projects.read", "projects.write", "build_configurations.read", "build_configurations.create", "bom.evaluate", "artifacts.version", "offers.compare", "events.subscribe"],
     approvalBoundaries: ["purchasing", "external publication", "permanent deletion", "credential changes", "printer control"]
@@ -950,8 +1151,19 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   app.get(route("/openapi.json"), async () => jsonOpenApi(service.getVersion()));
   app.get(route("/docs"), async (_request, reply) => reply.type("text/html; charset=utf-8").send(`<!doctype html><title>BenchLedger API</title><p>OpenAPI: <a href="/api/v1/openapi.json">/api/v1/openapi.json</a></p>`));
 
+  app.get(route("/auth/access"), async () => readWorkspaceSecurity());
+  app.post(route("/auth/lan-session"), async (_request, reply) => {
+    const access = await readWorkspaceSecurity();
+    if (access.mode !== "lan_open") return reply.code(403).send({ error: { code: "password_required", message: "Workspace password protection is enabled", correlationId: _request.correlationId } });
+    const session = auth.issueSession(reply);
+    return { ...access, authenticated: true, actor: "workspace-admin", csrfToken: session.csrf, expiresAt: new Date(session.expiresAt).toISOString(), credentialRevision: session.credentialRevision, correlationId: _request.correlationId };
+  });
+
   app.post(route("/mcp"), async (request, reply) => {
     const principal = requireScope(request, "read", auth);
+    if (principal.via !== "bearer") {
+      return reply.code(401).send({ error: { code: "unauthenticated", message: "A scoped bearer token is required for MCP", correlationId: request.correlationId } });
+    }
     const context = mcpContext(principal, request);
     const protocol = createApplicationMcpProtocol(service, { publicBaseUrl, artifactTransfer, context, serverInfo: { name: "benchledger", version: service.getVersion() } });
     const handler = createMcpHttpHandler(protocol, { context, maxBodyBytes: 1_000_000 });
@@ -964,21 +1176,86 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
 
   app.post(route("/auth/login"), async (request, reply) => {
     const clientKey = request.ip;
-    const currentAttempt = loginAttempts.get(clientKey);
-    if (currentAttempt && currentAttempt.resetAt > Date.now() && currentAttempt.count >= 5) {
-      return reply.code(429).header("retry-after", String(Math.ceil((currentAttempt.resetAt - Date.now()) / 1000))).send({ error: { code: "rate_limited", message: "Too many login attempts; try again later", correlationId: request.correlationId } });
-    }
-    if (currentAttempt && currentAttempt.resetAt <= Date.now()) loginAttempts.delete(clientKey);
+    rateLimitWindow(passwordAttempts, clientKey, "login");
     const body = request.body as { password?: unknown };
-    if (typeof body?.password !== "string" || body.password.length > 512 || !(await auth.verifyPassword(body.password))) {
-      const previous = loginAttempts.get(clientKey);
-      loginAttempts.set(clientKey, { count: (previous?.count ?? 0) + 1, resetAt: previous?.resetAt && previous.resetAt > Date.now() ? previous.resetAt : Date.now() + 15 * 60 * 1000 });
+    const valid = await verifyPasswordWithThrottle(async () => {
+      const access = await readWorkspaceSecurity();
+      return access.mode === "password" && typeof body?.password === "string" && body.password.length >= 12 && body.password.length <= 512
+        && await auth.verifyPassword(body.password as string);
+    }, "login verification");
+    if (!valid) {
+      recordFailedAttempt(passwordAttempts, clientKey);
       return reply.code(401).send({ error: { code: "invalid_credentials", message: "Email or password is invalid", correlationId: request.correlationId } });
     }
-    loginAttempts.delete(clientKey);
+    passwordAttempts.delete(clientKey);
     const session = auth.issueSession(reply);
-    return { authenticated: true, actor: "admin", csrfToken: session.csrf, expiresAt: new Date(session.expiresAt).toISOString(), correlationId: request.correlationId };
+    return { authenticated: true, actor: "workspace-admin", csrfToken: session.csrf, expiresAt: new Date(session.expiresAt).toISOString(), credentialRevision: session.credentialRevision, correlationId: request.correlationId };
   });
+  const securityMutation = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (demo) throw new ApplicationError("forbidden", "Workspace security settings are unavailable in the demo workspace");
+    const principal = requirePrincipal(request);
+    if (principal.source !== "ui" || principal.via !== "session" || principal.projectIds !== undefined || !auth.hasScope(principal, "admin")) throw new ApplicationError("forbidden", "Only an unscoped workspace administrator session may change security settings");
+    const idempotencyKey = requestIdempotencyKey(request);
+    if (idempotencyKey === undefined) throw new ApplicationError("validation", "Idempotency-Key is required for workspace security changes");
+    const operation = parseWorkspaceSecurityRequest(request.body, parseExpectedVersion(request));
+    const context: RequestContext = {
+      actor: principal.actor,
+      source: "ui",
+      correlationId: request.correlationId ?? randomUUID(),
+      scopes: principal.scopes,
+      idempotencyKey,
+      fingerprint: securityFingerprint(operation, sessionSecret)
+    };
+    try {
+      // ApplicationService performs idempotency lookup before it calls the
+      // runtime. This preserves safe replay after a lost response and keeps
+      // current-password verification ahead of replacement hashing inside the
+      // trusted runtime adapter.
+      const update = () => operation.operation === "enable" || operation.operation === "change_password"
+        ? runPasswordHashMutation(request.ip, () => service.updateWorkspaceSecurity(operation, context))
+        : service.updateWorkspaceSecurity(operation, context);
+      const mutation = operation.operation === "enable"
+        ? await update()
+        : await runCurrentPasswordMutation(request.ip, update);
+      if (operation.operation !== "enable") passwordAttempts.delete(request.ip);
+      // Advance the local verifier immediately after the durable mutation. If
+      // the following status read fails, prior sessions must still be invalid.
+      credentialRevision = Math.max(credentialRevision, mutation.data.version);
+      // The mutation result can be an idempotency replay from an earlier
+      // durable revision. Always re-read the current status before issuing a
+      // session so replaying a historical key cannot roll back the in-memory
+      // revision and revive an invalidated browser cookie.
+      const access = await readWorkspaceSecurity();
+      credentialRevision = Math.max(credentialRevision, access.version);
+      const session = auth.issueSession(reply);
+      return {
+        ...access,
+        access,
+        session: { authenticated: true, actor: "workspace-admin", csrfToken: session.csrf, expiresAt: new Date(session.expiresAt).toISOString(), credentialRevision: session.credentialRevision },
+        authenticated: true,
+        actor: "workspace-admin",
+        csrfToken: session.csrf,
+        expiresAt: new Date(session.expiresAt).toISOString(),
+        credentialRevision: session.credentialRevision,
+        correlationId: request.correlationId,
+        replayed: mutation.replayed
+      };
+    } catch (error: unknown) {
+      if (error instanceof ApplicationError) {
+        if (error.code === "forbidden" && error.message.includes("Current workspace password")) return reply.code(401).send({ error: { code: "invalid_credentials", message: "Current workspace password is invalid", correlationId: request.correlationId } });
+        throw error;
+      }
+      const securityError = workspaceSecurityError(error);
+      if (securityError !== null) {
+        if (securityError.code === "invalid_credentials") recordFailedAttempt(passwordAttempts, request.ip);
+        if (securityError.retryAfterSeconds !== undefined) reply.header("retry-after", String(securityError.retryAfterSeconds));
+        return reply.code(securityError.status).send({ error: { code: securityError.code, message: securityError.message, ...(securityError.details ? { details: securityError.details } : {}), correlationId: request.correlationId } });
+      }
+      throw error;
+    }
+  };
+  app.patch(route("/auth/access"), securityMutation);
+  app.post(route("/auth/security"), securityMutation);
   app.post(route("/auth/logout"), async (request, reply) => { requirePrincipal(request); auth.clearSession(reply); return { authenticated: false, correlationId: request.correlationId }; });
   app.get(route("/auth/session"), async (request) => { const principal = requirePrincipal(request); return { authenticated: true, actor: principal.actor, source: principal.source, scopes: [...principal.scopes], projectIds: principal.projectIds ? [...principal.projectIds] : undefined }; });
 

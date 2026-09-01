@@ -5,6 +5,7 @@ export * from "./project-repository.js";
 export * from "./procurement-repository.js";
 export * from "./audit-repository.js";
 export * from "./migrations.js";
+export * from "./workspace-security-repository.js";
 export * from "./catalog-repository.js";
 export * from "./reconciliation-repository.js";
 export * from "./category-repository.js";

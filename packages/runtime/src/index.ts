@@ -5,8 +5,11 @@ import { ArtifactStore } from "@benchledger/artifacts";
 import {
   AuditRepository, BomRepository, BenchDatabase, InventoryRepository, ProcurementRepository,
   ProjectRepository, ReservationRepository, CanonicalCatalogRepository,
-  ReconciliationRepository, migrateCatalogSchema
+  ReconciliationRepository, migrateCatalogSchema, migrateWorkspaceSecuritySchema,
+  WorkspaceSecurityRepository
 } from "@benchledger/database";
+import type { WorkspacePasswordHasher, WorkspacePasswordVerifier } from "./workspace-security-adapter.js";
+import { ProductionWorkspaceSecurityAdapter } from "./workspace-security-adapter.js";
 import { ProductionArtifactAdapter } from "./artifact-adapter.js";
 import { ProductionAuditAdapter } from "./audit-adapter.js";
 import { ProductionInventoryAdapter } from "./inventory-adapter.js";
@@ -28,6 +31,12 @@ export interface ProductionRuntimeOptions {
   readonly artifactDir?: string;
   readonly maxUploadBytes?: number;
   readonly maxStorageBytes?: number;
+  /** Optional one-time bootstrap hash. Durable state wins after first start. */
+  readonly workspacePasswordHash?: string;
+  /** Optional verifier for host-managed Argon2id hashes. */
+  readonly workspacePasswordVerifier?: WorkspacePasswordVerifier;
+  /** Optional host-managed password hasher; defaults to bounded scrypt. */
+  readonly workspacePasswordHasher?: WorkspacePasswordHasher;
 }
 
 export interface ProductionRuntime {
@@ -40,6 +49,7 @@ export interface ProductionRuntime {
   readonly artifactDir: string;
   readonly maxUploadBytes: number;
   readonly maxStorageBytes: number;
+  readonly workspaceSecurity: ProductionWorkspaceSecurityAdapter;
   close(): Promise<void>;
 }
 
@@ -89,11 +99,14 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
   try {
     migrateRuntimeSchema(database);
     migrateCatalogSchema(database);
+    migrateWorkspaceSecuritySchema(database);
     seedStarterCatalog(database);
     const artifacts = new ArtifactStore({ root: artifactDir, maxUploadBytes, maxStorageBytes });
     const initialized = await artifacts.init();
     if (!initialized.ok) throw new Error(`artifact store initialization failed: ${initialized.error.message}`);
     const state = new RuntimeState(database);
+    const workspaceSecurity = new ProductionWorkspaceSecurityAdapter(new WorkspaceSecurityRepository(database), options.workspacePasswordVerifier, options.workspacePasswordHasher);
+    workspaceSecurity.initialize(options.workspacePasswordHash);
     const inventoryRepository = new InventoryRepository(database);
     const projectRepository = new ProjectRepository(database);
     const bomRepository = new BomRepository(database);
@@ -118,6 +131,7 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
       catalog: new ProductionCatalogAdapter(database, state, unitOfWork, canonicalCatalog.products, canonicalCatalog.profiles),
       buildConfigurations: new ProductionBuildConfigurationAdapter(database, canonicalCatalog.snapshots, unitOfWork),
       reconciliations: new ProductionReconciliationAdapter(database, reconciliationRepository, projectRepository, bomRepository, reservationRepository, inventoryRepository, inventory, projectAdapter, state, unitOfWork),
+      workspaceSecurity,
       audit: new ProductionAuditAdapter(auditRepository, database, state, unitOfWork),
       events,
       idempotency: new ProductionIdempotency(state),
@@ -135,6 +149,7 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
       artifactDir,
       maxUploadBytes,
       maxStorageBytes,
+      workspaceSecurity,
       async close(): Promise<void> {
         if (closePromise !== undefined) return closePromise;
         closePromise = barrier.shutdown(() => {
@@ -160,3 +175,4 @@ export * from "./reconciliation-adapter.js";
 export * from "./category-adapter.js";
 export * from "./starter-catalog-data.js";
 export * from "./starter-catalog.js";
+export * from "./workspace-security-adapter.js";

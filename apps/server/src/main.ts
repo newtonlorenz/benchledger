@@ -7,6 +7,7 @@ const port = Number(process.env.BENCHLEDGER_PORT ?? 8792);
 const demo = process.env.BENCHLEDGER_DEMO === "true" || process.argv.includes("--demo");
 const maxUploadBytes = positiveIntegerFromEnvironment(process.env, "BENCHLEDGER_MAX_UPLOAD_BYTES");
 const maxStorageBytes = positiveIntegerFromEnvironment(process.env, "BENCHLEDGER_MAX_STORAGE_BYTES");
+const adminPasswordHash = process.env.BENCHLEDGER_ADMIN_PASSWORD_HASH;
 
 if (!demo && !process.env.BENCHLEDGER_DATA_DIR) {
   throw new Error("BENCHLEDGER_DATA_DIR must point to an external persistent data directory when demo mode is disabled");
@@ -20,7 +21,11 @@ const app = await createApp({
   ...(maxStorageBytes === undefined ? {} : { maxStorageBytes }),
   logger: true,
   trustProxy: process.env.BENCHLEDGER_TRUST_PROXY === "true",
-  auth: { secureCookies: secureCookiesFromEnvironment(), ...(bearerTokens.length === 0 ? {} : { bearerTokens }) }
+  auth: {
+    secureCookies: secureCookiesFromEnvironment(),
+    ...(adminPasswordHash === undefined ? {} : { adminPasswordHash }),
+    ...(bearerTokens.length === 0 ? {} : { bearerTokens })
+  }
 });
 await app.listen({ host, port });
 

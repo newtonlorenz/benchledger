@@ -292,6 +292,16 @@ export const CAPABILITY_DOCUMENT: JsonObject = {
   resources: RESOURCES as unknown as JsonValue,
   resourceTemplates: RESOURCE_TEMPLATES as unknown as JsonValue,
   tools: TOOL_DEFINITIONS as unknown as JsonValue,
+  browserAccess: {
+    modes: {
+      lan_open: "Browser session routes do not require a workspace password. Use only on a trusted LAN: anyone who can reach the configured interface and port can use the browser workspace as an authenticated user, including write actions available to that session.",
+      ["password"]: "Browser session routes require the configured workspace password.",
+    },
+    initialization: "Fresh installations with no password hash start in lan_open mode. Existing hash-configured installations stay password-protected and import that hash into durable settings once; after initialization, the durable setting wins.",
+    demo: "Demo mode remains password-protected regardless of the browser access mode setting.",
+    sessionInvalidation: "Changing the browser access mode or workspace password invalidates existing browser sessions; the browser must sign in again.",
+    mcpBoundary: "Browser access modes affect browser sessions only. /api/v1/mcp always requires a scoped bearer token and never gains implicit LAN access.",
+  },
   stockSemantics: {
     confirmed: "Physically counted or commissioned and eligible for automatic reuse when compatibility and quantity match.",
     inspect_first: "Evidence exists but current physical quantity or condition needs a human check before reservation.",
@@ -317,7 +327,7 @@ export const CAPABILITY_DOCUMENT: JsonObject = {
     "MCP can record reservations and usage events, but cannot start a printer, heat hardware, flash firmware, or generate/submit a print job.",
     "MCP can stage and finalize project artifacts, but cannot execute uploaded files or provide arbitrary filesystem access.",
     "MCP never exposes arbitrary shell, SQL, URL-fetch, path, credential, or database tools.",
-    "Public publication, deployment, credential changes, and destructive purge require explicit human approval outside this adapter.",
+    "Public publication, deployment, browser access mode or password changes, other credential changes, and destructive purge require explicit human approval outside this adapter.",
   ],
   artifactTransfer: "Large files use short-lived, header-bound, single-purpose HTTP upload/finalize/download capabilities. Tokens are never placed in URLs; MCP results never contain base64 or inline binary bytes.",
   reconciliationSemantics: {

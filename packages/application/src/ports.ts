@@ -25,6 +25,7 @@ import type {
   UpdateInventoryCategory as ApiUpdateInventoryCategory,
   InventoryCategoryListQuery as ApiInventoryCategoryListQuery,
 } from "@benchledger/api-contract";
+import type { WorkspaceSecurityStatus as ApiWorkspaceSecurityStatus } from "@benchledger/api-contract";
 
 /** Application aliases intentionally re-export the canonical API contracts. */
 export type CatalogProduct = ApiCatalogProduct;
@@ -40,6 +41,26 @@ export type CatalogProductLinkStatus = InventoryProductProfile["linkState"];
 export type InventoryCategory = ApiInventoryCategory;
 export type CreateInventoryCategory = ApiCreateInventoryCategory;
 export type UpdateInventoryCategory = ApiUpdateInventoryCategory;
+export type WorkspaceSecurityStatus = ApiWorkspaceSecurityStatus;
+
+/**
+ * Storage-facing workspace access boundary. The encoded hash members are
+ * intentionally application-internal and have no API-contract equivalent.
+ * Hosts should create them with their password hasher and never accept them
+ * from a public request body.
+ */
+export interface WorkspaceSecurityPort {
+  getStatus(): Promise<WorkspaceSecurityStatus>;
+  verifyPassword(password: string): Promise<boolean>;
+  /** Hashing occurs only after the application idempotency lookup. */
+  enablePassword(newPassword: string, expectedVersion: number | undefined): Promise<WorkspaceSecurityStatus>;
+  /** Current-password verification occurs inside the audited mutation. */
+  disablePassword(currentPassword: string, expectedVersion: number | undefined): Promise<WorkspaceSecurityStatus>;
+  changePassword(input: {
+    readonly currentPassword: string;
+    readonly newPassword: string;
+  }, expectedVersion: number | undefined): Promise<WorkspaceSecurityStatus>;
+}
 
 export interface CatalogProductListOptions {
   readonly q?: string;
@@ -346,6 +367,8 @@ export interface EventBusEvent {
   readonly version?: number;
   readonly correlationId: string;
   readonly at: string;
+  /** Small safe event metadata; credentials and request bodies are forbidden. */
+  readonly metadata?: Readonly<Record<string, unknown>>;
 }
 
 export type EventListener = (event: EventBusEvent) => void;
@@ -395,6 +418,7 @@ export interface ApplicationPorts {
   /** Immutable setup snapshots owned by a project revision. */
   readonly buildConfigurations?: BuildConfigurationPort;
   readonly reconciliations?: ReconciliationPort;
+  readonly workspaceSecurity?: WorkspaceSecurityPort;
   readonly audit: AuditPort;
   readonly events: EventBusPort;
   readonly idempotency: IdempotencyPort;

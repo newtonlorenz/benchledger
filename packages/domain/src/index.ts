@@ -7,3 +7,4 @@ export * from "./procurement.js";
 export * from "./audit.js";
 export * from "./reconciliation.js";
 export * from "./categories.js";
+export * from "./workspace-security.js";

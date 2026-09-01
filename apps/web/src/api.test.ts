@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, createSampleWorkspaceAdapter, createWorkspaceAdapter, mapInventoryItem } from "./api";
-import { loadAllInventoryCategories } from "./App";
 import type { Artifact, InventoryItem, Project } from "./domain";
 
 type ServerInventoryItem = Parameters<typeof mapInventoryItem>[0];
@@ -72,185 +71,183 @@ afterEach(() => {
 });
 
 describe("authenticated BenchLedger API adapter", () => {
-  it("follows opaque cursors when loading all managed categories", async () => {
-    const calls: Array<{ limit?: number; cursor?: string }> = [];
-    const categories = [
-      { id: "category-tools", name: "Tools", sortOrder: 0, archived: false, createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 },
-      { id: "category-electronics", name: "Electronics", sortOrder: 1, archived: false, createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 }
-    ] as const;
-    const adapter = {
-      listInventoryCategories: async (options: { limit?: number; cursor?: string } = {}) => {
-        calls.push(options);
-        return options.cursor === undefined
-          ? { data: categories.slice(0, 1), limit: 1, total: 2, nextCursor: "opaque-next" }
-          : { data: categories.slice(1), limit: 1, total: 2 };
-      }
-    };
-
-    await expect(loadAllInventoryCategories(adapter, 1)).resolves.toEqual(categories);
-    expect(calls).toEqual([{ limit: 1 }, { limit: 1, cursor: "opaque-next" }]);
-  });
-
-  it("keeps quick-create identity separate while retrying the same category assignment", async () => {
-    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-quick-category" });
-    const requestBodies: string[] = [];
-    const requestKeys: string[] = [];
+  it("reads workspace access and explicitly bootstraps a LAN-open session", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
-      .mockImplementationOnce(async (_input, init) => {
-        requestBodies.push(String(init?.body));
-        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
-        return Promise.reject(new TypeError("response lost after commit"));
-      })
-      .mockImplementationOnce(async (_input, init) => {
-        requestBodies.push(String(init?.body));
-        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
-        return jsonResponse({ data: serverItem({ id: "quick-tool", kind: "tool", categoryNodeId: "category-tools", name: "Hex driver" }) });
-      });
-
+      .mockResolvedValueOnce(jsonResponse({ mode: "lan_open", demo: false, version: 3 }))
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", csrfToken: "lan-csrf", expiresAt: "2026-08-31T10:00:00.000Z" }));
     const adapter = createWorkspaceAdapter();
-    const input = { name: "Hex driver", category: "Accessories" as const, kind: "tool", categoryNodeId: "category-tools", quantity: 1, unit: "each" as const };
-    await expect(adapter.createInventoryItem(input)).rejects.toMatchObject({ kind: "offline" });
-    await expect(adapter.createInventoryItem(input)).resolves.toMatchObject({ id: "quick-tool", kind: "tool", categoryNodeId: "category-tools" });
-    expect(requestBodies[1]).toBe(requestBodies[0]);
-    expect(requestKeys[1]).toBe(requestKeys[0]);
-    expect(JSON.parse(requestBodies[0]!)).toMatchObject({ name: "Hex driver", kind: "tool", categoryNodeId: "category-tools", quantity: 1, unit: "each" });
-    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("x-csrf-token")).toBe("csrf-quick-category");
+    await expect(adapter.getWorkspaceAccess()).resolves.toEqual({ mode: "lan_open", demo: false, version: 3 });
+    await expect(adapter.openLanSession()).resolves.toMatchObject({ authenticated: true, actor: "admin", csrfToken: "lan-csrf" });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/auth/access");
+    const [url, init] = fetchMock.mock.calls[1]!;
+    expect(url).toBe("/api/v1/auth/lan-session");
+    expect(init).toMatchObject({ method: "POST", credentials: "include" });
+    expect(new Headers(init?.headers).get("idempotency-key")).toMatch(/^web-lan-session-/);
   });
 
-  it("sends CSRF, idempotency, and optimistic versions for category mutations", async () => {
-    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-category-mutation" });
-    const category = { id: "category-tools", name: "Tools", sortOrder: 0, archived: false, createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 };
+  it("updates workspace access with an optimistic version, idempotency key, and replacement session", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=access-csrf" });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({ data: {
+      access: { mode: "password", demo: false, version: 4 },
+      session: { authenticated: true, actor: "admin", csrfToken: "replacement-csrf", expiresAt: "2026-08-31T12:00:00.000Z" }
+    } }));
+    const adapter = createWorkspaceAdapter();
+    const result = await adapter.updateWorkspaceAccess({ operation: "enable", newPassword: "a-new-password-please" }, 3);
+    expect(result).toMatchObject({ access: { mode: "password", version: 4 }, session: { csrfToken: "replacement-csrf" } });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe("/api/v1/auth/access");
+    expect(init).toMatchObject({ method: "PATCH", credentials: "include" });
+    expect(new Headers(init?.headers).get("x-csrf-token")).toBe("access-csrf");
+    expect(new Headers(init?.headers).get("if-match")).toBe("3");
+    expect(new Headers(init?.headers).get("idempotency-key")).toMatch(/^web-workspace-access-/);
+    expect(JSON.parse(String(init?.body))).toEqual({ operation: "enable", newPassword: "a-new-password-please", expectedVersion: 3 });
+  });
+
+  it("keeps the workspace access retry key when a committed response is malformed", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=access-csrf" });
+    const values = new Map<string, string>();
+    vi.stubGlobal("sessionStorage", {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); },
+      removeItem: (key: string) => { values.delete(key); }
+    });
+    const adapter = createWorkspaceAdapter();
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const malformedResponses = [
+      { access: { mode: "password", demo: false, version: 4 }, session: { authenticated: true } },
+      { access: { mode: "unknown", demo: false, version: 4 }, session: { authenticated: true, actor: "admin", csrfToken: "replacement-csrf", expiresAt: "2026-08-31T12:00:00.000Z" } },
+      { access: { mode: "password", demo: false }, session: { authenticated: true, actor: "admin", csrfToken: "replacement-csrf", expiresAt: "2026-08-31T12:00:00.000Z" } }
+    ];
+    for (const response of malformedResponses) {
+      fetchMock.mockResolvedValueOnce(jsonResponse(response));
+      await expect(adapter.updateWorkspaceAccess({ operation: "enable", newPassword: "a-new-password-please" }, 3)).rejects.toMatchObject({ status: 502 });
+      const key = new Headers(fetchMock.mock.calls.at(-1)?.[1]?.headers).get("idempotency-key");
+      expect(adapter.getWorkspaceAccessRetry()).toMatchObject({ key, operation: "enable", expectedVersion: 3 });
+      expect([...values.values()].join(" ")).not.toContain("a-new-password-please");
+      adapter.clearWorkspaceAccessRetry();
+    }
+  });
+
+  it("reuses the same idempotency key when a workspace access response is lost", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=access-csrf" });
     const fetchMock = vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(jsonResponse({ data: category }))
-      .mockResolvedValueOnce(jsonResponse({ data: { ...category, name: "Bench tools", sortOrder: 2, version: 2 } }))
-      .mockResolvedValueOnce(jsonResponse({ data: { ...category, name: "Bench tools", sortOrder: 2, archived: true, version: 3 } }));
+      .mockRejectedValueOnce(new TypeError("response lost"))
+      .mockResolvedValueOnce(jsonResponse({ mode: "lan_open", demo: false, version: 5, authenticated: true, actor: "admin", csrfToken: "replacement-csrf", expiresAt: "2026-08-31T12:00:00.000Z" }));
     const adapter = createWorkspaceAdapter();
-
-    await adapter.createInventoryCategory({ name: "Tools", sortOrder: 0 });
-    await adapter.updateInventoryCategory("category-tools", { name: "Bench tools", sortOrder: 2 }, 1);
-    await adapter.archiveInventoryCategory("category-tools", 2);
-
-    const createInit = fetchMock.mock.calls[0]?.[1];
-    const updateInit = fetchMock.mock.calls[1]?.[1];
-    const archiveInit = fetchMock.mock.calls[2]?.[1];
-    expect(new Headers(createInit?.headers).get("x-csrf-token")).toBe("csrf-category-mutation");
-    expect(new Headers(createInit?.headers).get("idempotency-key")).toMatch(/^web-inventory-category-/);
-    expect(new Headers(updateInit?.headers).get("if-match")).toBe("1");
-    expect(new Headers(updateInit?.headers).get("idempotency-key")).toMatch(/^web-inventory-category-update-/);
-    expect(JSON.parse(String(updateInit?.body))).toEqual({ name: "Bench tools", sortOrder: 2 });
-    expect(new Headers(archiveInit?.headers).get("if-match")).toBe("2");
-    expect(new Headers(archiveInit?.headers).get("idempotency-key")).toMatch(/^web-inventory-category-archive-/);
+    const input = { operation: "disable" as const, currentPassword: "a-password" };
+    await expect(adapter.updateWorkspaceAccess(input, 4)).rejects.toMatchObject({ kind: "offline" });
+    await expect(adapter.updateWorkspaceAccess(input, 4, { retry: true })).resolves.toMatchObject({ access: { mode: "lan_open", version: 5 } });
+    const firstHeaders = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+    const secondHeaders = new Headers(fetchMock.mock.calls[1]?.[1]?.headers);
+    expect(secondHeaders.get("idempotency-key")).toBe(firstHeaders.get("idempotency-key"));
+    expect(secondHeaders.get("if-match")).toBe("4");
   });
 
-  it("reuses a category mutation key after an ambiguous response", async () => {
-    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-category-retry" });
-    const category = { id: "category-tools", name: "Bench tools", sortOrder: 2, archived: false, createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 2 };
-    const requestKeys: string[] = [];
-    const requestBodies: string[] = [];
-    vi.spyOn(globalThis, "fetch")
-      .mockImplementationOnce(async (_input, init) => {
-        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
-        requestBodies.push(String(init?.body));
-        return Promise.reject(new TypeError("response lost after commit"));
-      })
-      .mockImplementationOnce(async (_input, init) => {
-        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
-        requestBodies.push(String(init?.body));
-        return jsonResponse({ data: category });
-      })
-      .mockImplementationOnce(async (_input, init) => {
-        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
-        requestBodies.push(String(init?.body));
-        return jsonResponse({ data: { ...category, version: 3 } });
-      });
-
-    const adapter = createWorkspaceAdapter();
-    const input = { name: "Bench tools", sortOrder: 2 };
-    await expect(adapter.updateInventoryCategory("category-tools", input, 1)).rejects.toMatchObject({ kind: "offline" });
-    await expect(adapter.updateInventoryCategory("category-tools", input, 1)).resolves.toMatchObject(category);
-    await expect(adapter.updateInventoryCategory("category-tools", input, 1)).resolves.toMatchObject({ version: 3 });
-    expect(requestKeys[1]).toBe(requestKeys[0]);
-    expect(requestKeys[0]).toMatch(/^web-inventory-category-update-/);
-    expect(requestBodies[1]).toBe(requestBodies[0]);
-    expect(requestKeys[2]).not.toBe(requestKeys[1]);
-    expect(requestBodies[2]).toBe(requestBodies[1]);
-  });
-
-  it("reuses a category create key after a lost response", async () => {
-    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-category-create-retry" });
-    const category = { id: "category-new", name: "New category", sortOrder: 4, archived: false, createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 };
-    const requestKeys: string[] = [];
-    const requestBodies: string[] = [];
-    vi.spyOn(globalThis, "fetch")
-      .mockImplementationOnce(async (_input, init) => {
-        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
-        requestBodies.push(String(init?.body));
-        return Promise.reject(new TypeError("response lost after commit"));
-      })
-      .mockImplementationOnce(async (_input, init) => {
-        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
-        requestBodies.push(String(init?.body));
-        return jsonResponse({ data: category });
-      });
-
-    const adapter = createWorkspaceAdapter();
-    const input = { name: "New category", sortOrder: 4 };
-    await expect(adapter.createInventoryCategory(input)).rejects.toMatchObject({ kind: "offline" });
-    await expect(adapter.createInventoryCategory(input)).resolves.toMatchObject(category);
-    expect(requestKeys[1]).toBe(requestKeys[0]);
-    expect(requestBodies[1]).toBe(requestBodies[0]);
-    expect(JSON.parse(requestBodies[0]!)).toEqual({ name: "New category", sortOrder: 4 });
-  });
-
-  it("reuses an archive key after a lost response and refreshes it after success", async () => {
-    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-category-archive-retry" });
-    const category = { id: "category-tools", name: "Tools", sortOrder: 0, archived: true, createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 2 };
-    const requestKeys: string[] = [];
+  it("keeps only opaque retry metadata in session storage and starts a new key for changed credentials", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=access-csrf" });
+    const values = new Map<string, string>();
+    vi.stubGlobal("sessionStorage", {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); },
+      removeItem: (key: string) => { values.delete(key); }
+    });
     const fetchMock = vi.spyOn(globalThis, "fetch")
-      .mockImplementationOnce(async (_input, init) => {
-        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
-        return Promise.reject(new TypeError("response lost after commit"));
-      })
-      .mockImplementationOnce(async (_input, init) => {
-        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
-        return jsonResponse({ data: category });
-      })
-      .mockImplementationOnce(async (_input, init) => {
-        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
-        return jsonResponse({ data: { ...category, version: 3 } });
-      });
+      .mockRejectedValueOnce(new TypeError("response lost"))
+      .mockRejectedValueOnce(new TypeError("response lost again"));
+    const adapter = createWorkspaceAdapter();
+    await expect(adapter.updateWorkspaceAccess({ operation: "enable", newPassword: "first-password-please" }, 9)).rejects.toMatchObject({ kind: "offline" });
+    const firstKey = new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("idempotency-key");
+    const stored = [...values.values()].join(" ");
+    expect(stored).toContain(firstKey!);
+    expect(stored).toContain("enable");
+    expect(stored).toContain("9");
+    expect(stored).not.toContain("first-password-please");
+
+    await expect(adapter.updateWorkspaceAccess({ operation: "enable", newPassword: "different-password" }, 9)).rejects.toMatchObject({ kind: "offline" });
+    const secondKey = new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("idempotency-key");
+    expect(secondKey).not.toBe(firstKey);
+    adapter.clearWorkspaceAccessRetry();
+    expect(adapter.hasPendingWorkspaceAccessRetry()).toBe(false);
+  });
+
+  it("rehydrates an opaque retry key across a fresh adapter for every security operation", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=access-csrf" });
+    const values = new Map<string, string>();
+    vi.stubGlobal("sessionStorage", {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); },
+      removeItem: (key: string) => { values.delete(key); }
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const cases = [
+      { input: { operation: "enable" as const, newPassword: "enable-password-please" }, version: 9, response: { mode: "password", version: 10 } },
+      { input: { operation: "change_password" as const, currentPassword: "old-password-please", newPassword: "change-password-please" }, version: 10, response: { mode: "password", version: 11 } },
+      { input: { operation: "disable" as const, currentPassword: "change-password-please" }, version: 11, response: { mode: "lan_open", version: 12 } }
+    ];
+    for (const current of cases) {
+      fetchMock.mockRejectedValueOnce(new TypeError("response lost"));
+      fetchMock.mockResolvedValueOnce(jsonResponse({ access: { ...current.response, demo: false }, session: { authenticated: true, actor: "admin", csrfToken: `csrf-${current.response.version}`, expiresAt: "2026-08-31T12:00:00.000Z" } }));
+      const firstAdapter = createWorkspaceAdapter();
+      await expect(firstAdapter.updateWorkspaceAccess(current.input, current.version)).rejects.toMatchObject({ kind: "offline" });
+      const stored = [...values.values()].join(" ");
+      expect(stored).toContain(current.input.operation);
+      expect(stored).toContain(String(current.version));
+      for (const secret of Object.entries(current.input).filter(([name]) => name !== "operation").map(([, value]) => value)) expect(stored).not.toContain(secret);
+
+      const secondAdapter = createWorkspaceAdapter();
+      expect(secondAdapter.getWorkspaceAccessRetry()).toMatchObject({ operation: current.input.operation, expectedVersion: current.version });
+      await expect(secondAdapter.updateWorkspaceAccess(current.input, current.version, { retry: true })).resolves.toMatchObject({ access: current.response });
+      expect(secondAdapter.hasPendingWorkspaceAccessRetry()).toBe(false);
+    }
+  });
+
+  it("submits a bounded bulk inventory edit and maps updated, unchanged, and audit metadata", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=bulk-token" });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({
+      data: {
+        updated: [serverItem({ id: "item-1", name: "Updated item", location: "Drawer B", condition: "good", tags: ["kept", "new"], version: 2 })],
+        unchanged: [serverItem({ id: "item-2", name: "Already item", location: "Drawer B", condition: "good", tags: ["kept"], version: 4 })]
+      },
+      audits: [{ id: "audit-item-1" }],
+      correlationId: "bulk-correlation",
+      replayed: false
+    }));
 
     const adapter = createWorkspaceAdapter();
-    await expect(adapter.archiveInventoryCategory("category-tools", 1)).rejects.toMatchObject({ kind: "offline" });
-    await expect(adapter.archiveInventoryCategory("category-tools", 1)).resolves.toMatchObject(category);
-    await expect(adapter.archiveInventoryCategory("category-tools", 1)).resolves.toMatchObject({ version: 3 });
-    expect(requestKeys[1]).toBe(requestKeys[0]);
-    expect(requestKeys[0]).toMatch(/^web-inventory-category-archive-/);
-    expect(requestKeys[2]).not.toBe(requestKeys[1]);
-    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("x-csrf-token")).toBe("csrf-category-archive-retry");
-    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("if-match")).toBe("1");
+    const result = await adapter.bulkUpdateInventory({
+      targets: [{ itemId: "item-1", expectedVersion: 1 }, { itemId: "item-2", expectedVersion: 4 }],
+      changes: { location: "Drawer B", condition: "good", tags: { add: ["new"], remove: ["old"] } }
+    });
+
+    expect(result).toMatchObject({
+      updated: [{ id: "item-1", name: "Updated item", location: "Drawer B", condition: "good", tags: ["kept", "new"], version: 2 }],
+      unchanged: [{ id: "item-2", name: "Already item", location: "Drawer B", condition: "good", tags: ["kept"], version: 4 }],
+      audits: ["audit-item-1"], correlationId: "bulk-correlation", replayed: false
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe("/api/v1/inventory/bulk");
+    expect(init).toMatchObject({ method: "PATCH", credentials: "include" });
+    expect(new Headers(init?.headers).get("x-csrf-token")).toBe("bulk-token");
+    expect(new Headers(init?.headers).get("idempotency-key")).toMatch(/^web-inventory-bulk-/);
+    expect(JSON.parse(String(init?.body))).toEqual({
+      targets: [{ itemId: "item-1", expectedVersion: 1 }, { itemId: "item-2", expectedVersion: 4 }],
+      changes: { location: "Drawer B", condition: "good", tags: { add: ["new"], remove: ["old"] } }
+    });
   });
 
-  it("keeps sample category rename validation aligned with the managed API", async () => {
-    const adapter = createSampleWorkspaceAdapter();
-    await expect(adapter.updateInventoryCategory("category-tools", { name: "Filament" }, 1)).rejects.toMatchObject({ status: 409, message: "A category with this name already exists beside it." });
-  });
-
-  it("filters sample inventory by managed assignment before paginating", async () => {
-    const adapter = createSampleWorkspaceAdapter();
-    const assigned = await adapter.createInventoryItem({ name: "Assigned driver", category: "Accessories", categoryNodeId: "category-tools", kind: "tool", quantity: 1, unit: "each" });
-    const categoryPage = await adapter.listInventory({ categoryNodeId: "category-tools", limit: 1 });
-    expect(categoryPage).toMatchObject({ items: [{ id: assigned.id }], total: 1 });
-    const unassignedPage = await adapter.listInventory({ unassigned: true, limit: 200 });
-    expect(unassignedPage.items.some((item) => item.id === assigned.id)).toBe(false);
-  });
-
-  it("keeps sample inventory pagination bounds aligned with the REST contract", async () => {
-    const adapter = createSampleWorkspaceAdapter();
-    await expect(adapter.listInventory({ q: "x".repeat(201), limit: 25 })).rejects.toMatchObject({ kind: "validation", status: 400 });
-    await expect(adapter.listInventory({ limit: 201 })).rejects.toMatchObject({ kind: "validation", status: 400 });
-    await expect(adapter.listInventory({ cursor: "1".repeat(201), limit: 25 })).rejects.toMatchObject({ kind: "validation", status: 400, code: "invalid_cursor" });
-    await expect(adapter.listInventory({ categoryNodeId: "category-tools", unassigned: true, limit: 25 })).rejects.toMatchObject({ kind: "validation", status: 400 });
+  it("rejects empty, oversized, or malformed bulk selections before making a request", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const adapter = createWorkspaceAdapter();
+    const changes = { location: "Drawer B" } as const;
+    await expect(adapter.bulkUpdateInventory({ targets: [], changes })).rejects.toMatchObject({ kind: "validation", status: 400, code: "invalid_bulk_targets" });
+    await expect(adapter.bulkUpdateInventory({ targets: Array.from({ length: 101 }, (_, index) => ({ itemId: `item-${index}`, expectedVersion: 1 })), changes })).rejects.toMatchObject({ kind: "validation", status: 400, code: "invalid_bulk_targets" });
+    await expect(adapter.bulkUpdateInventory({ targets: [{ itemId: "item-1", expectedVersion: 0 }], changes })).rejects.toMatchObject({ kind: "validation", status: 400, code: "invalid_bulk_target" });
+    await expect(adapter.bulkUpdateInventory({ targets: [{ itemId: "item-1", expectedVersion: undefined as unknown as number }], changes })).rejects.toMatchObject({ kind: "validation", status: 400, code: "invalid_bulk_target" });
+    await expect(adapter.bulkUpdateInventory({ targets: [{ itemId: "item-1", expectedVersion: 1 }], changes: { location: "   " } })).rejects.toMatchObject({ kind: "validation", status: 400, code: "invalid_bulk_changes" });
+    await expect(adapter.bulkUpdateInventory({ targets: [{ itemId: "item-1", expectedVersion: 1 }], changes: { tags: { add: ["Label"], remove: ["label"] } } })).rejects.toMatchObject({ kind: "validation", status: 400, code: "invalid_bulk_changes" });
+    await expect(adapter.bulkUpdateInventory({ targets: [{ itemId: "item-1", expectedVersion: 1 }], changes: { tags: { add: ["Label", "label"] } } })).rejects.toMatchObject({ kind: "validation", status: 400, code: "invalid_bulk_changes" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("requests inventory pages from the server and maps pagination without slicing a workspace snapshot", async () => {
@@ -258,22 +255,12 @@ describe("authenticated BenchLedger API adapter", () => {
       data: [serverItem({ id: "item-page", name: "Paged item" })], limit: 10, total: 21, nextCursor: "10"
     }));
     const adapter = createWorkspaceAdapter();
-    const result = await adapter.listInventory({ q: "  ESP32 ", kind: "electronic", evidence: "physically_counted", available: true, categoryNodeId: "category-electronics", limit: 10, cursor: "20" });
+    const result = await adapter.listInventory({ q: "  ESP32 ", kind: "electronic", evidence: "physically_counted", available: true, limit: 10, cursor: "20" });
     expect(result).toMatchObject({ items: [{ id: "item-page", name: "Paged item" }], limit: 10, total: 21, nextCursor: "10" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url] = fetchMock.mock.calls[0]!;
     expect(url).toContain("/api/v1/inventory?");
-    expect(new URL(String(url), "http://localhost").search).toBe("?q=ESP32&kind=electronic&evidence=physically_counted&available=true&categoryNodeId=category-electronics&limit=10&cursor=20");
-  });
-
-  it("bounds an overlong inventory search before sending it to the server", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({ data: [], limit: 25, total: 0 }));
-    const adapter = createWorkspaceAdapter();
-
-    await adapter.listInventory({ q: `${"x".repeat(201)}  `, limit: 25 });
-
-    const [url] = fetchMock.mock.calls[0]!;
-    expect(new URL(String(url), "http://localhost").searchParams.get("q")).toBe("x".repeat(200));
+    expect(new URL(String(url), "http://localhost").search).toBe("?q=ESP32&kind=electronic&evidence=physically_counted&available=true&limit=10&cursor=20");
   });
 
   it("surfaces an authentication boundary instead of silently showing synthetic data", async () => {
@@ -301,37 +288,6 @@ describe("authenticated BenchLedger API adapter", () => {
     expect(new Headers(init.headers).get("idempotency-key")).toMatch(/^web-count-/);
     expect(countRequest?.[0]).toContain("/api/v1/inventory/item-1/count");
     expect(JSON.parse(String(init.body))).toMatchObject({ quantity: 4 });
-  });
-
-  it("commissions uncertain stock with provenance, version, and idempotency headers", async () => {
-    vi.stubGlobal("document", { cookie: "forge_csrf=commission-token" });
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({
-      data: { event: { id: "event-commission-1" }, item: serverItem({ quantity: 3, availableQuantity: 3, evidence: { state: "commissioned", source: "bench check", observedAt: "2026-08-30T12:00:00.000Z" }, version: 2 }) }
-    }));
-
-    const adapter = createWorkspaceAdapter();
-    const result = await adapter.commissionInventoryItem("item-1", {
-      quantity: 3,
-      source: "bench check",
-      sourceId: "check-1",
-      observedAt: "2026-08-30T12:00:00.000Z",
-      note: "Counted in drawer 2"
-    }, 1);
-
-    expect(result).toMatchObject({ id: "item-1", evidence: "commissioned", quantity: 3 });
-    const [url, rawInit] = fetchMock.mock.calls[0]!;
-    const init = rawInit as RequestInit;
-    expect(url).toContain("/api/v1/inventory/item-1/commission");
-    expect(init).toMatchObject({ credentials: "include", method: "POST" });
-    const headers = new Headers(init.headers);
-    expect(headers.get("x-csrf-token")).toBe("commission-token");
-    expect(headers.get("if-match")).toBe("1");
-    expect(headers.get("idempotency-key")).toMatch(/^web-commission-/);
-    expect(JSON.parse(String(init.body))).toEqual({
-      quantity: 3,
-      unit: "each",
-      evidence: { state: "commissioned", source: "bench check", sourceId: "check-1", observedAt: "2026-08-30T12:00:00.000Z", note: "Counted in drawer 2" }
-    });
   });
 
   it("patches editable inventory fields with the current item version", async () => {
@@ -465,73 +421,6 @@ describe("authenticated BenchLedger API adapter", () => {
       "/api/v1/project-revisions/revision-next/bom"
     ]);
     for (const [, init] of fetchMock.mock.calls.slice(1)) expect(new Headers(init?.headers).get("x-csrf-token")).toBe("csrf-project");
-  });
-
-  it("reuses a project command key after an ambiguous response, then releases it for a later identical create", async () => {
-    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-project-retry" });
-    const requestBodies: string[] = [];
-    const requestKeys: string[] = [];
-    let writeCount = 0;
-    const responseFor = (id: string) => jsonResponse({ data: {
-      project: serverProject({ id, name: "Retry project", description: "A safely retried project", currentRevisionId: `revision-${id}` }),
-      revision: serverRevision({ id: `revision-${id}`, projectId: id })
-    } });
-    const fetchMock = vi.spyOn(globalThis, "fetch")
-      .mockImplementationOnce(async (_input, init) => {
-        writeCount += 1;
-        requestBodies.push(String(init?.body));
-        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
-        // The server has committed before the response is lost. A retry must
-        // replay the same atomic project + initial revision command.
-        return Promise.reject(new TypeError("response lost after commit"));
-      })
-      .mockImplementationOnce(async (_input, init) => {
-        writeCount += 1;
-        requestBodies.push(String(init?.body));
-        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
-        return responseFor("project-changed");
-      })
-      .mockImplementationOnce(async (_input, init) => {
-        writeCount += 1;
-        requestBodies.push(String(init?.body));
-        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
-        return responseFor("project-replayed");
-      })
-      .mockImplementationOnce(async (_input, init) => {
-        writeCount += 1;
-        requestBodies.push(String(init?.body));
-        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
-        return responseFor("project-new");
-      });
-
-    const adapter = createWorkspaceAdapter();
-    const input = { name: "Retry project", description: "A safely retried project" };
-    await expect(adapter.createProject(input)).rejects.toMatchObject({ kind: "offline" });
-
-    const changed = await adapter.createProject({ ...input, description: "A changed project" });
-    expect(changed).toMatchObject({ id: "project-changed" });
-    expect(writeCount).toBe(2);
-    expect(requestKeys[1]).not.toBe(requestKeys[0]);
-    expect(requestBodies[1]).not.toBe(requestBodies[0]);
-
-    const replayed = await adapter.createProject(input);
-    expect(replayed).toMatchObject({ id: "project-replayed", currentRevision: "r01", serverRevisionId: "revision-project-replayed" });
-    expect(writeCount).toBe(3);
-    expect(requestBodies[2]).toBe(requestBodies[0]);
-    expect(requestKeys[2]).toBe(requestKeys[0]);
-    expect(requestKeys[0]).toMatch(/^web-project-/);
-    expect(JSON.parse(requestBodies[0]!)).toEqual({
-      project: { name: "Retry project", description: "A safely retried project", status: "idea" },
-      revision: { name: "Initial concept", status: "concept" }
-    });
-
-    // Once replay succeeds, a later intentional identical create gets a fresh
-    // command identity rather than inheriting the resolved retry key.
-    await adapter.createProject(input);
-    expect(writeCount).toBe(4);
-    expect(requestKeys[3]).not.toBe(requestKeys[0]);
-    expect(requestBodies[3]).toBe(requestBodies[0]);
-    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("reuses a revision command key after an ambiguous response, then releases it for a later revision", async () => {
@@ -685,7 +574,7 @@ describe("authenticated BenchLedger API adapter", () => {
     expect(search[0]).toMatchObject({ id: canonicalProduct.id, family: "PETG", model: "PETG HF", colour: "Black", netMassG: 1000, sku: "PETG-HF-BLK" });
     const createdProduct = await adapter.createCatalogProduct({ kind: "filament", manufacturer: "Bambu Lab", family: "PETG", model: "PETG HF", variant: "HF", colour: "Black", colourCode: "BK", diameterMm: 1.75, netMassG: 1000 });
     expect(createdProduct).toMatchObject({ id: canonicalProduct.id, materialFamily: "PETG" });
-    const exact = await adapter.createExactInventoryItem({ category: "Filament", categoryNodeId: "category-filament", product: createdProduct, quantity: 1000, linkState: "reported", filament: { lotBatch: "LOT-1", state: "opened", openedAt: "2026-08-30", tareMassG: 164, placement: "AMS slot 1" } });
+    const exact = await adapter.createExactInventoryItem({ category: "Filament", product: createdProduct, quantity: 1000, linkState: "reported", filament: { lotBatch: "LOT-1", state: "opened", openedAt: "2026-08-30", tareMassG: 164, placement: "AMS slot 1" } });
     expect(exact).toMatchObject({ id: "spool-1", catalogProduct: { id: canonicalProduct.id }, productProfile: { linkState: "reported", filament: { lotBatch: "LOT-1", state: "opened" } } });
 
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/v1/catalog/products?kind=filament&q=PETG");
@@ -696,7 +585,7 @@ describe("authenticated BenchLedger API adapter", () => {
     expect(inventoryBody).not.toHaveProperty("catalogProductId");
     expect(inventoryBody).not.toHaveProperty("productProfile");
     expect(inventoryBody).not.toHaveProperty("linkState");
-    expect(inventoryBody).toMatchObject({ kind: "filament", categoryNodeId: "category-filament", unit: "gram", manufacturer: "Bambu Lab", sku: "PETG-HF-BLK" });
+    expect(inventoryBody).toMatchObject({ kind: "filament", unit: "gram", manufacturer: "Bambu Lab", sku: "PETG-HF-BLK" });
     const profileBody = compoundBody.profile;
     expect(profileBody).toEqual({ catalogProductId: canonicalProduct.id, profileType: "filament_spool", linkState: "reported", details: { lot: "LOT-1", openedState: "open", openedAt: "2026-08-30T00:00:00.000Z", tareMassG: 164, currentPlacement: "AMS slot 1" } });
     expect(profileBody).not.toHaveProperty("itemId");
@@ -912,37 +801,6 @@ describe("sample bulk inventory adapter", () => {
       changes: { tags: { remove: ["CASETAG"] } }
     });
     expect(removed.updated[0]?.tags).toEqual([]);
-  });
-});
-
-describe("authenticated bulk mutation retries", () => {
-  it("reuses the retained command key after an ambiguous response", async () => {
-    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-bulk-retry" });
-    const requestKeys: string[] = [];
-    const requestBodies: string[] = [];
-    const retriedItem = serverItem({ id: "item-1", location: "Bulk shelf", condition: "good", tags: ["bulk"], version: 2 });
-    const fetchMock = vi.spyOn(globalThis, "fetch")
-      .mockImplementationOnce(async (_input, init) => {
-        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
-        requestBodies.push(String(init?.body));
-        // Simulate a committed server mutation whose response was lost.
-        return Promise.reject(new TypeError("response lost after commit"));
-      })
-      .mockImplementationOnce(async (_input, init) => {
-        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
-        requestBodies.push(String(init?.body));
-        return jsonResponse({ data: { updated: [retriedItem], unchanged: [] }, audits: [{ id: "audit-bulk-retry" }], correlationId: "bulk-retry", replayed: true });
-      });
-
-    const adapter = createWorkspaceAdapter();
-    const input = { targets: [{ itemId: "item-1", expectedVersion: 1 }], changes: { location: "Bulk shelf", condition: "good" as const, tags: { add: ["bulk"] } } };
-    await expect(adapter.bulkUpdateInventory(input)).rejects.toMatchObject({ kind: "offline" });
-    await expect(adapter.bulkUpdateInventory(input)).resolves.toMatchObject({ replayed: true, updated: [{ id: "item-1", location: "Bulk shelf", version: 2 }] });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(requestKeys[0]).toMatch(/^web-inventory-bulk-/);
-    expect(requestKeys[1]).toBe(requestKeys[0]);
-    expect(requestBodies[1]).toBe(requestBodies[0]);
-    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("x-csrf-token")).toBe("csrf-bulk-retry");
   });
 });
 

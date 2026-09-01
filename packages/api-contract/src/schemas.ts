@@ -4,6 +4,24 @@ export const idSchema = z.string().min(1).max(160).regex(/^[A-Za-z0-9][A-Za-z0-9
 export const correlationIdSchema = z.string().min(1).max(160).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 export const isoDateSchema = z.string().datetime({ offset: true });
 
+export const workspaceSecurityModeSchema = z.enum(["lan_open", "password"]);
+export const workspaceSecurityStatusSchema = z.object({
+  mode: workspaceSecurityModeSchema,
+  passwordConfigured: z.boolean(),
+  version: z.number().int().positive()
+}).strict();
+
+/** Public password inputs contain plaintext only at the request boundary.
+ * Encoded hashes are generated inside the trusted host and are not accepted
+ * by any public contract. Every mutation carries its optimistic version so a
+ * stale settings form cannot overwrite a newer credential. */
+export const workspacePasswordSchema = z.string().min(12).max(512);
+export const workspaceSecurityMutationSchema = z.discriminatedUnion("operation", [
+  z.object({ operation: z.literal("enable"), newPassword: workspacePasswordSchema, expectedVersion: z.number().int().positive() }).strict(),
+  z.object({ operation: z.literal("disable"), currentPassword: workspacePasswordSchema, expectedVersion: z.number().int().positive() }).strict(),
+  z.object({ operation: z.literal("change_password"), currentPassword: workspacePasswordSchema, newPassword: workspacePasswordSchema, expectedVersion: z.number().int().positive() }).strict()
+]);
+
 export const itemKindSchema = z.enum([
   "printer",
   "tool",

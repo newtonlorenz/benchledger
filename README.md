@@ -92,6 +92,10 @@ npm run dev
 
 Open [http://127.0.0.1:8792](http://127.0.0.1:8792). Development mode uses
 synthetic demo data; never copy a private inventory database into the checkout.
+The demo remains password-protected. A fresh trusted-LAN deployment with no
+bootstrap password hash starts with browser access in `lan_open` mode; use that
+mode only when every device on the network is trusted. An administrator can
+enable `password` mode in Settings.
 
 For a production-like LAN installation with external persistent storage, follow
 the [deployment guide](docs/deployment.md).
@@ -110,7 +114,9 @@ runtime supports skills. Otherwise begin with the
 Agents can inspect inventory, calculate BOM gaps, prepare shopping proposals,
 manage revisions and artifacts, and draft project close-out reconciliation. They
 cannot buy, publish, purge permanently, control a printer, or bypass physical
-verification.
+verification. Browser access mode does not grant MCP access: `/api/v1/mcp`
+always requires a scoped bearer token, including when the browser is in
+`lan_open` mode.
 
 ## Architecture
 

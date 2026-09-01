@@ -3,7 +3,7 @@ import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import type * as React from "react";
 import { ApiError, createSampleWorkspaceAdapter, createWorkspaceAdapter, MAX_INVENTORY_SEARCH_LENGTH } from "./api";
 import type { WorkspaceAdapter } from "./api";
-import type { BomInput, CatalogProductDraft, CatalogProductPage, CatalogSearchOptions, ExactInventoryInput, InventoryBulkUpdateInput, InventoryBulkUpdateResult, InventoryCommissionInput, InventoryKindQuery, InventoryListQuery, InventoryUpdateInput, RevisionInput } from "./api";
+import type { BomInput, CatalogProductDraft, CatalogProductPage, CatalogSearchOptions, ExactInventoryInput, InventoryBulkUpdateInput, InventoryBulkUpdateResult, InventoryCommissionInput, InventoryKindQuery, InventoryListQuery, InventoryUpdateInput, RevisionInput, WorkspaceAccess } from "./api";
 import { CatalogInventoryFlow, BuildSetupSummary, OwnedItemCombobox, splitSetupValues } from "./catalog-ui";
 import type { BuildConfigInput, CatalogProduct } from "./domain";
 import {
@@ -25,6 +25,7 @@ import { ReconciliationUI } from "./reconciliation-ui";
 import type { ReconciliationViewModel } from "./reconciliation-ui";
 import { CategoryManager, CategorySelection, inventoryCategoryFilterOptions, managedCategoryForId, selectedCategoryLabel } from "./category-ui";
 import type { CategoryCreateInput, CategoryUpdateInput, ManagedInventoryCategory } from "./category-ui";
+import { WorkspaceAccessSection } from "./workspace-access";
 
 type Page = "overview" | "inventory" | "projects" | "capabilities" | "settings";
 type ProjectTab = "plan" | "files" | "offers" | "reconciliation";
@@ -103,6 +104,7 @@ function App() {
   const [connectionError, setConnectionError] = useState<ApiError>();
   const [demoAvailable, setDemoAvailable] = useState(false);
   const [sampleMode, setSampleMode] = useState(false);
+  const [workspaceAccess, setWorkspaceAccess] = useState<WorkspaceAccess>();
   const [reloadNonce, setReloadNonce] = useState(0);
   const [categoryReloadNonce, setCategoryReloadNonce] = useState(0);
   const [inventoryRefreshNonce, setInventoryRefreshNonce] = useState(0);
@@ -122,17 +124,32 @@ function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const newProjectTriggerRef = useRef<HTMLButtonElement>(null);
 
+  const bootstrapWorkspace = async () => {
+    let access: WorkspaceAccess | undefined;
+    try {
+      access = await adapter.getWorkspaceAccess();
+      setWorkspaceAccess(access);
+      if (access.mode === "lan_open" && !access.demo) await adapter.openLanSession();
+    } catch (error) {
+      // Older local services do not expose the optional access endpoint yet.
+      // Keep their existing password flow usable while the service is upgraded.
+      if (!(error instanceof ApiError && error.status === 404)) throw error;
+    }
+    return adapter.loadWorkspace();
+  };
+
   useEffect(() => {
     let active = true;
     setLoading(true);
     setConnection("loading");
-    adapter.loadWorkspace().then((snapshot) => {
+    bootstrapWorkspace().then((snapshot) => {
       if (!active) return;
       setItems(snapshot.inventory);
       setProjects(snapshot.projects);
       setOffers(snapshot.offers);
       setSelectedProjectId(snapshot.projects[0]?.id ?? "");
       setSampleMode(snapshot.source === "synthetic");
+      setWorkspaceAccess((current) => current ? { ...current, demo: current.demo || Boolean(snapshot.health?.demo) } : current);
       setDemoAvailable(Boolean(snapshot.health?.demo));
       setConnection(snapshot.source === "synthetic" ? "sample" : "ready");
       setConnectionError(undefined);
@@ -229,6 +246,7 @@ function App() {
       setProjects(snapshot.projects);
       setOffers(snapshot.offers);
       setSampleMode(snapshot.source === "synthetic");
+      setWorkspaceAccess((current) => current ? { ...current, demo: current.demo || Boolean(snapshot.health?.demo) } : current);
       setDemoAvailable(Boolean(snapshot.health?.demo));
       setConnection(snapshot.source === "synthetic" ? "sample" : "ready");
       setConnectionError(undefined);
@@ -624,7 +642,7 @@ function App() {
             {page === "projects" && selectedProject && <ProjectPage project={selectedProject} projects={projects} items={items} offers={offers} tab={projectTab} expert={expert} sampleMode={sampleMode} onTabChange={setProjectTab} onSelectProject={setSelectedProjectId} onOpenItem={setSelectedItemId} onNavigate={navigate} onToast={setToast} onNewProject={openNewProject} onNewRevision={() => setShowNewRevision(true)} onRetrySetup={pendingRevisionSetup?.projectId === selectedProject.id && pendingRevisionSetup.revisionId === selectedProject.serverRevisionId ? retryRevisionSetup : undefined} onAddBom={() => setShowAddBom(true)} onUpload={uploadArtifact} onReadReconciliation={adapter.readReconciliation} onSaveReconciliation={adapter.saveReconciliationDraft} onCommitReconciliation={adapter.commitReconciliation} onRefreshWorkspace={refreshWorkspace} />}
             {page === "projects" && !selectedProject && <EmptyState icon="folder" title="No projects yet" description="Start with a name and project goal. You can add parts and files after that." action="Create first project" onAction={() => setShowNewProject(true)} />}
             {page === "capabilities" && <CapabilitiesPage expert={expert} onCopy={setToast} />}
-            {page === "settings" && <SettingsPage expert={expert} sampleMode={sampleMode} connection={connection} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} onRetryCategories={() => setCategoryReloadNonce((current) => current + 1)} onCreateCategory={createInventoryCategory} onUpdateCategory={updateInventoryCategory} onArchiveCategory={archiveInventoryCategory} onExpert={() => setExpert((current) => !current)} onLogout={sampleMode ? returnToPrivateWorkspace : signOut} />}
+            {page === "settings" && <><div className={workspaceAccess?.mode === "lan_open" ? "settings-page-lan-open" : undefined}><SettingsPage expert={expert} sampleMode={sampleMode} connection={connection} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} onRetryCategories={() => setCategoryReloadNonce((current) => current + 1)} onCreateCategory={createInventoryCategory} onUpdateCategory={updateInventoryCategory} onArchiveCategory={archiveInventoryCategory} hideLogout={workspaceAccess?.mode === "lan_open"} onExpert={() => setExpert((current) => !current)} onLogout={sampleMode ? returnToPrivateWorkspace : signOut} /></div>{workspaceAccess && !sampleMode && !workspaceAccess.demo && <div className="settings-layout"><WorkspaceAccessSection access={workspaceAccess} pendingRetry={adapter.getWorkspaceAccessRetry()} onUpdate={adapter.updateWorkspaceAccess} onChanged={setWorkspaceAccess} onClearRetry={adapter.clearWorkspaceAccessRetry} onRebootstrap={() => { setReloadNonce((current) => current + 1); }} /></div>}</>}
           </main>
         </div>
       </div>
@@ -1365,9 +1383,9 @@ function CapabilitiesPage({ expert, onCopy }: { expert: boolean; onCopy: (messag
 
 function Prompt({ text }: { text: string }) { return <button className="prompt-row" onClick={() => navigator.clipboard?.writeText(text)}><Icon name="spark" size={15} /><span>{text}</span><Icon name="copy" size={14} /></button>; }
 
-function SettingsPage({ expert, sampleMode, connection, categories, categoriesLoading, categoriesError, onRetryCategories, onCreateCategory, onUpdateCategory, onArchiveCategory, onExpert, onLogout }: { expert: boolean; sampleMode: boolean; connection: ConnectionState; categories: readonly ManagedInventoryCategory[]; categoriesLoading: boolean; categoriesError?: string | undefined; onRetryCategories: () => void; onCreateCategory: (input: CategoryCreateInput) => Promise<ManagedInventoryCategory | undefined>; onUpdateCategory: (id: string, input: CategoryUpdateInput, expectedVersion: number) => Promise<ManagedInventoryCategory | undefined>; onArchiveCategory: (id: string, expectedVersion: number) => Promise<ManagedInventoryCategory | undefined>; onExpert: () => void; onLogout: () => void }) {
+function SettingsPage({ expert, sampleMode, connection, categories, categoriesLoading, categoriesError, onRetryCategories, onCreateCategory, onUpdateCategory, onArchiveCategory, hideLogout, onExpert, onLogout }: { expert: boolean; sampleMode: boolean; connection: ConnectionState; categories: readonly ManagedInventoryCategory[]; categoriesLoading: boolean; categoriesError?: string | undefined; onRetryCategories: () => void; onCreateCategory: (input: CategoryCreateInput) => Promise<ManagedInventoryCategory | undefined>; onUpdateCategory: (id: string, input: CategoryUpdateInput, expectedVersion: number) => Promise<ManagedInventoryCategory | undefined>; onArchiveCategory: (id: string, expectedVersion: number) => Promise<ManagedInventoryCategory | undefined>; hideLogout: boolean; onExpert: () => void; onLogout: () => void }) {
   const connected = connection === "ready";
-  return <><PageHeader eyebrow="Workspace settings" title="Review workspace settings" description="Set the detail level and review connection information." /><div className="settings-layout"><section className="surface settings-section"><SectionHeading eyebrow="Display" title="Display detail" /><div className="setting-row"><div><strong>Detail level</strong><span>Beginner view shows task labels. Expert view also shows identifiers and technical evidence.</span></div><button className={`mode-toggle setting-control ${expert ? "is-expert" : ""}`} aria-pressed={expert} onClick={onExpert}><span className="mode-dot" />{expert ? "Expert details on" : "Beginner view on"}</button></div><div className="setting-row"><div><strong>Measurements</strong><span>Current display units are millimetres, grams, metres, and pieces. This value is not editable.</span></div><span className="setting-value">mm · g · m · each</span></div><div className="setting-row"><div><strong>Currency</strong><span>Each supplier price keeps its source currency and observation date. This value is not editable.</span></div><span className="setting-value">Source currency</span></div></section>{categoriesLoading && <div className="category-loading" role="status" aria-live="polite"><Icon name="refresh" size={16} /> Loading inventory categories…</div>}{categoriesError ? <section className="surface settings-section category-load-error" role="alert"><Icon name="warning" size={18} /><div><strong>Could not load inventory categories.</strong><span>{categoriesError}</span></div><button type="button" className="button button-secondary" onClick={onRetryCategories}>Try again</button></section> : !categoriesLoading ? <CategoryManager categories={categories} onCreate={onCreateCategory} onUpdate={onUpdateCategory} onArchive={onArchiveCategory} /> : null}<section className="surface settings-section"><SectionHeading eyebrow="Connection" title="Private API" /><div className="connection-panel"><div className="connection-panel-top"><span className="connection-icon"><Icon name="link" size={18} /></span><div><strong>{sampleMode ? "Sample workspace" : "Local workspace adapter"}</strong><span>{sampleMode ? "Synthetic data only" : "Connected to /api/v1"}</span></div><span className="connection-badge"><span className={`online-dot ${connected || sampleMode ? "" : "is-offline"}`} /> {sampleMode ? "Sample mode" : connected ? "Connected" : "Session error"}</span></div><p>{sampleMode ? "This workspace contains synthetic records. Changes remain in the sample workspace." : "The browser sends supported reads and writes to the authenticated private service. It reports failed writes."}</p></div><div className="setting-row setting-row-last"><div><strong>MCP endpoint</strong><span>Use a scoped token. Read the capability manifest before you use tools.</span></div><code className="setting-value">benchledger://capabilities</code></div><button className="button button-quiet settings-logout" onClick={onLogout}><Icon name="arrow-left" size={16} /> {sampleMode ? "Close sample workspace" : "Sign out"}</button></section><section className="surface settings-section"><SectionHeading eyebrow="Evidence states" title="Inventory evidence rules" /><div className="evidence-legend"><Legend tone="good" title="Ready to use" text="A physical count or commissioning record confirms the stock." /><Legend tone="warn" title="Check quantity" text="Count delivered or uncertain stock before you reuse it." /><Legend tone="bad" title="Need to buy" text="Confirmed compatible stock does not cover the requirement." /></div></section></div></>;
+  return <><PageHeader eyebrow="Workspace settings" title="Review workspace settings" description="Set the detail level and review connection information." /><div className="settings-layout"><section className="surface settings-section"><SectionHeading eyebrow="Display" title="Display detail" /><div className="setting-row"><div><strong>Detail level</strong><span>Beginner view shows task labels. Expert view also shows identifiers and technical evidence.</span></div><button className={`mode-toggle setting-control ${expert ? "is-expert" : ""}`} aria-pressed={expert} onClick={onExpert}><span className="mode-dot" />{expert ? "Expert details on" : "Beginner view on"}</button></div><div className="setting-row"><div><strong>Measurements</strong><span>Current display units are millimetres, grams, metres, and pieces. This value is not editable.</span></div><span className="setting-value">mm · g · m · each</span></div><div className="setting-row"><div><strong>Currency</strong><span>Each supplier price keeps its source currency and observation date. This value is not editable.</span></div><span className="setting-value">Source currency</span></div></section>{categoriesLoading && <div className="category-loading" role="status" aria-live="polite"><Icon name="refresh" size={16} /> Loading inventory categories…</div>}{categoriesError ? <section className="surface settings-section category-load-error" role="alert"><Icon name="warning" size={18} /><div><strong>Could not load inventory categories.</strong><span>{categoriesError}</span></div><button type="button" className="button button-secondary" onClick={onRetryCategories}>Try again</button></section> : !categoriesLoading ? <CategoryManager categories={categories} onCreate={onCreateCategory} onUpdate={onUpdateCategory} onArchive={onArchiveCategory} /> : null}<section className="surface settings-section"><SectionHeading eyebrow="Connection" title="Private API" /><div className="connection-panel"><div className="connection-panel-top"><span className="connection-icon"><Icon name="link" size={18} /></span><div><strong>{sampleMode ? "Sample workspace" : "Local workspace adapter"}</strong><span>{sampleMode ? "Synthetic data only" : "Connected to /api/v1"}</span></div><span className="connection-badge"><span className={`online-dot ${connected || sampleMode ? "" : "is-offline"}`} /> {sampleMode ? "Sample mode" : connected ? "Connected" : "Session error"}</span></div><p>{sampleMode ? "This workspace contains synthetic records. Changes remain in the sample workspace." : "The browser sends supported reads and writes to the authenticated private service. It reports failed writes."}</p></div><div className="setting-row setting-row-last"><div><strong>MCP endpoint</strong><span>Use a scoped token. Read the capability manifest before you use tools.</span></div><code className="setting-value">benchledger://capabilities</code></div>{!hideLogout && <button className="button button-quiet settings-logout" onClick={onLogout}><Icon name="arrow-left" size={16} /> {sampleMode ? "Close sample workspace" : "Sign out"}</button>}</section><section className="surface settings-section"><SectionHeading eyebrow="Evidence states" title="Inventory evidence rules" /><div className="evidence-legend"><Legend tone="good" title="Ready to use" text="A physical count or commissioning record confirms the stock." /><Legend tone="warn" title="Check quantity" text="Count delivered or uncertain stock before you reuse it." /><Legend tone="bad" title="Need to buy" text="Confirmed compatible stock does not cover the requirement." /></div></section></div></>;
 }
 
 function Legend({ tone, title, text }: { tone: StockLabelTone; title: string; text: string }) { return <div className="legend-row"><span className={`legend-mark mark-${tone}`}>{tone === "good" ? "✓" : tone === "warn" ? "?" : "!"}</span><div><strong>{title}</strong><span>{text}</span></div></div>; }
