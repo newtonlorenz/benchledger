@@ -221,6 +221,10 @@ function catalogFactsChanged(current: CatalogProduct, changes: Record<string, un
   return fields.some((field) => Object.hasOwn(changes, field) && !sameCatalogFact(currentRecord[field], changes[field]));
 }
 
+function catalogProvenanceChanged(current: CatalogProduct, changes: Record<string, unknown>): boolean {
+  return Object.hasOwn(changes, "provenance") && !sameCatalogFact(current.provenance, changes.provenance);
+}
+
 function parseInventoryProductProfile(row: SqliteRow): InventoryProductProfile {
   const profile = inventoryProductProfileSchema.parse({
     id: text(row, "id"),
@@ -352,12 +356,13 @@ export class CatalogProductRepository {
       version: current.version + 1
     };
     const factsChanged = catalogFactsChanged(current, changedRecord);
+    const provenanceChanged = catalogProvenanceChanged(current, changedRecord);
     const merged = factsChanged
       ? Object.fromEntries(Object.entries(mergedCandidate).filter(([key]) => key !== "provenance"))
       : mergedCandidate;
     const parsed = catalogProductSchema.parse(merged);
     this.database.transaction(() => {
-      if (factsChanged) {
+      if (factsChanged || provenanceChanged) {
         this.database.run(
           "INSERT INTO catalog_product_history (id, catalog_product_id, superseded_version, payload_json, superseded_at) VALUES (?, ?, ?, ?, ?)",
           [createId("catalog-history"), id, current.version, JSON.stringify(current), parsed.updatedAt],

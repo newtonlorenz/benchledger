@@ -39,8 +39,9 @@ function seedProduct(database: BenchDatabase, repository: StarterCatalogProductW
   return true;
 }
 
-function exactV1Product(correctionId: string, v2Product: CatalogProduct, v1: Readonly<Record<string, unknown>>): CatalogProduct {
-  return catalogProductSchema.parse({ ...structuredClone(v2Product), ...structuredClone(v1), id: correctionId });
+function sameValue(left: unknown, right: unknown): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return deterministicJson(left) === deterministicJson(right);
 }
 
 function correctV1Product(
@@ -51,15 +52,20 @@ function correctV1Product(
   if (v2Product === undefined) throw new Error(`starter catalog correction references unknown product ${correction.id}`);
   const current = repository.get(correction.id);
   if (current === undefined) return false;
-  const expectedV1 = exactV1Product(correction.id, v2Product, correction.v1);
 
   // A complete payload fingerprint makes this migration ownership-safe. Any
   // user edit, replacement, or prior correction causes the row to be left
   // untouched while the dataset metadata can still advance transactionally.
-  if (deterministicJson(current) !== deterministicJson(expectedV1)) return false;
+  if (deterministicJson(current) !== deterministicJson(correction.v1)) return false;
 
+  const currentRecord = current as unknown as Record<string, unknown>;
   const v2Record = v2Product as unknown as Record<string, unknown>;
-  const changes = Object.fromEntries(Object.keys(correction.v1).map((field) => [field, structuredClone(v2Record[field])]));
+  const changes = Object.fromEntries(
+    [...new Set([...Object.keys(currentRecord), ...Object.keys(v2Record)])]
+      .filter((field) => !["id", "kind", "createdAt", "updatedAt", "version"].includes(field))
+      .filter((field) => !sameValue(currentRecord[field], v2Record[field]))
+      .map((field) => [field, structuredClone(v2Record[field])]),
+  );
   repository.update(current.id, changes, current.version);
   return true;
 }

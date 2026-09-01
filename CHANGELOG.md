@@ -23,7 +23,8 @@ first public release; all current work is under **Unreleased**.
   adds as inspect-first stock until explicit commissioning evidence is recorded
 - Corrected the reviewed Prusament ASA and PC Blend nominal net masses to 800 g
   and 900 g, with history-preserving, edit-safe upgrades for version 1 starter
-  catalogs
+  catalogs; the upgrade fingerprints all previously corrected same-ID catalog
+  payloads and their provenance
 
 ### Known pre-release limitations
 

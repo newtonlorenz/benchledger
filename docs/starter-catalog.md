@@ -57,12 +57,14 @@ retain valid provenance.
 
 When a workspace reports dataset version 1, startup applies the v1-to-v2
 corrections only to rows whose complete stored payload still exactly matches
-the originally seeded v1 payload. This preserves user edits and custom rows,
+the originally seeded v1 payload. The immutable fingerprints cover the
+historical Bambu Lab, Polymaker, OVERTURE, and Anycubic payloads, as well as
+the prior Prusament package masses. This preserves user edits and custom rows,
 even when they use a starter ID. Each applied correction increments that
-product version and appends its superseded payload to history before the
-dataset metadata advances to version 2 in the same transaction. Missing rows
-are inserted with the current v2 payload; startup never creates inventory,
-profiles, quantities, reservations, or stock events.
+product version and appends its superseded payload and provenance to history
+before the dataset metadata advances to version 2 in the same transaction.
+Missing rows are inserted with the current v2 payload; startup never creates
+inventory, profiles, quantities, reservations, or stock events.
 The source links are observations, not a live lookup or an availability
 claim; the catalog does not fetch arbitrary URLs.
 

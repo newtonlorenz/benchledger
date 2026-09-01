@@ -215,6 +215,35 @@ describe("v2 catalog and physical profile repositories", () => {
     expect(specificationHistory.map((entry) => entry.superseded_version)).toEqual([2, 3, 4]);
     expect(JSON.parse(specificationHistory[2]!.payload_json)).toMatchObject({ colourName: "Slate", nominalNetMassG: 1000, version: 4 });
 
+    const provenanceOnly = {
+      ...filament,
+      id: "catalog-provenance-only",
+      provenance: {
+        sourceUrl: "https://materials.example.test/old-product",
+        sourceLabel: "Old manufacturer product page",
+        verifiedAt: time,
+      },
+    } satisfies CatalogProduct;
+    products.create(provenanceOnly);
+    const provenanceUpdated = products.update(provenanceOnly.id, {
+      provenance: {
+        sourceUrl: "https://materials.example.test/new-product",
+        sourceLabel: "New manufacturer product page",
+        verifiedAt: "2026-08-31T12:00:00.000Z",
+      },
+    }, 1);
+    expect(provenanceUpdated).toMatchObject({ version: 2, provenance: { sourceUrl: "https://materials.example.test/new-product" } });
+    const provenanceHistory = database.get<{ readonly superseded_version: number; readonly payload_json: string }>(
+      "SELECT superseded_version, payload_json FROM catalog_product_history WHERE catalog_product_id = ?",
+      [provenanceOnly.id],
+    );
+    expect(provenanceHistory?.superseded_version).toBe(1);
+    expect(JSON.parse(provenanceHistory!.payload_json)).toMatchObject({
+      id: provenanceOnly.id,
+      version: 1,
+      provenance: provenanceOnly.provenance,
+    });
+
     const profiles = new InventoryProductProfileRepository(database);
     profiles.create(spoolProfile());
     const promoted = profiles.update("profile-spool-1", { linkState: "confirmed" }, 1);

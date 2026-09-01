@@ -213,21 +213,46 @@ export const STARTER_FILAMENTS: readonly CatalogProduct[] = [
 export const STARTER_CATALOG_PRODUCTS: readonly CatalogProduct[] = [...STARTER_PRINTERS, ...STARTER_FILAMENTS];
 
 /**
- * Exact v1 values for the rows corrected by dataset v2. The seed uses these
- * values as an ownership fingerprint: a row is migrated only while its full
- * payload still matches the originally seeded v1 product.
+ * Immutable v1 payloads for every stable-ID row whose facts or provenance
+ * changed before dataset v2. Keep these snapshots explicit: deriving a v1
+ * fingerprint from the current dataset can hide a historical correction.
  */
 export interface StarterCatalogV1Correction {
   readonly id: string;
-  readonly v1: Readonly<Record<string, unknown>>;
+  readonly v1: CatalogProduct;
 }
 
+export const STARTER_CATALOG_V1_PRODUCTS: readonly CatalogProduct[] = [
+  filament("starter-filament-bambu-pla-basic-black", "Bambu Lab", "PLA Basic", "PLA", "https://us.store.bambulab.com/products/pla-basic-filament?variant=43045599019144", { colourName: "Black", colourCode: "#000000", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }),
+  filament("starter-filament-bambu-pla-matte-charcoal", "Bambu Lab", "PLA Matte", "PLA", "https://jp.store.bambulab.com/products/pla-matte-filament?variant=48933736743204", { colourName: "Matte Charcoal", colourCode: "11101", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "Matte"),
+  filament("starter-filament-bambu-petg-hf-black", "Bambu Lab", "PETG HF", "PETG", "https://us.store.bambulab.com/products/petg-hf?from=home_web", { colourName: "Black", colourCode: "#000000", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "HF"),
+  filament("starter-filament-bambu-abs-gf-black", "Bambu Lab", "ABS-GF", "ABS", "https://us.store.bambulab.com/products/abs-gf", { colourName: "Black", colourCode: "41101", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "ABS-GF"),
+  filament("starter-filament-bambu-asa-black", "Bambu Lab", "ASA", "ASA", "https://us.store.bambulab.com/products/asa-filament", { colourName: "Black", colourCode: "#000000", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }),
+  filament("starter-filament-bambu-tpu-95a-hf-black", "Bambu Lab", "TPU 95A HF", "TPU", "https://bambulab-us.myshopify.com/products/tpu-95a-hf", { colourName: "Black", colourCode: "51100", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "95A HF"),
+  filament("starter-filament-bambu-pla-cf-black", "Bambu Lab", "PLA-CF", "PLA", "https://us.store.bambulab.com/products/pla-cf?id=41158283591816", { colourName: "Black", colourCode: "#000000", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "PLA-CF"),
+  filament("starter-filament-overture-pla-black", "OVERTURE", "PLA", "PLA", "https://overture3d.com/products/overture-pla", { colourName: "Black", colourCode: "#000000", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }),
+  filament("starter-filament-overture-petg-black", "OVERTURE", "High Speed PETG", "PETG", "https://overture3d.com/products/overture-high-speed-petg", { colourName: "Black", colourCode: "#000000", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "High Speed"),
+  filament("starter-filament-overture-tpu-black", "OVERTURE", "TPU 95A", "TPU", "https://overture3d.com/products/overture-tpu?variant=46988794921214", { colourName: "Matte Black", colourCode: "#000000", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "95A"),
+  filament("starter-filament-polymaker-polylite-asa-black", "Polymaker", "Polymaker ASA", "ASA", "https://shop.polymaker.com/products/asa?variant=39574343254073", { colourName: "Black", sku: "PF01001", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "Formerly PolyLite ASA"),
+  filament("starter-filament-polymaker-polymax-petg-black", "Polymaker", "PolyMax PETG", "PETG", "https://shop.polymaker.com/products/polymax-PETG", { colourName: "Black", sku: "PB02001", diameterMm: 1.75, nominalNetMassG: 750, lengthBasis: "unknown" }),
+  printer("starter-printer-anycubic-kobra-2", "Anycubic", "Kobra 2", { x: 250, y: 220, z: 220 }, "https://store.anycubic.com/products/kobra-2"),
+  printer("starter-printer-anycubic-kobra-2-pro", "Anycubic", "Kobra 2 Pro", { x: 250, y: 220, z: 220 }, "https://store.anycubic.com/products/kobra-2-pro"),
+  printer("starter-printer-anycubic-kobra-s1", "Anycubic", "Kobra S1", { x: 250, y: 250, z: 270 }, "https://store.anycubic.com/products/anycubic-kobra-s1"),
+];
+
+/**
+ * Version 1 was deployed while these two package facts still used the old
+ * values. Keep this later v1 snapshot as a second accepted migration source
+ * because the dataset version was not bumped when those values changed.
+ */
+export const STARTER_CATALOG_V1_LATE_PRODUCTS: readonly CatalogProduct[] = [
+  filament("starter-filament-prusament-asa-jet-black", "Prusament", "ASA", "ASA", prusamentAsa, { colourName: "Jet Black", diameterMm: 1.75, nominalNetMassG: 850, lengthBasis: "unknown" }),
+  filament("starter-filament-prusament-pc-blend-black", "Prusament", "PC Blend", "PC", prusamentPcBlend, { colourName: "Jet Black", diameterMm: 1.75, nominalNetMassG: 970, lengthBasis: "unknown" }),
+];
+
 export const STARTER_CATALOG_V1_CORRECTIONS: readonly StarterCatalogV1Correction[] = [
-  { id: "starter-printer-anycubic-kobra-2", v1: { buildVolumeMm: { x: 250, y: 220, z: 220 } } },
-  { id: "starter-printer-anycubic-kobra-2-pro", v1: { buildVolumeMm: { x: 250, y: 220, z: 220 } } },
-  { id: "starter-printer-anycubic-kobra-s1", v1: { buildVolumeMm: { x: 250, y: 250, z: 270 } } },
-  { id: "starter-filament-prusament-asa-jet-black", v1: { nominalNetMassG: 850 } },
-  { id: "starter-filament-prusament-pc-blend-black", v1: { nominalNetMassG: 970 } },
+  ...STARTER_CATALOG_V1_PRODUCTS.map((v1) => ({ id: v1.id, v1 })),
+  ...STARTER_CATALOG_V1_LATE_PRODUCTS.map((v1) => ({ id: v1.id, v1 })),
 ];
 
 /** Short aliases for hosts and tests that treat the dataset as one catalog. */
