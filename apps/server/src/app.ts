@@ -673,16 +673,16 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       "/auth/access": {
         get: { security: [], responses: { "200": { description: "Workspace access mode (mode, passwordConfigured, and version only)" } } },
         patch: {
-          summary: "Update browser workspace access mode",
-          description: "UI-only unscoped administrator session. Requires CSRF, If-Match or expectedVersion, and Idempotency-Key. A successful mutation rotates the browser session and invalidates prior sessions.",
+          summary: "Update browser workspace access mode (operation form)",
+          description: "UI-only unscoped administrator session. Requires CSRF, Idempotency-Key, and an operation-first body with expectedVersion (If-Match may also carry the same version). A successful mutation rotates the browser session and invalidates prior sessions.",
           parameters: [
-            { in: "header", name: "If-Match", required: true, schema: { type: "string", pattern: "^(W/)?\\\"?[1-9][0-9]*\\\"?$" } },
+            { in: "header", name: "If-Match", required: false, schema: { type: "string", pattern: "^(W/)?\\\"?[1-9][0-9]*\\\"?$" }, description: "Optional when expectedVersion is present in the body; if both are supplied they must match." },
             { in: "header", name: "Idempotency-Key", required: true, schema: { type: "string", minLength: 8, maxLength: 200 } }
           ],
           requestBody: { required: true, content: { "application/json": { schema: { oneOf: [
-            { type: "object", additionalProperties: false, required: ["mode", "newPassword"], properties: { mode: { const: "password" }, newPassword: { type: "string", minLength: 12, maxLength: 512 } } },
-            { type: "object", additionalProperties: false, required: ["mode", "currentPassword", "newPassword"], properties: { mode: { const: "password" }, currentPassword: { type: "string", minLength: 12, maxLength: 512 }, newPassword: { type: "string", minLength: 12, maxLength: 512 } } },
-            { type: "object", additionalProperties: false, required: ["mode", "currentPassword"], properties: { mode: { const: "lan_open" }, currentPassword: { type: "string", minLength: 12, maxLength: 512 } } }
+            { type: "object", additionalProperties: false, required: ["operation", "newPassword", "expectedVersion"], properties: { operation: { const: "enable" }, newPassword: { type: "string", minLength: 12, maxLength: 512 }, expectedVersion: { type: "integer", minimum: 1 } } },
+            { type: "object", additionalProperties: false, required: ["operation", "currentPassword", "expectedVersion"], properties: { operation: { const: "disable" }, currentPassword: { type: "string", minLength: 12, maxLength: 512 }, expectedVersion: { type: "integer", minimum: 1 } } },
+            { type: "object", additionalProperties: false, required: ["operation", "currentPassword", "newPassword", "expectedVersion"], properties: { operation: { const: "change_password" }, currentPassword: { type: "string", minLength: 12, maxLength: 512 }, newPassword: { type: "string", minLength: 12, maxLength: 512 }, expectedVersion: { type: "integer", minimum: 1 } } }
           ] } } } },
           responses: { "200": { description: "Updated workspace access mode and fresh session" }, "400": { description: "Invalid operation" }, "401": { description: "Current password is invalid" }, "403": { description: "UI administrator session required" }, "409": { description: "Stale access version or idempotency conflict" }, "429": { description: "Too many attempts" } }
         }
@@ -784,7 +784,7 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       "/transfers/uploads/{id}": { put: { security: [{ transferAuth: [] }], responses: { "200": { description: "Uploaded bytes" }, "403": { description: "Invalid or expired transfer capability" }, "410": { description: "Expired transfer capability" } } } },
       "/transfers/uploads/{id}/finalize": { post: { security: [{ transferAuth: [] }], responses: { "200": { description: "Finalized artifact" }, "403": { description: "Invalid or expired transfer capability" }, "410": { description: "Expired transfer capability" } } } },
       "/transfers/artifacts/{id}/download": { get: { security: [{ transferAuth: [] }], responses: { "200": { description: "Artifact bytes" }, "403": { description: "Invalid or expired transfer capability" }, "410": { description: "Expired transfer capability" } } } },
-      "/mcp": { post: { responses: { "200": { description: "Authenticated MCP JSON-RPC response" } } } },
+      "/mcp": { post: { security: [{ bearerAuth: [] }], responses: { "200": { description: "Authenticated MCP JSON-RPC response" } } } },
       "/events": { get: { responses: { "200": { description: "Server-sent state events" } } } }
     }
   };

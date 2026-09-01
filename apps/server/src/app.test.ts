@@ -454,6 +454,24 @@ describe("BenchLedger HTTP API", () => {
             schema: { type: "string", minLength: 8, maxLength: 200 }
           })]
         }
+      expect(document.paths["/mcp"]).toMatchObject({ post: { security: [{ bearerAuth: [] }] } });
+      expect(document.paths["/auth/access"]).toMatchObject({
+        patch: {
+          parameters: expect.arrayContaining([expect.objectContaining({ in: "header", name: "If-Match", required: false })]),
+          requestBody: {
+            content: {
+              "application/json": {
+                schema: {
+                  oneOf: expect.arrayContaining([
+                    expect.objectContaining({ required: ["operation", "newPassword", "expectedVersion"] }),
+                    expect.objectContaining({ required: ["operation", "currentPassword", "expectedVersion"] }),
+                    expect.objectContaining({ required: ["operation", "currentPassword", "newPassword", "expectedVersion"] }),
+                  ]),
+                },
+              },
+            },
+          },
+        },
       });
       const payload = {
         project: { id: "atomic-project", name: "Atomic project", description: "One command", status: "planning" },
