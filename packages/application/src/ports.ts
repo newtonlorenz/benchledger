@@ -11,6 +11,7 @@ import type {
   BuildConfigurationSnapshot as ApiBuildConfigurationSnapshot,
   CreateBuildConfigurationSnapshot as ApiCreateBuildConfigurationSnapshot,
   ArtifactBuildConfigurationBinding as ApiArtifactBuildConfigurationBinding,
+  CommissionInventoryItem,
   ReconciliationCommit,
   ReconciliationDraft,
   ReconciliationBasis,
@@ -172,6 +173,8 @@ export interface InventoryPort {
   updateItem(id: string, input: UpdateInventoryInput, expectedVersion: number | undefined, ctx: RequestContext): Promise<InventoryItem>;
   /** Record an observed physical count and promote its evidence atomically. */
   recordPhysicalCount?(itemId: string, quantity: number, ctx: RequestContext, note?: string): Promise<StockMutation>;
+  /** Record an observed count that deliberately promotes uncertain evidence to commissioned. */
+  commissionItem?(itemId: string, input: CommissionInventoryItem, expectedVersion: number | undefined, ctx: RequestContext): Promise<StockMutation>;
   recordStockEvent(input: StockEventInput, ctx: RequestContext): Promise<StockMutation>;
   listStockEvents(itemId: string, limit: number, cursor?: string): Promise<Page<StockEvent>>;
 }

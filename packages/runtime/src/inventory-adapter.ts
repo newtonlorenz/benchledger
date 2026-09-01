@@ -1,5 +1,5 @@
 import { createId, createStockEvent, DomainError } from "@benchledger/domain";
-import type { InventoryItem as ApiInventoryItem, CreateInventoryItem, StockEvent as ApiStockEvent, StockEventInput } from "@benchledger/api-contract";
+import type { CommissionInventoryItem, InventoryItem as ApiInventoryItem, CreateInventoryItem, StockEvent as ApiStockEvent, StockEventInput } from "@benchledger/api-contract";
 import type { InventoryItem, StockEvent } from "@benchledger/domain";
 import type { InventoryListOptions, InventoryPort, Page, RequestContext, StockMutation, UnitOfWorkPort, UpdateInventoryInput } from "@benchledger/application";
 import { InventoryRepository } from "@benchledger/database";
@@ -12,6 +12,11 @@ import {
 import { attempt, clone, nowIso, page } from "./utils.js";
 
 const ENTITY = "inventory_item";
+
+function ensureDescriptiveUpdate(input: UpdateInventoryInput): void {
+  const controlledField = Object.keys(input).find((field) => ["quantity", "availableQuantity", "evidence", "unit"].includes(field));
+  if (controlledField !== undefined) throw new DomainError("invalid_update", `${controlledField} is controlled by stock events`);
+}
 
 function isSearchMatch(item: ApiInventoryItem, query: string | undefined): boolean {
   if (query === undefined || query.trim().length === 0) return true;
@@ -60,6 +65,22 @@ function initialCountEvent(item: InventoryItem, quantity: number, version: numbe
   });
 }
 
+function initialAllocationEvent(item: InventoryItem, quantity: number, version: number): StockEvent {
+  return createStockEvent({
+    id: `${item.id}-initial-allocation`,
+    itemId: item.id,
+    kind: "allocate",
+    quantity,
+    unit: item.unit,
+    reason: "Initial inventory allocation",
+    source: "import",
+    evidence: { apiItemVersion: version, bootstrap: true },
+    idempotencyKey: `inventory:${item.id}:initial-allocation`,
+    occurredAt: item.createdAt,
+    createdAt: item.createdAt
+  });
+}
+
 export class ProductionInventoryAdapter implements InventoryPort {
   constructor(
     private readonly database: BenchDatabase,
@@ -100,8 +121,11 @@ export class ProductionInventoryAdapter implements InventoryPort {
         this.state.setInitialVersion(ENTITY, created.id);
         if (this.categoryAssignments !== undefined && input.categoryNodeId !== undefined) this.categoryAssignments.setItemCategoryNode(created.id, input.categoryNodeId, created.createdAt);
         if (isConfirmedEvidence(input.evidence.state)) {
-          const count = initialCountEvent(created, input.availableQuantity ?? input.quantity, 1);
+          const count = initialCountEvent(created, input.quantity, 1);
           this.repository.appendStockEvent(count);
+          const availableQuantity = input.availableQuantity ?? input.quantity;
+          const initiallyAllocated = input.quantity - availableQuantity;
+          if (initiallyAllocated > 0) this.repository.appendStockEvent(initialAllocationEvent(created, initiallyAllocated, 1));
         }
         return this.toApi(created);
       });
@@ -132,6 +156,7 @@ export class ProductionInventoryAdapter implements InventoryPort {
 
   async updateItem(id: string, input: UpdateInventoryInput, expectedVersion: number | undefined): Promise<ApiInventoryItem> {
     return this.unitOfWork.exclusive(() => attempt(() => {
+      ensureDescriptiveUpdate(input);
       const current = this.repository.get(id);
       if (current === undefined || current.retiredAt !== undefined) throw new DomainError("inventory_not_found", `inventory item ${id} does not exist`);
       const currentApi = this.toApi(current);
@@ -142,35 +167,40 @@ export class ProductionInventoryAdapter implements InventoryPort {
         this.repository.upsert(updated);
         if (this.categoryAssignments !== undefined && input.categoryNodeId !== undefined) this.categoryAssignments.setItemCategoryNode(id, input.categoryNodeId ?? undefined, updated.updatedAt);
         const nextVersion = this.state.bumpVersion(ENTITY, id);
-        if (input.quantity !== undefined || input.evidence !== undefined) {
-          if (isConfirmedEvidence(merged.evidence.state)) {
-            const count = createStockEvent({
-              id: `${id}-version-${nextVersion}-count`,
-              itemId: id,
-              kind: "count",
-              quantity: merged.quantity,
-              unit: updated.unit,
-              reason: "Inventory record updated",
-              source: "api",
-              evidence: { apiItemVersion: nextVersion },
-              idempotencyKey: `inventory:${id}:version:${nextVersion}:count`,
-              occurredAt: updated.updatedAt,
-              createdAt: updated.updatedAt
-            });
-            this.repository.appendStockEvent(count);
-          }
-        }
         return this.toApi(updated, nextVersion);
       });
     }));
   }
 
   async recordPhysicalCount(itemId: string, quantity: number, ctx: RequestContext, note?: string): Promise<StockMutation> {
+    return this.recordCount(itemId, quantity, ctx, undefined, "physically_counted", undefined, note);
+  }
+
+  async commissionItem(itemId: string, input: CommissionInventoryItem, expectedVersion: number | undefined, ctx: RequestContext): Promise<StockMutation> {
+    return this.recordCount(itemId, input.quantity, ctx, input, "commissioned", expectedVersion);
+  }
+
+  private async recordCount(
+    itemId: string,
+    quantity: number,
+    ctx: RequestContext,
+    commissioning: CommissionInventoryItem | undefined,
+    evidenceState: "physically_counted" | "commissioned",
+    expectedVersion?: number,
+    note?: string
+  ): Promise<StockMutation> {
     return this.unitOfWork.exclusive(() => attempt(() => {
       const current = this.repository.get(itemId);
       if (current === undefined || current.retiredAt !== undefined) throw new DomainError("inventory_not_found", `inventory item ${itemId} does not exist`);
       if (!Number.isFinite(quantity) || quantity < 0) throw new DomainError("invalid_quantity", "physical count must be zero or greater");
-      const idempotencyKey = ctx.idempotencyKey === undefined ? undefined : `physical-count:${itemId}:${ctx.idempotencyKey}`;
+      const currentApi = this.toApi(current);
+      if (evidenceState === "commissioned" && isConfirmedEvidence(currentApi.evidence.state)) {
+        throw new DomainError("invalid_evidence_transition", "inventory item is already confirmed");
+      }
+      if (commissioning !== undefined && mapApiUnitToDomain(commissioning.unit) !== current.unit) {
+        throw new DomainError("invalid_unit", `unit mismatch: item uses ${current.unit}, count uses ${commissioning.unit}`);
+      }
+      const idempotencyKey = ctx.idempotencyKey === undefined ? undefined : `${evidenceState === "commissioned" ? "commission" : "physical-count"}:${itemId}:${ctx.idempotencyKey}`;
       const existing = idempotencyKey === undefined ? undefined : this.repository.listStockEvents(itemId).find((event) => event.idempotencyKey === idempotencyKey);
       if (existing !== undefined) {
         const version = this.state.getVersion(ENTITY, itemId);
@@ -179,9 +209,11 @@ export class ProductionInventoryAdapter implements InventoryPort {
         return { event: this.toApiStockEvent(existing, version), item: this.toApi(item, version) };
       }
       return this.database.transaction(() => {
+        this.state.ensureVersion(ENTITY, itemId, expectedVersion);
         const now = nowIso();
-        const currentApi = this.toApi(current);
-        const evidence = { ...currentApi.evidence, state: "physically_counted" as const, observedAt: now };
+        const balance = this.repository.balance(itemId);
+        if (quantity < balance.allocated) throw new DomainError("over_allocation", "physical count cannot be below allocated quantity");
+        const evidence = commissioning?.evidence ?? { ...currentApi.evidence, state: "physically_counted" as const, observedAt: now };
         const updated = nativeItemFromApi({
           name: currentApi.name,
           kind: currentApi.kind,
@@ -201,15 +233,23 @@ export class ProductionInventoryAdapter implements InventoryPort {
         this.repository.upsert(updated);
         const nextVersion = this.state.getVersion(ENTITY, itemId) + 1;
         const event = createStockEvent({
-          id: `${itemId}-physical-count-${nextVersion}`,
+          id: `${itemId}-${evidenceState === "commissioned" ? "commission" : "physical-count"}-${nextVersion}`,
           itemId,
           kind: "count",
           quantity,
           unit: updated.unit,
-          reason: note ?? "Physical inventory count",
+          reason: commissioning?.evidence.note ?? note ?? "Physical inventory count",
           actor: { type: ctx.source === "mcp" ? "agent" : "human", id: ctx.actor },
           source: ctx.source,
-          evidence: { apiItemVersion: nextVersion, ...(note === undefined ? {} : { note }) },
+          evidence: {
+            apiItemVersion: nextVersion,
+            state: evidenceState,
+            previousEvidence: currentApi.evidence,
+            ...(commissioning === undefined || commissioning.evidence.source === undefined ? {} : { source: commissioning.evidence.source }),
+            ...(commissioning === undefined || commissioning.evidence.sourceId === undefined ? {} : { sourceId: commissioning.evidence.sourceId }),
+            ...(commissioning === undefined || commissioning.evidence.observedAt === undefined ? {} : { observedAt: commissioning.evidence.observedAt }),
+            ...(commissioning?.evidence.note === undefined && note === undefined ? {} : { note: commissioning?.evidence.note ?? note })
+          },
           correlationId: ctx.correlationId,
           ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
           occurredAt: now,

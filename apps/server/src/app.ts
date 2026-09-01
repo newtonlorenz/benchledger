@@ -6,7 +6,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import cookie from "@fastify/cookie";
 import swagger from "@fastify/swagger";
 import {
-  beginUploadSchema, createBomLineSchema, createInventoryCategorySchema, createInventoryItemSchema, createOfferSchema,
+  beginUploadSchema, commissionInventoryItemSchema, createBomLineSchema, createInventoryCategorySchema, createInventoryItemSchema, createOfferSchema,
   createProjectRevisionSchema, createProjectSchema, createReservationSchema,
   createProjectWithInitialRevisionSchema, createWorkItemRevisionSchema, createWorkItemSchema, healthSchema,
   inventoryCategoryListQuerySchema, inventoryListQuerySchema, stockEventInputSchema, updateBomLineSchema,
@@ -432,7 +432,7 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       model: { type: "string", maxLength: 200 },
       sku: { type: "string", maxLength: 200 },
       quantity: { type: "number", minimum: 0 },
-      availableQuantity: { type: "number", minimum: 0 },
+      availableQuantity: { type: "number", minimum: 0, description: "Available confirmed stock. availableQuantity cannot exceed quantity; the server rejects requests that violate this cross-field invariant." },
       unit: { type: "string", enum: ["each", "gram", "millimetre", "millilitre", "metre", "set"] },
       location: { type: "string", maxLength: 240 },
       condition: { type: "string", enum: ["new", "good", "worn", "needs_repair", "unknown"] },
@@ -461,6 +461,21 @@ function jsonOpenApi(version: string): Record<string, unknown> {
         properties: {
           state: { type: "string", enum: ["physically_counted", "commissioned", "delivered_uncounted", "ordered_unverified", "allocated", "consumed", "unknown"] },
           source: { type: "string", maxLength: 500 }, sourceId: { type: "string", maxLength: 500 },
+          observedAt: { type: "string", format: "date-time" }, note: { type: "string", maxLength: 1000 }
+        }
+      }
+    }
+  };
+  const commissionInventoryItemSchema = {
+    type: "object", additionalProperties: false,
+    required: ["quantity", "unit", "evidence"],
+    properties: {
+      quantity: { type: "number", minimum: 0, description: "Observed usable quantity after commissioning." },
+      unit: { type: "string", enum: ["each", "gram", "millimetre", "millilitre", "metre", "set"] },
+      evidence: {
+        type: "object", additionalProperties: false, required: ["state", "source", "observedAt"],
+        properties: {
+          state: { const: "commissioned" }, source: { type: "string", minLength: 1, maxLength: 500 }, sourceId: { type: "string", maxLength: 500 },
           observedAt: { type: "string", format: "date-time" }, note: { type: "string", maxLength: 1000 }
         }
       }
@@ -550,6 +565,7 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       },
       schemas: {
         CreateInventoryItem: createInventoryItemSchema,
+        CommissionInventoryItem: commissionInventoryItemSchema,
         CreateInventoryProductProfileWithoutItem: createInventoryProductProfileWithoutItemSchema,
         CreateInventoryWithProductProfile: inventoryWithProductProfileSchema,
         InventoryCategory: inventoryCategorySchema,
@@ -593,6 +609,18 @@ function jsonOpenApi(version: string): Record<string, unknown> {
         }
       },
       "/inventory/{id}": { get: { responses: { "200": { description: "Inventory item" } } }, patch: { responses: { "200": { description: "Updated inventory item" } } } },
+      "/inventory/{id}/commission": {
+        post: {
+          summary: "Commission an uncertain inventory item",
+          description: "Records the observed quantity and commissioned provenance as an append-only count event. The item evidence state cannot be changed by generic PATCH.",
+          parameters: [
+            { name: "If-Match", in: "header", required: true, schema: { type: "integer", minimum: 1 }, description: "Expected inventory item version; stale versions are rejected with 409." },
+            { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 8, maxLength: 200 }, description: "Stable key for retrying this exact commissioning command; reusing it with different input is rejected." }
+          ],
+          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CommissionInventoryItem" } } } },
+          responses: { "201": { description: "Commissioning event and resulting inventory item" }, "400": { description: "Invalid commissioning request" }, "409": { description: "Version conflict or invalid evidence transition" } }
+        }
+      },
       "/inventory/{id}/product-profile": { get: { responses: { "200": { description: "Physical inventory product profile" }, "404": { description: "Profile not found" } } }, put: { responses: { "200": { description: "Updated physical inventory product profile" } } } },
       "/inventory/{id}/count": { post: { responses: { "201": { description: "Recorded physical count" } } } },
       "/inventory/{id}/stock-events": { get: { responses: { "200": { description: "Stock event page" } } }, post: { responses: { "201": { description: "Stock mutation" } } } },
@@ -952,6 +980,16 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const item = await service.getInventoryItem(params.id);
     const body = parsePhysicalCount(request.body);
     const mutation = await service.recordPhysicalCount(params.id, body.quantity, requestContext(request), item.unit, body.note);
+    return reply.code(201).send(mutation);
+  });
+  app.post(route("/inventory/:id/commission"), async (request, reply) => {
+    requireScope(request, "write", auth);
+    rejectScopedGlobalAccess(request);
+    const params = request.params as { id: string };
+    const expectedVersion = parseExpectedVersion(request);
+    if (expectedVersion === undefined) throw new ApplicationError("validation", "If-Match is required when commissioning inventory");
+    if (requestIdempotencyKey(request) === undefined) throw new ApplicationError("validation", "Idempotency-Key is required when commissioning inventory");
+    const mutation = await service.commissionInventoryItem(params.id, parseBody(commissionInventoryItemSchema, request.body), expectedVersion, requestContext(request));
     return reply.code(201).send(mutation);
   });
   app.patch(route("/inventory/:id"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.updateInventoryItem(params.id, parseBody(updateInventoryItemSchema, request.body) as never, parseExpectedVersion(request), requestContext(request)); });

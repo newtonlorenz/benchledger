@@ -116,6 +116,7 @@ function backend(): BenchLedgerBackend {
       get: async () => inventoryItem,
       create: async (input) => ({ id: "created-item", version: 1, item: { ...inventoryItem, name: input.name } }),
       update: async () => ({ id: inventoryItem.id, version: 2, item: inventoryItem }),
+      commission: async (input) => ({ id: input.itemId, version: 2, item: { ...inventoryItem, evidence: { ...inventoryItem.evidence, state: "commissioned" }, availability: "confirmed" } }),
       recordStockEvent: async (input) => ({
         eventId: "event-1",
         itemId: input.itemId,
@@ -262,6 +263,29 @@ describe("McpAdapter", () => {
     await expect(adapter.callTool("archive_inventory_category", { categoryId: "category-tools", expectedVersion: 1 }, scoped)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "FORBIDDEN" } } });
   });
 
+  it("dispatches commissioning with evidence and blocks it for project-scoped tokens", async () => {
+    const adapter = new McpAdapter(backend());
+    const result = await adapter.callTool("commission_inventory_item", {
+      itemId: "item-esp32",
+      expectedVersion: 1,
+      quantity: { value: 2, unit: "piece" },
+      evidence: { state: "commissioned", source: "bench-check", recordedAt: "2026-08-31T10:00:00Z" }
+    }, { ...context, idempotencyKey: "commission-mcp-1" });
+    expect(result).toMatchObject({ isError: false, structuredContent: { id: "item-esp32", item: { evidence: { state: "commissioned" } } } });
+    await expect(adapter.callTool("commission_inventory_item", {
+      itemId: "item-esp32",
+      expectedVersion: 1,
+      quantity: { value: 2, unit: "piece" },
+      evidence: { state: "commissioned", source: "bench-check", recordedAt: "2026-08-31T10:00:00Z" }
+    }, { ...context, projectIds: ["project-1"] })).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "FORBIDDEN" } } });
+    await expect(adapter.callTool("commission_inventory_item", {
+      itemId: "item-esp32",
+      expectedVersion: 1,
+      quantity: { value: 2, unit: "piece" },
+      evidence: { state: "commissioned", source: "bench-check", recordedAt: "2026-08-31T10:00:00Z" }
+    }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
+  });
+
   it("returns scoped HTTP links for artifacts and rejects inline data URLs", async () => {
     const adapter = new McpAdapter(backend());
     const result = await adapter.callTool("begin_artifact_upload", { projectId: "project-1", filename: "source.step", role: "source", mediaType: "model/step", byteLength: 12, sha256: "a".repeat(64) }, context);
@@ -287,6 +311,7 @@ describe("McpAdapter", () => {
     const adapter = new McpAdapter(backend());
     const names = adapter.listTools().map((tool) => tool.name);
 
+    expect(new Set(names).size).toBe(names.length);
     expect(names).toContain("calculate_bom_gaps");
     expect(names).toContain("refresh_context");
     const categoryUpdate = adapter.listTools().find((tool) => tool.name === "update_inventory_category");

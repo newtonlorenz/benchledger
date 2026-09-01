@@ -7,6 +7,7 @@ import type {
   BomLine as ApiBomLine,
   CreateBomLine,
   CreateInventoryItem,
+  CommissionInventoryItem,
   CreateOffer,
   CreateProject,
   CreateProjectWithInitialRevision,
@@ -59,6 +60,7 @@ import type {
   InventoryCategory,
   InventoryCategoryCreateInput,
   InventoryCategoryUpdateInput,
+  InventoryCommissionInput,
   InventoryItem,
   InventoryListInput,
   InventoryUpdateInput,
@@ -303,6 +305,17 @@ export function createApplicationBackend(service: ApplicationService, options: P
       update: async (input, context) => {
         const { itemId, expectedVersion, ...changes } = input;
         return mutationResult(await service.updateInventoryItem(itemId, toApiInventoryUpdate(changes), expectedVersion, appContext(context)), "item", toMcpInventoryItem);
+      },
+      commission: async (input: InventoryCommissionInput, context) => {
+        const mutation = await service.commissionInventoryItem(input.itemId, toApiInventoryCommission(input), input.expectedVersion, appContext(context));
+        return {
+          id: mutation.data.item.id,
+          version: mutation.data.item.version,
+          item: toMcpInventoryItem(mutation.data.item),
+          eventId: mutation.data.event.id,
+          auditId: mutation.audit.id,
+          correlationId: mutation.correlationId,
+        };
       },
       recordStockEvent: async (input, context) => {
         const event = await service.recordStockEvent(toApiStockEvent(input), appContext(context));
@@ -842,7 +855,7 @@ function toMcpAvailability(item: ApiInventoryItem): Availability {
 
 function toMcpEvidence(item: ApiInventoryItem): EvidenceSummary {
   const state: EvidenceSummary["state"] = item.evidence.state === "physically_counted" ? "physical_count" : item.evidence.state === "commissioned" ? "commissioned" : item.evidence.state === "delivered_uncounted" ? "delivery" : item.evidence.state === "ordered_unverified" ? "order" : item.evidence.state === "allocated" ? "user_reported" : "unknown";
-  return { state, source: item.evidence.source ?? "unknown", recordedAt: item.evidence.observedAt ?? item.updatedAt, ...(item.evidence.note === undefined ? {} : { note: item.evidence.note }) };
+  return { state, source: item.evidence.source ?? "unknown", ...(item.evidence.sourceId === undefined ? {} : { sourceId: item.evidence.sourceId }), recordedAt: item.evidence.observedAt ?? item.updatedAt, ...(item.evidence.note === undefined ? {} : { note: item.evidence.note }) };
 }
 
 function toMcpDimensions(value: Dimension | undefined): Dimensions | undefined {
@@ -892,7 +905,21 @@ function toApiEvidence(value: Availability): ApiInventoryItem["evidence"]["state
 
 function toApiEvidenceInput(value: EvidenceSummary): CreateInventoryItem["evidence"] {
   const state: CreateInventoryItem["evidence"]["state"] = value.state === "physical_count" ? "physically_counted" : value.state === "commissioned" ? "commissioned" : value.state === "delivery" ? "delivered_uncounted" : value.state === "order" ? "ordered_unverified" : value.state === "user_reported" ? "unknown" : "unknown";
-  return { state, source: value.source, observedAt: value.recordedAt, ...(value.note === undefined ? {} : { note: value.note }) };
+  return { state, source: value.source, ...(value.sourceId === undefined ? {} : { sourceId: value.sourceId }), observedAt: value.recordedAt, ...(value.note === undefined ? {} : { note: value.note }) };
+}
+
+function toApiInventoryCommission(input: InventoryCommissionInput): CommissionInventoryItem {
+  return {
+    quantity: input.quantity.value,
+    unit: toApiUnit(input.quantity.unit),
+    evidence: {
+      state: "commissioned",
+      source: input.evidence.source,
+      ...(input.evidence.sourceId === undefined ? {} : { sourceId: input.evidence.sourceId }),
+      observedAt: input.evidence.recordedAt,
+      ...(input.evidence.note === undefined ? {} : { note: input.evidence.note }),
+    },
+  };
 }
 
 function toApiDimensions(value: Dimensions | undefined): CreateInventoryItem["dimensions"] {

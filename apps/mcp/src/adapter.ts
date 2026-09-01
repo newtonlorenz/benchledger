@@ -29,6 +29,7 @@ import {
   inventoryCategoryCreate,
   inventoryCategoryUpdate,
   inventoryCategoryArchive,
+  inventoryCommission,
   inventoryWithProductProfileCreate,
   inventoryProductProfileLink,
   inventoryProductProfileRead,
@@ -197,6 +198,19 @@ function requireAtomicInventoryBackend(adapter: McpAdapter): NonNullable<BenchLe
   return create;
 }
 
+function requireCommissioningBackend(adapter: McpAdapter): NonNullable<BenchLedgerBackend["inventory"]["commission"]> {
+  const commission = adapter.backend.inventory.commission;
+  if (commission === undefined) throw new McpAdapterError("BACKEND_ERROR", "The inventory commissioning command is not configured for this MCP host.");
+  return commission;
+}
+
+function requireCommissioningIdempotency(context: McpRequestContext): void {
+  const key = context.idempotencyKey;
+  if (key === undefined || key.length < 8 || key.length > 200) {
+    throw new McpAdapterError("INVALID_ARGUMENT", "Inventory commissioning requires an idempotency key in the request context.");
+  }
+}
+
 function requireBuildConfigurationsBackend(adapter: McpAdapter): NonNullable<BenchLedgerBackend["buildConfigurations"]> {
   if (adapter.backend.buildConfigurations === undefined) throw new McpAdapterError("BACKEND_ERROR", "The build configuration backend is not configured for this MCP host.");
   return adapter.backend.buildConfigurations;
@@ -341,7 +355,7 @@ async function authorizeProjectScope(adapter: McpAdapter, name: string, input: u
   if (name === "create_project" || name === "create_project_with_initial_revision") {
     rejectScopedGlobalWrite(context, "A project-scoped token cannot create a new workspace outside its allow-list.");
   }
-  if (name === "create_inventory_item" || name === "create_inventory_with_product_profile" || name === "update_inventory_item" || name === "record_stock_event" || name === "create_inventory_category" || name === "update_inventory_category" || name === "archive_inventory_category") {
+  if (name === "create_inventory_item" || name === "create_inventory_with_product_profile" || name === "update_inventory_item" || name === "commission_inventory_item" || name === "record_stock_event" || name === "create_inventory_category" || name === "update_inventory_category" || name === "archive_inventory_category") {
     rejectScopedGlobalWrite(context, "Inventory is workspace-global; project-scoped tokens may read it but cannot mutate it.");
   }
   if (name === "create_catalog_product" || name === "update_catalog_product") {
@@ -385,6 +399,10 @@ export class McpAdapter {
       ["create_inventory_item", (input, context) => this.backend.inventory.create(inventoryCreate(input), context)],
       ["create_inventory_with_product_profile", (input, context) => requireAtomicInventoryBackend(this)(inventoryWithProductProfileCreate(input), context)],
       ["update_inventory_item", (input, context) => this.backend.inventory.update(inventoryUpdate(input), context)],
+      ["commission_inventory_item", (input, context) => {
+        requireCommissioningIdempotency(context);
+        return requireCommissioningBackend(this)(inventoryCommission(input), context);
+      }],
       ["record_stock_event", (input, context) => this.backend.inventory.recordStockEvent(stockEvent(input), context)],
       ["list_stock_events", (input, context) => this.backend.inventory.listStockEvents(stockEvents(input), context)],
       ["list_inventory_categories", (input, context) => requireInventoryCategoriesBackend(this).list(inventoryCategoryList(input), context)],

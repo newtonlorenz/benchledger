@@ -263,6 +263,37 @@ describe("authenticated BenchLedger API adapter", () => {
     expect(JSON.parse(String(init.body))).toMatchObject({ quantity: 4 });
   });
 
+  it("commissions uncertain stock with provenance, version, and idempotency headers", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=commission-token" });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({
+      data: { event: { id: "event-commission-1" }, item: serverItem({ quantity: 3, availableQuantity: 3, evidence: { state: "commissioned", source: "bench check", observedAt: "2026-08-30T12:00:00.000Z" }, version: 2 }) }
+    }));
+
+    const adapter = createWorkspaceAdapter();
+    const result = await adapter.commissionInventoryItem("item-1", {
+      quantity: 3,
+      source: "bench check",
+      sourceId: "check-1",
+      observedAt: "2026-08-30T12:00:00.000Z",
+      note: "Counted in drawer 2"
+    }, 1);
+
+    expect(result).toMatchObject({ id: "item-1", evidence: "commissioned", quantity: 3 });
+    const [url, rawInit] = fetchMock.mock.calls[0]!;
+    const init = rawInit as RequestInit;
+    expect(url).toContain("/api/v1/inventory/item-1/commission");
+    expect(init).toMatchObject({ credentials: "include", method: "POST" });
+    const headers = new Headers(init.headers);
+    expect(headers.get("x-csrf-token")).toBe("commission-token");
+    expect(headers.get("if-match")).toBe("1");
+    expect(headers.get("idempotency-key")).toMatch(/^web-commission-/);
+    expect(JSON.parse(String(init.body))).toEqual({
+      quantity: 3,
+      unit: "each",
+      evidence: { state: "commissioned", source: "bench check", sourceId: "check-1", observedAt: "2026-08-30T12:00:00.000Z", note: "Counted in drawer 2" }
+    });
+  });
+
   it("patches editable inventory fields with the current item version", async () => {
     vi.stubGlobal("document", { cookie: "forge_csrf=edit-token" });
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({

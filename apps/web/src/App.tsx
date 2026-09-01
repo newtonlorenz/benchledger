@@ -3,7 +3,7 @@ import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import type * as React from "react";
 import { ApiError, createSampleWorkspaceAdapter, createWorkspaceAdapter } from "./api";
 import type { WorkspaceAdapter } from "./api";
-import type { BomInput, CatalogProductDraft, ExactInventoryInput, InventoryUpdateInput, RevisionInput } from "./api";
+import type { BomInput, CatalogProductDraft, ExactInventoryInput, InventoryCommissionInput, InventoryUpdateInput, RevisionInput } from "./api";
 import { CatalogInventoryFlow, BuildSetupSummary, OwnedItemCombobox, splitSetupValues } from "./catalog-ui";
 import type { BuildConfigInput, CatalogProduct } from "./domain";
 import {
@@ -288,6 +288,18 @@ function App() {
     }
   };
 
+  const commissionInventoryItem = async (itemId: string, input: InventoryCommissionInput, expectedVersion: number): Promise<InventoryItem> => {
+    try {
+      const result = await adapter.commissionInventoryItem(itemId, input, expectedVersion);
+      setItems((current) => current.map((item) => item.id === itemId ? result : item));
+      setToast(`Commissioned ${result.name} with ${formatQuantity(result.quantity, result.unit)} observed stock.`);
+      return result;
+    } catch (error: unknown) {
+      handleMutationError(error, "commissioning that inventory");
+      throw error;
+    }
+  };
+
   const updateInventoryItem = async (itemId: string, input: Partial<InventoryUpdateInput>, expectedVersion?: number): Promise<InventoryItem> => {
     try {
       const result = await adapter.updateInventoryItem(itemId, input, expectedVersion);
@@ -535,7 +547,7 @@ function App() {
         </div>
       </div>
 
-      {selectedItem && <InventoryDrawer item={selectedItem} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} expert={expert} onClose={() => setSelectedItemId(undefined)} onCount={recordCount} onUpdate={updateInventoryItem} />}
+      {selectedItem && <InventoryDrawer item={selectedItem} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} expert={expert} onClose={() => setSelectedItemId(undefined)} onCount={recordCount} onCommission={commissionInventoryItem} onUpdate={updateInventoryItem} />}
       {showNewProject && <NewProjectDialog onClose={closeNewProject} onCreate={createProject} />}
       {showNewRevision && selectedProject && <NewRevisionDialog project={selectedProject} items={items} expert={expert} onClose={() => setShowNewRevision(false)} onCreate={createRevision} />}
       {showAddBom && selectedProject && <AddBomDialog items={items} project={selectedProject} onClose={() => setShowAddBom(false)} onCreate={addBomLine} />}
@@ -571,6 +583,20 @@ function normalizeApiError(error: unknown): ApiError {
   if (error instanceof TypeError) return new ApiError("The private service could not be reached.", { kind: "offline" });
   if (error instanceof Error) return new ApiError(error.message, { kind: "server" });
   return new ApiError("The private service returned an unexpected error.", { kind: "server" });
+}
+
+function localDateTimeValue(iso: string | undefined): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function observedAtFromLocalDateTime(value: string): string | undefined {
+  if (!value.trim()) return undefined;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
 function writeFailureMessage(error: ApiError, action: string): string {
@@ -969,11 +995,19 @@ function useOverlayBehavior(containerRef: React.RefObject<HTMLElement | null>, o
   }, [containerRef]);
 }
 
-function InventoryDrawer({ item, categories, categoriesLoading, categoriesError, expert, onClose, onCount, onUpdate }: { item: InventoryItem; categories: readonly ManagedInventoryCategory[]; categoriesLoading: boolean; categoriesError?: string | undefined; expert: boolean; onClose: () => void; onCount: (id: string, quantity: number) => Promise<InventoryItem>; onUpdate: (id: string, input: Partial<InventoryUpdateInput>, expectedVersion?: number) => Promise<InventoryItem> }) {
+function InventoryDrawer({ item, categories, categoriesLoading, categoriesError, expert, onClose, onCount, onCommission, onUpdate }: { item: InventoryItem; categories: readonly ManagedInventoryCategory[]; categoriesLoading: boolean; categoriesError?: string | undefined; expert: boolean; onClose: () => void; onCount: (id: string, quantity: number) => Promise<InventoryItem>; onCommission: (id: string, input: InventoryCommissionInput, expectedVersion: number) => Promise<InventoryItem>; onUpdate: (id: string, input: Partial<InventoryUpdateInput>, expectedVersion?: number) => Promise<InventoryItem> }) {
   const [quantity, setQuantity] = useState(String(item.quantity));
   const [countSaving, setCountSaving] = useState(false);
   const [countError, setCountError] = useState<string>();
   const [countSaved, setCountSaved] = useState<string>();
+  const [commissionQuantity, setCommissionQuantity] = useState(String(item.quantity));
+  const [commissionSource, setCommissionSource] = useState(item.provenance?.source ?? "");
+  const [commissionSourceId, setCommissionSourceId] = useState(item.provenance?.sourceId ?? "");
+  const [commissionObservedAt, setCommissionObservedAt] = useState(() => localDateTimeValue(item.provenance?.observedAt));
+  const [commissionNote, setCommissionNote] = useState("");
+  const [commissionSaving, setCommissionSaving] = useState(false);
+  const [commissionError, setCommissionError] = useState<string>();
+  const [commissionSaved, setCommissionSaved] = useState<string>();
   const [editing, setEditing] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string>();
@@ -1006,6 +1040,46 @@ function InventoryDrawer({ item, categories, categoriesLoading, categoriesError,
       setCountError(normalizeApiError(error).message);
     } finally {
       setCountSaving(false);
+    }
+  };
+
+  const submitCommission = async () => {
+    const parsed = Number(commissionQuantity);
+    const observedAt = observedAtFromLocalDateTime(commissionObservedAt);
+    setCommissionError(undefined);
+    setCommissionSaved(undefined);
+    if (!commissionQuantity.trim() || !Number.isFinite(parsed) || parsed < 0) {
+      setCommissionError("Enter a quantity of zero or greater.");
+      return;
+    }
+    if (!commissionSource.trim()) {
+      setCommissionError("Add the source of this commissioning observation.");
+      return;
+    }
+    if (!observedAt) {
+      setCommissionError("Add when this quantity was observed.");
+      return;
+    }
+    if (item.version === undefined) {
+      setCommissionError("Reload this item before commissioning it.");
+      return;
+    }
+    setCommissionSaving(true);
+    try {
+      const result = await onCommission(item.id, {
+        quantity: parsed,
+        source: commissionSource.trim(),
+        ...(commissionSourceId.trim() ? { sourceId: commissionSourceId.trim() } : {}),
+        observedAt,
+        ...(commissionNote.trim() ? { note: commissionNote.trim() } : {})
+      }, item.version);
+      setCommissionQuantity(String(result.quantity));
+      setQuantity(String(result.quantity));
+      setCommissionSaved(`Commissioned ${formatQuantity(result.quantity, result.unit)} as confirmed stock.`);
+    } catch (error: unknown) {
+      setCommissionError(normalizeApiError(error).message);
+    } finally {
+      setCommissionSaving(false);
     }
   };
 
@@ -1074,6 +1148,8 @@ function InventoryDrawer({ item, categories, categoriesLoading, categoriesError,
           {(item.category === "Filament" || item.category === "Printers") && <div className="exact-product-callout"><strong>{exactProductLabel(item)}</strong><span>{item.productProfile?.linkState === "confirmed" ? "Use this link for exact setup matching." : "Check the physical item before you link an exact product."}</span></div>}
           <div className="drawer-facts"><div><span>Model or variant</span><strong>{item.variant}</strong></div><div><span>Location</span><strong>{item.location}</strong></div>{item.manufacturer && <div><span>Manufacturer</span><strong>{item.manufacturer}</strong></div>}{item.sku && <div><span>SKU</span><code>{item.sku}</code></div>}{item.productProfile?.filament?.lotBatch && <div><span>Lot or batch</span><strong>{item.productProfile.filament.lotBatch}</strong></div>}{item.productProfile?.printer?.assetLabel && <div><span>Asset label</span><strong>{item.productProfile.printer.assetLabel}</strong></div>}</div>
         </>}
+
+        {(item.evidence === "delivered" || item.evidence === "ordered") && <section className="drawer-quantity" aria-labelledby="commission-heading"><div><span className="eyebrow" id="commission-heading">Confirm received stock</span><strong>Commission this item</strong><span>Turn delivery evidence into confirmed stock after checking the physical quantity.</span><p>This records a separate append-only event. The source and observation time are required so the prior delivery evidence remains auditable.</p></div><div className="count-form"><label htmlFor="commission-quantity">Observed quantity</label><div><input id="commission-quantity" type="number" min="0" step="any" inputMode="decimal" value={commissionQuantity} onChange={(event) => setCommissionQuantity(event.target.value)} disabled={commissionSaving} /><span>{item.unit}</span></div><label className="form-field"><span>Source</span><input required value={commissionSource} maxLength={500} placeholder="Physical check, delivery record, or project log" onChange={(event) => setCommissionSource(event.target.value)} disabled={commissionSaving} /></label><label className="form-field"><span>Observed</span><input required type="datetime-local" value={commissionObservedAt} onChange={(event) => setCommissionObservedAt(event.target.value)} disabled={commissionSaving} /></label>{expert && <><label className="form-field"><span>Source ID <small>(optional)</small></span><input value={commissionSourceId} maxLength={500} placeholder="Evidence reference" onChange={(event) => setCommissionSourceId(event.target.value)} disabled={commissionSaving} /></label><label className="form-field"><span>Note <small>(optional)</small></span><textarea rows={2} maxLength={1000} value={commissionNote} placeholder="What did you observe?" onChange={(event) => setCommissionNote(event.target.value)} disabled={commissionSaving} /></label></>}<button type="button" className="button button-secondary" onClick={() => { void submitCommission(); }} disabled={commissionSaving}>{commissionSaving ? "Saving…" : "Commission stock"}</button>{commissionError && <p className="form-error" role="alert">{commissionError}</p>}{commissionSaved && <p className="form-success" role="status">{commissionSaved}</p>}</div></section>}
 
         <section className="drawer-quantity" aria-labelledby="physical-count-heading"><div><span className="eyebrow" id="physical-count-heading">Verified on-hand quantity</span><strong>{formatQuantity(item.quantity, item.unit)}</strong><span>{item.reserved ? `${formatQuantity(item.reserved, item.unit)} reserved; ${formatQuantity(availableForReuse, item.unit)} available for reuse.` : "No quantity is reserved."}</span><p>Enter the quantity that you can physically verify. This action creates a stock event and replaces the recorded on-hand quantity.</p></div><div className="count-form"><label htmlFor="count-quantity">Physical count</label><div><input id="count-quantity" type="number" min="0" step="any" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={countSaving} /><span>{item.unit}</span></div><button type="button" className="button button-secondary" onClick={() => { void submitCount(); }} disabled={countSaving}>{countSaving ? "Saving…" : "Save physical count"}</button>{countError && <p className="form-error" role="alert">{countError}</p>}{countSaved && <p className="form-success" role="status">{countSaved}</p>}</div></section>
 

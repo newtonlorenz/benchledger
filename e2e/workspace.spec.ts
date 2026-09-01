@@ -125,6 +125,21 @@ test("requires and persists the managed category and semantic kind for quick inv
   await expect(page.locator(".table-item").filter({ hasText: "E2E quick category item" })).toBeVisible();
 });
 
+test("keeps the physical-count field aligned after commissioning delivered stock", async ({ page }) => {
+  await signIn(page);
+  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await page.getByLabel("Search inventory").fill("Dupont jumper wire assortment");
+  await page.getByRole("button", { name: "Dupont jumper wire assortment wire" }).click();
+
+  const drawer = page.getByRole("dialog", { name: "Dupont jumper wire assortment" });
+  await drawer.getByLabel("Observed quantity").fill("7");
+  await drawer.getByLabel("Source", { exact: true }).fill("E2E bench count");
+  await drawer.getByLabel("Observed", { exact: true }).fill("2026-09-01T12:00");
+  await drawer.getByRole("button", { name: "Commission stock" }).click();
+
+  await expect(drawer.getByLabel("Physical count")).toHaveValue("7");
+});
+
 test("creates a project atomically and finalizes a revisioned artifact", async ({ page }) => {
   await signIn(page);
   await page.getByRole("button", { name: "New project" }).click();

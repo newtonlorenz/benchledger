@@ -1,5 +1,34 @@
 import { describe, expect, it } from "vitest";
-import { MemoryUnitOfWork } from "./memory-store.js";
+import { createMemoryRuntime, MemoryUnitOfWork } from "./memory-store.js";
+
+describe("MemoryInventory", () => {
+  it("promotes an unknown physical count to available stock", async () => {
+    const runtime = createMemoryRuntime();
+    await runtime.inventory.createItem({
+      id: "unknown-count-item",
+      name: "Unknown count item",
+      kind: "electronic",
+      quantity: 0,
+      unit: "each",
+      tags: [],
+      links: [],
+      evidence: { state: "unknown" }
+    });
+
+    const mutation = await runtime.inventory.recordPhysicalCount("unknown-count-item", 4, {
+      actor: "memory-store-test",
+      source: "api",
+      correlationId: "memory-store-count-test",
+      scopes: new Set(["write"])
+    });
+
+    expect(mutation.item).toMatchObject({
+      quantity: 4,
+      availableQuantity: 4,
+      evidence: { state: "physically_counted" }
+    });
+  });
+});
 
 describe("MemoryUnitOfWork", () => {
   it("serializes concurrent work and permits nested calls", async () => {

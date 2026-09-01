@@ -7,7 +7,7 @@ import type {
   StockEventInput, UploadSession, WorkItem, WorkItemRevision, CatalogProduct, CreateCatalogProduct,
   UpdateCatalogProduct, InventoryProductProfile, CreateInventoryProductProfile,
   UpdateInventoryProductProfile, BuildConfigurationSnapshot, CreateBuildConfigurationSnapshot,
-  ArtifactBuildConfigurationBinding, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory
+  ArtifactBuildConfigurationBinding, CommissionInventoryItem, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory
 } from "@benchledger/api-contract";
 import { ApplicationError } from "@benchledger/application";
 import type {
@@ -94,6 +94,11 @@ function ensureItemUnit(item: InventoryItem, unit: InventoryItem["unit"]): void 
   if (item.unit !== unit) throw new ApplicationError("validation", `Unit mismatch: item uses ${item.unit}, event uses ${unit}`);
 }
 
+function ensureDescriptiveUpdate(input: UpdateInventoryInput): void {
+  const controlledField = Object.keys(input).find((field) => ["quantity", "availableQuantity", "evidence", "unit"].includes(field));
+  if (controlledField !== undefined) throw new ApplicationError("validation", `${controlledField} is controlled by stock events`);
+}
+
 class MemoryInventory implements InventoryPort {
   readonly items = new Map<string, InventoryItem>();
   readonly events = new Map<string, StockEvent[]>();
@@ -140,6 +145,18 @@ class MemoryInventory implements InventoryPort {
       tags: [...input.tags], links: clone(input.links), evidence: clone(evidence), createdAt, updatedAt: createdAt, version: 1
     };
     this.items.set(itemId, item);
+    if (canCount(evidence.state)) {
+      const initialEvents: StockEvent[] = [{
+        id: `${itemId}-initial-count`, itemId, type: "count", quantity: input.quantity, unit: input.unit,
+        actor: "system", source: "import", evidence: { bootstrap: true }, createdAt, itemVersion: 1
+      }];
+      const initiallyAllocated = input.quantity - (input.availableQuantity ?? input.quantity);
+      if (initiallyAllocated > 0) initialEvents.push({
+        id: `${itemId}-initial-allocation`, itemId, type: "allocate", quantity: initiallyAllocated, unit: input.unit,
+        actor: "system", source: "import", evidence: { bootstrap: true }, createdAt, itemVersion: 1
+      });
+      this.events.set(itemId, initialEvents);
+    }
     return Promise.resolve(clone(item));
   }
 
@@ -154,14 +171,10 @@ class MemoryInventory implements InventoryPort {
   }
 
   updateItem(itemId: string, input: UpdateInventoryInput, expectedVersion: number | undefined): Promise<InventoryItem> {
+    ensureDescriptiveUpdate(input);
     const current = this.items.get(itemId);
     if (!current) throw new ApplicationError("not_found", `Inventory item '${itemId}' was not found`);
     ensureVersion(current.version, expectedVersion, "Inventory item");
-    const evidence = input.evidence ?? current.evidence;
-    const quantity = input.quantity ?? current.quantity;
-    const availableQuantity = input.quantity !== undefined || input.evidence !== undefined
-      ? (canCount(evidence.state) ? quantity : 0)
-      : current.availableQuantity;
     const nextCategoryNodeId = input.categoryNodeId === null ? undefined : input.categoryNodeId ?? current.categoryNodeId;
     const next = {
       ...current,
@@ -170,7 +183,6 @@ class MemoryInventory implements InventoryPort {
       ...(input.tags ? { tags: [...input.tags] } : {}),
       ...(input.links ? { links: clone(input.links) } : {}),
       ...(input.dimensions ? { dimensions: clone(input.dimensions) } : {}),
-      evidence: clone(evidence), quantity, availableQuantity,
       updatedAt: iso(), version: current.version + 1
     } as InventoryItem;
     this.items.set(itemId, next);
@@ -178,28 +190,77 @@ class MemoryInventory implements InventoryPort {
   }
 
   async recordPhysicalCount(itemId: string, quantity: number, ctx: RequestContext, note?: string): Promise<StockMutation> {
+    return this.recordCount(itemId, quantity, ctx, undefined, "physically_counted", undefined, note);
+  }
+
+  async commissionItem(itemId: string, input: CommissionInventoryItem, expectedVersion: number | undefined, ctx: RequestContext): Promise<StockMutation> {
+    return this.recordCount(itemId, input.quantity, ctx, input, "commissioned", expectedVersion);
+  }
+
+  private async recordCount(
+    itemId: string,
+    quantity: number,
+    ctx: RequestContext,
+    commissioning: CommissionInventoryItem | undefined,
+    evidenceState: "physically_counted" | "commissioned",
+    expectedVersion?: number,
+    note?: string
+  ): Promise<StockMutation> {
     const current = this.items.get(itemId);
     if (!current) throw new ApplicationError("not_found", `Inventory item '${itemId}' was not found`);
     if (!Number.isFinite(quantity) || quantity < 0) throw new ApplicationError("validation", "Physical count must be zero or greater");
-    const stock = await this.recordStockEvent({ itemId, type: "count", quantity, unit: current.unit, ...(note === undefined ? {} : { note }) }, ctx);
-    const evidence = { ...current.evidence, state: "physically_counted" as const, observedAt: iso() };
-    const updated = await this.updateItem(itemId, { evidence }, stock.item.version);
-    return { event: stock.event, item: updated };
+    if (evidenceState === "commissioned" && canCount(current.evidence.state)) {
+      throw new ApplicationError("conflict", "Inventory item is already confirmed; record a physical count if the quantity changed");
+    }
+    ensureItemUnit(current, commissioning?.unit ?? current.unit);
+    ensureVersion(current.version, expectedVersion, "Inventory item");
+    const allocated = canCount(current.evidence.state) ? current.quantity - current.availableQuantity : 0;
+    if (quantity < allocated) throw new ApplicationError("conflict", "Physical count cannot be below allocated quantity");
+    const now = iso();
+    const evidence = commissioning?.evidence ?? { ...current.evidence, state: "physically_counted" as const, observedAt: now };
+    const updated: InventoryItem = {
+      ...current,
+      quantity,
+      availableQuantity: quantity - allocated,
+      evidence: clone(evidence),
+      updatedAt: now,
+      version: current.version + 1
+    };
+    const event: StockEvent = {
+      itemId,
+      type: "count",
+      quantity,
+      unit: current.unit,
+      note: commissioning?.evidence.note ?? note,
+      evidence: {
+        state: evidenceState,
+        previousEvidence: current.evidence,
+        ...(commissioning?.evidence.source === undefined ? {} : { source: commissioning.evidence.source }),
+        ...(commissioning?.evidence.sourceId === undefined ? {} : { sourceId: commissioning.evidence.sourceId }),
+        ...(commissioning?.evidence.observedAt === undefined ? {} : { observedAt: commissioning.evidence.observedAt }),
+      },
+      id: id("stock", ++this.sequence),
+      actor: ctx.actor,
+      source: ctx.source === "system" ? "api" : ctx.source,
+      createdAt: now,
+      itemVersion: updated.version
+    };
+    this.items.set(itemId, updated);
+    const events = this.events.get(itemId) ?? [];
+    this.events.set(itemId, [...events, event]);
+    return { event: clone(event), item: clone(updated) };
   }
 
   recordStockEvent(input: StockEventInput, ctx: RequestContext): Promise<StockMutation> {
     const current = this.items.get(input.itemId);
     if (!current) throw new ApplicationError("not_found", `Inventory item '${input.itemId}' was not found`);
     ensureItemUnit(current, input.unit);
-    if (input.type === "count") {
-      if (!Number.isFinite(input.quantity) || input.quantity < 0) throw new ApplicationError("validation", "Count must be zero or greater");
-    } else ensurePositive(input.quantity, "Event quantity");
+    if (input.type === "count") return this.recordCount(input.itemId, input.quantity, ctx, undefined, "physically_counted");
+    ensurePositive(input.quantity, "Event quantity");
     let quantity = current.quantity;
     let availableQuantity = current.availableQuantity;
-    if (input.type === "count") {
-      quantity = input.quantity;
-      availableQuantity = canCount(current.evidence.state) ? input.quantity : 0;
-    } else if (["receipt", "return"].includes(input.type)) {
+    let evidence = current.evidence;
+    if (["receipt", "return"].includes(input.type)) {
       quantity += input.quantity;
       if (canCount(current.evidence.state)) availableQuantity += input.quantity;
     } else if (["allocate", "consume", "loss", "dispose"].includes(input.type)) {
@@ -212,7 +273,7 @@ class MemoryInventory implements InventoryPort {
       quantity += input.quantity;
       if (canCount(current.evidence.state)) availableQuantity += input.quantity;
     }
-    const updated: InventoryItem = { ...current, quantity, availableQuantity, updatedAt: iso(), version: current.version + 1 };
+    const updated: InventoryItem = { ...current, quantity, availableQuantity, evidence, updatedAt: iso(), version: current.version + 1 };
     const event: StockEvent = {
       ...input,
       id: id("stock", ++this.sequence),

@@ -577,6 +577,81 @@ describe("BenchLedger HTTP API", () => {
     await app.close();
   });
 
+  it("exposes commissioning as a versioned append-only inventory command", async () => {
+    const { app, cookie, csrf } = await loggedIn();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/inventory",
+      headers: { cookie, "x-csrf-token": csrf },
+      payload: {
+        id: "http-commission-item",
+        name: "Delivered board",
+        kind: "electronic",
+        quantity: 4,
+        unit: "each",
+        tags: [],
+        links: [],
+        evidence: { state: "delivered_uncounted", source: "delivery", sourceId: "delivery-1", observedAt: "2026-08-30T10:00:00.000Z" }
+      }
+    });
+    expect(created.statusCode).toBe(201);
+    const commissioned = await app.inject({
+      method: "POST",
+      url: "/api/v1/inventory/http-commission-item/commission",
+      headers: { cookie, "x-csrf-token": csrf, "if-match": "1", "idempotency-key": "http-commission-1" },
+      payload: { quantity: 3, unit: "each", evidence: { state: "commissioned", source: "bench-test", sourceId: "check-1", observedAt: "2026-08-31T10:00:00.000Z" } }
+    });
+    expect(commissioned.statusCode).toBe(201);
+    expect(commissioned.json()).toMatchObject({ data: { item: { quantity: 3, availableQuantity: 3, evidence: { state: "commissioned" }, version: 2 }, event: { type: "count", evidence: { state: "commissioned" } } } });
+    const events = await app.inject({ method: "GET", url: "/api/v1/inventory/http-commission-item/stock-events", headers: { cookie } });
+    expect(events.statusCode).toBe(200);
+    expect(events.json()).toMatchObject({ data: [{ type: "count", evidence: { state: "commissioned", previousEvidence: { state: "delivered_uncounted" } } }] });
+    await app.close();
+  });
+
+  it("requires commissioning authorization, If-Match, and idempotency, then rejects stale and changed retries", async () => {
+    const { app, cookie, csrf } = await loggedIn();
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/inventory",
+      headers: { cookie, "x-csrf-token": csrf },
+      payload: { id: "commission-contract-item", name: "Delivered connector", kind: "accessory", quantity: 4, unit: "each", tags: [], links: [], evidence: { state: "delivered_uncounted", source: "delivery" } }
+    });
+    expect(create.statusCode).toBe(201);
+    const body = { quantity: 3, unit: "each", evidence: { state: "commissioned", source: "bench", observedAt: "2026-08-31T10:00:00.000Z" } };
+    const baseHeaders = { cookie, "x-csrf-token": csrf };
+    expect((await app.inject({ method: "POST", url: "/api/v1/inventory/commission-contract-item/commission", headers: baseHeaders, payload: body })).statusCode).toBe(400);
+    expect((await app.inject({ method: "POST", url: "/api/v1/inventory/commission-contract-item/commission", headers: { ...baseHeaders, "if-match": "1" }, payload: body })).statusCode).toBe(400);
+    expect((await app.inject({ method: "POST", url: "/api/v1/inventory/commission-contract-item/commission", headers: { ...baseHeaders, "idempotency-key": "commission-stale-1", "if-match": "2" }, payload: body })).statusCode).toBe(409);
+
+    const headers = { ...baseHeaders, "if-match": "1", "idempotency-key": "commission-contract-1" };
+    const first = await app.inject({ method: "POST", url: "/api/v1/inventory/commission-contract-item/commission", headers, payload: body });
+    expect(first.statusCode).toBe(201);
+    expect(first.json()).toMatchObject({ replayed: false, data: { item: { version: 2 } } });
+    const replay = await app.inject({ method: "POST", url: "/api/v1/inventory/commission-contract-item/commission", headers, payload: body });
+    expect(replay.statusCode).toBe(201);
+    expect(replay.json()).toMatchObject({ replayed: true, data: { item: { version: 2 } } });
+    const changed = await app.inject({ method: "POST", url: "/api/v1/inventory/commission-contract-item/commission", headers, payload: { ...body, quantity: 2 } });
+    expect(changed.statusCode).toBe(409);
+    expect(changed.json()).toMatchObject({ error: { code: "idempotency_conflict" } });
+    await app.close();
+
+    const readOnly = await createApp({ demo: true, auth: { sessionSecret: "s".repeat(48), secureCookies: false, bearerTokens: [bearerRecord("commission-read-only", ["read"])] }, logger: false });
+    const denied = await readOnly.inject({ method: "POST", url: "/api/v1/inventory/commission-contract-item/commission", headers: { authorization: "Bearer commission-read-only", "if-match": "1", "idempotency-key": "commission-read-only" }, payload: body });
+    expect(denied.statusCode).toBe(403);
+    await readOnly.close();
+  });
+
+  it("documents the cross-field available-quantity invariant in OpenAPI", async () => {
+    const app = await createApp({ demo: true, auth: { sessionSecret: "s".repeat(48), secureCookies: false }, logger: false });
+    const response = await app.inject({ method: "GET", url: "/api/v1/openapi.json" });
+    expect(response.statusCode).toBe(200);
+    const document = response.json<{ components: { schemas: { CreateInventoryItem: { properties: { availableQuantity: { description?: string } } }; }; }; paths: Record<string, any> }>();
+    expect(document.components.schemas.CreateInventoryItem.properties.availableQuantity.description).toMatch(/cannot exceed quantity/i);
+    expect(document.paths["/inventory/{id}/commission"]).toMatchObject({ post: { requestBody: { content: { "application/json": { schema: { $ref: "#/components/schemas/CommissionInventoryItem" } } } } } });
+    await app.close();
+  });
+
   it("rehydrates exact inventory links and the latest build setup after a fresh workspace load", async () => {
     const { app, cookie, csrf } = await loggedIn();
     const revisionId = "synthetic-revision-lamp-r01";
