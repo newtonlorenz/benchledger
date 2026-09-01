@@ -3,6 +3,10 @@
 This roadmap records intentionally deferred work. It is not part of the first
 private LAN deployment gate.
 
+The consolidated product outcome and simplified beginner-to-expert experience are
+defined in [`maker-project-management-prd.md`](maker-project-management-prd.md).
+The detailed `REQ-*` engineering contracts below remain the implementation annex.
+
 ## Agent-first maker workflow backlog
 
 The client-agent feedback and its complete sanitized contract live in
