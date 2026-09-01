@@ -121,6 +121,10 @@ describe("MCP validation boundary", () => {
     const filteredCursor = `fl1.${"a".repeat(300)}`;
     expect(inventoryList({ limit: 10, query: "PETG", category: "filament", availability: "confirmed", location: "drawer-A" })).toMatchObject({ limit: 10, query: "PETG", category: "filament", availability: "confirmed", location: "drawer-A" });
     expect(inventoryList({ location: "drawer-A", cursor: filteredCursor }).cursor).toBe(filteredCursor);
+    expect(inventoryList({ query: "q".repeat(200), cursor: "c".repeat(200) })).toMatchObject({ query: "q".repeat(200), cursor: "c".repeat(200) });
+    expectInvalid(() => inventoryList({ query: "q".repeat(201) }));
+    expectInvalid(() => inventoryList({ cursor: "c".repeat(201) }));
+    expectInvalid(() => inventoryList({ categoryNodeId: "category-tools", unassigned: true }));
     expect(inventoryList(undefined)).toEqual({ limit: 25, query: undefined, category: undefined, availability: undefined, location: undefined });
     const created = inventoryCreate({
       name: "PETG HF",

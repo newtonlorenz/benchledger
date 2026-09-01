@@ -387,10 +387,10 @@ export function inventoryList(value: unknown): InventoryListInput {
   keys(input, ["limit", "cursor", "query", "category", "categoryNodeId", "unassigned", "availability", "location"], "arguments");
   // Location filtering is applied after bounded application pages and uses a
   // compact opaque cursor that can contain a near-maximum source cursor.
-  const page = parsePageInput({ limit: input.limit, cursor: input.cursor }, "arguments", 512);
+  const page = parsePageInput({ limit: input.limit, cursor: input.cursor }, "arguments", input.location === undefined ? 200 : 512);
   const result: InventoryListInput = {
     ...page,
-    query: optionalString(input.query, "arguments.query", 256),
+    query: optionalString(input.query, "arguments.query", 200),
     category: optionalString(input.category, "arguments.category", 128),
     categoryNodeId: input.categoryNodeId === undefined ? undefined : categoryId(input.categoryNodeId, "arguments.categoryNodeId"),
     unassigned: optionalBoolean(input.unassigned, "arguments.unassigned"),

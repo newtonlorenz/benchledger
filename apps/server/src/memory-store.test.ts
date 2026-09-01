@@ -2,6 +2,27 @@ import { describe, expect, it } from "vitest";
 import { createMemoryRuntime, MemoryUnitOfWork } from "./memory-store.js";
 
 describe("MemoryInventory", () => {
+  it("normalizes search and enforces the REST inventory list bounds", async () => {
+    const runtime = createMemoryRuntime();
+    await runtime.inventory.createItem({
+      id: "normalized-search-item",
+      name: "PETG spool",
+      kind: "filament",
+      quantity: 1,
+      unit: "each",
+      tags: [],
+      links: [],
+      evidence: { state: "unknown" }
+    });
+
+    await expect(runtime.inventory.listItems({ q: "  petg  ", limit: 1 })).resolves.toMatchObject({ data: [{ id: "normalized-search-item" }] });
+    await expect(runtime.inventory.listItems({ q: "q".repeat(201), limit: 1 })).rejects.toMatchObject({ code: "validation" });
+    await expect(runtime.inventory.listItems({ limit: 0 })).rejects.toMatchObject({ code: "validation" });
+    await expect(runtime.inventory.listItems({ limit: 201 })).rejects.toMatchObject({ code: "validation" });
+    await expect(runtime.inventory.listItems({ limit: 1, cursor: "c".repeat(201) })).rejects.toMatchObject({ code: "validation" });
+    await expect(runtime.inventory.listItems({ limit: 1, categoryNodeId: "category-tools", unassigned: true })).rejects.toMatchObject({ code: "validation" });
+  });
+
   it("promotes an unknown physical count to available stock", async () => {
     const runtime = createMemoryRuntime();
     await runtime.inventory.createItem({

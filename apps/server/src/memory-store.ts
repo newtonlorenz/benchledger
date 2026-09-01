@@ -22,6 +22,9 @@ import { BUILTIN_INVENTORY_CATEGORIES, compareInventoryCategoryKeys, normalizeIn
 const clone = <T>(value: T): T => structuredClone(value);
 
 const MAX_CATEGORY_CURSOR_LENGTH = 512;
+const MAX_INVENTORY_QUERY_LENGTH = 200;
+const MAX_INVENTORY_PAGE_SIZE = 200;
+const MAX_INVENTORY_CURSOR_LENGTH = 200;
 const CATEGORY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
 
 function iso(): string {
@@ -90,6 +93,28 @@ function ensurePositive(value: number, label: string): void {
   if (!Number.isFinite(value) || value <= 0) throw new ApplicationError("validation", `${label} must be positive`);
 }
 
+function normalizeInventoryListOptions(options: InventoryListOptions): InventoryListOptions {
+  if (options.q !== undefined && typeof options.q !== "string") {
+    throw new ApplicationError("validation", "q must be a string");
+  }
+  if (options.q !== undefined && options.q.length > MAX_INVENTORY_QUERY_LENGTH) {
+    throw new ApplicationError("validation", `q must be at most ${MAX_INVENTORY_QUERY_LENGTH} characters`);
+  }
+  if (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > MAX_INVENTORY_PAGE_SIZE) {
+    throw new ApplicationError("validation", `limit must be an integer between 1 and ${MAX_INVENTORY_PAGE_SIZE}`);
+  }
+  if (options.cursor !== undefined && typeof options.cursor !== "string") {
+    throw new ApplicationError("validation", "cursor must be a string");
+  }
+  if (options.cursor !== undefined && options.cursor.length > MAX_INVENTORY_CURSOR_LENGTH) {
+    throw new ApplicationError("validation", `cursor must be at most ${MAX_INVENTORY_CURSOR_LENGTH} characters`);
+  }
+  if (options.categoryNodeId !== undefined && options.unassigned === true) {
+    throw new ApplicationError("validation", "categoryNodeId and unassigned cannot be combined");
+  }
+  return options.q === undefined ? options : { ...options, q: options.q.trim() };
+}
+
 function ensureItemUnit(item: InventoryItem, unit: InventoryItem["unit"]): void {
   if (item.unit !== unit) throw new ApplicationError("validation", `Unit mismatch: item uses ${item.unit}, event uses ${unit}`);
 }
@@ -108,22 +133,23 @@ class MemoryInventory implements InventoryPort {
     for (const item of seed) this.items.set(item.id, clone(item));
   }
 
-  listItems(options: InventoryListOptions): Promise<Page<InventoryItem>> {
-    const normalized = options.q?.trim().toLocaleLowerCase();
+  async listItems(options: InventoryListOptions): Promise<Page<InventoryItem>> {
+    const normalizedOptions = normalizeInventoryListOptions(options);
+    const normalized = normalizedOptions.q?.toLocaleLowerCase();
     const items = [...this.items.values()].filter((item) => {
-      if (!options.includeRetired && item.retiredAt !== undefined) return false;
-      if (options.kind && item.kind !== options.kind) return false;
-      if (options.evidence && item.evidence.state !== options.evidence) return false;
-      if (options.available !== undefined && (item.availableQuantity > 0) !== options.available) return false;
-      if (options.categoryNodeId !== undefined && item.categoryNodeId !== options.categoryNodeId) return false;
-      if (options.unassigned === true && item.categoryNodeId !== undefined) return false;
+      if (!normalizedOptions.includeRetired && item.retiredAt !== undefined) return false;
+      if (normalizedOptions.kind && item.kind !== normalizedOptions.kind) return false;
+      if (normalizedOptions.evidence && item.evidence.state !== normalizedOptions.evidence) return false;
+      if (normalizedOptions.available !== undefined && (item.availableQuantity > 0) !== normalizedOptions.available) return false;
+      if (normalizedOptions.categoryNodeId !== undefined && item.categoryNodeId !== normalizedOptions.categoryNodeId) return false;
+      if (normalizedOptions.unassigned === true && item.categoryNodeId !== undefined) return false;
       if (!normalized) return true;
       return [item.name, item.description, item.manufacturer, item.model, item.sku, item.location, ...item.tags].filter(Boolean).join(" ").toLocaleLowerCase().includes(normalized);
     }).sort((a, b) => a.name.trim().toLocaleLowerCase().localeCompare(b.name.trim().toLocaleLowerCase()) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
-    const offset = parseInventoryCursor(options.cursor);
-    const selected = items.slice(offset, offset + options.limit);
+    const offset = parseInventoryCursor(normalizedOptions.cursor);
+    const selected = items.slice(offset, offset + normalizedOptions.limit);
     const nextOffset = offset + selected.length < items.length ? offset + selected.length : undefined;
-    return Promise.resolve({ data: clone(selected), limit: options.limit, total: items.length, ...(nextOffset === undefined ? {} : { nextCursor: String(nextOffset) }) });
+    return { data: clone(selected), limit: normalizedOptions.limit, total: items.length, ...(nextOffset === undefined ? {} : { nextCursor: String(nextOffset) }) };
   }
 
   getItem(itemId: string): Promise<InventoryItem | null> {
