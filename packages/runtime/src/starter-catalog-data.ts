@@ -184,8 +184,8 @@ export const STARTER_FILAMENTS: readonly CatalogProduct[] = [
 
   filament("starter-filament-prusament-pla-jet-black", "Prusament", "PLA", "PLA", prusamentPla, { colourName: "Jet Black", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }),
   filament("starter-filament-prusament-petg-jet-black", "Prusament", "PETG", "PETG", prusamentPetg, { colourName: "Jet Black", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }),
-  filament("starter-filament-prusament-asa-jet-black", "Prusament", "ASA", "ASA", prusamentAsa, { colourName: "Jet Black", diameterMm: 1.75, nominalNetMassG: 850, lengthBasis: "unknown" }),
-  filament("starter-filament-prusament-pc-blend-black", "Prusament", "PC Blend", "PC", prusamentPcBlend, { colourName: "Jet Black", diameterMm: 1.75, nominalNetMassG: 970, lengthBasis: "unknown" }),
+  filament("starter-filament-prusament-asa-jet-black", "Prusament", "ASA", "ASA", prusamentAsa, { colourName: "Jet Black", diameterMm: 1.75, nominalNetMassG: 800, lengthBasis: "unknown" }),
+  filament("starter-filament-prusament-pc-blend-black", "Prusament", "PC Blend", "PC", prusamentPcBlend, { colourName: "Jet Black", diameterMm: 1.75, nominalNetMassG: 900, lengthBasis: "unknown" }),
   filament("starter-filament-prusament-pla-galaxy-black", "Prusament", "PLA", "PLA", prusamentPlaGalaxyBlack, { colourName: "Prusa Galaxy Black", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "Galaxy"),
 
   filament("starter-filament-polymaker-polylite-pla-black", "Polymaker", "PolyLite PLA", "PLA", polymakerPolyLitePla, { colourName: "Black", colourCode: "#030305", sku: "PA02001", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown", densityGcm3: 1.19 }),
@@ -211,6 +211,24 @@ export const STARTER_FILAMENTS: readonly CatalogProduct[] = [
 ];
 
 export const STARTER_CATALOG_PRODUCTS: readonly CatalogProduct[] = [...STARTER_PRINTERS, ...STARTER_FILAMENTS];
+
+/**
+ * Exact v1 values for the rows corrected by dataset v2. The seed uses these
+ * values as an ownership fingerprint: a row is migrated only while its full
+ * payload still matches the originally seeded v1 product.
+ */
+export interface StarterCatalogV1Correction {
+  readonly id: string;
+  readonly v1: Readonly<Record<string, unknown>>;
+}
+
+export const STARTER_CATALOG_V1_CORRECTIONS: readonly StarterCatalogV1Correction[] = [
+  { id: "starter-printer-anycubic-kobra-2", v1: { buildVolumeMm: { x: 250, y: 220, z: 220 } } },
+  { id: "starter-printer-anycubic-kobra-2-pro", v1: { buildVolumeMm: { x: 250, y: 220, z: 220 } } },
+  { id: "starter-printer-anycubic-kobra-s1", v1: { buildVolumeMm: { x: 250, y: 250, z: 270 } } },
+  { id: "starter-filament-prusament-asa-jet-black", v1: { nominalNetMassG: 850 } },
+  { id: "starter-filament-prusament-pc-blend-black", v1: { nominalNetMassG: 970 } },
+];
 
 /** Short aliases for hosts and tests that treat the dataset as one catalog. */
 export const STARTER_CATALOG = STARTER_CATALOG_PRODUCTS;

@@ -58,8 +58,9 @@ Fresh production runtimes include a curated, versioned starter catalog of major
 FFF printers and filament products. `search_catalog_products` searches only
 explicit identity/specification fields; a product's server-owned manufacturer
 provenance URL is read-only metadata and is not a search field. Startup seeding
-is insert-missing-only and creates no inventory, profiles, or stock events, so a
-workspace's existing or custom catalog rows remain authoritative.
+inserts missing IDs and creates no inventory, profiles, or stock events. During
+the v1-to-v2 upgrade it corrects only complete, untouched v1 seed payloads;
+edited or custom rows remain authoritative.
 
 The adapter exposes bounded pages. Continue with the returned cursor instead of
 requesting an unbounded dump. A project resource is similarly scoped:

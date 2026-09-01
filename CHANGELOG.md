@@ -21,6 +21,9 @@ first public release; all current work is under **Unreleased**.
   namespace, deployment identity, and visual lockup before the first public release
 - Corrected reviewed Anycubic Kobra build volumes and kept reported exact-printer
   adds as inspect-first stock until explicit commissioning evidence is recorded
+- Corrected the reviewed Prusament ASA and PC Blend nominal net masses to 800 g
+  and 900 g, with history-preserving, edit-safe upgrades for version 1 starter
+  catalogs
 
 ### Known pre-release limitations
 

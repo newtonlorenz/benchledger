@@ -7,10 +7,11 @@ physical inventory item, product profile, quantity, reservation, or stock
 event.
 
 The dataset is versioned in `forge_meta` under
-`starter_catalog_dataset_version`. Startup inserts only missing stable IDs. It
-does not overwrite an existing or custom row, including a custom row that uses
-one of the starter IDs. A later dataset revision must add a new version and
-preserve this insert-missing-only rule.
+`starter_catalog_dataset_version`. For fresh workspaces and current datasets,
+startup inserts only missing stable IDs. The documented v1-to-v2 upgrade is the
+only exception: it may correct an untouched row whose complete payload matches
+the original v1 seed fingerprint. It never overwrites an edited or custom row,
+including a custom row that uses one of the starter IDs.
 
 ## Review scope
 
@@ -24,11 +25,15 @@ change a product.
 
 The reviewed Anycubic build volumes are Kobra 2 and Kobra 2 Pro at
 220 × 220 × 250 mm, and Kobra S1 at 250 × 250 × 250 mm.
+The reviewed Prusament ASA Jet Black and PC Blend Jet Black products have
+nominal net masses of 800 g and 900 g, respectively.
 
 The seed keeps one direct product/variant URL per record. Examples of the
 reviewed manufacturer pages include [Bambu PLA Matte Charcoal](https://us.store.bambulab.com/products/pla-matte-filament?id=43992833261787),
 [PolyMax PETG](https://shop.polymaker.com/products/polymax-petg?variant=39574348169273),
 [PolyMide PA6-GF](https://us-wholesale.polymaker.com/products/polymide-pa6-gf?variant=40556798083174),
+[Prusament ASA Jet Black](https://www.prusa3d.com/product/prusament-asa-jet-black-850g/),
+[Prusament PC Blend Jet Black](https://www.prusa3d.com/product/prusament-pc-blend-jet-black-970g/),
 [Prusament PLA Jet Black](https://www.prusa3d.com/product/prusament-pla-jet-black-1kg/),
 [eSUN PETG](https://www.esun3d.com/petg-product/),
 [SUNLU PLA Meta](https://www.sunlu.com/products/261), and
@@ -39,7 +44,8 @@ used as evidence for an exact seeded identity or variant.
 The PolyMide PA6-GF record uses the stable ID
 `starter-filament-polymaker-polymide-pa6-gf-grey`, matching its reviewed Grey
 colour. Stable IDs are part of catalog identity and are searchable; changing a
-seed definition leaves existing rows and their append-only history untouched.
+seed definition leaves existing rows and their append-only history untouched
+outside the explicitly documented v1-to-v2 correction set.
 
 Each seeded product carries its source URL and review timestamp as
 server-owned read-only provenance. Provenance is returned by catalog reads,
@@ -48,6 +54,15 @@ When an identity or specification fact is corrected, its current provenance
 is cleared until the corrected value is verified again, while the complete
 superseded payload and provenance remain in append-only history. No-op updates
 retain valid provenance.
+
+When a workspace reports dataset version 1, startup applies the v1-to-v2
+corrections only to rows whose complete stored payload still exactly matches
+the originally seeded v1 payload. This preserves user edits and custom rows,
+even when they use a starter ID. Each applied correction increments that
+product version and appends its superseded payload to history before the
+dataset metadata advances to version 2 in the same transaction. Missing rows
+are inserted with the current v2 payload; startup never creates inventory,
+profiles, quantities, reservations, or stock events.
 The source links are observations, not a live lookup or an availability
 claim; the catalog does not fetch arbitrary URLs.
 

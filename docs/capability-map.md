@@ -75,11 +75,13 @@ The production runtime seeds a curated, versioned starter catalog on startup:
 at least 24 FFF printer identities spanning Bambu Lab, Prusa Research,
 Creality, ELEGOO, and Anycubic, plus at least 24 exact 1.75 mm filament
 identities spanning Bambu Lab, Prusament, Polymaker, eSUN, SUNLU, and
-OVERTURE. Seeding is insert-missing-only and never creates inventory items,
-physical product profiles, or stock events. Existing rows, including custom
-rows that reuse a starter identifier, are preserved byte-for-byte. Curated
-records may include server-owned manufacturer provenance; it is read-only and
-excluded from create/update inputs and catalog identity search.
+OVERTURE. Seeding inserts missing IDs and never creates inventory items,
+physical product profiles, or stock events. During the v1-to-v2 upgrade, only
+complete, untouched v1 seed payloads receive the documented corrections; all
+edited or custom rows, including rows that reuse a starter identifier, remain
+authoritative. Curated records may include server-owned manufacturer
+provenance; it is read-only and excluded from create/update inputs and catalog
+identity search.
 
 ## UI parity
 

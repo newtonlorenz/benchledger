@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { BenchDatabase, CatalogProductRepository, migrateCatalogSchema } from "@benchledger/database";
+import type { CatalogProduct } from "@benchledger/api-contract";
 import { STARTER_CATALOG_DATASET_VERSION, STARTER_CATALOG_PRODUCTS, STARTER_FILAMENTS, STARTER_PRINTERS } from "./starter-catalog-data.js";
 import { createProductionRuntime, type ProductionRuntime } from "./index.js";
 import { seedStarterCatalog } from "./starter-catalog.js";
@@ -21,6 +22,28 @@ async function makeRuntime(): Promise<{ readonly runtime: ProductionRuntime; rea
   const runtime = await createProductionRuntime({ dataDir, maxUploadBytes: 1024 * 1024, maxStorageBytes: 4 * 1024 * 1024 });
   runtimes.push(runtime);
   return { runtime, dataDir };
+}
+
+const V1_CORRECTION_OVERRIDES: Readonly<Record<string, Partial<CatalogProduct>>> = {
+  "starter-printer-anycubic-kobra-2": { buildVolumeMm: { x: 250, y: 220, z: 220 } },
+  "starter-printer-anycubic-kobra-2-pro": { buildVolumeMm: { x: 250, y: 220, z: 220 } },
+  "starter-printer-anycubic-kobra-s1": { buildVolumeMm: { x: 250, y: 250, z: 270 } },
+  "starter-filament-prusament-asa-jet-black": { nominalNetMassG: 850 },
+  "starter-filament-prusament-pc-blend-black": { nominalNetMassG: 970 },
+};
+
+function v1Product(product: CatalogProduct): CatalogProduct {
+  const override = V1_CORRECTION_OVERRIDES[product.id];
+  return override === undefined ? structuredClone(product) : { ...structuredClone(product), ...structuredClone(override) } as CatalogProduct;
+}
+
+function seedV1Catalog(database: BenchDatabase): void {
+  const repository = new CatalogProductRepository(database);
+  for (const product of STARTER_CATALOG_PRODUCTS) repository.create(v1Product(product));
+  database.run(
+    "INSERT INTO forge_meta (key, value) VALUES (?, ?)",
+    ["starter_catalog_dataset_version", "1"],
+  );
 }
 
 describe("reviewed starter catalog", () => {
@@ -135,7 +158,7 @@ describe("reviewed starter catalog", () => {
       kind: "filament",
       colourName: "Jet Black",
       diameterMm: 1.75,
-      nominalNetMassG: 850,
+      nominalNetMassG: 800,
       lengthBasis: "unknown",
       provenance: { sourceUrl: "https://www.prusa3d.com/product/prusament-asa-jet-black-850g/" },
     });
@@ -143,7 +166,7 @@ describe("reviewed starter catalog", () => {
       kind: "filament",
       colourName: "Jet Black",
       diameterMm: 1.75,
-      nominalNetMassG: 970,
+      nominalNetMassG: 900,
       lengthBasis: "unknown",
       provenance: { sourceUrl: "https://www.prusa3d.com/product/prusament-pc-blend-jet-black-970g/" },
     });
@@ -189,6 +212,84 @@ describe("reviewed starter catalog", () => {
     expect(second.database.get<{ readonly count: number }>("SELECT COUNT(*) AS count FROM inventory_items")?.count).toBe(0);
     expect(second.database.get<{ readonly count: number }>("SELECT COUNT(*) AS count FROM inventory_product_profiles")?.count).toBe(0);
     expect(second.database.get<{ readonly count: number }>("SELECT COUNT(*) AS count FROM stock_events")?.count).toBe(0);
+  });
+
+  it("upgrades an unedited v1 catalog under stable IDs with append-only history", () => {
+    const database = new BenchDatabase(":memory:");
+    migrateCatalogSchema(database);
+    seedV1Catalog(database);
+
+    const result = seedStarterCatalog(database);
+    const repository = new CatalogProductRepository(database);
+    expect(result).toMatchObject({ datasetVersion: 2, inserted: 0 });
+    expect(database.get("SELECT value FROM forge_meta WHERE key = ?", ["starter_catalog_dataset_version"])).toEqual({ value: "2" });
+
+    for (const product of STARTER_CATALOG_PRODUCTS) {
+      expect(repository.get(product.id)).toBeDefined();
+    }
+    expect(repository.get("starter-printer-anycubic-kobra-2")).toMatchObject({ version: 2, buildVolumeMm: { x: 220, y: 220, z: 250 } });
+    expect(repository.get("starter-printer-anycubic-kobra-2-pro")).toMatchObject({ version: 2, buildVolumeMm: { x: 220, y: 220, z: 250 } });
+    expect(repository.get("starter-printer-anycubic-kobra-s1")).toMatchObject({ version: 2, buildVolumeMm: { x: 250, y: 250, z: 250 } });
+    expect(repository.get("starter-filament-prusament-asa-jet-black")).toMatchObject({ version: 2, nominalNetMassG: 800 });
+    expect(repository.get("starter-filament-prusament-pc-blend-black")).toMatchObject({ version: 2, nominalNetMassG: 900 });
+    for (const id of [
+      "starter-printer-anycubic-kobra-2",
+      "starter-printer-anycubic-kobra-2-pro",
+      "starter-printer-anycubic-kobra-s1",
+      "starter-filament-prusament-asa-jet-black",
+      "starter-filament-prusament-pc-blend-black",
+    ]) expect(repository.get(id)?.provenance).toBeUndefined();
+
+    const history = database.all<{ readonly catalog_product_id: string; readonly superseded_version: number; readonly payload_json: string }>(
+      "SELECT catalog_product_id, superseded_version, payload_json FROM catalog_product_history ORDER BY catalog_product_id",
+    );
+    expect(history).toHaveLength(5);
+    expect(history.map((entry) => entry.catalog_product_id)).toEqual([
+      "starter-filament-prusament-asa-jet-black",
+      "starter-filament-prusament-pc-blend-black",
+      "starter-printer-anycubic-kobra-2",
+      "starter-printer-anycubic-kobra-2-pro",
+      "starter-printer-anycubic-kobra-s1",
+    ]);
+    expect(JSON.parse(history[0]!.payload_json)).toMatchObject({ version: 1, nominalNetMassG: 850, provenance: { sourceUrl: "https://www.prusa3d.com/product/prusament-asa-jet-black-850g/" } });
+    expect(JSON.parse(history[2]!.payload_json)).toMatchObject({ version: 1, buildVolumeMm: { x: 250, y: 220, z: 220 }, provenance: { sourceUrl: "https://store.anycubic.com/products/kobra-2" } });
+    expect(database.get<{ readonly count: number }>("SELECT COUNT(*) AS count FROM inventory_items")?.count).toBe(0);
+    expect(database.get<{ readonly count: number }>("SELECT COUNT(*) AS count FROM inventory_product_profiles")?.count).toBe(0);
+    expect(database.get<{ readonly count: number }>("SELECT COUNT(*) AS count FROM stock_events")?.count).toBe(0);
+    database.close();
+  });
+
+  it("preserves an edited v1 row and advances metadata without creating stock", () => {
+    const database = new BenchDatabase(":memory:");
+    migrateCatalogSchema(database);
+    seedV1Catalog(database);
+    const repository = new CatalogProductRepository(database);
+    const edited = repository.update("starter-filament-prusament-asa-jet-black", { nominalNetMassG: 1234 }, 1);
+    const before = database.get<{ readonly payload_json: string }>("SELECT payload_json FROM catalog_products WHERE id = ?", [edited.id])?.payload_json;
+
+    const result = seedStarterCatalog(database);
+
+    expect(result).toMatchObject({ datasetVersion: 2, inserted: 0 });
+    expect(database.get<{ readonly payload_json: string }>("SELECT payload_json FROM catalog_products WHERE id = ?", [edited.id])?.payload_json).toBe(before);
+    expect(repository.get(edited.id)).toMatchObject({ version: 2, nominalNetMassG: 1234 });
+    expect(database.get<{ readonly count: number }>("SELECT COUNT(*) AS count FROM catalog_product_history WHERE catalog_product_id = ?", [edited.id])?.count).toBe(1);
+    database.close();
+  });
+
+  it("is idempotent after a v1 upgrade", () => {
+    const database = new BenchDatabase(":memory:");
+    migrateCatalogSchema(database);
+    seedV1Catalog(database);
+    seedStarterCatalog(database);
+    const before = database.all("SELECT catalog_product_id, superseded_version, payload_json, superseded_at FROM catalog_product_history ORDER BY id");
+    const productsBefore = database.all("SELECT id, payload_json, version, updated_at FROM catalog_products ORDER BY id");
+
+    const result = seedStarterCatalog(database);
+
+    expect(result).toMatchObject({ datasetVersion: 2, inserted: 0 });
+    expect(database.all("SELECT catalog_product_id, superseded_version, payload_json, superseded_at FROM catalog_product_history ORDER BY id")).toEqual(before);
+    expect(database.all("SELECT id, payload_json, version, updated_at FROM catalog_products ORDER BY id")).toEqual(productsBefore);
+    database.close();
   });
 
   it("rolls back every insert and forge_meta when a mid-seed writer fails", () => {
