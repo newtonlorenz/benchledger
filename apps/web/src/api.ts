@@ -1748,9 +1748,6 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     async listCatalogProductPage(kind, query = "", options) {
       return sampleCatalogPage(kind, query, options);
     },
-    async listCatalogProductPage(kind, query = "", options) {
-      return sampleCatalogPage(kind, query, options);
-    },
     async searchCatalogProducts(kind, query = "", options) {
       return sampleCatalogPage(kind, query, options).products;
     },
