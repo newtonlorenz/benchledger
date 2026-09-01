@@ -21,8 +21,14 @@ import {
   catalogProductCreate,
   catalogProductSearch,
   catalogProductUpdate,
+  categoryId,
+  categorySingleId,
   finalizeArtifactUpload,
   inventoryCreate,
+  inventoryCategoryList,
+  inventoryCategoryCreate,
+  inventoryCategoryUpdate,
+  inventoryCategoryArchive,
   inventoryWithProductProfileCreate,
   inventoryProductProfileLink,
   inventoryProductProfileRead,
@@ -141,6 +147,16 @@ function resourceId(value: string, label: string): string {
   return id(decoded, label);
 }
 
+function categoryResourceId(value: string, label: string): string {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    throw new McpAdapterError("INVALID_RESOURCE", `${label} contains an invalid encoded identifier.`);
+  }
+  return categoryId(decoded, label);
+}
+
 function projectIdFromInput(input: unknown): string | undefined {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return undefined;
   const candidate = (input as Record<string, unknown>).projectId;
@@ -168,6 +184,11 @@ function rejectScopedGlobalAccess(context: McpRequestContext, message: string): 
 function requireCatalogBackend(adapter: McpAdapter): NonNullable<BenchLedgerBackend["catalog"]> {
   if (adapter.backend.catalog === undefined) throw new McpAdapterError("BACKEND_ERROR", "The catalog backend is not configured for this MCP host.");
   return adapter.backend.catalog;
+}
+
+function requireInventoryCategoriesBackend(adapter: McpAdapter): NonNullable<BenchLedgerBackend["inventoryCategories"]> {
+  if (adapter.backend.inventoryCategories === undefined) throw new McpAdapterError("BACKEND_ERROR", "The inventory category backend is not configured for this MCP host.");
+  return adapter.backend.inventoryCategories;
 }
 
 function requireAtomicInventoryBackend(adapter: McpAdapter): NonNullable<BenchLedgerBackend["inventory"]["createWithProductProfile"]> {
@@ -320,7 +341,7 @@ async function authorizeProjectScope(adapter: McpAdapter, name: string, input: u
   if (name === "create_project" || name === "create_project_with_initial_revision") {
     rejectScopedGlobalWrite(context, "A project-scoped token cannot create a new workspace outside its allow-list.");
   }
-  if (name === "create_inventory_item" || name === "create_inventory_with_product_profile" || name === "update_inventory_item" || name === "record_stock_event") {
+  if (name === "create_inventory_item" || name === "create_inventory_with_product_profile" || name === "update_inventory_item" || name === "record_stock_event" || name === "create_inventory_category" || name === "update_inventory_category" || name === "archive_inventory_category") {
     rejectScopedGlobalWrite(context, "Inventory is workspace-global; project-scoped tokens may read it but cannot mutate it.");
   }
   if (name === "create_catalog_product" || name === "update_catalog_product") {
@@ -366,6 +387,11 @@ export class McpAdapter {
       ["update_inventory_item", (input, context) => this.backend.inventory.update(inventoryUpdate(input), context)],
       ["record_stock_event", (input, context) => this.backend.inventory.recordStockEvent(stockEvent(input), context)],
       ["list_stock_events", (input, context) => this.backend.inventory.listStockEvents(stockEvents(input), context)],
+      ["list_inventory_categories", (input, context) => requireInventoryCategoriesBackend(this).list(inventoryCategoryList(input), context)],
+      ["read_inventory_category", (input, context) => requireInventoryCategoriesBackend(this).get({ categoryId: categorySingleId(input, "categoryId") }, context)],
+      ["create_inventory_category", (input, context) => requireInventoryCategoriesBackend(this).create(inventoryCategoryCreate(input), context)],
+      ["update_inventory_category", (input, context) => requireInventoryCategoriesBackend(this).update(inventoryCategoryUpdate(input), context)],
+      ["archive_inventory_category", (input, context) => requireInventoryCategoriesBackend(this).archive(inventoryCategoryArchive(input), context)],
 
       ["search_catalog_products", (input, context) => requireCatalogBackend(this).search(catalogProductSearch(input), context)],
       ["read_catalog_product", (input, context) => requireCatalogBackend(this).get({ productId: singleId(input, "productId") }, context)],
@@ -487,6 +513,10 @@ export class McpAdapter {
       assertScope(context.scopes, "inventory:read");
       return this.backend.inventory.summary({ limit: 50 }, context);
     }
+    if (uri === "benchledger://inventory/categories") {
+      assertScope(context.scopes, "inventory:read");
+      return requireInventoryCategoriesBackend(this).list({ limit: 50 }, context);
+    }
 
     const catalogProductMatch = /^benchledger:\/\/catalog\/products\/([^/]+)$/.exec(uri);
     if (catalogProductMatch !== null) {
@@ -505,6 +535,12 @@ export class McpAdapter {
     if (inventoryMatch !== null) {
       assertScope(context.scopes, "inventory:read");
       return this.backend.inventory.get({ itemId: resourceId(inventoryMatch[1]!, "itemId") }, context);
+    }
+
+    const inventoryCategoryMatch = /^benchledger:\/\/inventory\/categories\/([^/]+)$/.exec(uri);
+    if (inventoryCategoryMatch !== null) {
+      assertScope(context.scopes, "inventory:read");
+      return requireInventoryCategoriesBackend(this).get({ categoryId: categoryResourceId(inventoryCategoryMatch[1]!, "categoryId") }, context);
     }
 
     const projectContextMatch = /^benchledger:\/\/projects\/([^/]+)\/context$/.exec(uri);

@@ -3,6 +3,8 @@ import { McpAdapterError } from "./errors.js";
 import {
   assertProjectAccess,
   assertScope,
+  categoryId,
+  categorySingleId,
   artifactList,
   artifactMetadata,
   beginArtifactUpload,
@@ -17,6 +19,10 @@ import {
   finalizeArtifactUpload,
   id,
   inventoryCreate,
+  inventoryCategoryArchive,
+  inventoryCategoryCreate,
+  inventoryCategoryList,
+  inventoryCategoryUpdate,
   inventoryWithProductProfileCreate,
   inventoryList,
   inventoryUpdate,
@@ -60,6 +66,10 @@ describe("MCP validation boundary", () => {
     expectInvalid(() => id("part/1", "id"), /without path separators/);
     expectInvalid(() => id("part\\1", "id"), /without path separators/);
     expectInvalid(() => id("x".repeat(129), "id"));
+    const longCategoryId = "c" + "a".repeat(159);
+    expect(categoryId(longCategoryId, "categoryId")).toBe(longCategoryId);
+    expect(categorySingleId({ categoryId: longCategoryId }, "categoryId")).toBe(longCategoryId);
+    expectInvalid(() => id(longCategoryId, "id"));
     expectInvalid(() => id(42, "id"));
     expect(singleId({ itemId: "item-1" }, "itemId")).toBe("item-1");
     expectInvalid(() => singleId({ itemId: "item-1", extra: true }, "itemId"), /unknown field/);
@@ -80,6 +90,7 @@ describe("MCP validation boundary", () => {
     expectInvalid(() => parsePageInput({ limit: 101 }));
     expectInvalid(() => parsePageInput({ limit: 1.1 }));
     expectInvalid(() => parsePageInput({ cursor: 10 }));
+    expectInvalid(() => parsePageInput({ cursor: "x".repeat(201) }));
     expectInvalid(() => parsePageInput({ unknown: true }));
   });
 
@@ -105,13 +116,17 @@ describe("MCP validation boundary", () => {
   });
 
   it("validates inventory reads and writes, including links, optional metadata, and filters", () => {
+    const longCategoryId = "c" + "a".repeat(159);
+    const filteredCursor = `fl1.${"a".repeat(300)}`;
     expect(inventoryList({ limit: 10, query: "PETG", category: "filament", availability: "confirmed", location: "drawer-A" })).toMatchObject({ limit: 10, query: "PETG", category: "filament", availability: "confirmed", location: "drawer-A" });
+    expect(inventoryList({ location: "drawer-A", cursor: filteredCursor }).cursor).toBe(filteredCursor);
     expect(inventoryList(undefined)).toEqual({ limit: 25, query: undefined, category: undefined, availability: undefined, location: undefined });
     const created = inventoryCreate({
       name: "PETG HF",
       category: "filament",
       quantity: { value: 1000, unit: "gram" },
       evidence: { state: "physical_count", source: "weighed", recordedAt: "2026-08-30" },
+      categoryNodeId: longCategoryId,
       description: "High-flow filament",
       manufacturer: "Bambu Lab",
       model: "PETG HF",
@@ -121,11 +136,28 @@ describe("MCP validation boundary", () => {
       location: "filament cabinet",
       links: [{ label: "Manufacturer", url: "https://maker.example/petg" }],
     });
-    expect(created).toMatchObject({ name: "PETG HF", quantity: { value: 1000, unit: "gram" }, condition: "opened", links: [{ label: "Manufacturer" }] });
-    expect(inventoryUpdate({ itemId: "filament-1", expectedVersion: 3, model: "PETG HF v2", links: [] })).toMatchObject({ itemId: "filament-1", expectedVersion: 3, model: "PETG HF v2", links: [] });
+    expect(created).toMatchObject({ name: "PETG HF", categoryNodeId: longCategoryId, quantity: { value: 1000, unit: "gram" }, condition: "opened", links: [{ label: "Manufacturer" }] });
+    expect(inventoryUpdate({ itemId: "filament-1", expectedVersion: 3, categoryNodeId: longCategoryId, model: "PETG HF v2", links: [] })).toMatchObject({ itemId: "filament-1", expectedVersion: 3, categoryNodeId: longCategoryId, model: "PETG HF v2", links: [] });
     expectInvalid(() => inventoryList({ availability: "maybe" }));
     expectInvalid(() => inventoryCreate({ name: "x", category: "tool", quantity: { value: 1, unit: "piece" }, evidence: { state: "unknown", source: "x", recordedAt: "now" }, links: [{ label: "bad", url: "file:///secret" }] }));
     expectInvalid(() => inventoryUpdate({ itemId: "item-1", links: [{ label: "bad", url: "https://example.test/a" }, { label: "bad", url: "https://example.test/b" }], unexpected: true }));
+  });
+
+  it("validates bounded category CRUD inputs and keeps parent/archive commands separate", () => {
+    expect(inventoryCategoryList({ limit: 10, includeArchived: true })).toEqual({ limit: 10, cursor: undefined, includeArchived: true });
+    expect(inventoryCategoryList({ cursor: "x".repeat(512) }).cursor).toHaveLength(512);
+    expectInvalid(() => inventoryCategoryList({ cursor: "x".repeat(513) }));
+    const longCategoryId = "c" + "a".repeat(159);
+    expect(inventoryCategoryCreate({ id: longCategoryId, name: "  Printer parts  ", parentId: longCategoryId, sortOrder: 2 })).toEqual({ id: longCategoryId, name: "Printer parts", parentId: longCategoryId, sortOrder: 2 });
+    expect(inventoryCategoryUpdate({ categoryId: longCategoryId, expectedVersion: 3, name: "Printers" })).toMatchObject({ categoryId: longCategoryId, expectedVersion: 3, name: "Printers" });
+    expect(inventoryCategoryArchive({ categoryId: longCategoryId, expectedVersion: 3 })).toEqual({ categoryId: longCategoryId, expectedVersion: 3 });
+    expect(inventoryCategoryCreate({ id: longCategoryId, name: "  Printer parts  ", parentId: longCategoryId, sortOrder: 2 })).toEqual({ id: longCategoryId, name: "Printer parts", parentId: longCategoryId, sortOrder: 2 });
+    expect(inventoryCategoryUpdate({ categoryId: "category-printers", expectedVersion: 3, name: "Printers" })).toMatchObject({ categoryId: "category-printers", expectedVersion: 3, name: "Printers" });
+    expect(inventoryCategoryArchive({ categoryId: "category-printers", expectedVersion: 3 })).toEqual({ categoryId: "category-printers", expectedVersion: 3 });
+    expectInvalid(() => inventoryCategoryUpdate({ categoryId: "category-printers", name: "Printers" }));
+    expectInvalid(() => inventoryCategoryArchive({ categoryId: "category-printers" }));
+    expectInvalid(() => inventoryCategoryUpdate({ categoryId: "category-printers", parentId: "category-tools" }));
+    expectInvalid(() => inventoryCategoryArchive({ categoryId: "bad/id" }));
   });
 
   it("validates the atomic inventory/profile request and forbids profile item identity", () => {
@@ -214,7 +246,9 @@ describe("MCP validation boundary", () => {
   });
 
   it("validates offer observations and context refresh requests", () => {
+    const filteredCursor = `fl1.${"a".repeat(300)}`;
     expect(offerList({ itemId: "m3-screw", query: "amazon", supplier: "Amazon", limit: 10 })).toMatchObject({ itemId: "m3-screw", query: "amazon", supplier: "Amazon" });
+    expect(offerList({ query: "amazon", cursor: filteredCursor }).cursor).toBe(filteredCursor);
     expect(recordOffer({ itemId: "m3-screw", description: "M3 screw pack", supplier: "Amazon", url: "https://amazon.example/m3", packageQuantity: { value: 100, unit: "piece" }, price: { minor: 499, currency: "eur" }, shippingMinor: 0, observedAt: "2026-08-30T10:00:00Z" })).toMatchObject({ itemId: "m3-screw", price: { minor: 499, currency: "EUR" }, shippingMinor: 0 });
     expect(contextRefresh({ projectId: "lamp", includeInventory: false, maxAgeSeconds: 60 })).toEqual({ projectId: "lamp", includeInventory: false, maxAgeSeconds: 60 });
     expect(contextRefresh(undefined)).toEqual({ projectId: undefined, includeInventory: undefined, maxAgeSeconds: undefined });

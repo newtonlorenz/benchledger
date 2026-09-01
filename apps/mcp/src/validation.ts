@@ -4,6 +4,8 @@ import {
   createCatalogProductSchema,
   createInventoryProductProfileWithoutItemSchema,
   createInventoryProductProfileSchema,
+  createInventoryCategorySchema,
+  updateInventoryCategorySchema,
   updateCatalogProductSchema,
   updateInventoryProductProfileSchema,
   saveReconciliationDraftSchema,
@@ -35,6 +37,8 @@ import type {
   InventoryProductProfileLinkInput,
   InventoryProductProfileReadInput,
   InventoryWithProductProfileCreateInput,
+  InventoryCategoryCreateInput,
+  InventoryCategoryUpdateInput,
   ReconciliationReadInput,
   ReconciliationDraftSaveInput,
   ReconciliationCommitInput,
@@ -126,6 +130,7 @@ function optionalEnum<T extends string>(value: unknown, label: string, values: r
 }
 
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const categoryIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 
 export function id(value: unknown, label: string): string {
   const result = stringValue(value, label, { max: 128 });
@@ -133,10 +138,24 @@ export function id(value: unknown, label: string): string {
   return result;
 }
 
+/** Managed taxonomy IDs have a 160-character API limit; unrelated MCP IDs
+ * intentionally retain the narrower 128-character contract above. */
+export function categoryId(value: unknown, label: string): string {
+  const result = stringValue(value, label, { max: 160 });
+  if (!categoryIdPattern.test(result)) fail(`${label} must be a stable category identifier without path separators.`);
+  return result;
+}
+
 export function singleId(value: unknown, field: string): string {
   const input = record(value, "arguments");
   keys(input, [field], "arguments");
   return id(input[field], `arguments.${field}`);
+}
+
+export function categorySingleId(value: unknown, field: string): string {
+  const input = record(value, "arguments");
+  keys(input, [field], "arguments");
+  return categoryId(input[field], `arguments.${field}`);
 }
 
 export function retireProject(value: unknown): { projectId: string; expectedVersion?: number } {
@@ -162,11 +181,11 @@ export function optionalId(value: unknown, label: string): string | undefined {
   return id(value, label);
 }
 
-export function parsePageInput(value: unknown, label = "arguments"): PageInput {
+export function parsePageInput(value: unknown, label = "arguments", maxCursor = 200): PageInput {
   const input = record(value ?? {}, label);
   keys(input, ["limit", "cursor"], label);
   const limit = input.limit === undefined ? 25 : integer(input.limit, `${label}.limit`, 1, 100);
-  const cursor = optionalString(input.cursor, `${label}.cursor`, 512);
+  const cursor = optionalString(input.cursor, `${label}.cursor`, maxCursor);
   return cursor === undefined ? { limit } : { limit, cursor };
 }
 
@@ -355,7 +374,9 @@ function textFields(input: UnknownRecord, label: string, output: Record<string, 
 export function inventoryList(value: unknown): InventoryListInput {
   const input = record(value ?? {}, "arguments");
   keys(input, ["limit", "cursor", "query", "category", "availability", "location"], "arguments");
-  const page = parsePageInput({ limit: input.limit, cursor: input.cursor });
+  // Location filtering is applied after bounded application pages and uses a
+  // compact opaque cursor that can contain a near-maximum source cursor.
+  const page = parsePageInput({ limit: input.limit, cursor: input.cursor }, "arguments", 512);
   return {
     ...page,
     query: optionalString(input.query, "arguments.query", 256),
@@ -367,13 +388,14 @@ export function inventoryList(value: unknown): InventoryListInput {
 
 export function inventoryCreate(value: unknown): InventoryCreateInput {
   const input = record(value, "arguments");
-  keys(input, ["name", "category", "quantity", "evidence", "description", "manufacturer", "model", "sku", "dimensions", "condition", "location", "links"], "arguments");
+  keys(input, ["name", "category", "categoryNodeId", "quantity", "evidence", "description", "manufacturer", "model", "sku", "dimensions", "condition", "location", "links"], "arguments");
   const result: InventoryCreateInput = {
     name: stringValue(input.name, "arguments.name", { max: 256 }),
     category: stringValue(input.category, "arguments.category", { max: 128 }),
     quantity: quantity(input.quantity, "arguments.quantity"),
     evidence: evidence(input.evidence, "arguments.evidence"),
   };
+  result.categoryNodeId = input.categoryNodeId === undefined ? undefined : categoryId(input.categoryNodeId, "arguments.categoryNodeId");
   const text = {} as Record<string, string | undefined>;
   textFields(input, "arguments", text);
   Object.assign(result, text);
@@ -394,9 +416,12 @@ export function inventoryWithProductProfileCreate(value: unknown): InventoryWith
 
 export function inventoryUpdate(value: unknown): InventoryUpdateInput {
   const input = record(value, "arguments");
-  keys(input, ["itemId", "expectedVersion", "name", "category", "description", "manufacturer", "model", "sku", "dimensions", "condition", "location", "links"], "arguments");
+  keys(input, ["itemId", "expectedVersion", "name", "category", "categoryNodeId", "description", "manufacturer", "model", "sku", "dimensions", "condition", "location", "links"], "arguments");
   const result: InventoryUpdateInput = { itemId: id(input.itemId, "arguments.itemId") };
   result.expectedVersion = optionalInteger(input.expectedVersion, "arguments.expectedVersion");
+  result.categoryNodeId = input.categoryNodeId === null || input.categoryNodeId === undefined
+    ? input.categoryNodeId
+    : categoryId(input.categoryNodeId, "arguments.categoryNodeId");
   const text = {} as Record<string, string | undefined>;
   textFields(input, "arguments", text);
   Object.assign(result, text);
@@ -404,6 +429,36 @@ export function inventoryUpdate(value: unknown): InventoryUpdateInput {
   result.condition = optionalEnum(input.condition, "arguments.condition", ["new", "used", "opened", "unknown"] as const);
   if (input.links !== undefined) result.links = links(input.links, "arguments.links");
   return result;
+}
+
+export function inventoryCategoryList(value: unknown): PageInput & { includeArchived?: boolean } {
+  const input = record(value ?? {}, "arguments");
+  keys(input, ["limit", "cursor", "includeArchived"], "arguments");
+  const page = parsePageInput({ limit: input.limit, cursor: input.cursor }, "arguments", 512);
+  if (input.includeArchived !== undefined && typeof input.includeArchived !== "boolean") fail("arguments.includeArchived must be a boolean.");
+  return { ...page, ...(input.includeArchived === undefined ? {} : { includeArchived: input.includeArchived }) };
+}
+
+export function inventoryCategoryCreate(value: unknown): InventoryCategoryCreateInput {
+  return canonicalSchema(createInventoryCategorySchema, record(value, "arguments"), "arguments");
+}
+
+export function inventoryCategoryUpdate(value: unknown): { categoryId: string; expectedVersion: number } & InventoryCategoryUpdateInput {
+  const input = record(value, "arguments");
+  keys(input, ["categoryId", "expectedVersion", "name", "sortOrder"], "arguments");
+  const parsedCategoryId = categoryId(input.categoryId, "arguments.categoryId");
+  const expectedVersion = integer(input.expectedVersion, "arguments.expectedVersion", 1);
+  const changes = canonicalSchema(updateInventoryCategorySchema, { ...(input.name === undefined ? {} : { name: input.name }), ...(input.sortOrder === undefined ? {} : { sortOrder: input.sortOrder }) }, "arguments");
+  if (Object.keys(changes).length === 0) fail("arguments must contain at least one category change.");
+  return { categoryId: parsedCategoryId, expectedVersion, ...changes };
+}
+
+export function inventoryCategoryArchive(value: unknown): { categoryId: string; expectedVersion: number } {
+  const input = record(value, "arguments");
+  keys(input, ["categoryId", "expectedVersion"], "arguments");
+  const parsedCategoryId = categoryId(input.categoryId, "arguments.categoryId");
+  const expectedVersion = integer(input.expectedVersion, "arguments.expectedVersion", 1);
+  return { categoryId: parsedCategoryId, expectedVersion };
 }
 
 export function stockEvent(value: unknown): RecordStockEventInput {
@@ -709,7 +764,9 @@ export function retireArtifact(value: unknown): RetireArtifactInput {
 export function offerList(value: unknown): OfferListInput {
   const input = record(value, "arguments");
   keys(input, ["itemId", "query", "supplier", "limit", "cursor"], "arguments");
-  return { ...parsePageInput({ limit: input.limit, cursor: input.cursor }), itemId: optionalId(input.itemId, "arguments.itemId"), query: optionalString(input.query, "arguments.query", 256), supplier: optionalString(input.supplier, "arguments.supplier", 256) };
+  // Offer query/supplier filters are applied across bounded application pages
+  // and therefore share the larger opaque cursor bound with filtered inventory.
+  return { ...parsePageInput({ limit: input.limit, cursor: input.cursor }, "arguments", 512), itemId: optionalId(input.itemId, "arguments.itemId"), query: optionalString(input.query, "arguments.query", 256), supplier: optionalString(input.supplier, "arguments.supplier", 256) };
 }
 
 function money(value: unknown, label: string): { minor: number; currency: string } {

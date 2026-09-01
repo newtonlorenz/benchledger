@@ -3,7 +3,7 @@ import type { InventoryItem as ApiInventoryItem, CreateInventoryItem, StockEvent
 import type { InventoryItem, StockEvent } from "@benchledger/domain";
 import type { InventoryListOptions, InventoryPort, Page, RequestContext, StockMutation, UnitOfWorkPort, UpdateInventoryInput } from "@benchledger/application";
 import { InventoryRepository } from "@benchledger/database";
-import type { BenchDatabase } from "@benchledger/database";
+import type { BenchDatabase, InventoryCategoryRepository } from "@benchledger/database";
 import { RuntimeState } from "./persistence.js";
 import {
   apiInventoryFromNative, apiStockEventFromNative, isConfirmedEvidence, mapApiUnitToDomain,
@@ -28,6 +28,7 @@ function mergeInventoryInput(current: ApiInventoryItem, input: UpdateInventoryIn
     ...(current.id === undefined ? {} : { id: current.id }),
     name: input.name ?? current.name,
     kind: input.kind ?? current.kind,
+    ...(input.categoryNodeId === undefined && current.categoryNodeId === undefined ? {} : { categoryNodeId: input.categoryNodeId === null ? undefined : input.categoryNodeId ?? current.categoryNodeId }),
     ...(input.description === undefined && current.description === undefined ? {} : { description: input.description ?? current.description }),
     ...(input.manufacturer === undefined && current.manufacturer === undefined ? {} : { manufacturer: input.manufacturer ?? current.manufacturer }),
     ...(input.model === undefined && current.model === undefined ? {} : { model: input.model ?? current.model }),
@@ -64,7 +65,8 @@ export class ProductionInventoryAdapter implements InventoryPort {
     private readonly database: BenchDatabase,
     private readonly repository: InventoryRepository,
     private readonly state: RuntimeState,
-    private readonly unitOfWork: Pick<UnitOfWorkPort, "exclusive">
+    private readonly unitOfWork: Pick<UnitOfWorkPort, "exclusive">,
+    private readonly categoryAssignments?: InventoryCategoryRepository,
   ) {}
 
   async listItems(options: InventoryListOptions): Promise<Page<ApiInventoryItem>> {
@@ -96,6 +98,7 @@ export class ProductionInventoryAdapter implements InventoryPort {
       return this.database.transaction(() => {
         const created = this.repository.create(native);
         this.state.setInitialVersion(ENTITY, created.id);
+        if (this.categoryAssignments !== undefined && input.categoryNodeId !== undefined) this.categoryAssignments.setItemCategoryNode(created.id, input.categoryNodeId, created.createdAt);
         if (isConfirmedEvidence(input.evidence.state)) {
           const count = initialCountEvent(created, input.availableQuantity ?? input.quantity, 1);
           this.repository.appendStockEvent(count);
@@ -137,6 +140,7 @@ export class ProductionInventoryAdapter implements InventoryPort {
         this.state.ensureVersion(ENTITY, id, expectedVersion);
         const updated = nativeItemFromApi(merged, id, nowIso(), current);
         this.repository.upsert(updated);
+        if (this.categoryAssignments !== undefined && input.categoryNodeId !== undefined) this.categoryAssignments.setItemCategoryNode(id, input.categoryNodeId ?? undefined, updated.updatedAt);
         const nextVersion = this.state.bumpVersion(ENTITY, id);
         if (input.quantity !== undefined || input.evidence !== undefined) {
           if (isConfirmedEvidence(merged.evidence.state)) {
@@ -265,8 +269,10 @@ export class ProductionInventoryAdapter implements InventoryPort {
   }
 
   toApi(item: InventoryItem, version = this.state.getVersion(ENTITY, item.id)): ApiInventoryItem {
+    const assigned = this.categoryAssignments?.getItemCategoryNode(item.id);
+    const withCategory = assigned === undefined ? item : { ...item, categoryNodeId: assigned };
     const balance = this.repository.balance(item.id);
-    return clone(apiInventoryFromNative(item, balance, version));
+    return clone(apiInventoryFromNative(withCategory, balance, version));
   }
 
   metadata(id: string): ReturnType<typeof readInventoryMetadata> {

@@ -20,6 +20,9 @@ import type {
   SaveReconciliationDraft as ApiSaveReconciliationDraft,
   CommitReconciliation as ApiCommitReconciliation,
   ReconciliationCommit as ApiReconciliationCommit,
+  InventoryCategory as ApiInventoryCategory,
+  CreateInventoryCategory as ApiCreateInventoryCategory,
+  UpdateInventoryCategory as ApiUpdateInventoryCategory,
 } from "@benchledger/api-contract";
 
 export type JsonPrimitive = null | boolean | number | string;
@@ -120,6 +123,8 @@ export interface InventoryItem {
   id: string;
   name: string;
   category: string;
+  /** Optional user-managed taxonomy assignment; semantic category remains `category`. */
+  categoryNodeId?: string;
   quantity: Quantity;
   availability: Availability;
   evidence: EvidenceSummary;
@@ -217,6 +222,7 @@ export interface BuildConfigurationReadInput {
 export interface InventoryCreateInput {
   name: string;
   category: string;
+  categoryNodeId?: string;
   quantity: Quantity;
   evidence: EvidenceSummary;
   description?: string;
@@ -234,6 +240,7 @@ export interface InventoryUpdateInput {
   expectedVersion?: number;
   name?: string;
   category?: string;
+  categoryNodeId?: string | null;
   description?: string;
   manufacturer?: string;
   model?: string;
@@ -700,6 +707,18 @@ export interface InventoryBackend {
   listStockEvents(input: StockEventsInput, context: McpRequestContext): Promise<Page<StockEvent>>;
 }
 
+export type InventoryCategory = ApiInventoryCategory;
+export type InventoryCategoryCreateInput = ApiCreateInventoryCategory;
+export type InventoryCategoryUpdateInput = ApiUpdateInventoryCategory;
+
+export interface InventoryCategoriesBackend {
+  list(input: PageInput & { includeArchived?: boolean }, context: McpRequestContext): Promise<Page<InventoryCategory>>;
+  get(input: { categoryId: string }, context: McpRequestContext): Promise<InventoryCategory>;
+  create(input: InventoryCategoryCreateInput, context: McpRequestContext): Promise<WriteResult<InventoryCategory>>;
+  update(input: { categoryId: string; expectedVersion: number } & InventoryCategoryUpdateInput, context: McpRequestContext): Promise<WriteResult<InventoryCategory>>;
+  archive(input: { categoryId: string; expectedVersion: number }, context: McpRequestContext): Promise<WriteResult<InventoryCategory>>;
+}
+
 export interface ProjectsBackend {
   list(input: ProjectListInput, context: McpRequestContext): Promise<Page<Project>>;
   get(input: { projectId: string }, context: McpRequestContext): Promise<Project>;
@@ -770,6 +789,7 @@ export interface ReconciliationBackend {
 
 export interface BenchLedgerBackend {
   inventory: InventoryBackend;
+  inventoryCategories?: InventoryCategoriesBackend;
   /** Optional for backwards-compatible hosts that have not enabled the v2 catalog. */
   catalog?: CatalogBackend;
   projects: ProjectsBackend;

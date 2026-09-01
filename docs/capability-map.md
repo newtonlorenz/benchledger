@@ -16,7 +16,9 @@ resource byte budget.
 | `benchledger://capabilities` | Tool, resource, evidence, transfer, and safety contract | `context:read` |
 | `benchledger://catalog/products/{productId}` | One exact printer or filament catalog identity | `catalog:read` |
 | `benchledger://inventory/summary` | Current counts and categories | `inventory:read` |
+| `benchledger://inventory/categories` | Bounded user-managed category taxonomy; archived nodes are opt-in | `inventory:read` |
 | `benchledger://inventory/items/{itemId}` | One item with quantity, dimensions, links, and evidence | `inventory:read` |
+| `benchledger://inventory/categories/{categoryId}` | One user-managed category or subcategory | `inventory:read` |
 | `benchledger://inventory/items/{itemId}/product-profile` | Exact-product link for one physical item; non-confirming states stay explicit | `catalog:read` |
 | `benchledger://projects/{projectId}/context` | Bounded project brief and next actions | `projects:read` |
 | `benchledger://projects/{projectId}/revisions/{revisionId}` | One versioned planning revision | `projects:read` |
@@ -45,6 +47,8 @@ and invalid hashes. Mutating tools use optimistic versions where applicable.
 | --- | --- | --- | --- |
 | Inventory | `read_inventory_summary`, `list_inventory`, `read_inventory_item`, `list_stock_events` | `inventory:read` | No |
 | Inventory | `create_inventory_item`, `update_inventory_item`, `record_stock_event` | `inventory:write` | Yes |
+| Inventory taxonomy | `list_inventory_categories`, `read_inventory_category` | `inventory:read` | No |
+| Inventory taxonomy | `create_inventory_category`, `update_inventory_category`, `archive_inventory_category` | `inventory:write` | Yes; update/archive require an expected version |
 | Exact inventory | `create_inventory_with_product_profile` | `inventory:write` + `catalog:write` | Yes |
 | Catalog | `search_catalog_products`, `read_catalog_product`, `read_inventory_product_profile` | `catalog:read` | No |
 | Catalog | `create_catalog_product`, `update_catalog_product`, `link_inventory_product_profile` | `catalog:write` | Yes |
@@ -71,6 +75,7 @@ kept in the checked-in capability contract and enforced server-side.
 | Human workflow | UI surface | MCP composition |
 | --- | --- | --- |
 | See what I have | Inventory dashboard and item detail | `read_inventory_summary` → `list_inventory` → item resource |
+| Organize inventory | Planned settings UI; API/MCP available | `list_inventory_categories` → `create_inventory_category` / `update_inventory_category` / `archive_inventory_category`; pass `categoryNodeId` when creating or updating an item |
 | Count uncertain stock | Item count form and stock timeline | `read_inventory_item` → `record_stock_event(kind=count_correction)` |
 | Add an exact printer or spool | Exact-product guided add | catalog search/read → `create_inventory_with_product_profile` |
 | Start a project | Guided project setup | `create_project_with_initial_revision` → `create_work_item`; use `create_project_revision` for later planning baselines |

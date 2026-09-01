@@ -1,4 +1,5 @@
 import type { BenchDatabase, SqliteParameter, SqliteRow } from "@benchledger/database";
+import { migrateInventoryCategorySchema } from "@benchledger/database";
 
 export const RUNTIME_SCHEMA_VERSION = 1;
 
@@ -8,6 +9,7 @@ export const RUNTIME_SCHEMA_VERSION = 1;
  * and command replay data without changing those packages' schemas.
  */
 export function migrateRuntimeSchema(database: BenchDatabase): void {
+  migrateInventoryCategorySchema(database);
   database.exec(`
     CREATE TABLE IF NOT EXISTS forge_runtime_migrations (
       version INTEGER PRIMARY KEY NOT NULL,

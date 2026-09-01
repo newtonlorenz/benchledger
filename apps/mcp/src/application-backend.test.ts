@@ -49,8 +49,22 @@ function serviceStub(): ApplicationService {
     createdAt: "2026-08-30T10:00:00.000Z",
     version: 1,
   };
+  const category = {
+    id: "category-tools",
+    name: "Tools",
+    sortOrder: 0,
+    archived: false,
+    createdAt: "2026-08-30T10:00:00.000Z",
+    updatedAt: "2026-08-30T10:00:00.000Z",
+    version: 1,
+  };
   return {
     listInventory: async () => ({ data: [item], limit: 10 }),
+    listInventoryCategories: async () => ({ data: [category], limit: 10 }),
+    getInventoryCategory: async () => category,
+    createInventoryCategory: async (input: { name: string }) => ({ data: { ...category, id: "category-created", name: input.name }, audit: { id: "audit-category", entityId: "category-created", version: 1 }, correlationId: "bridge-test", replayed: false }),
+    updateInventoryCategory: async (id: string, input: { name?: string }, _expectedVersion: number) => ({ data: { ...category, id, ...(input.name === undefined ? {} : { name: input.name }), version: 2 }, audit: { id: "audit-category-update", entityId: id, version: 2 }, correlationId: "bridge-test", replayed: false }),
+    archiveInventoryCategory: async (id: string, _expectedVersion: number) => ({ data: { ...category, id, archived: true, version: 2 }, audit: { id: "audit-category-archive", entityId: id, version: 2 }, correlationId: "bridge-test", replayed: false }),
     getArtifact: async () => artifact,
     getProjectRevision: async () => ({ id: "revision-1", projectId: "project-1", number: 1, name: "Initial", status: "concept", createdAt: "2026-08-30T10:00:00.000Z", version: 1 }),
     getReservationDetails: async () => ({ projectId: "project-1", projectRevisionId: "revision-1", reservation: { lineId: "bom-1", itemId: "item-1" }, bomLine: { unit: "each" } }),
@@ -65,6 +79,14 @@ describe("createApplicationBackend", () => {
     const backend = createApplicationBackend(serviceStub(), { publicBaseUrl: "http://maker.local:8792", artifactTransfer: transferProvider });
     const result = await backend.inventory.list({ limit: 10 }, context);
     expect(result.items[0]).toMatchObject({ id: "filament-petg", category: "filament", availability: "confirmed", quantity: { value: 1000, unit: "gram" } });
+  });
+
+  it("maps managed categories through the shared application service", async () => {
+    const backend = createApplicationBackend(serviceStub());
+    await expect(backend.inventoryCategories?.list({ limit: 5 }, context)).resolves.toMatchObject({ items: [{ id: "category-tools" }], nextCursor: null, hasMore: false });
+    await expect(backend.inventoryCategories?.create({ name: "Printer parts", sortOrder: 0 }, context)).resolves.toMatchObject({ category: { id: "category-created", name: "Printer parts" }, auditId: "audit-category" });
+    await expect(backend.inventoryCategories?.update({ categoryId: "category-tools", expectedVersion: 1, name: "Workshop tools" }, context)).resolves.toMatchObject({ category: { name: "Workshop tools", version: 2 } });
+    await expect(backend.inventoryCategories?.archive({ categoryId: "category-tools", expectedVersion: 1 }, context)).resolves.toMatchObject({ category: { archived: true } });
   });
 
   it("returns separate short-lived capabilities for upload and finalize", async () => {

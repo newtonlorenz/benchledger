@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ApplicationError } from "@benchledger/application";
 import type { EventBusEvent, RequestContext } from "@benchledger/application";
-import { DomainError } from "@benchledger/domain";
+import { DomainError, normalizeInventoryCategoryKey } from "@benchledger/domain";
 import { BenchDatabase } from "@benchledger/database";
 import {
   RuntimeConflict,
@@ -132,6 +132,32 @@ describe("runtime configuration and persistence", () => {
     database.run("UPDATE forge_runtime_idempotency SET payload_json = ? WHERE actor = ? AND idempotency_key = ?", ["bad", "agent", "key"]);
     expect(state.getIdempotency("agent", "key")).toBeNull();
     expect(sqlParams(["a", 1, null, new Uint8Array([2]), 3n])).toEqual(["a", 1, null, new Uint8Array([2]), 3n]);
+  });
+
+  it("upgrades a legacy category table through the real on-disk startup path", async () => {
+    const root = await mkdtemp(join(tmpdir(), "benchledger-category-migration-"));
+    directories.push(root);
+    const databasePath = join(root, "benchledger.sqlite");
+    const legacy = new BenchDatabase(databasePath);
+    expect(legacy.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'inventory_categories'")).toBeUndefined();
+    legacy.exec(`CREATE TABLE inventory_categories (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+      parent_id TEXT REFERENCES inventory_categories(id),
+      sort_order INTEGER NOT NULL CHECK (sort_order >= 0),
+      archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      version INTEGER NOT NULL CHECK (version > 0)
+    );
+    CREATE UNIQUE INDEX inventory_categories_sibling_name_idx ON inventory_categories(COALESCE(parent_id, ''), lower(name));`);
+    legacy.run("INSERT INTO inventory_categories (id, name, parent_id, sort_order, archived, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", ["legacy-startup-electronique", "Électronique", null, 100, 0, "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z", 1]);
+    legacy.close();
+
+    const runtime = await createProductionRuntime({ dataDir: root, maxUploadBytes: 1024 * 1024, maxStorageBytes: 4 * 1024 * 1024 });
+    runtimes.push(runtime);
+    expect(runtime.database.get("SELECT normalized_name FROM inventory_categories WHERE id = ?", ["legacy-startup-electronique"])).toEqual({ normalized_name: normalizeInventoryCategoryKey("Électronique") });
+    expect(runtime.database.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'inventory_item_category_assignments'")).toMatchObject({ name: "inventory_item_category_assignments" });
   });
 });
 
@@ -282,6 +308,29 @@ describe("production inventory and procurement adapters", () => {
     expect(inventory.balance(confirmed.id)).toMatchObject({ onHand: 5, available: 5 });
     expect(inventory.version(confirmed.id)).toBe(count.item.version);
     expect(inventory.metadata(confirmed.id)).toMatchObject({ kind: "electronic", sku: "ESP32-S3-R2", location: "drawer B" });
+  });
+
+  it("persists managed category hierarchy and additive item assignments", async () => {
+    const runtime = await makeRuntime();
+    const categories = runtime.ports.inventoryCategories!;
+    const parent = await categories.createCategory({ id: "runtime-category-parent", name: "Runtime parent", sortOrder: 900 }, context());
+    const child = await categories.createCategory({ id: "runtime-category-child", name: "Runtime child", parentId: parent.id, sortOrder: 1 }, context());
+    expect(child.parentId).toBe(parent.id);
+    await expect(categories.archiveCategory(parent.id, 1, context())).rejects.toMatchObject({ code: "conflict" });
+    const renamed = await categories.updateCategory(child.id, { name: "Renamed child", sortOrder: 2 }, 1, context());
+    expect(renamed).toMatchObject({ parentId: parent.id, name: "Renamed child", version: 2 });
+    await expect(categories.archiveCategory(child.id, 1, context())).rejects.toMatchObject({ code: "conflict" });
+    expect(await categories.archiveCategory(child.id, 2, context())).toMatchObject({ archived: true, version: 3 });
+    expect(await categories.archiveCategory(parent.id, 1, context())).toMatchObject({ archived: true, version: 2 });
+
+    const referenced = await categories.createCategory({ id: "runtime-category-referenced", name: "Runtime referenced", sortOrder: 901 }, context());
+    const item = await runtime.ports.inventory.createItem({ id: "runtime-category-item", name: "Assigned tool", kind: "tool", quantity: 1, unit: "each", tags: [], links: [], categoryNodeId: referenced.id, evidence: { state: "unknown" } }, context());
+    expect(item).toMatchObject({ categoryNodeId: referenced.id, version: 1 });
+    expect(runtime.database.get("SELECT category_node_id FROM inventory_item_category_assignments WHERE item_id = ?", [item.id])).toEqual({ category_node_id: referenced.id });
+    await expect(categories.archiveCategory(referenced.id, 1, context())).rejects.toMatchObject({ code: "conflict" });
+    await (runtime.ports.inventory as ProductionInventoryAdapter).rollbackCreatedItem(item.id);
+    expect(runtime.database.get("SELECT category_node_id FROM inventory_item_category_assignments WHERE item_id = ?", [item.id])).toBeUndefined();
+    expect(await categories.archiveCategory(referenced.id, 1, context())).toMatchObject({ archived: true, version: 2 });
   });
 
   it("maps every stock event type and actor source while preserving ledger history", async () => {
