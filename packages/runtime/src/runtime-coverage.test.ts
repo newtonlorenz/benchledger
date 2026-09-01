@@ -333,6 +333,8 @@ describe("production inventory and procurement adapters", () => {
     await (runtime.ports.inventory as ProductionInventoryAdapter).rollbackCreatedItem(item.id);
     expect(runtime.database.get("SELECT category_node_id FROM inventory_item_category_assignments WHERE item_id = ?", [item.id])).toBeUndefined();
     expect(await categories.archiveCategory(referenced.id, 1, context())).toMatchObject({ archived: true, version: 2 });
+  });
+
   it("uses offset cursors as opaque inventory page tokens and rejects malformed values", async () => {
     const runtime = await makeRuntime();
     for (const id of ["page-c", "page-a", "page-b"]) {
@@ -347,6 +349,24 @@ describe("production inventory and procurement adapters", () => {
     await expect(runtime.ports.inventory.listItems({ limit: 1, cursor: second.nextCursor! })).resolves.toMatchObject({ data: [{ id: "page-c" }] });
     await expect(runtime.ports.inventory.listItems({ limit: 1, cursor: "-1" })).rejects.toMatchObject({ code: "invalid_cursor" });
     await expect(runtime.ports.inventory.listItems({ limit: 1, cursor: "not-a-cursor" })).rejects.toMatchObject({ code: "invalid_cursor" });
+  });
+
+  it("applies managed and unassigned category filters before inventory pagination", async () => {
+    const runtime = await makeRuntime();
+    const categories = runtime.ports.inventoryCategories!;
+    await categories.createCategory({ id: "page-category-tools", name: "Paged tools", sortOrder: 950 }, context());
+    for (const item of [
+      { id: "page-category-a", name: "Alpha tool", categoryNodeId: "page-category-tools" },
+      { id: "page-category-b", name: "Beta tool", categoryNodeId: "page-category-tools" },
+      { id: "page-unassigned", name: "Legacy tool" }
+    ] as const) {
+      await runtime.ports.inventory.createItem({ ...item, kind: "tool", quantity: 1, unit: "each", tags: [], links: [], evidence: { state: "unknown" } }, context());
+    }
+
+    const first = await runtime.ports.inventory.listItems({ categoryNodeId: "page-category-tools", limit: 1 });
+    expect(first).toMatchObject({ data: [{ id: "page-category-a" }], total: 2, nextCursor: "1" });
+    await expect(runtime.ports.inventory.listItems({ categoryNodeId: "page-category-tools", limit: 1, cursor: first.nextCursor! })).resolves.toMatchObject({ data: [{ id: "page-category-b" }], total: 2 });
+    await expect(runtime.ports.inventory.listItems({ unassigned: true, limit: 10 })).resolves.toMatchObject({ data: [{ id: "page-unassigned" }], total: 1 });
   });
 
   it("keeps every native accessory category in the canonical accessory filter", async () => {

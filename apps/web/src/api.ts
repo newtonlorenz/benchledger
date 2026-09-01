@@ -1346,6 +1346,8 @@ function sampleInventoryPage(items: readonly InventoryItem[], query: InventoryLi
     if (query.kind !== undefined && item.kind !== query.kind) return false;
     if (query.evidence !== undefined && canonicalSampleEvidence(item) !== query.evidence) return false;
     if (query.available !== undefined && ((item.availableQuantity ?? 0) > 0) !== query.available) return false;
+    if (query.categoryNodeId !== undefined && item.categoryNodeId !== query.categoryNodeId) return false;
+    if (query.unassigned === true && item.categoryNodeId !== undefined) return false;
     if (!normalized) return true;
     return [item.name, item.variant, item.description, item.location, item.manufacturer, item.model, item.sku, ...item.tags].filter(Boolean).join(" ").toLocaleLowerCase().includes(normalized);
   }).sort(compareInventoryItems);

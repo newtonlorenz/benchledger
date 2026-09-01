@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commissionInventoryItemSchema, createBomLineSchema, createInventoryItemSchema, updateBomLineSchema, updateInventoryItemSchema } from "./schemas.js";
+import { commissionInventoryItemSchema, createBomLineSchema, createInventoryItemSchema, inventoryListQuerySchema, updateBomLineSchema, updateInventoryItemSchema } from "./schemas.js";
 
 const constraints = {
   kind: "electronic",
@@ -29,6 +29,14 @@ describe("REST BOM constraint schema", () => {
   it("rejects unknown and non-string constraint values at the REST boundary", () => {
     expect(() => createBomLineSchema.parse({ name: "Controller", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: { unsupported: "value" } })).toThrow();
     expect(() => updateBomLineSchema.parse({ constraints: { kind: 42 } })).toThrow();
+  });
+});
+
+describe("REST inventory pagination filters", () => {
+  it("accepts one managed assignment filter and rejects ambiguous combinations", () => {
+    expect(inventoryListQuerySchema.parse({ categoryNodeId: "category-tools", limit: "25" })).toMatchObject({ categoryNodeId: "category-tools", limit: 25 });
+    expect(inventoryListQuerySchema.parse({ unassigned: "true", limit: "25" })).toMatchObject({ unassigned: true, limit: 25 });
+    expect(() => inventoryListQuerySchema.parse({ categoryNodeId: "category-tools", unassigned: "true" })).toThrow();
   });
 });
 

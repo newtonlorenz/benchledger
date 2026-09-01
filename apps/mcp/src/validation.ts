@@ -301,10 +301,11 @@ export function reconciliationCommit(value: unknown): ReconciliationCommitInput 
 export function quantity(value: unknown, label: string): Quantity {
   const input = record(value, label);
   keys(input, ["value", "unit"], label);
-  const result: InventoryListInput = {
+  const result: Quantity = {
     value: finiteNumber(input.value, `${label}.value`, 0.000001),
     unit: enumValue(input.unit, `${label}.unit`, ["piece", "gram", "millimetre", "millilitre", "metre", "roll", "set"] as const),
   };
+  return result;
 }
 
 function optionalQuantity(value: unknown, label: string): Quantity | undefined {
@@ -334,13 +335,14 @@ function optionalDimensions(value: unknown, label: string): Dimensions | undefin
 export function evidence(value: unknown, label: string): EvidenceSummary {
   const input = record(value, label);
   keys(input, ["state", "source", "sourceId", "recordedAt", "note"], label);
-  const result: InventoryListInput = {
+  const result: EvidenceSummary = {
     state: enumValue(input.state, `${label}.state`, ["physical_count", "commissioned", "measured", "manufacturer", "order", "delivery", "user_reported", "inferred", "unknown"] as const),
     source: stringValue(input.source, `${label}.source`, { max: 256 }),
     ...(input.sourceId === undefined ? {} : { sourceId: optionalString(input.sourceId, `${label}.sourceId`, 500) }),
     recordedAt: stringValue(input.recordedAt, `${label}.recordedAt`, { max: 64 }),
     note: optionalString(input.note, `${label}.note`, 2000),
   };
+  return result;
 }
 
 function optionalEvidence(value: unknown, label: string): EvidenceSummary | undefined {

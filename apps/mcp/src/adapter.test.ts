@@ -332,6 +332,8 @@ describe("McpAdapter", () => {
     expect(categoryList?.inputSchema.properties.cursor).toMatchObject({ description: expect.stringContaining("512") });
     const inventoryList = adapter.listTools().find((tool) => tool.name === "list_inventory");
     expect(inventoryList?.inputSchema.properties.cursor).toMatchObject({ description: expect.stringContaining("512") });
+    expect(inventoryList?.inputSchema.properties.categoryNodeId).toMatchObject({ type: "string", maxLength: 160 });
+    expect(inventoryList?.inputSchema.properties.unassigned).toMatchObject({ type: "boolean" });
     const offerList = adapter.listTools().find((tool) => tool.name === "list_offers");
     expect(offerList?.inputSchema.properties.cursor).toMatchObject({ description: expect.stringContaining("512") });
     const categoryRead = adapter.listTools().find((tool) => tool.name === "read_inventory_category");

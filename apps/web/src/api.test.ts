@@ -234,17 +234,28 @@ describe("authenticated BenchLedger API adapter", () => {
   it("keeps sample category rename validation aligned with the managed API", async () => {
     const adapter = createSampleWorkspaceAdapter();
     await expect(adapter.updateInventoryCategory("category-tools", { name: "Filament" }, 1)).rejects.toMatchObject({ status: 409, message: "A category with this name already exists beside it." });
+  });
+
+  it("filters sample inventory by managed assignment before paginating", async () => {
+    const adapter = createSampleWorkspaceAdapter();
+    const assigned = await adapter.createInventoryItem({ name: "Assigned driver", category: "Accessories", categoryNodeId: "category-tools", kind: "tool", quantity: 1, unit: "each" });
+    const categoryPage = await adapter.listInventory({ categoryNodeId: "category-tools", limit: 1 });
+    expect(categoryPage).toMatchObject({ items: [{ id: assigned.id }], total: 1 });
+    const unassignedPage = await adapter.listInventory({ unassigned: true, limit: 200 });
+    expect(unassignedPage.items.some((item) => item.id === assigned.id)).toBe(false);
+  });
+
   it("requests inventory pages from the server and maps pagination without slicing a workspace snapshot", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({
       data: [serverItem({ id: "item-page", name: "Paged item" })], limit: 10, total: 21, nextCursor: "10"
     }));
     const adapter = createWorkspaceAdapter();
-    const result = await adapter.listInventory({ q: "  ESP32 ", kind: "electronic", evidence: "physically_counted", available: true, limit: 10, cursor: "20" });
+    const result = await adapter.listInventory({ q: "  ESP32 ", kind: "electronic", evidence: "physically_counted", available: true, categoryNodeId: "category-electronics", limit: 10, cursor: "20" });
     expect(result).toMatchObject({ items: [{ id: "item-page", name: "Paged item" }], limit: 10, total: 21, nextCursor: "10" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url] = fetchMock.mock.calls[0]!;
     expect(url).toContain("/api/v1/inventory?");
-    expect(new URL(String(url), "http://localhost").search).toBe("?q=ESP32&kind=electronic&evidence=physically_counted&available=true&limit=10&cursor=20");
+    expect(new URL(String(url), "http://localhost").search).toBe("?q=ESP32&kind=electronic&evidence=physically_counted&available=true&categoryNodeId=category-electronics&limit=10&cursor=20");
   });
 
   it("bounds an overlong inventory search before sending it to the server", async () => {
