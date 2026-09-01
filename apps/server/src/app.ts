@@ -639,9 +639,6 @@ function jsonOpenApi(version: string): Record<string, unknown> {
         patch: {
           summary: "Apply one bounded metadata batch to explicit inventory items",
           description: "Targets carry explicit optimistic versions. The server preflights every target and commits location, condition, and tag add/remove changes atomically; no-op targets keep their version and produce no audit or event.",
-<<<<<<< HEAD
-          parameters: [{ name: "Idempotency-Key", in: "header", required: true, description: "Stable command identity used to safely replay an identical bulk update.", schema: { type: "string", minLength: 8, maxLength: 200 } }],
-=======
           parameters: [{
             name: "Idempotency-Key",
             in: "header",
@@ -649,7 +646,6 @@ function jsonOpenApi(version: string): Record<string, unknown> {
             description: "Stable command identity used to safely replay an identical bulk update.",
             schema: { type: "string", minLength: 8, maxLength: 200 }
           }],
->>>>>>> 8d559fc (fix(api): document bulk update idempotency header)
           requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/InventoryBulkUpdate" } } } },
           responses: { "200": { description: "Bulk inventory mutation with per-item audits" }, "400": { description: "Invalid request or missing idempotency key" }, "403": { description: "CSRF, write-scope, or project-scoped denial" }, "409": { description: "Version, idempotency, or atomic commit conflict" } }
         }
