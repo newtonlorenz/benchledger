@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import type * as React from "react";
-import { ApiError, createSampleWorkspaceAdapter, createWorkspaceAdapter } from "./api";
+import { ApiError, createSampleWorkspaceAdapter, createWorkspaceAdapter, MAX_INVENTORY_SEARCH_LENGTH } from "./api";
 import type { WorkspaceAdapter } from "./api";
 import type { BomInput, CatalogProductDraft, ExactInventoryInput, InventoryCommissionInput, InventoryKindQuery, InventoryListQuery, InventoryUpdateInput, RevisionInput } from "./api";
 import { CatalogInventoryFlow, BuildSetupSummary, OwnedItemCombobox, splitSetupValues } from "./catalog-ui";
@@ -61,7 +61,7 @@ function readInventoryUrlState(): { readonly search: string; readonly categoryNo
   const evidenceValues: InventoryEvidenceState[] = ["physically_counted", "commissioned", "delivered_uncounted", "ordered_unverified", "allocated", "consumed", "unknown"];
   const evidence = evidenceValues.includes(evidenceValue as InventoryEvidenceState) ? evidenceValue as InventoryEvidenceState : "All";
   const availability = availableValue === "true" ? "available" : availableValue === "false" ? "unavailable" : "All";
-  return { search: params.get("q")?.trim() ?? "", categoryNodeId, kind, evidence, availability };
+  return { search: params.get("q")?.trim().slice(0, MAX_INVENTORY_SEARCH_LENGTH) ?? "", categoryNodeId, kind, evidence, availability };
 }
 
 const pageCopy: Record<Page, { label: string; icon: Parameters<typeof Icon>[0]["name"] }> = {
@@ -136,7 +136,11 @@ function App() {
     }).catch((error: unknown) => {
       if (!active) return;
       const normalized = normalizeApiError(error);
-      setConnectionError(normalized);
+      if (normalized.kind === "unauthenticated") {
+        handleSessionExpiry(normalized);
+      } else {
+        setConnectionError(normalized);
+      }
       setDemoAvailable(Boolean(normalized.demo));
       setConnection(normalized.kind === "unauthenticated" ? "unauthenticated" : normalized.kind === "offline" ? "offline" : "error");
       setLoading(false);
@@ -194,7 +198,7 @@ function App() {
   };
 
   const searchInventory = (value: string) => {
-    setSearch(value);
+    setSearch(value.slice(0, MAX_INVENTORY_SEARCH_LENGTH));
     navigate("inventory");
   };
 
@@ -279,14 +283,33 @@ function App() {
     }
   };
 
+  const clearAuthenticatedWorkspace = () => {
+    adapter.clearAuthenticatedState();
+    setItems([]);
+    setProjects([]);
+    setOffers([]);
+    setPendingRevisionSetup(undefined);
+    setSelectedItemId(undefined);
+    setCatalogQuery("");
+    setCatalogProducts([]);
+  };
+
+  const handleSessionExpiry = (error: unknown): ApiError => {
+    const normalized = normalizeApiError(error);
+    if (!sampleMode) {
+      clearAuthenticatedWorkspace();
+      setConnectionError(normalized);
+      setConnection("unauthenticated");
+    }
+    return normalized;
+  };
+
   const handleMutationError = (error: unknown, action: string) => {
     const normalized = normalizeApiError(error);
-    setConnectionError(normalized);
     if (!sampleMode && (normalized.kind === "unauthenticated" || normalized.kind === "csrf")) {
-      setConnection("unauthenticated");
-      setItems([]);
-      setProjects([]);
-      setOffers([]);
+      handleSessionExpiry(normalized);
+    } else {
+      setConnectionError(normalized);
     }
     setToast(writeFailureMessage(normalized, action));
   };
@@ -543,7 +566,7 @@ function App() {
               <label className="global-search">
                 <Icon name="search" size={17} />
                 <span className="sr-only">Search inventory</span>
-                <input ref={searchInputRef} value={search} onChange={(event) => searchInventory(event.target.value)} placeholder="Search inventory" aria-label="Search inventory" />
+                <input ref={searchInputRef} value={search} maxLength={MAX_INVENTORY_SEARCH_LENGTH} onChange={(event) => searchInventory(event.target.value)} placeholder="Search inventory" aria-label="Search inventory" />
                 <kbd>⌘ K</kbd>
               </label>
               <button className={`mode-toggle ${expert ? "is-expert" : ""}`} onClick={() => setExpert((current) => !current)} aria-pressed={expert}>
@@ -557,7 +580,7 @@ function App() {
 
           <main className="content" id="main-content">
             {page === "overview" && <OverviewPage items={items} projects={projects} expert={expert} sampleMode={sampleMode} onNavigate={navigate} onOpenProject={openProject} onSelectItem={setSelectedItemId} onNewProject={openNewProject} />}
-            {page === "inventory" && <InventoryPage adapter={adapter} categories={categories} search={search} refreshKey={inventoryRefreshNonce} onSearch={setSearch} onPageItems={(pageItems) => setItems((current) => { const byId = new Map(current.map((item) => [item.id, item] as const)); pageItems.forEach((item) => byId.set(item.id, item)); return [...byId.values()]; })} onSelectItem={setSelectedItemId} onNewItem={() => setShowNewItem(true)} />}
+            {page === "inventory" && <InventoryPage adapter={adapter} categories={categories} search={search} refreshKey={inventoryRefreshNonce} onSearch={(value) => setSearch(value.slice(0, MAX_INVENTORY_SEARCH_LENGTH))} onSessionExpired={handleSessionExpiry} onPageItems={(pageItems) => setItems((current) => { const byId = new Map(current.map((item) => [item.id, item] as const)); pageItems.forEach((item) => byId.set(item.id, item)); return [...byId.values()]; })} onSelectItem={setSelectedItemId} onNewItem={() => setShowNewItem(true)} />}
             {page === "projects" && selectedProject && <ProjectPage project={selectedProject} projects={projects} items={items} offers={offers} tab={projectTab} expert={expert} sampleMode={sampleMode} onTabChange={setProjectTab} onSelectProject={setSelectedProjectId} onOpenItem={setSelectedItemId} onNavigate={navigate} onToast={setToast} onNewProject={openNewProject} onNewRevision={() => setShowNewRevision(true)} onRetrySetup={pendingRevisionSetup?.projectId === selectedProject.id && pendingRevisionSetup.revisionId === selectedProject.serverRevisionId ? retryRevisionSetup : undefined} onAddBom={() => setShowAddBom(true)} onUpload={uploadArtifact} onReadReconciliation={adapter.readReconciliation} onSaveReconciliation={adapter.saveReconciliationDraft} onCommitReconciliation={adapter.commitReconciliation} onRefreshWorkspace={refreshWorkspace} />}
             {page === "projects" && !selectedProject && <EmptyState icon="folder" title="No projects yet" description="Start with a name and project goal. You can add parts and files after that." action="Create first project" onAction={() => setShowNewProject(true)} />}
             {page === "capabilities" && <CapabilitiesPage expert={expert} onCopy={setToast} />}
@@ -699,7 +722,7 @@ function SectionHeading({ eyebrow, title, action, onAction }: { eyebrow: string;
   return <div className="section-heading"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2></div>{action && <button className="text-button" onClick={onAction}>{action}<Icon name="arrow-right" size={14} /></button>}</div>;
 }
 
-function InventoryPage({ adapter, categories, search, refreshKey, onSearch, onPageItems, onSelectItem, onNewItem }: { adapter: WorkspaceAdapter; categories: readonly ManagedInventoryCategory[]; search: string; refreshKey: number; onSearch: (value: string) => void; onPageItems: (items: readonly InventoryItem[]) => void; onSelectItem: (id: string) => void; onNewItem: () => void }) {
+function InventoryPage({ adapter, categories, search, refreshKey, onSearch, onSessionExpired, onPageItems, onSelectItem, onNewItem }: { adapter: WorkspaceAdapter; categories: readonly ManagedInventoryCategory[]; search: string; refreshKey: number; onSearch: (value: string) => void; onSessionExpired: (error: unknown) => void; onPageItems: (items: readonly InventoryItem[]) => void; onSelectItem: (id: string) => void; onNewItem: () => void }) {
   const initialUrlState = readInventoryUrlState();
   const [categoryNodeId, setCategoryNodeId] = useState(initialUrlState.categoryNodeId);
   const [kind, setKind] = useState<InventoryKindQuery | "All">(initialUrlState.kind);
@@ -756,7 +779,12 @@ function InventoryPage({ adapter, categories, search, refreshKey, onSearch, onPa
         onPageItems(result.items);
       }).catch((cause: unknown) => {
         if (!active || sequence !== requestSequence.current) return;
-        setError(normalizeApiError(cause));
+        const normalized = normalizeApiError(cause);
+        if (normalized.kind === "unauthenticated") {
+          onSessionExpired(normalized);
+        } else {
+          setError(normalized);
+        }
       }).finally(() => {
         if (active && sequence === requestSequence.current) setLoading(false);
       });
@@ -784,7 +812,14 @@ function InventoryPage({ adapter, categories, search, refreshKey, onSearch, onPa
       setTotal(result.total);
       onPageItems(result.items);
     } catch (cause: unknown) {
-      if (sequence === requestSequence.current) setLoadMoreError(normalizeApiError(cause));
+      if (sequence === requestSequence.current) {
+        const normalized = normalizeApiError(cause);
+        if (normalized.kind === "unauthenticated") {
+          onSessionExpired(normalized);
+        } else {
+          setLoadMoreError(normalized);
+        }
+      }
     } finally {
       if (sequence === requestSequence.current) setLoadingMore(false);
     }
@@ -801,7 +836,7 @@ function InventoryPage({ adapter, categories, search, refreshKey, onSearch, onPa
     <PageHeader eyebrow="Inventory" title="Review inventory." description="Check tools, materials, components, quantities, and evidence." action="Add item" onAction={onNewItem} />
     <section className="surface inventory-section">
       <div className="inventory-toolbar" aria-label="Inventory filters">
-        <label className="field-search"><Icon name="search" size={17} /><span className="sr-only">Filter inventory</span><input value={search} onChange={(event) => onSearch(event.target.value)} placeholder="Search name, model, tag, or location" /></label>
+        <label className="field-search"><Icon name="search" size={17} /><span className="sr-only">Filter inventory</span><input value={search} maxLength={MAX_INVENTORY_SEARCH_LENGTH} onChange={(event) => onSearch(event.target.value)} placeholder="Search name, model, tag, or location" /></label>
         <div className="inventory-filter-grid">
           <InventoryFilter label="Category" value={categoryNodeId} onChange={setCategoryNodeId} options={[{ value: "", label: "All categories" }, ...inventoryCategoryFilterOptions(categories), { value: UNASSIGNED_CATEGORY_FILTER, label: "Unassigned legacy items" }]} />
           <InventoryFilter label="Kind" value={kind} onChange={(value) => setKind(value as InventoryKindQuery | "All")} options={[{ value: "All", label: "All kinds" }, ...inventoryKindOptions]} />

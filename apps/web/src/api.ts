@@ -145,6 +145,7 @@ export interface InventoryPage {
   nextCursor?: string;
 }
 export interface WorkspaceAdapter {
+  clearAuthenticatedState(): void;
   checkHealth(): Promise<ServerHealth>;
   session(): Promise<SessionResult>;
   login(password: string): Promise<LoginResult>;
@@ -171,6 +172,8 @@ export interface WorkspaceAdapter {
   saveReconciliationDraft(projectId: string, revisionId: string, model: ReconciliationViewModel): Promise<ReconciliationViewModel>;
   commitReconciliation(projectId: string, revisionId: string, model: ReconciliationViewModel): Promise<ReconciliationViewModel>;
 }
+
+export const MAX_INVENTORY_SEARCH_LENGTH = 200;
 
 function apiRoot(): string {
   const configured = import.meta.env.VITE_BENCHLEDGER_API_URL as string | undefined;
@@ -1367,6 +1370,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     serverRevisionId: `sample-revision-${Date.now()}`
   });
   return {
+    clearAuthenticatedState() {},
     async checkHealth() { return { status: "ok", service: "benchledger", version: "sample", demo: true, now: new Date().toISOString() }; },
     async session() { return { authenticated: true, actor: "sample", source: "demo", scopes: ["read", "write"] }; },
     async login() { return { authenticated: true, actor: "sample", csrfToken: "sample", expiresAt: new Date(Date.now() + 3_600_000).toISOString() }; },
@@ -1582,6 +1586,12 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
   const pendingReconciliationDraftCommands = new Map<string, PendingReconciliationCommand<ReconciliationDraftRequestBody>>();
   const pendingReconciliationCommitCommands = new Map<string, PendingReconciliationCommand<ReconciliationCommitRequestBody>>();
   const adapter: WorkspaceAdapter = {
+    clearAuthenticatedState() {
+      csrfToken = undefined;
+      serverUnits.clear();
+      inventoryCache.clear();
+      projectCache.clear();
+    },
     async checkHealth() { health = await request<ServerHealth>("/health"); return health; },
     async session() { return request<SessionResult>("/auth/session"); },
     async login(password) {
@@ -1615,7 +1625,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
     },
     async listInventory(query) {
       const params = new URLSearchParams();
-      const normalizedQuery = query.q?.trim();
+      const normalizedQuery = query.q?.trim().slice(0, MAX_INVENTORY_SEARCH_LENGTH);
       if (normalizedQuery) params.set("q", normalizedQuery);
       if (query.kind) params.set("kind", query.kind);
       if (query.evidence) params.set("evidence", query.evidence);
