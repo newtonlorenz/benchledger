@@ -29,6 +29,9 @@ type Page = "overview" | "inventory" | "projects" | "capabilities" | "settings";
 type ProjectTab = "plan" | "files" | "offers" | "reconciliation";
 type ConnectionState = "loading" | "ready" | "sample" | "unauthenticated" | "offline" | "error";
 type PendingRevisionSetup = { readonly projectId: string; readonly revisionId: string; readonly input: BuildConfigInput };
+type ProjectCreateOutcome = "created" | "failed" | "ambiguous";
+
+const ambiguousProjectCreationMessage = "BenchLedger could not confirm whether this project was created. Your details are still here. Retry safely; the same command will be replayed if it committed.";
 
 const pageCopy: Record<Page, { label: string; icon: Parameters<typeof Icon>[0]["name"] }> = {
   overview: { label: "Workbench", icon: "grid" },
@@ -77,6 +80,7 @@ function App() {
   const [catalogProducts, setCatalogProducts] = useState<CatalogProduct[]>([]);
   const catalogSearchSequence = useRef(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const newProjectTriggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     let active = true;
@@ -141,6 +145,17 @@ function App() {
   const searchInventory = (value: string) => {
     setSearch(value);
     navigate("inventory");
+  };
+
+  const openNewProject = (event: React.MouseEvent<HTMLButtonElement>) => {
+    newProjectTriggerRef.current = event.currentTarget;
+    setShowNewProject(true);
+  };
+
+  const closeNewProject = () => {
+    setShowNewProject(false);
+    const trigger = newProjectTriggerRef.current;
+    if (trigger) window.setTimeout(() => trigger.focus(), 32);
   };
 
   const retryConnection = () => {
@@ -248,7 +263,7 @@ function App() {
     }
   };
 
-  const createProject = async (input: Pick<Project, "name" | "description">): Promise<boolean> => {
+  const createProject = async (input: Pick<Project, "name" | "description">): Promise<ProjectCreateOutcome> => {
     try {
       const project = await adapter.createProject(input);
       setProjects((current) => [project, ...current]);
@@ -256,10 +271,16 @@ function App() {
       setShowNewProject(false);
       setPage("projects");
       setToast(`${project.name} is ready for its first requirements.`);
-      return true;
+      return "created";
     } catch (error: unknown) {
-      handleMutationError(error, "creating that project");
-      return false;
+      const normalized = normalizeApiError(error);
+      if (isAmbiguousMutation(normalized)) {
+        setConnectionError(normalized);
+        setToast(ambiguousProjectCreationMessage);
+        return "ambiguous";
+      }
+      handleMutationError(normalized, "creating that project");
+      return "failed";
     }
   };
 
@@ -432,9 +453,9 @@ function App() {
           {sampleMode && <SampleBanner onReturn={returnToPrivateWorkspace} />}
 
           <main className="content" id="main-content">
-            {page === "overview" && <OverviewPage items={items} projects={projects} expert={expert} sampleMode={sampleMode} onNavigate={navigate} onOpenProject={openProject} onSelectItem={setSelectedItemId} onNewProject={() => setShowNewProject(true)} />}
+            {page === "overview" && <OverviewPage items={items} projects={projects} expert={expert} sampleMode={sampleMode} onNavigate={navigate} onOpenProject={openProject} onSelectItem={setSelectedItemId} onNewProject={openNewProject} />}
             {page === "inventory" && <InventoryPage items={items} search={search} expert={expert} onSearch={setSearch} onSelectItem={setSelectedItemId} onNewItem={() => setShowNewItem(true)} />}
-            {page === "projects" && selectedProject && <ProjectPage project={selectedProject} projects={projects} items={items} offers={offers} tab={projectTab} expert={expert} sampleMode={sampleMode} onTabChange={setProjectTab} onSelectProject={setSelectedProjectId} onOpenItem={setSelectedItemId} onNavigate={navigate} onToast={setToast} onNewRevision={() => setShowNewRevision(true)} onRetrySetup={pendingRevisionSetup?.projectId === selectedProject.id && pendingRevisionSetup.revisionId === selectedProject.serverRevisionId ? retryRevisionSetup : undefined} onAddBom={() => setShowAddBom(true)} onUpload={uploadArtifact} onReadReconciliation={adapter.readReconciliation} onSaveReconciliation={adapter.saveReconciliationDraft} onCommitReconciliation={adapter.commitReconciliation} onRefreshWorkspace={refreshWorkspace} />}
+            {page === "projects" && selectedProject && <ProjectPage project={selectedProject} projects={projects} items={items} offers={offers} tab={projectTab} expert={expert} sampleMode={sampleMode} onTabChange={setProjectTab} onSelectProject={setSelectedProjectId} onOpenItem={setSelectedItemId} onNavigate={navigate} onToast={setToast} onNewProject={openNewProject} onNewRevision={() => setShowNewRevision(true)} onRetrySetup={pendingRevisionSetup?.projectId === selectedProject.id && pendingRevisionSetup.revisionId === selectedProject.serverRevisionId ? retryRevisionSetup : undefined} onAddBom={() => setShowAddBom(true)} onUpload={uploadArtifact} onReadReconciliation={adapter.readReconciliation} onSaveReconciliation={adapter.saveReconciliationDraft} onCommitReconciliation={adapter.commitReconciliation} onRefreshWorkspace={refreshWorkspace} />}
             {page === "projects" && !selectedProject && <EmptyState icon="folder" title="No projects yet" description="Start with a name and project goal. You can add parts and files after that." action="Create first project" onAction={() => setShowNewProject(true)} />}
             {page === "capabilities" && <CapabilitiesPage expert={expert} onCopy={setToast} />}
             {page === "settings" && <SettingsPage expert={expert} sampleMode={sampleMode} connection={connection} onExpert={() => setExpert((current) => !current)} onLogout={sampleMode ? returnToPrivateWorkspace : signOut} />}
@@ -443,7 +464,7 @@ function App() {
       </div>
 
       {selectedItem && <InventoryDrawer item={selectedItem} expert={expert} onClose={() => setSelectedItemId(undefined)} onCount={recordCount} onUpdate={updateInventoryItem} />}
-      {showNewProject && <NewProjectDialog onClose={() => setShowNewProject(false)} onCreate={createProject} />}
+      {showNewProject && <NewProjectDialog onClose={closeNewProject} onCreate={createProject} />}
       {showNewRevision && selectedProject && <NewRevisionDialog project={selectedProject} items={items} expert={expert} onClose={() => setShowNewRevision(false)} onCreate={createRevision} />}
       {showAddBom && selectedProject && <AddBomDialog items={items} project={selectedProject} onClose={() => setShowAddBom(false)} onCreate={addBomLine} />}
       {showNewItem && <NewInventoryDialog catalogQuery={catalogQuery} catalogProducts={catalogProducts} onCatalogQuery={setCatalogQuery} onSearchCatalog={searchCatalogProducts} onCreateCatalogProduct={addCatalogProduct} onCreateExact={addExactInventoryItem} onClose={() => setShowNewItem(false)} onCreate={addInventoryItem} />}
@@ -487,6 +508,10 @@ function writeFailureMessage(error: ApiError, action: string): string {
   return `Cannot complete ${action}. Nothing was saved.`;
 }
 
+function isAmbiguousMutation(error: ApiError): boolean {
+  return !["validation", "forbidden", "unauthenticated", "csrf"].includes(error.kind);
+}
+
 function ConnectionScreen({ state, error, demoAvailable, onLogin, onRetry, onSample }: { state: Exclude<ConnectionState, "loading" | "ready" | "sample">; error: ApiError | undefined; demoAvailable: boolean; onLogin: (password: string) => Promise<void>; onRetry: () => void; onSample: () => void }) {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -510,7 +535,7 @@ function SampleBanner({ onReturn }: { onReturn: () => void }) {
   return <div className="offline-banner sample-banner" role="status"><Icon name="info" size={17} /><div><strong>Sample workspace</strong><span>This is synthetic data for exploring the workflow. It is not your inventory and nothing is saved to the private service.</span></div><button className="text-button" onClick={onReturn}><Icon name="arrow-left" size={15} /> Return to private workspace</button></div>;
 }
 
-function PageHeader({ eyebrow, title, description, action, onAction, actionIcon = "plus", children }: { eyebrow: string; title: string; description: string; action?: string | undefined; onAction?: (() => void) | undefined; actionIcon?: Parameters<typeof Icon>[0]["name"]; children?: ReactNode }) {
+function PageHeader({ eyebrow, title, description, action, onAction, actionIcon = "plus", children }: { eyebrow: string; title: string; description: string; action?: string | undefined; onAction?: ((event: React.MouseEvent<HTMLButtonElement>) => void) | undefined; actionIcon?: Parameters<typeof Icon>[0]["name"]; children?: ReactNode }) {
   return <div className="page-header"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{description}</p></div><div className="header-actions">{children}{action && <button className="button button-primary" onClick={onAction}><Icon name={actionIcon} size={17} />{action}</button>}</div></div>;
 }
 
@@ -518,7 +543,7 @@ function BuildRail({ currentStep, projectName, onProject }: { currentStep: numbe
   return <section className="build-rail" aria-label="Build progress"><div className="rail-heading"><div><span className="eyebrow">Build path</span><strong>{projectName ?? "Your next build"}</strong></div>{onProject && <button className="text-button" onClick={onProject}>Open project <Icon name="arrow-right" size={15} /></button>}</div><div className="rail-track">{railSteps.map((step, index) => <div className={`rail-step ${index < currentStep ? "is-complete" : ""} ${index === currentStep ? "is-current" : ""}`} key={step}><span className="rail-marker">{index < currentStep ? <Icon name="check" size={13} /> : index + 1}</span><span>{step}</span>{index < railSteps.length - 1 && <span className="rail-line" aria-hidden="true" />}</div>)}</div></section>;
 }
 
-function OverviewPage({ items, projects, expert, sampleMode, onNavigate, onOpenProject, onSelectItem, onNewProject }: { items: InventoryItem[]; projects: Project[]; expert: boolean; sampleMode: boolean; onNavigate: (page: Page) => void; onOpenProject: (id: string, tab?: ProjectTab) => void; onSelectItem: (id: string) => void; onNewProject: () => void }) {
+function OverviewPage({ items, projects, expert, sampleMode, onNavigate, onOpenProject, onSelectItem, onNewProject }: { items: InventoryItem[]; projects: Project[]; expert: boolean; sampleMode: boolean; onNavigate: (page: Page) => void; onOpenProject: (id: string, tab?: ProjectTab) => void; onSelectItem: (id: string) => void; onNewProject: (event: React.MouseEvent<HTMLButtonElement>) => void }) {
   const counts = countByState(items);
   const activeProject = projects.find((project) => project.status === "In progress") ?? projects[0];
   const activeSummary = activeProject ? calculateProjectSummary(activeProject, items) : undefined;
@@ -613,7 +638,7 @@ function StatusPill({ state, compact = false }: { state: StockState | "optional"
   return <span className={`status-pill tone-${status.tone} ${compact ? "status-compact" : ""}`}><span className="status-symbol" aria-hidden="true">{status.tone === "good" ? "✓" : status.tone === "bad" ? "!" : status.tone === "warn" ? "?" : "–"}</span>{status.label}</span>;
 }
 
-function ProjectPage({ project, projects, items, offers, tab, expert, sampleMode, onTabChange, onSelectProject, onOpenItem, onNavigate, onToast, onNewRevision, onRetrySetup, onAddBom, onUpload, onReadReconciliation, onSaveReconciliation, onCommitReconciliation, onRefreshWorkspace }: {
+function ProjectPage({ project, projects, items, offers, tab, expert, sampleMode, onTabChange, onSelectProject, onOpenItem, onNavigate, onToast, onNewProject, onNewRevision, onRetrySetup, onAddBom, onUpload, onReadReconciliation, onSaveReconciliation, onCommitReconciliation, onRefreshWorkspace }: {
   project: Project;
   projects: Project[];
   items: InventoryItem[];
@@ -626,6 +651,7 @@ function ProjectPage({ project, projects, items, offers, tab, expert, sampleMode
   onOpenItem: (id: string) => void;
   onNavigate: (page: Page) => void;
   onToast: (message: string) => void;
+  onNewProject: (event: React.MouseEvent<HTMLButtonElement>) => void;
   onNewRevision: () => void;
   onRetrySetup?: (() => void) | undefined;
   onAddBom: () => void;
@@ -685,7 +711,7 @@ function ProjectPage({ project, projects, items, offers, tab, expert, sampleMode
     }
   };
   return <>
-    <PageHeader eyebrow="Project" title={project.name} description={project.subtitle}><select className="project-select" aria-label="Choose project" value={project.id} onChange={(event) => onSelectProject(event.target.value)}>{projects.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select>{onRetrySetup && <button className="button button-secondary" onClick={onRetrySetup}><Icon name="refresh" size={16} /> Retry setup</button>}<button className="button button-secondary" onClick={onNewRevision}><Icon name="plus" size={16} /> New revision</button></PageHeader>
+    <PageHeader eyebrow="Project" title={project.name} description={project.subtitle} action="New project" onAction={onNewProject}><select className="project-select" aria-label="Choose project" value={project.id} onChange={(event) => onSelectProject(event.target.value)}>{projects.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select>{onRetrySetup && <button className="button button-secondary" onClick={onRetrySetup}><Icon name="refresh" size={16} /> Retry setup</button>}<button className="button button-secondary" onClick={onNewRevision}><Icon name="plus" size={16} /> New revision</button></PageHeader>
     <BuildRail currentStep={project.railStep} projectName={`${project.name} · ${project.currentRevision}`} />
     <div className="dossier-layout"><aside className="dossier-column"><div className="dossier-status"><span className={`status-pill tone-${project.status === "Complete" ? "good" : "info"}`}><span className="status-symbol">●</span>{project.status}</span><span className="revision-label">{project.currentRevision}</span></div><h2>{project.workItem}</h2><p>{project.description}</p><div className="dossier-next"><span className="eyebrow">Next action</span><strong>{summary.inspectLines ? "Check the physical stock" : summary.missingLines ? "Source the remaining parts" : "Ready to validate"}</strong><span>{summary.inspectLines ? `${summary.inspectLines} BOM line needs a count before it can be reserved.` : `${summary.missingLines} BOM lines are not covered by confirmed stock.`}</span></div><dl className="dossier-facts"><div><dt>Current revision</dt><dd>{project.currentRevision}</dd></div><div><dt>Build files</dt><dd>{project.artifacts.length} artifacts</dd></div><div><dt>Last changed</dt><dd>{project.updated}</dd></div></dl>{project.buildConfigSnapshot && <BuildSetupSummary input={project.buildConfigSnapshot} printer={configuredPrinter} filament={configuredFilament} expert={expert} />}{expert && <details className="expert-detail" open><summary>Expert context</summary><div className="detail-grid"><div><span>Work item ID</span><code>{project.id}/work-item</code></div><div><span>Revision state</span><code>State is supplied by the connected service.</code></div><div><span>Artifact policy</span><code>Retained revisions are not overwritten.</code></div></div></details>}<button className="text-button dossier-inventory-link" onClick={() => onNavigate("inventory")}>Browse all inventory <Icon name="arrow-right" size={15} /></button></aside><section className="dossier-workspace"><div className="tab-list" role="tablist" aria-label="Project workspace"><button role="tab" aria-selected={tab === "plan"} className={tab === "plan" ? "is-active" : ""} onClick={() => onTabChange("plan")}><Icon name="clipboard" size={16} /> Plan <span>{summary.totalLines}</span></button><button role="tab" aria-selected={tab === "files"} className={tab === "files" ? "is-active" : ""} onClick={() => onTabChange("files")}><Icon name="folder" size={16} /> Files <span>{project.artifacts.length}</span></button><button role="tab" aria-selected={tab === "offers"} className={tab === "offers" ? "is-active" : ""} onClick={() => onTabChange("offers")}><Icon name="tag" size={16} /> Shopping list <span>{summary.missingLines}</span></button>{hasServerRevision && <button role="tab" aria-selected={tab === "reconciliation"} className={tab === "reconciliation" ? "is-active" : ""} onClick={() => onTabChange("reconciliation")}><Icon name="check-circle" size={16} /> Close out <span>{reconciliation?.status === "committed" ? "Done" : "Review"}</span></button>}</div>{tab === "plan" && <ProjectPlan project={project} summary={summary} expert={expert} onOpenItem={onOpenItem} onAddBom={onAddBom} />}{tab === "files" && <ProjectFiles project={project} expert={expert} sampleMode={sampleMode} onUpload={(file, role) => onUpload(project.id, file, role)} />}{tab === "offers" && <ShoppingList project={project} summary={summary} offers={offers} expert={expert} onToast={onToast} onBackToPlan={() => onTabChange("plan")} />}{tab === "reconciliation" && hasServerRevision && <section className="reconciliation-page-surface">{reconciliationLoading && <div className="reconciliation-loading" role="status"><span className="eyebrow">Project close-out</span><strong>Loading the current review…</strong><p>Nothing changes in inventory while this review loads.</p></div>}{reconciliationError && !reconciliationLoading && <div className="reconciliation-loading reconciliation-load-error" role="alert"><span className="eyebrow">Could not load close-out</span><strong>{reconciliationError}</strong><button className="button button-secondary" onClick={() => onTabChange("plan")}>Back to plan</button></div>}{reconciliation && !reconciliationLoading && !reconciliationError && <ReconciliationUI model={reconciliation} expert={expert} onChange={setReconciliation} onRequestPreview={saveReconciliation} onConfirmCommit={commitReconciliation} />}</section>}</section></div>
   </>;
@@ -814,10 +840,16 @@ function useOverlayBehavior(containerRef: React.RefObject<HTMLElement | null>, o
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
     const container = containerRef.current;
     const focusFirstControl = () => {
-      const first = container?.querySelector<HTMLElement>("[autofocus]") ?? container?.querySelector<HTMLElement>(focusableOverlaySelector);
+      const first = container?.querySelector<HTMLElement>("[data-autofocus]")
+        ?? container?.querySelector<HTMLElement>("form input:not([disabled]), form textarea:not([disabled]), form select:not([disabled])")
+        ?? container?.querySelector<HTMLElement>(focusableOverlaySelector);
       first?.focus();
     };
     focusFirstControl();
+    // The background becomes inert in the same render as the dialog. Some
+    // browsers clear focus from the triggering control after that attribute
+    // changes, so repeat the handoff after the browser applies inertness.
+    const deferredFocus = window.setTimeout(focusFirstControl, 0);
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -847,8 +879,16 @@ function useOverlayBehavior(containerRef: React.RefObject<HTMLElement | null>, o
     document.addEventListener("keydown", handleKeyDown);
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
+      window.clearTimeout(deferredFocus);
       if (previousFocus?.isConnected) {
-        window.setTimeout(() => previousFocus.focus(), 0);
+        let restoreAttempts = 0;
+        const restoreFocus = () => {
+          if (!previousFocus.isConnected) return;
+          previousFocus.focus();
+          restoreAttempts += 1;
+          if (document.activeElement !== previousFocus && restoreAttempts < 3) window.setTimeout(restoreFocus, 16);
+        };
+        window.setTimeout(restoreFocus, 0);
       }
     };
   }, [containerRef]);
@@ -966,7 +1006,7 @@ function InventoryDrawer({ item, expert, onClose, onCount, onUpdate }: { item: I
   </>;
 }
 
-function NewProjectDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (input: Pick<Project, "name" | "description">) => Promise<boolean> }) {
+function NewProjectDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (input: Pick<Project, "name" | "description">) => Promise<ProjectCreateOutcome> }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -977,8 +1017,9 @@ function NewProjectDialog({ onClose, onCreate }: { onClose: () => void; onCreate
     setSubmitting(true);
     setFormError(undefined);
     try {
-      const created = await onCreate({ name: name.trim(), description: description.trim() || "Project goal not recorded." });
-      if (!created) setFormError("The project was not created. Check the service connection and try again.");
+      const outcome = await onCreate({ name: name.trim(), description: description.trim() || "Project goal not recorded." });
+      if (outcome === "failed") setFormError("The project was not created. Check the service connection and try again.");
+      if (outcome === "ambiguous") setFormError(ambiguousProjectCreationMessage);
     } catch (error: unknown) {
       setFormError(normalizeApiError(error).message);
     } finally {

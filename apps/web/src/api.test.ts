@@ -231,6 +231,73 @@ describe("authenticated BenchLedger API adapter", () => {
     for (const [, init] of fetchMock.mock.calls.slice(1)) expect(new Headers(init?.headers).get("x-csrf-token")).toBe("csrf-project");
   });
 
+  it("reuses a project command key after an ambiguous response, then releases it for a later identical create", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-project-retry" });
+    const requestBodies: string[] = [];
+    const requestKeys: string[] = [];
+    let writeCount = 0;
+    const responseFor = (id: string) => jsonResponse({ data: {
+      project: serverProject({ id, name: "Retry project", description: "A safely retried project", currentRevisionId: `revision-${id}` }),
+      revision: serverRevision({ id: `revision-${id}`, projectId: id })
+    } });
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async (_input, init) => {
+        writeCount += 1;
+        requestBodies.push(String(init?.body));
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        // The server has committed before the response is lost. A retry must
+        // replay the same atomic project + initial revision command.
+        return Promise.reject(new TypeError("response lost after commit"));
+      })
+      .mockImplementationOnce(async (_input, init) => {
+        writeCount += 1;
+        requestBodies.push(String(init?.body));
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        return responseFor("project-changed");
+      })
+      .mockImplementationOnce(async (_input, init) => {
+        writeCount += 1;
+        requestBodies.push(String(init?.body));
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        return responseFor("project-replayed");
+      })
+      .mockImplementationOnce(async (_input, init) => {
+        writeCount += 1;
+        requestBodies.push(String(init?.body));
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        return responseFor("project-new");
+      });
+
+    const adapter = createWorkspaceAdapter();
+    const input = { name: "Retry project", description: "A safely retried project" };
+    await expect(adapter.createProject(input)).rejects.toMatchObject({ kind: "offline" });
+
+    const changed = await adapter.createProject({ ...input, description: "A changed project" });
+    expect(changed).toMatchObject({ id: "project-changed" });
+    expect(writeCount).toBe(2);
+    expect(requestKeys[1]).not.toBe(requestKeys[0]);
+    expect(requestBodies[1]).not.toBe(requestBodies[0]);
+
+    const replayed = await adapter.createProject(input);
+    expect(replayed).toMatchObject({ id: "project-replayed", currentRevision: "r01", serverRevisionId: "revision-project-replayed" });
+    expect(writeCount).toBe(3);
+    expect(requestBodies[2]).toBe(requestBodies[0]);
+    expect(requestKeys[2]).toBe(requestKeys[0]);
+    expect(requestKeys[0]).toMatch(/^web-project-/);
+    expect(JSON.parse(requestBodies[0]!)).toEqual({
+      project: { name: "Retry project", description: "A safely retried project", status: "idea" },
+      revision: { name: "Initial concept", status: "concept" }
+    });
+
+    // Once replay succeeds, a later intentional identical create gets a fresh
+    // command identity rather than inheriting the resolved retry key.
+    await adapter.createProject(input);
+    expect(writeCount).toBe(4);
+    expect(requestKeys[3]).not.toBe(requestKeys[0]);
+    expect(requestBodies[3]).toBe(requestBodies[0]);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
   it("reuses a revision command key after an ambiguous response, then releases it for a later revision", async () => {
     vi.stubGlobal("document", { cookie: "forge_csrf=csrf-revision-retry" });
     const committedRevision = serverRevision({ id: "revision-replayed", number: 2, name: "Fit pass", status: "CAD complete" });

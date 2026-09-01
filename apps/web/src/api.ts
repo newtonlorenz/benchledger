@@ -783,6 +783,16 @@ type RevisionRequestBody = {
   readonly status: string;
 };
 
+type ProjectRequestBody = {
+  readonly project: { readonly name: string; readonly description: string; readonly status: "idea" };
+  readonly revision: { readonly name: "Initial concept"; readonly status: "concept" };
+};
+
+type PendingProjectCommand = {
+  readonly key: string;
+  readonly body: ProjectRequestBody;
+};
+
 type PendingRevisionCommand = {
   readonly key: string;
   readonly body: RevisionRequestBody;
@@ -806,6 +816,19 @@ function revisionRequestBody(input: RevisionInput): RevisionRequestBody {
     ...(input.notes ? { notes: input.notes } : {}),
     status: input.status ?? "concept"
   };
+}
+
+function projectRequestBody(input: Pick<Project, "name" | "description">): ProjectRequestBody {
+  return {
+    project: { name: input.name, description: input.description, status: "idea" },
+    revision: { name: "Initial concept", status: "concept" }
+  };
+}
+
+function projectCommandId(body: ProjectRequestBody): string {
+  // Keep retries tied to the exact atomic project + initial revision command,
+  // while allowing a later intentional identical create to receive a fresh key.
+  return JSON.stringify(body);
 }
 
 function revisionCommandId(projectId: string, body: RevisionRequestBody): string {
@@ -1333,6 +1356,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
   const inventoryCache = new Map<string, InventoryItem>();
   const projectCache = new Map<string, Project>();
   const pendingRevisionCommands = new Map<string, PendingRevisionCommand>();
+  const pendingProjectCommands = new Map<string, PendingProjectCommand>();
   const pendingExactInventoryCommands = new Map<string, PendingExactInventoryCommand>();
   const pendingReconciliationDraftCommands = new Map<string, PendingReconciliationCommand<ReconciliationDraftRequestBody>>();
   const pendingReconciliationCommitCommands = new Map<string, PendingReconciliationCommand<ReconciliationCommitRequestBody>>();
@@ -1463,22 +1487,32 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
     async createProject(input) {
       const token = csrfToken ?? cookieValue("forge_csrf");
       if (!token) throw new ApiError("Your session needs a fresh CSRF token before creating a project", { kind: "csrf", status: 403 });
-      const payload = await request<{ data: { project: ServerProject; revision: ServerRevision } }>("/projects/with-initial-revision", {
-        method: "POST",
-        headers: { "Idempotency-Key": idempotencyKey("project") },
-        body: JSON.stringify({
-          project: { name: input.name, description: input.description, status: "idea" },
-          revision: { name: "Initial concept", status: "concept" }
-        })
-      }, token);
-      const created = mutationData(payload);
-      const project = mapProject({
-        ...created.project,
-        currentRevisionId: created.revision.id,
-        currentRevision: { ...created.revision, bom: [], artifacts: [] }
-      });
-      projectCache.set(project.id, project);
-      return project;
+      const body = projectRequestBody(input);
+      const commandId = projectCommandId(body);
+      const pending = pendingProjectCommands.get(commandId);
+      const command = pending ?? { key: idempotencyKey("project"), body };
+      if (pending === undefined) pendingProjectCommands.set(commandId, command);
+      try {
+        const payload = await request<{ data: { project: ServerProject; revision: ServerRevision } }>("/projects/with-initial-revision", {
+          method: "POST",
+          headers: { "Idempotency-Key": command.key },
+          body: JSON.stringify(command.body)
+        }, token);
+        const created = mutationData(payload);
+        const project = mapProject({
+          ...created.project,
+          currentRevisionId: created.revision.id,
+          currentRevision: { ...created.revision, bom: [], artifacts: [] }
+        });
+        projectCache.set(project.id, project);
+        // A successful response resolves this logical command. The next
+        // intentional project gets a new key, even if its fields match.
+        if (pendingProjectCommands.get(commandId)?.key === command.key) pendingProjectCommands.delete(commandId);
+        return project;
+      } catch (error: unknown) {
+        if (!mutationFailureIsAmbiguous(error) && pendingProjectCommands.get(commandId)?.key === command.key) pendingProjectCommands.delete(commandId);
+        throw error;
+      }
     },
     async createRevision(projectId, input) {
       const token = csrfToken ?? cookieValue("forge_csrf");
