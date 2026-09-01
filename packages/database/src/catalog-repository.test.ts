@@ -46,7 +46,7 @@ const printer: CatalogProduct = {
   version: 1,
 };
 
-describe("v2 catalog migration", () => {
+describe("catalog migration", () => {
   it("is additive, idempotent, and refuses a newer recorded schema", () => {
     const database = new BenchDatabase(":memory:");
     migrateCatalogSchema(database);
@@ -54,6 +54,7 @@ describe("v2 catalog migration", () => {
     expect(database.get("SELECT value FROM forge_meta WHERE key = ?", ["catalog_schema_version"])).toEqual({ value: String(CATALOG_SCHEMA_VERSION) });
     expect(database.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", ["inventory_items"])).toBeDefined();
     expect(database.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", ["catalog_products"])).toBeDefined();
+    expect(database.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", ["catalog_product_history"])).toBeDefined();
     database.run("UPDATE forge_meta SET value = ? WHERE key = ?", [String(CATALOG_SCHEMA_VERSION + 1), "catalog_schema_version"]);
     expect(() => migrateCatalogSchema(database)).toThrow(/newer than supported/i);
     database.close();
@@ -175,6 +176,34 @@ describe("v2 catalog and physical profile repositories", () => {
     expect(noOp.provenance).toEqual(sourced.provenance);
     const corrected = products.update(sourced.id, { colourName: "Graphite" }, 2);
     expect(corrected.provenance).toBeUndefined();
+    const history = database.all<{ readonly catalog_product_id: string; readonly superseded_version: number; readonly payload_json: string }>(
+      "SELECT catalog_product_id, superseded_version, payload_json FROM catalog_product_history WHERE catalog_product_id = ? ORDER BY superseded_version",
+      [sourced.id],
+    );
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({ catalog_product_id: sourced.id, superseded_version: 2 });
+    expect(JSON.parse(history[0]!.payload_json)).toMatchObject({
+      id: sourced.id,
+      kind: sourced.kind,
+      manufacturer: sourced.manufacturer,
+      productName: sourced.productName,
+      materialFamily: sourced.materialFamily,
+      diameterMm: sourced.diameterMm,
+      nominalNetMassG: sourced.nominalNetMassG,
+      lengthBasis: sourced.lengthBasis,
+      version: 2,
+      colourName: sourced.colourName,
+      provenance: sourced.provenance,
+    });
+
+    const correctedAgain = products.update(sourced.id, { colourName: "Slate" }, 3);
+    expect(correctedAgain.provenance).toBeUndefined();
+    const historyAfterSecondCorrection = database.all<{ readonly superseded_version: number; readonly payload_json: string }>(
+      "SELECT superseded_version, payload_json FROM catalog_product_history WHERE catalog_product_id = ? ORDER BY superseded_version",
+      [sourced.id],
+    );
+    expect(historyAfterSecondCorrection.map((entry) => entry.superseded_version)).toEqual([2, 3]);
+    expect(JSON.parse(historyAfterSecondCorrection[1]!.payload_json)).toMatchObject({ colourName: "Graphite", version: 3 });
 
     const profiles = new InventoryProductProfileRepository(database);
     profiles.create(spoolProfile());

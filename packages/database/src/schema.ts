@@ -235,6 +235,23 @@ CREATE TABLE IF NOT EXISTS catalog_products (
 CREATE INDEX IF NOT EXISTS catalog_products_kind_idx ON catalog_products(kind, created_at, id);
 CREATE INDEX IF NOT EXISTS catalog_products_updated_idx ON catalog_products(updated_at, id);
 
+/**
+ * Corrections to curated catalog facts replace the current payload, but the
+ * superseded payload remains durable for provenance and incident review. This
+ * table is append-only by repository design and is intentionally not part of
+ * the public catalog contract.
+ */
+CREATE TABLE IF NOT EXISTS catalog_product_history (
+  id TEXT PRIMARY KEY NOT NULL,
+  catalog_product_id TEXT NOT NULL REFERENCES catalog_products(id),
+  superseded_version INTEGER NOT NULL CHECK (superseded_version > 0),
+  payload_json TEXT NOT NULL,
+  superseded_at TEXT NOT NULL,
+  UNIQUE(catalog_product_id, superseded_version)
+);
+
+CREATE INDEX IF NOT EXISTS catalog_product_history_product_idx ON catalog_product_history(catalog_product_id, superseded_version, id);
+
 CREATE TABLE IF NOT EXISTS inventory_product_profiles (
   id TEXT PRIMARY KEY NOT NULL,
   item_id TEXT NOT NULL REFERENCES inventory_items(id),

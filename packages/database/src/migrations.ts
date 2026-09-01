@@ -3,7 +3,7 @@ import { CATALOG_SCHEMA_SQL, INVENTORY_CATEGORY_SCHEMA_SQL } from "./schema.js";
 import { BUILTIN_INVENTORY_CATEGORIES, normalizeInventoryCategoryKey } from "@benchledger/domain";
 
 /** Additive exact-product migration; safe to run on every startup. */
-export const CATALOG_SCHEMA_VERSION = 2;
+export const CATALOG_SCHEMA_VERSION = 3;
 export const CATALOG_SCHEMA_MIGRATION_SQL = CATALOG_SCHEMA_SQL;
 
 export function migrateCatalogSchema(database: BenchDatabase): void {

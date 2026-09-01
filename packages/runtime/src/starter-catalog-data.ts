@@ -184,8 +184,8 @@ export const STARTER_FILAMENTS: readonly CatalogProduct[] = [
 
   filament("starter-filament-prusament-pla-jet-black", "Prusament", "PLA", "PLA", prusamentPla, { colourName: "Jet Black", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }),
   filament("starter-filament-prusament-petg-jet-black", "Prusament", "PETG", "PETG", prusamentPetg, { colourName: "Jet Black", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }),
-  filament("starter-filament-prusament-asa-jet-black", "Prusament", "ASA", "ASA", prusamentAsa, { colourName: "Jet Black", diameterMm: 1.75, nominalNetMassG: 800, lengthBasis: "unknown" }),
-  filament("starter-filament-prusament-pc-blend-black", "Prusament", "PC Blend", "PC", prusamentPcBlend, { colourName: "Jet Black", diameterMm: 1.75, nominalNetMassG: 900, lengthBasis: "unknown" }),
+  filament("starter-filament-prusament-asa-jet-black", "Prusament", "ASA", "ASA", prusamentAsa, { colourName: "Jet Black", diameterMm: 1.75, nominalNetMassG: 850, lengthBasis: "unknown" }),
+  filament("starter-filament-prusament-pc-blend-black", "Prusament", "PC Blend", "PC", prusamentPcBlend, { colourName: "Jet Black", diameterMm: 1.75, nominalNetMassG: 970, lengthBasis: "unknown" }),
   filament("starter-filament-prusament-pla-galaxy-black", "Prusament", "PLA", "PLA", prusamentPlaGalaxyBlack, { colourName: "Prusa Galaxy Black", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "Galaxy"),
 
   filament("starter-filament-polymaker-polylite-pla-black", "Polymaker", "PolyLite PLA", "PLA", polymakerPolyLitePla, { colourName: "Black", colourCode: "#030305", sku: "PA02001", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown", densityGcm3: 1.19 }),

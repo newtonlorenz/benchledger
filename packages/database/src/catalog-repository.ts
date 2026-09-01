@@ -351,18 +351,27 @@ export class CatalogProductRepository {
       updatedAt: changedRecord.updatedAt ?? nowIso(),
       version: current.version + 1
     };
-    const merged = catalogFactsChanged(current, changedRecord)
+    const factsChanged = catalogFactsChanged(current, changedRecord);
+    const merged = factsChanged
       ? Object.fromEntries(Object.entries(mergedCandidate).filter(([key]) => key !== "provenance"))
       : mergedCandidate;
     const parsed = catalogProductSchema.parse(merged);
-    const result = this.database.run(
-      "UPDATE catalog_products SET payload_json = ?, version = ?, updated_at = ? WHERE id = ? AND version = ?",
-      [JSON.stringify(parsed), parsed.version, parsed.updatedAt, id, expectedValue]
-    ) as { changes?: number | bigint };
-    if (typeof result?.changes === "number" ? result.changes !== 1 : typeof result?.changes === "bigint" ? result.changes !== 1n : this.get(id)?.version !== parsed.version) {
-      const actual = this.get(id)?.version ?? expectedValue;
-      conflict("catalog product", id, expectedValue, actual);
-    }
+    this.database.transaction(() => {
+      if (factsChanged) {
+        this.database.run(
+          "INSERT INTO catalog_product_history (id, catalog_product_id, superseded_version, payload_json, superseded_at) VALUES (?, ?, ?, ?, ?)",
+          [createId("catalog-history"), id, current.version, JSON.stringify(current), parsed.updatedAt],
+        );
+      }
+      const result = this.database.run(
+        "UPDATE catalog_products SET payload_json = ?, version = ?, updated_at = ? WHERE id = ? AND version = ?",
+        [JSON.stringify(parsed), parsed.version, parsed.updatedAt, id, expectedValue]
+      ) as { changes?: number | bigint };
+      if (typeof result?.changes === "number" ? result.changes !== 1 : typeof result?.changes === "bigint" ? result.changes !== 1n : this.get(id)?.version !== parsed.version) {
+        const actual = this.get(id)?.version ?? expectedValue;
+        conflict("catalog product", id, expectedValue, actual);
+      }
+    });
     return parsed;
   }
 

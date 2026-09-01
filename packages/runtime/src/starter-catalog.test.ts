@@ -64,7 +64,7 @@ describe("reviewed starter catalog", () => {
       kind: "filament",
       colourName: "Jet Black",
       diameterMm: 1.75,
-      nominalNetMassG: 800,
+      nominalNetMassG: 850,
       lengthBasis: "unknown",
       provenance: { sourceUrl: "https://www.prusa3d.com/product/prusament-asa-jet-black-850g/" },
     });
@@ -72,7 +72,7 @@ describe("reviewed starter catalog", () => {
       kind: "filament",
       colourName: "Jet Black",
       diameterMm: 1.75,
-      nominalNetMassG: 900,
+      nominalNetMassG: 970,
       lengthBasis: "unknown",
       provenance: { sourceUrl: "https://www.prusa3d.com/product/prusament-pc-blend-jet-black-970g/" },
     });
@@ -95,6 +95,15 @@ describe("reviewed starter catalog", () => {
       scopes: new Set(["read", "write", "catalog:read", "catalog:write"]),
     });
     expect(changed.provenance).toBeUndefined();
+    const superseded = first.runtime.database.get<{ readonly catalog_product_id: string; readonly superseded_version: number; readonly payload_json: string }>(
+      "SELECT catalog_product_id, superseded_version, payload_json FROM catalog_product_history WHERE catalog_product_id = ?",
+      [changed.id],
+    );
+    expect(superseded).toMatchObject({ catalog_product_id: changed.id, superseded_version: 1 });
+    expect(JSON.parse(superseded!.payload_json)).toMatchObject({
+      id: changed.id,
+      provenance: { sourceUrl: "https://bambulab.com/en-us/h2d" },
+    });
     const before = first.runtime.database.get<{ readonly payload_json: string }>("SELECT payload_json FROM catalog_products WHERE id = ?", [changed.id])?.payload_json;
     first.runtime.database.run("DELETE FROM catalog_products WHERE id = ?", ["starter-filament-overture-pla-black"]);
     await first.runtime.close();
