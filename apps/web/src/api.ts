@@ -663,6 +663,13 @@ function isoDateValue(value: string): string {
 function exactInventoryBody(input: ExactInventoryInput): UnknownRecord {
   const product = input.product;
   const placement = input.filament?.placement ?? input.printer?.placement;
+  // A catalog match and an exact-product report do not commission a printer.
+  // Only the guided flow's explicit confirmed link plus commissioning date is
+  // enough to create confirmed machine stock; every other path stays
+  // inspect-first until a commissioning/count command records evidence.
+  const printerIsExplicitlyCommissioned = input.category === "Printers"
+    && input.linkState === "confirmed"
+    && Boolean(input.printer?.commissionedAt);
   const dimensions = input.category === "Filament" && product.diameterMm !== undefined
     ? { diameterMm: product.diameterMm, measured: false }
     : undefined;
@@ -679,7 +686,7 @@ function exactInventoryBody(input: ExactInventoryInput): UnknownRecord {
     ...(dimensions ? { dimensions } : {}),
     tags: [input.category.toLowerCase(), "exact-product"],
     links: [],
-    evidence: { state: input.category === "Printers" ? "commissioned" : "unknown", source: "ui" }
+    evidence: { state: printerIsExplicitlyCommissioned ? "commissioned" : "unknown", source: "ui" }
   };
 }
 

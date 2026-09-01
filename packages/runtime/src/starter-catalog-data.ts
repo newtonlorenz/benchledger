@@ -6,7 +6,7 @@ import type { CatalogProduct } from "@benchledger/api-contract";
  * are owned by the workspace. Keep this date in sync with the review note in
  * docs/starter-catalog.md when refreshing manufacturer facts.
  */
-export const STARTER_CATALOG_DATASET_VERSION = 1;
+export const STARTER_CATALOG_DATASET_VERSION = 2;
 export const STARTER_CATALOG_REVIEWED_AT = "2026-09-01T00:00:00.000Z";
 
 const source = (sourceUrl: string, sourceLabel: string) => ({
@@ -164,12 +164,12 @@ export const STARTER_PRINTERS: readonly CatalogProduct[] = [
   printer("starter-printer-elegoo-neptune-4-max", "ELEGOO", "Neptune 4 Max", { x: 420, y: 420, z: 480 }, elegooNeptune4Max),
   printer("starter-printer-elegoo-centauri-carbon", "ELEGOO", "Centauri Carbon", { x: 256, y: 256, z: 256 }, elegooCentauriCarbon),
 
-  printer("starter-printer-anycubic-kobra-2", "Anycubic", "Kobra 2", { x: 250, y: 220, z: 220 }, anycubicKobra2),
-  printer("starter-printer-anycubic-kobra-2-pro", "Anycubic", "Kobra 2 Pro", { x: 250, y: 220, z: 220 }, anycubicKobra2Pro),
+  printer("starter-printer-anycubic-kobra-2", "Anycubic", "Kobra 2", { x: 220, y: 220, z: 250 }, anycubicKobra2),
+  printer("starter-printer-anycubic-kobra-2-pro", "Anycubic", "Kobra 2 Pro", { x: 220, y: 220, z: 250 }, anycubicKobra2Pro),
   printer("starter-printer-anycubic-kobra-2-max", "Anycubic", "Kobra 2 Max", { x: 420, y: 420, z: 500 }, anycubicKobra2Max),
   printer("starter-printer-anycubic-kobra-3", "Anycubic", "Kobra 3", { x: 250, y: 250, z: 260 }, anycubicKobra3),
   printer("starter-printer-anycubic-kobra-3-combo", "Anycubic", "Kobra 3", { x: 250, y: 250, z: 260 }, anycubicKobra3Combo, "Combo"),
-  printer("starter-printer-anycubic-kobra-s1", "Anycubic", "Kobra S1", { x: 250, y: 250, z: 270 }, anycubicKobraS1),
+  printer("starter-printer-anycubic-kobra-s1", "Anycubic", "Kobra S1", { x: 250, y: 250, z: 250 }, anycubicKobraS1),
 ];
 
 /** Curated exact filament identities. A missing length is intentional: it is not inferred from density. */

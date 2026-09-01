@@ -243,6 +243,23 @@ describe("exact product API boundary coverage", () => {
     expect(body.profile).toMatchObject({ profileType: "printer_asset", details: { commissionedAt: "2026-08-30T00:00:00.000Z", location: "Print room" } });
   });
 
+  it("keeps the default reported printer path inspect-first until it is explicitly commissioned", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=reported-printer-token" });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({ data: {
+      item: serverInventoryItem({ id: "reported-printer-item", kind: "printer", quantity: 1, availableQuantity: 0, unit: "each", evidence: { state: "unknown" } }),
+      profile: { id: "reported-printer-profile", itemId: "reported-printer-item", catalogProductId: "printer-product", profileType: "printer_asset", linkState: "reported", details: {}, version: 1 }
+    } }));
+    const adapter = createWorkspaceAdapter();
+    const product: CatalogProduct = { id: "printer-product", kind: "printer", manufacturer: "Anycubic", exactModel: "Kobra 2", technology: "fff", buildVolumeMm: { x: 220, y: 220, z: 250 } };
+
+    const item = await adapter.createExactInventoryItem({ category: "Printers", product, quantity: 1, linkState: "reported", printer: {} });
+
+    expect(item).toMatchObject({ id: "reported-printer-item", state: "inspect-first", serverEvidence: "unknown", availableQuantity: 0, productProfile: { linkState: "reported" } });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as { item: { evidence: { state: string } }; profile: { linkState: string; details: Record<string, unknown> } };
+    expect(body.item.evidence).toMatchObject({ state: "unknown" });
+    expect(body.profile).toEqual({ catalogProductId: product.id, profileType: "printer_asset", linkState: "reported", details: {} });
+  });
+
   it("surfaces incomplete compound item/profile responses and preserves CSRF boundaries", async () => {
     vi.stubGlobal("document", { cookie: "forge_csrf=coverage-token" });
     const product: CatalogProduct = { ...canonicalFilament, id: "compound-product" };

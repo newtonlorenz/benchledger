@@ -39,6 +39,21 @@ describe("reviewed starter catalog", () => {
     expect(products.data.every((product) => !product.provenance?.sourceUrl.includes("/collections/"))).toBe(true);
     expect(STARTER_FILAMENTS.every((product) => product.kind !== "filament" || product.nominalLengthM !== undefined || product.lengthBasis === "unknown")).toBe(true);
     const byId = new Map(products.data.map((product) => [product.id, product]));
+    expect(byId.get("starter-printer-anycubic-kobra-2")).toMatchObject({
+      manufacturer: "Anycubic",
+      exactModel: "Kobra 2",
+      buildVolumeMm: { x: 220, y: 220, z: 250 },
+    });
+    expect(byId.get("starter-printer-anycubic-kobra-2-pro")).toMatchObject({
+      manufacturer: "Anycubic",
+      exactModel: "Kobra 2 Pro",
+      buildVolumeMm: { x: 220, y: 220, z: 250 },
+    });
+    expect(byId.get("starter-printer-anycubic-kobra-s1")).toMatchObject({
+      manufacturer: "Anycubic",
+      exactModel: "Kobra S1",
+      buildVolumeMm: { x: 250, y: 250, z: 250 },
+    });
     expect(byId.get("starter-filament-bambu-pla-basic-black")).toMatchObject({
       kind: "filament",
       colourName: "Black",

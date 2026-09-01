@@ -14,13 +14,16 @@ preserve this insert-missing-only rule.
 
 ## Review scope
 
-The initial dataset was reviewed on 2026-09-01 against direct manufacturer
+Dataset version 2 was reviewed on 2026-09-01 against direct manufacturer
 product pages. It deliberately records only identity fields and core
 manufacturer-published dimensions that were verified for this seed: 31 printer
 identities and 29 filament identities. Filament length is left unknown unless
 the manufacturer declares it; no length is inferred from density. The
 catalog should be refreshed when manufacturers retire, rename, or materially
 change a product.
+
+The reviewed Anycubic build volumes are Kobra 2 and Kobra 2 Pro at
+220 × 220 × 250 mm, and Kobra S1 at 250 × 250 × 250 mm.
 
 The seed keeps one direct product/variant URL per record. Examples of the
 reviewed manufacturer pages include [Bambu PLA Matte Charcoal](https://us.store.bambulab.com/products/pla-matte-filament?id=43992833261787),

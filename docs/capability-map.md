@@ -100,7 +100,7 @@ profiles when present.
 | Correct metadata across loaded items | Explicit inventory selection and confirmation dialog | `bulk_update_inventory_items` with 1–100 `{itemId, expectedVersion}` targets; location, canonical condition, or normalized tag add/remove only; atomic preflight, deterministic updated/unchanged results, and no-op rows emit no audit/event |
 | Count uncertain stock | Item count form and stock timeline | `read_inventory_item` → `record_stock_event(kind=count_correction)` |
 | Commission delivered or ordered stock | Item commissioning action with observed quantity and provenance | `read_inventory_item` → `commission_inventory_item` |
-| Add an exact printer or spool | Exact-product guided add | catalog search/read → `create_inventory_with_product_profile` |
+| Add an exact printer or spool | Exact-product guided add; reported printers remain inspect-first until explicitly commissioned | catalog search/read → `create_inventory_with_product_profile` |
 | Start a project | Guided project setup | `create_project_with_initial_revision` → `create_work_item`; use `create_project_revision` for later planning baselines |
 | Understand a build gap | BOM editor and gap panel | `list_bom_lines` → `calculate_bom_gaps` |
 | Hold confirmed parts | Reservation panel | `create_reservation` → read BOM/gaps again |

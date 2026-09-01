@@ -19,6 +19,8 @@ first public release; all current work is under **Unreleased**.
 
 - Adopted the BenchLedger name, package scope, MCP resource scheme, environment
   namespace, deployment identity, and visual lockup before the first public release
+- Corrected reviewed Anycubic Kobra build volumes and kept reported exact-printer
+  adds as inspect-first stock until explicit commissioning evidence is recorded
 
 ### Known pre-release limitations
 

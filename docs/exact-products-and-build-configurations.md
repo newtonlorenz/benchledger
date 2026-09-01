@@ -35,8 +35,10 @@ remains evidence that must be checked.
 
 A filament-spool profile may record lot or batch, sealed/open state, opened
 date, tare mass, and current placement. A printer-asset profile may record a
-local asset label and commissioning date. Serial numbers are not exposed by
-default.
+local asset label and commissioning date. A catalog match or reported exact
+printer link does not commission the machine: without explicit confirmed
+commissioning evidence, the guided add creates inspect-first stock. Serial
+numbers are not exposed by default.
 
 The original 53 inventory records remain valid without profiles. The migration
 does not parse their names, change quantities, convert spool counts to grams,
