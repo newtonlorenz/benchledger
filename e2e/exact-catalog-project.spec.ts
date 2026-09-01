@@ -280,7 +280,7 @@ test("keeps the starter catalog facet path accessible and honest at 390px", asyn
   await page.getByRole("button", { name: "Open navigation" }).click();
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
   await page.getByRole("button", { name: "Add item", exact: true }).click();
-  const addDialog = page.getByRole("dialog");
+  const selectionDialog = page.getByRole("dialog", { name: "Add to inventory" });
   const completeCatalog = page.waitForResponse((response) => {
     const url = new URL(response.url());
     return response.request().method() === "GET"
@@ -290,8 +290,11 @@ test("keeps the starter catalog facet path accessible and honest at 390px", asyn
       && url.searchParams.get("limit") === "100"
       && !url.searchParams.has("q");
   });
-  await addDialog.getByRole("button", { name: /^Filament\b/u }).click();
+  await selectionDialog.getByRole("combobox", { name: /Item type/u }).selectOption("filament");
+  await selectionDialog.getByRole("combobox", { name: /Category/u }).selectOption("category-filament");
+  await selectionDialog.getByRole("button", { name: "Continue", exact: true }).click();
   await completeCatalog;
+  const addDialog = page.getByRole("dialog", { name: "Add filament" });
 
   await addDialog.getByLabel("Manufacturer / brand").selectOption({ label: "Bambu Lab" });
   await addDialog.getByLabel("Product line / material family").selectOption({ label: "PETG" });
