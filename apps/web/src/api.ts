@@ -70,6 +70,13 @@ type ServerReservation = { id: string; lineId: string; itemId: string; quantity:
 export type RevisionInput = { name: string; notes?: string; status?: string; buildConfig?: BuildConfigInput };
 export type BomInput = { name: string; requiredQuantity: number; unit: BomLine["unit"]; itemId?: string; optional?: boolean; note?: string };
 export type InventoryUpdateInput = Pick<InventoryItem, "name" | "description" | "manufacturer" | "location" | "sku" | "tags"> & { model: string; categoryNodeId?: string | null };
+export type InventoryCommissionInput = {
+  quantity: number;
+  source: string;
+  sourceId?: string;
+  observedAt: string;
+  note?: string;
+};
 
 export type CatalogProductDraft = {
   kind: CatalogKind;
@@ -126,6 +133,7 @@ export interface WorkspaceAdapter {
   logout(): Promise<void>;
   loadWorkspace(): Promise<WorkspaceSnapshot>;
   recordCount(itemId: string, quantity: number): Promise<InventoryItem>;
+  commissionInventoryItem(itemId: string, input: InventoryCommissionInput, expectedVersion: number): Promise<InventoryItem>;
   updateInventoryItem(itemId: string, input: Partial<InventoryUpdateInput>, expectedVersion?: number): Promise<InventoryItem>;
   createInventoryItem(input: { name: string; category: InventoryItem["category"]; categoryNodeId?: string; kind?: string; quantity: number; unit: InventoryItem["unit"] }): Promise<InventoryItem>;
   listInventoryCategories(options?: { includeArchived?: boolean; limit?: number; cursor?: string }): Promise<InventoryCategoryPage>;
@@ -1314,6 +1322,37 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
       state.inventory = state.inventory.map((candidate) => candidate.id === itemId ? updated : candidate);
       return updated;
     },
+    async commissionInventoryItem(itemId, input, expectedVersion) {
+      const item = state.inventory.find((candidate) => candidate.id === itemId);
+      if (!item) throw new ApiError("Inventory item not found", { kind: "validation", status: 404 });
+      if (item.evidence !== "delivered" && item.evidence !== "ordered") {
+        throw new ApiError("Only delivered or ordered inventory can be commissioned", { kind: "validation", status: 409 });
+      }
+      if (item.version !== expectedVersion) {
+        throw new ApiError("Inventory item changed; reload it before commissioning", { kind: "validation", status: 409 });
+      }
+      if (!input.source.trim() || !input.observedAt.trim()) {
+        throw new ApiError("Commissioning requires a source and observed time", { kind: "validation", status: 400 });
+      }
+      const updated: InventoryItem = {
+        ...item,
+        quantity: input.quantity,
+        availableQuantity: input.quantity,
+        reserved: 0,
+        state: "available",
+        evidence: "commissioned",
+        provenance: {
+          source: input.source.trim(),
+          ...(input.sourceId?.trim() ? { sourceId: input.sourceId.trim() } : {}),
+          observedAt: input.observedAt,
+          ...(input.note?.trim() ? { note: input.note.trim() } : {})
+        },
+        version: item.version + 1,
+        lastCounted: input.observedAt.slice(0, 10)
+      };
+      state.inventory = state.inventory.map((candidate) => candidate.id === itemId ? updated : candidate);
+      return updated;
+    },
     async updateInventoryItem(itemId, input) {
       const item = state.inventory.find((candidate) => candidate.id === itemId);
       if (!item) throw new ApiError("Inventory item not found", { kind: "validation", status: 404 });
@@ -1521,6 +1560,35 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       const payload = await request<{ data: { event: unknown; item: ServerInventoryItem } }>(`/inventory/${encodeURIComponent(itemId)}/count`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey("count") }, body: JSON.stringify({ quantity }) }, token);
       const item = payload.data?.item;
       if (!item) throw new ApiError("The service returned an incomplete count", { kind: "server", status: 502 });
+      serverUnits.set(item.id, item.unit);
+      const mapped = mapInventoryItem(item);
+      inventoryCache.set(mapped.id, mapped);
+      return mapped;
+    },
+    async commissionInventoryItem(itemId, input, expectedVersion) {
+      const token = csrfToken ?? cookieValue("forge_csrf");
+      if (!token) throw new ApiError("Your session needs a fresh CSRF token before commissioning stock", { kind: "csrf", status: 403 });
+      const source = input.source.trim();
+      if (!source || !input.observedAt.trim()) throw new ApiError("Commissioning requires a source and observed time", { kind: "validation", status: 400 });
+      const cached = inventoryCache.get(itemId);
+      const unit = serverUnits.get(itemId) ?? (cached === undefined ? "each" : serverUnitFor(cached));
+      const payload = await request<{ data: { event: unknown; item: ServerInventoryItem } }>(`/inventory/${encodeURIComponent(itemId)}/commission`, {
+        method: "POST",
+        headers: { "If-Match": String(expectedVersion), "Idempotency-Key": idempotencyKey("commission") },
+        body: JSON.stringify({
+          quantity: input.quantity,
+          unit,
+          evidence: {
+            state: "commissioned",
+            source,
+            ...(input.sourceId?.trim() ? { sourceId: input.sourceId.trim() } : {}),
+            observedAt: input.observedAt,
+            ...(input.note?.trim() ? { note: input.note.trim() } : {})
+          }
+        })
+      }, token);
+      const item = payload.data?.item;
+      if (!item) throw new ApiError("The service returned an incomplete commissioning result", { kind: "server", status: 502 });
       serverUnits.set(item.id, item.unit);
       const mapped = mapInventoryItem(item);
       inventoryCache.set(mapped.id, mapped);

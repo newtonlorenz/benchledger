@@ -1,7 +1,7 @@
 import type { z } from "zod";
 import type {
   artifactSchema, auditEventSchema, beginUploadSchema, bomGapCandidateSchema, bomGapSchema, bomLineSchema, createBomLineSchema,
-  createInventoryItemSchema, createOfferSchema, createProjectRevisionSchema,
+  commissionInventoryItemSchema, createInventoryItemSchema, createOfferSchema, createProjectRevisionSchema,
   createProjectSchema, createProjectWithInitialRevisionSchema, createReservationSchema, createWorkItemRevisionSchema,
   createWorkItemSchema, dimensionSchema, healthSchema, inventoryItemSchema,
   inventoryListQuerySchema, inventoryCategoryListQuerySchema, inventoryCategorySchema, createInventoryCategorySchema, updateInventoryCategorySchema, offerSchema, projectRevisionSchema, projectSchema, projectWithInitialRevisionSchema,
@@ -34,6 +34,7 @@ export type CreateInventoryCategory = z.infer<typeof createInventoryCategorySche
 export type UpdateInventoryCategory = z.infer<typeof updateInventoryCategorySchema>;
 export type InventoryListQuery = z.infer<typeof inventoryListQuerySchema>;
 export type CreateInventoryItem = z.infer<typeof createInventoryItemSchema>;
+export type CommissionInventoryItem = z.infer<typeof commissionInventoryItemSchema>;
 export type UpdateInventoryItem = z.infer<typeof updateInventoryItemSchema>;
 export type StockEventInput = z.infer<typeof stockEventInputSchema>;
 export type StockEvent = z.infer<typeof stockEventSchema>;

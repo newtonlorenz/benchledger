@@ -18,6 +18,7 @@ import {
   evidence,
   finalizeArtifactUpload,
   id,
+  inventoryCommission,
   inventoryCreate,
   inventoryCategoryArchive,
   inventoryCategoryCreate,
@@ -181,6 +182,20 @@ describe("MCP validation boundary", () => {
       profile: { ...parsed.profile, itemId: "item-1" },
     }));
     expectInvalid(() => inventoryWithProductProfileCreate({ ...parsed, extra: true }));
+  });
+
+  it("requires commissioned provenance for the explicit inventory transition", () => {
+    expect(inventoryCommission({
+      itemId: "wire-1",
+      expectedVersion: 2,
+      quantity: { value: 3, unit: "piece" },
+      evidence: { state: "commissioned", source: "bench-check", recordedAt: "2026-08-31T10:00:00Z", note: "Counted and tested" }
+    })).toMatchObject({ itemId: "wire-1", expectedVersion: 2, quantity: { value: 3 }, evidence: { state: "commissioned" } });
+    expectInvalid(() => inventoryCommission({
+      itemId: "wire-1",
+      quantity: { value: 3, unit: "piece" },
+      evidence: { state: "delivery", source: "delivery", recordedAt: "2026-08-31T10:00:00Z" }
+    }));
   });
 
   it("accepts every stock event kind and protects event history inputs", () => {

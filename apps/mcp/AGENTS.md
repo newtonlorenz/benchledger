@@ -82,6 +82,11 @@ The agent should call `calculate_bom_gaps` and explain every result as one of:
 - **Optional:** useful but not required to complete the stated build.
 
 Never turn an order, delivery message, or old price into a present stock count.
+When a delivery or order has been physically checked, use
+`commission_inventory_item` with the observed quantity, commissioned evidence,
+the current `expectedVersion`, and a distinct idempotency key in the request
+context. Do not change evidence through `update_inventory_item`; commissioning
+creates the append-only count event that retains the prior provenance.
 
 ## 4. Give experts the evidence (minute 4–6)
 

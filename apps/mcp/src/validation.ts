@@ -32,6 +32,7 @@ import type {
   ExternalLink,
   FinalizeArtifactUploadInput,
   InventoryCreateInput,
+  InventoryCommissionInput,
   InventoryListInput,
   InventoryUpdateInput,
   InventoryProductProfileLinkInput,
@@ -325,10 +326,11 @@ function optionalDimensions(value: unknown, label: string): Dimensions | undefin
 
 export function evidence(value: unknown, label: string): EvidenceSummary {
   const input = record(value, label);
-  keys(input, ["state", "source", "recordedAt", "note"], label);
+  keys(input, ["state", "source", "sourceId", "recordedAt", "note"], label);
   return {
     state: enumValue(input.state, `${label}.state`, ["physical_count", "commissioned", "measured", "manufacturer", "order", "delivery", "user_reported", "inferred", "unknown"] as const),
     source: stringValue(input.source, `${label}.source`, { max: 256 }),
+    ...(input.sourceId === undefined ? {} : { sourceId: optionalString(input.sourceId, `${label}.sourceId`, 500) }),
     recordedAt: stringValue(input.recordedAt, `${label}.recordedAt`, { max: 64 }),
     note: optionalString(input.note, `${label}.note`, 2000),
   };
@@ -459,6 +461,19 @@ export function inventoryCategoryArchive(value: unknown): { categoryId: string; 
   const parsedCategoryId = categoryId(input.categoryId, "arguments.categoryId");
   const expectedVersion = integer(input.expectedVersion, "arguments.expectedVersion", 1);
   return { categoryId: parsedCategoryId, expectedVersion };
+}
+
+export function inventoryCommission(value: unknown): InventoryCommissionInput {
+  const input = record(value, "arguments");
+  keys(input, ["itemId", "expectedVersion", "quantity", "evidence"], "arguments");
+  const parsedEvidence = evidence(input.evidence, "arguments.evidence");
+  if (parsedEvidence.state !== "commissioned") fail("arguments.evidence.state must be commissioned");
+  return {
+    itemId: id(input.itemId, "arguments.itemId"),
+    expectedVersion: integer(input.expectedVersion, "arguments.expectedVersion", 1),
+    quantity: quantity(input.quantity, "arguments.quantity"),
+    evidence: parsedEvidence as InventoryCommissionInput["evidence"]
+  };
 }
 
 export function stockEvent(value: unknown): RecordStockEventInput {

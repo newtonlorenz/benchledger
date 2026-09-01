@@ -3,7 +3,7 @@ import {
   bomGapSchema, createBomLineSchema, createInventoryCategorySchema, createInventoryItemSchema, createOfferSchema,
   createProjectRevisionSchema, createProjectSchema, createReservationSchema,
   createProjectWithInitialRevisionSchema, createWorkItemRevisionSchema, createWorkItemSchema, idSchema, inventoryListQuerySchema,
-  stockEventInputSchema, updateBomLineSchema, updateInventoryCategorySchema, updateInventoryItemSchema,
+  commissionInventoryItemSchema, stockEventInputSchema, updateBomLineSchema, updateInventoryCategorySchema, updateInventoryItemSchema,
   updateProjectSchema, catalogProductSchema, createCatalogProductSchema,
   updateCatalogProductSchema, inventoryProductProfileSchema,
   createInventoryProductProfileSchema, updateInventoryProductProfileSchema,
@@ -17,7 +17,7 @@ import type {
   Artifact, BomGap, BomGapCandidate, BomLine, CreateBomLine, CreateInventoryItem, CreateOffer, CreateProject,
   CreateProjectRevision, CreateReservation, CreateWorkItem, CreateWorkItemRevision,
   CreateProjectWithInitialRevision, InventoryItem, InventoryListQuery, Offer, Project, ProjectRevision, ProjectWithInitialRevision, Reservation,
-  StockEventInput, UploadSession, WorkItem, WorkItemRevision, CatalogProduct, CreateCatalogProduct,
+  StockEventInput, CommissionInventoryItem, UploadSession, WorkItem, WorkItemRevision, CatalogProduct, CreateCatalogProduct,
   UpdateCatalogProduct, InventoryProductProfile, CreateInventoryProductProfile,
   UpdateInventoryProductProfile, BuildConfigurationSnapshot, CreateBuildConfigurationSnapshot,
   ReconciliationDraft, ReconciliationCommit, CommitReconciliation, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory
@@ -807,6 +807,30 @@ export class ApplicationService {
         ? await this.ports.inventory.recordPhysicalCount(parsedId, quantity, ctx, note)
         : await this.recordPhysicalCountFallback(parsedId, quantity, ctx, note);
       return { value, entityId: value.item.id, version: value.item.version };
+    });
+  }
+
+  /**
+   * Promote uncertain delivery/order evidence only through a counted,
+   * provenance-bearing ledger command. Generic metadata PATCHes cannot change
+   * evidence, so this operation preserves both the new commissioning evidence
+   * and the prior evidence in the append-only stock event.
+   */
+  async commissionInventoryItem(itemId: string, input: CommissionInventoryItem, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<StockMutation>> {
+    const parsedId = requireId(itemId, "item id");
+    const parsed = commissionInventoryItemSchema.parse(input);
+    const commandCtx = commandContext(ctx, "inventory.item.commission", { itemId: parsedId, expectedVersion, input: parsed });
+    return this.mutate(commandCtx, "inventory.item.commission", "inventory_item", parsedId, async () => {
+      const current = await this.ports.inventory.getItem(parsedId);
+      if (!current) throw notFound("Inventory item", parsedId);
+      if (CONFIRMED_EVIDENCE.has(current.evidence.state)) {
+        throw conflict("Inventory item is already confirmed; record a physical count if the quantity changed");
+      }
+      if (this.ports.inventory.commissionItem === undefined) {
+        throw new ApplicationError("integrity_error", "This runtime does not support inventory commissioning");
+      }
+      const mutation = await this.ports.inventory.commissionItem(parsedId, parsed, expectedVersion, commandCtx);
+      return { value: mutation, entityId: mutation.item.id, version: mutation.item.version };
     });
   }
 

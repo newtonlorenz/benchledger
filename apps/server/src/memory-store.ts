@@ -7,7 +7,7 @@ import type {
   StockEventInput, UploadSession, WorkItem, WorkItemRevision, CatalogProduct, CreateCatalogProduct,
   UpdateCatalogProduct, InventoryProductProfile, CreateInventoryProductProfile,
   UpdateInventoryProductProfile, BuildConfigurationSnapshot, CreateBuildConfigurationSnapshot,
-  ArtifactBuildConfigurationBinding, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory
+  ArtifactBuildConfigurationBinding, CommissionInventoryItem, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory
 } from "@benchledger/api-contract";
 import { ApplicationError } from "@benchledger/application";
 import type {
@@ -190,30 +190,77 @@ class MemoryInventory implements InventoryPort {
   }
 
   async recordPhysicalCount(itemId: string, quantity: number, ctx: RequestContext, note?: string): Promise<StockMutation> {
+    return this.recordCount(itemId, quantity, ctx, undefined, "physically_counted", undefined, note);
+  }
+
+  async commissionItem(itemId: string, input: CommissionInventoryItem, expectedVersion: number | undefined, ctx: RequestContext): Promise<StockMutation> {
+    return this.recordCount(itemId, input.quantity, ctx, input, "commissioned", expectedVersion);
+  }
+
+  private async recordCount(
+    itemId: string,
+    quantity: number,
+    ctx: RequestContext,
+    commissioning: CommissionInventoryItem | undefined,
+    evidenceState: "physically_counted" | "commissioned",
+    expectedVersion?: number,
+    note?: string
+  ): Promise<StockMutation> {
     const current = this.items.get(itemId);
     if (!current) throw new ApplicationError("not_found", `Inventory item '${itemId}' was not found`);
     if (!Number.isFinite(quantity) || quantity < 0) throw new ApplicationError("validation", "Physical count must be zero or greater");
-    const stock = await this.recordStockEvent({ itemId, type: "count", quantity, unit: current.unit, ...(note === undefined ? {} : { note }) }, ctx);
-    return stock;
+    if (evidenceState === "commissioned" && canCount(current.evidence.state)) {
+      throw new ApplicationError("conflict", "Inventory item is already confirmed; record a physical count if the quantity changed");
+    }
+    ensureItemUnit(current, commissioning?.unit ?? current.unit);
+    ensureVersion(current.version, expectedVersion, "Inventory item");
+    const allocated = canCount(current.evidence.state) ? current.quantity - current.availableQuantity : 0;
+    if (quantity < allocated) throw new ApplicationError("conflict", "Physical count cannot be below allocated quantity");
+    const now = iso();
+    const evidence = commissioning?.evidence ?? { ...current.evidence, state: "physically_counted" as const, observedAt: now };
+    const updated: InventoryItem = {
+      ...current,
+      quantity,
+      availableQuantity: quantity - allocated,
+      evidence: clone(evidence),
+      updatedAt: now,
+      version: current.version + 1
+    };
+    const event: StockEvent = {
+      itemId,
+      type: "count",
+      quantity,
+      unit: current.unit,
+      note: commissioning?.evidence.note ?? note,
+      evidence: {
+        state: evidenceState,
+        previousEvidence: current.evidence,
+        ...(commissioning?.evidence.source === undefined ? {} : { source: commissioning.evidence.source }),
+        ...(commissioning?.evidence.sourceId === undefined ? {} : { sourceId: commissioning.evidence.sourceId }),
+        ...(commissioning?.evidence.observedAt === undefined ? {} : { observedAt: commissioning.evidence.observedAt }),
+      },
+      id: id("stock", ++this.sequence),
+      actor: ctx.actor,
+      source: ctx.source === "system" ? "api" : ctx.source,
+      createdAt: now,
+      itemVersion: updated.version
+    };
+    this.items.set(itemId, updated);
+    const events = this.events.get(itemId) ?? [];
+    this.events.set(itemId, [...events, event]);
+    return { event: clone(event), item: clone(updated) };
   }
 
   recordStockEvent(input: StockEventInput, ctx: RequestContext): Promise<StockMutation> {
     const current = this.items.get(input.itemId);
     if (!current) throw new ApplicationError("not_found", `Inventory item '${input.itemId}' was not found`);
     ensureItemUnit(current, input.unit);
-    if (input.type === "count") {
-      if (!Number.isFinite(input.quantity) || input.quantity < 0) throw new ApplicationError("validation", "Count must be zero or greater");
-    } else ensurePositive(input.quantity, "Event quantity");
+    if (input.type === "count") return this.recordCount(input.itemId, input.quantity, ctx, undefined, "physically_counted");
+    ensurePositive(input.quantity, "Event quantity");
     let quantity = current.quantity;
     let availableQuantity = current.availableQuantity;
     let evidence = current.evidence;
-    if (input.type === "count") {
-      const allocated = canCount(current.evidence.state) ? current.quantity - current.availableQuantity : 0;
-      if (input.quantity < allocated) throw new ApplicationError("conflict", "Physical count cannot be below allocated quantity");
-      quantity = input.quantity;
-      availableQuantity = input.quantity - allocated;
-      evidence = { ...current.evidence, state: "physically_counted", observedAt: iso() };
-    } else if (["receipt", "return"].includes(input.type)) {
+    if (["receipt", "return"].includes(input.type)) {
       quantity += input.quantity;
       if (canCount(current.evidence.state)) availableQuantity += input.quantity;
     } else if (["allocate", "consume", "loss", "dispose"].includes(input.type)) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createBomLineSchema, createInventoryItemSchema, updateBomLineSchema, updateInventoryItemSchema } from "./schemas.js";
+import { commissionInventoryItemSchema, createBomLineSchema, createInventoryItemSchema, updateBomLineSchema, updateInventoryItemSchema } from "./schemas.js";
 
 const constraints = {
   kind: "electronic",
@@ -57,5 +57,20 @@ describe("REST inventory quantity invariants", () => {
     expect(updateInventoryItemSchema.parse({ name: "Renamed", location: "drawer-B", tags: ["board"] })).toMatchObject({
       name: "Renamed", location: "drawer-B", tags: ["board"]
     });
+  });
+});
+
+describe("REST inventory commissioning contract", () => {
+  it("requires an observed quantity, matching unit, and commissioned evidence", () => {
+    expect(commissionInventoryItemSchema.parse({
+      quantity: 1,
+      unit: "each",
+      evidence: { state: "commissioned", source: "bench-test", observedAt: "2026-08-31T10:00:00.000Z" }
+    })).toMatchObject({ quantity: 1, unit: "each", evidence: { state: "commissioned" } });
+    expect(() => commissionInventoryItemSchema.parse({
+      quantity: 1,
+      unit: "each",
+      evidence: { state: "delivered_uncounted", source: "bench-test" }
+    })).toThrow();
   });
 });

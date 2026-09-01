@@ -69,7 +69,7 @@ const inventoryItemCreateProperty: JsonObject = object({
   category: string("Inventory category, for example filament or printer."),
   categoryNodeId: categoryIdProperty("Optional user-managed category or subcategory assignment."),
   quantity: quantityProperty,
-  evidence: object({ state: string(), source: string(), recordedAt: string(), note: string() }, ["state", "source", "recordedAt"]),
+  evidence: object({ state: string(), source: string(), sourceId: string("Optional source reference."), recordedAt: string(), note: string() }, ["state", "source", "recordedAt"]),
   description: string(), manufacturer: string(), model: string(), sku: string(),
   dimensions: object({ length: number(), width: number(), height: number(), diameter: number(), unit: string(), source: string(), uncertainty: number() }),
   condition: string(), location: string(), links: array(object({ label: string(), url: string() }, ["label", "url"])),
@@ -84,6 +84,23 @@ const inventoryWithProductProfileProperty: JsonObject = object({
   item: inventoryItemCreateProperty,
   profile: inventoryProductProfileCreateProperty,
 }, ["item", "profile"]);
+const inventoryCommissionProperty: JsonObject = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    itemId: idProperty("Uncertain inventory item to commission."),
+    expectedVersion: integer("Inventory item version read before commissioning."),
+    quantity: quantityProperty,
+    evidence: object({
+      state: { const: "commissioned", description: "Required deliberate commissioning evidence state." },
+      source: string("Where the commissioning observation came from."),
+      sourceId: string("Optional source reference."),
+      recordedAt: string("ISO-8601 commissioning observation timestamp."),
+      note: string("What was observed during commissioning."),
+    }, ["state", "source", "recordedAt"]),
+  },
+  required: ["itemId", "expectedVersion", "quantity", "evidence"],
+};
 const descriptorProperty: JsonObject = {
   oneOf: [string("Short descriptor."), object({
     name: string(), version: string(), model: string(), material: string(), side: string(), type: string(), surface: string(),
@@ -174,6 +191,8 @@ export const TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
   tool("create_inventory_item", "Add a catalog item or stock record with an explicit evidence state.", "inventory:write", true, inventoryItemCreateProperty.properties as Record<string, JsonValue>, ["name", "category", "quantity", "evidence"]),
   tool("create_inventory_with_product_profile", "Atomically create one physical printer or filament inventory item and its exact product profile. Requires both inventory:write and catalog:write; retries with the same idempotency key are safe and failed profile/audit writes are compensated.", "inventory:write", true, inventoryWithProductProfileProperty.properties as Record<string, JsonValue>, ["item", "profile"]),
   tool("update_inventory_item", "Update descriptive inventory metadata and optionally assign a user-managed category using optimistic versioning.", "inventory:write", true, { itemId: idProperty("Inventory item identifier."), expectedVersion: integer(), name: string(), category: string(), categoryNodeId: nullableCategoryIdProperty("Optional category assignment; null clears it."), description: string(), manufacturer: string(), model: string(), sku: string(), dimensions: object({ length: number(), width: number(), height: number(), diameter: number(), unit: string(), source: string(), uncertainty: number() }), condition: string(), location: string(), links: array(object({ label: string(), url: string() }, ["label", "url"])) }, ["itemId"]),
+  tool("update_inventory_item", "Update descriptive inventory metadata and optionally assign a user-managed category using optimistic versioning.", "inventory:write", true, { itemId: idProperty("Inventory item identifier."), expectedVersion: integer(), name: string(), category: string(), categoryNodeId: nullableCategoryIdProperty("Optional category assignment; null clears it."), description: string(), manufacturer: string(), model: string(), sku: string(), dimensions: object({ length: number(), width: number(), height: number(), diameter: number(), unit: string(), source: string(), uncertainty: number() }), condition: string(), location: string(), links: array(object({ label: string(), url: string() }, ["label", "url"])) }, ["itemId"]),
+  tool("commission_inventory_item", "Promote delivered or ordered inventory to commissioned only with an observed quantity and provenance; records an append-only count event and preserves prior evidence. Supply expectedVersion and a distinct idempotency key in the request context.", "inventory:write", true, inventoryCommissionProperty.properties as Record<string, JsonValue>, ["itemId", "expectedVersion", "quantity", "evidence"]),
   tool("record_stock_event", "Record one append-only receipt, count correction, allocation, use, return, loss, or disposal event.", "inventory:write", true, { itemId: idProperty("Inventory item identifier."), kind: string(), quantity: quantityProperty, note: string() }, ["itemId", "kind", "quantity"]),
   tool("list_stock_events", "List the append-only stock event history for one item.", "inventory:read", false, { ...pageProperties, itemId: idProperty("Inventory item identifier.") }, ["itemId"]),
   tool("list_inventory_categories", "List the bounded user-managed inventory taxonomy; semantic inventory kinds remain closed and separate.", "inventory:read", false, { ...categoryPageProperties, includeArchived: boolean("Include archived categories.") }),
@@ -272,7 +291,7 @@ export const CAPABILITY_DOCUMENT: JsonObject = {
   scopeBehavior: {
     projectTokens: "A token with projectIds may address only those projects. Project list results are allow-list filtered; workspace-wide aggregate endpoints are rejected.",
     indirectProjectIds: "Revision, work-item, BOM-line, reservation, artifact, and upload identifiers are resolved from durable host state before dispatch. If ancestry cannot be proven, the request is rejected; request-local ID caches are never authoritative.",
-    inventory: "The inventory catalog and user-managed category taxonomy are shared workspace context. Project-scoped tokens may read inventory, categories, and stock history for matching, but cannot create, update, retire, count, record stock events, or mutate categories.",
+    inventory: "The inventory catalog and user-managed category taxonomy are shared workspace context. Project-scoped tokens may read inventory, categories, and stock history for matching, but cannot create, update, retire, commission, count, record stock events, or mutate categories. Uncertain delivery/order evidence can be promoted only through commission_inventory_item with an observed quantity, commissioned provenance, expectedVersion, and a distinct idempotency key; the prior evidence remains in the append-only count event.",
     atomicInventoryProfile: "create_inventory_with_product_profile requires both inventory:write and catalog:write on an unscoped token. Its item and profile commit as one audited, idempotent command; a failed profile, audit, idempotency, or binding step compensates the just-created records.",
     catalog: "Exact catalog products are shared workspace context. Project-scoped tokens may search and read products for in-scope snapshots, but only unscoped catalog tokens may create or correct products.",
     profiles: "Physical product profiles are workspace-global. Profile reads and writes require catalog scope and are not available to project-scoped tokens; reported and suggested links never imply confirmed stock or compatibility.",

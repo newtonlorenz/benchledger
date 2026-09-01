@@ -106,6 +106,7 @@ export type EvidenceState =
 export interface EvidenceSummary {
   state: EvidenceState;
   source: string;
+  sourceId?: string;
   recordedAt: string;
   note?: string;
 }
@@ -249,6 +250,13 @@ export interface InventoryUpdateInput {
   condition?: InventoryItem["condition"];
   location?: string;
   links?: readonly InventoryLinkInput[];
+}
+
+export interface InventoryCommissionInput {
+  itemId: string;
+  expectedVersion: number;
+  quantity: Quantity;
+  evidence: Omit<EvidenceSummary, "state"> & { state: "commissioned" };
 }
 
 export type StockEventKind = "receipt" | "count_correction" | "allocation" | "return" | "use" | "loss" | "disposal";
@@ -703,6 +711,8 @@ export interface InventoryBackend {
   /** Atomically create a physical inventory item and its exact product profile. */
   createWithProductProfile?(input: InventoryWithProductProfileCreateInput, context: McpRequestContext): Promise<InventoryWithProductProfileResult>;
   update(input: InventoryUpdateInput, context: McpRequestContext): Promise<WriteResult<InventoryItem>>;
+  /** Promote uncertain evidence through an observed quantity and append-only event. */
+  commission?(input: InventoryCommissionInput, context: McpRequestContext): Promise<WriteResult<InventoryItem>>;
   recordStockEvent(input: RecordStockEventInput, context: McpRequestContext): Promise<StockEventResult>;
   listStockEvents(input: StockEventsInput, context: McpRequestContext): Promise<Page<StockEvent>>;
 }

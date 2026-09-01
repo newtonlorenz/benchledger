@@ -132,4 +132,41 @@ describe("inventory creation invariants", () => {
       await rm(dataDir, { recursive: true, force: true });
     }
   });
+
+  it("commissions uncertain inventory through an append-only count event in both runtimes", async () => {
+    const uncertain = {
+      id: "delivered-commission-item",
+      name: "Delivered board",
+      kind: "electronic" as const,
+      quantity: 10,
+      unit: "each" as const,
+      tags: [],
+      links: [],
+      evidence: { state: "delivered_uncounted" as const, source: "delivery-record", sourceId: "delivery-1", observedAt: "2026-08-30T10:00:00.000Z" }
+    };
+    const commission = {
+      quantity: 8,
+      unit: "each" as const,
+      evidence: { state: "commissioned" as const, source: "bench-commissioning", sourceId: "check-1", observedAt: "2026-08-31T10:00:00.000Z", note: "Located and tested" }
+    };
+    const memory = createMemoryRuntime();
+    const dataDir = await mkdtemp(join(tmpdir(), "benchledger-commission-invariant-"));
+    const production = await createProductionRuntime({ dataDir, maxUploadBytes: 1024 * 1024, maxStorageBytes: 4 * 1024 * 1024 });
+    const runtimes = [memory.ports, production.ports];
+    try {
+      for (const runtime of runtimes) {
+        const service = new ApplicationService(runtime);
+        await service.createInventoryItem(uncertain, context);
+        const mutation = await service.commissionInventoryItem(uncertain.id, commission, 1, context);
+        expect(mutation.data.item).toMatchObject({ quantity: 8, availableQuantity: 8, version: 2, evidence: commission.evidence });
+        expect(mutation.data.event).toMatchObject({ type: "count", quantity: 8, evidence: { state: "commissioned", previousEvidence: uncertain.evidence, sourceId: "check-1" } });
+        await expect(runtime.inventory.getItem(uncertain.id)).resolves.toMatchObject({ quantity: 8, availableQuantity: 8, evidence: commission.evidence, version: 2 });
+        await expect(runtime.inventory.listStockEvents(uncertain.id, 10)).resolves.toMatchObject({ data: [{ type: "count", quantity: 8, evidence: { state: "commissioned" } }] });
+        await expect(service.commissionInventoryItem(uncertain.id, commission, 1, context)).rejects.toMatchObject({ code: "conflict" });
+      }
+    } finally {
+      await production.close();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
 });

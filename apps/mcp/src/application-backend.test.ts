@@ -69,6 +69,7 @@ function serviceStub(): ApplicationService {
     getProjectRevision: async () => ({ id: "revision-1", projectId: "project-1", number: 1, name: "Initial", status: "concept", createdAt: "2026-08-30T10:00:00.000Z", version: 1 }),
     getReservationDetails: async () => ({ projectId: "project-1", projectRevisionId: "revision-1", reservation: { lineId: "bom-1", itemId: "item-1" }, bomLine: { unit: "each" } }),
     recordUsage: async (input: { itemId: string; quantity: number; unit: string; projectId: string; reservationId?: string }) => ({ data: { event: { id: "usage-event-1" }, item: { id: input.itemId, availableQuantity: 4, unit: input.unit, version: 2 } }, audit: { id: "audit-usage" }, correlationId: "bridge-test", replayed: false }),
+    commissionInventoryItem: async (itemId: string, input: { quantity: number; unit: string; evidence: { state: string; source: string; sourceId?: string; observedAt: string; note?: string } }, expectedVersion: number) => ({ data: { event: { id: "commission-event-1", itemId, type: "count", quantity: input.quantity, unit: input.unit, evidence: input.evidence }, item: { ...item, id: itemId, quantity: input.quantity, availableQuantity: input.quantity, evidence: input.evidence, version: expectedVersion + 1 } }, audit: { id: "audit-commission" }, correlationId: "bridge-test", replayed: false }),
     beginArtifactUpload: async () => ({ data: { id: "upload-1", artifactId: "artifact-1", uploadUrl: "/api/v1/artifacts/uploads/upload-1", expiresAt: "2026-08-30T10:15:00.000Z", maxBytes: 100, status: "pending" }, audit: { id: "audit-1", entityId: "upload-1" }, correlationId: "bridge-test", replayed: false }),
     createProjectWithInitialRevision: async () => ({ data: { project: { id: "project-atomic", name: "Atomic project", status: "idea", createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", currentRevisionId: "revision-atomic", version: 1 }, revision: { id: "revision-atomic", projectId: "project-atomic", number: 1, name: "Initial", status: "concept", createdAt: "2026-08-30T10:00:00.000Z", version: 1 } }, audit: { id: "audit-atomic", entityId: "project-atomic", action: "project.create_with_initial_revision", actor: "bridge-test", source: "mcp", correlationId: "bridge-test", entityType: "project", version: 1, createdAt: "2026-08-30T10:00:00.000Z" }, correlationId: "bridge-test", replayed: false }),
   } as unknown as ApplicationService;
@@ -112,6 +113,25 @@ describe("createApplicationBackend", () => {
     const backend = createApplicationBackend(serviceStub(), { publicBaseUrl: "http://maker.local:8792", artifactTransfer: transferProvider });
     const result = await backend.bom.recordUsage({ projectRevisionId: "revision-1", reservationId: "reservation-1", itemId: "item-1", quantity: { value: 1, unit: "piece" } }, context);
     expect(result).toMatchObject({ usageEventId: "usage-event-1", itemId: "item-1" });
+  });
+
+  it("forwards commissioning provenance, version, and idempotency context", async () => {
+    const service = serviceStub() as ApplicationService & Record<string, any>;
+    service.commissionInventoryItem = vi.fn(service.commissionInventoryItem);
+    const backend = createApplicationBackend(service);
+    const result = await backend.inventory.commission!({
+      itemId: "filament-petg",
+      expectedVersion: 3,
+      quantity: { value: 750, unit: "gram" },
+      evidence: { state: "commissioned", source: "bench check", sourceId: "check-3", recordedAt: "2026-08-31T10:00:00Z", note: "Reweighed" },
+    }, { ...context, idempotencyKey: "commission-bridge-1" });
+
+    expect(service.commissionInventoryItem).toHaveBeenCalledWith("filament-petg", {
+      quantity: 750,
+      unit: "gram",
+      evidence: { state: "commissioned", source: "bench check", sourceId: "check-3", observedAt: "2026-08-31T10:00:00Z", note: "Reweighed" },
+    }, 3, expect.objectContaining({ source: "mcp", idempotencyKey: "commission-bridge-1" }));
+    expect(result).toMatchObject({ id: "filament-petg", version: 4, eventId: "commission-event-1", auditId: "audit-commission" });
   });
 
   it("rejects usage when a reservation belongs to another project revision", async () => {

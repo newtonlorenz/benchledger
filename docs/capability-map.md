@@ -46,7 +46,7 @@ and invalid hashes. Mutating tools use optimistic versions where applicable.
 | Family | Tools | Scope | Mutates? |
 | --- | --- | --- | --- |
 | Inventory | `read_inventory_summary`, `list_inventory`, `read_inventory_item`, `list_stock_events` | `inventory:read` | No |
-| Inventory | `create_inventory_item`, `update_inventory_item`, `record_stock_event` | `inventory:write` | Yes |
+| Inventory | `create_inventory_item`, `update_inventory_item`, `commission_inventory_item`, `record_stock_event` | `inventory:write` | Yes |
 | Inventory taxonomy | `list_inventory_categories`, `read_inventory_category` | `inventory:read` | No |
 | Inventory taxonomy | `create_inventory_category`, `update_inventory_category`, `archive_inventory_category` | `inventory:write` | Yes; update/archive require an expected version |
 | Exact inventory | `create_inventory_with_product_profile` | `inventory:write` + `catalog:write` | Yes |
@@ -77,6 +77,7 @@ kept in the checked-in capability contract and enforced server-side.
 | See what I have | Inventory dashboard and item detail | `read_inventory_summary` → `list_inventory` → item resource |
 | Organize inventory | Settings category manager; inventory table, category filter, and item drawer show managed assignments | `list_inventory_categories` → `create_inventory_category` / `update_inventory_category` / `archive_inventory_category`; pass `categoryNodeId` when creating or updating an item; `kind` remains the separate semantic filter |
 | Count uncertain stock | Item count form and stock timeline | `read_inventory_item` → `record_stock_event(kind=count_correction)` |
+| Commission delivered or ordered stock | Item commissioning action with observed quantity and provenance | `read_inventory_item` → `commission_inventory_item` |
 | Add an exact printer or spool | Exact-product guided add | catalog search/read → `create_inventory_with_product_profile` |
 | Start a project | Guided project setup | `create_project_with_initial_revision` → `create_work_item`; use `create_project_revision` for later planning baselines |
 | Understand a build gap | BOM editor and gap panel | `list_bom_lines` → `calculate_bom_gaps` |
@@ -88,6 +89,13 @@ kept in the checked-in capability contract and enforced server-side.
 
 All UI actions in the table are application-service operations. The frontend
 does not silently invent compatibility, current counts, or purchase outcomes.
+
+Commissioning is deliberately separate from generic PATCH. It requires an
+observed quantity, commissioned evidence with a source and timestamp, and the
+current item version. REST callers must also send `If-Match` and
+`Idempotency-Key`; retries with the same key and identical payload replay the
+same mutation, while a different payload or stale version is rejected. The
+append-only count event retains the prior delivery/order evidence for audit.
 
 ## Artifact transfer contract
 

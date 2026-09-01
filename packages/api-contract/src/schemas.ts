@@ -154,6 +154,17 @@ function validateInventoryQuantityInvariant(value: { readonly quantity: number; 
 
 export const createInventoryItemSchema = createInventoryItemShape.superRefine(validateInventoryQuantityInvariant);
 
+/**
+ * Commissioning is a deliberate evidence transition, not a generic item
+ * update. The observed quantity and provenance are recorded with an append-only
+ * stock count event by the application service.
+ */
+export const commissionInventoryItemSchema = z.object({
+  quantity: z.number().finite().nonnegative(),
+  unit: quantityUnitSchema,
+  evidence: evidenceSchema.extend({ state: z.literal("commissioned"), source: z.string().min(1).max(500), observedAt: isoDateSchema })
+}).strict();
+
 const updateInventoryItemShape = createInventoryItemShape.omit({ id: true, quantity: true, availableQuantity: true, unit: true, evidence: true });
 export const updateInventoryItemSchema = updateInventoryItemShape.extend({ categoryNodeId: idSchema.nullable().optional() }).partial().strict();
 

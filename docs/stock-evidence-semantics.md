@@ -50,6 +50,12 @@ claims, record the observed count/correction and retain the prior event. A
 reservation is not consumption; actual consumption is recorded separately with
 `record_usage`.
 
+An uncertain `delivered_uncounted` or `ordered_unverified` item can become
+`commissioned` only through the explicit commissioning command. The command
+requires a current version, an observed quantity, and commissioned provenance
+(source and observation time). It appends a count event that keeps the prior
+evidence in its audit payload; generic metadata PATCH cannot change evidence.
+
 ## BOM evaluation
 
 For each line, the service considers the exact item, explicit alternatives, unit,
