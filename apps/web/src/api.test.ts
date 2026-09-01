@@ -245,6 +245,14 @@ describe("authenticated BenchLedger API adapter", () => {
     expect(unassignedPage.items.some((item) => item.id === assigned.id)).toBe(false);
   });
 
+  it("keeps sample inventory pagination bounds aligned with the REST contract", async () => {
+    const adapter = createSampleWorkspaceAdapter();
+    await expect(adapter.listInventory({ q: "x".repeat(201), limit: 25 })).rejects.toMatchObject({ kind: "validation", status: 400 });
+    await expect(adapter.listInventory({ limit: 201 })).rejects.toMatchObject({ kind: "validation", status: 400 });
+    await expect(adapter.listInventory({ cursor: "1".repeat(201), limit: 25 })).rejects.toMatchObject({ kind: "validation", status: 400, code: "invalid_cursor" });
+    await expect(adapter.listInventory({ categoryNodeId: "category-tools", unassigned: true, limit: 25 })).rejects.toMatchObject({ kind: "validation", status: 400 });
+  });
+
   it("requests inventory pages from the server and maps pagination without slicing a workspace snapshot", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({
       data: [serverItem({ id: "item-page", name: "Paged item" })], limit: 10, total: 21, nextCursor: "10"

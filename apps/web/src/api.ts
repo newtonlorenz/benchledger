@@ -1337,8 +1337,20 @@ function canonicalSampleEvidence(item: InventoryItem): InventoryEvidenceState {
 
 function sampleInventoryPage(items: readonly InventoryItem[], query: InventoryListQuery): InventoryPage {
   const cursor = query.cursor;
+  if (query.q !== undefined && query.q.length > MAX_INVENTORY_SEARCH_LENGTH) {
+    throw new ApiError(`Inventory search must be at most ${MAX_INVENTORY_SEARCH_LENGTH} characters`, { kind: "validation", status: 400, demo: true });
+  }
+  if (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > 200) {
+    throw new ApiError("Inventory page size must be an integer between 1 and 200", { kind: "validation", status: 400, demo: true });
+  }
+  if (cursor !== undefined && cursor.length > 200) {
+    throw new ApiError("The inventory pagination cursor is too long", { kind: "validation", status: 400, code: "invalid_cursor", demo: true });
+  }
   if (cursor !== undefined && (!/^(0|[1-9][0-9]*)$/u.test(cursor) || !Number.isSafeInteger(Number(cursor)))) {
     throw new ApiError("The inventory pagination cursor is invalid", { kind: "validation", status: 400, code: "invalid_cursor", demo: true });
+  }
+  if (query.categoryNodeId !== undefined && query.unassigned === true) {
+    throw new ApiError("categoryNodeId and unassigned cannot be combined", { kind: "validation", status: 400, demo: true });
   }
   const offset = cursor === undefined ? 0 : Number(cursor);
   const normalized = query.q?.trim().toLocaleLowerCase();
