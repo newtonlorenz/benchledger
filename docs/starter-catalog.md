@@ -55,6 +55,12 @@ is cleared until the corrected value is verified again, while the complete
 superseded payload and provenance remain in append-only history. No-op updates
 retain valid provenance.
 
+The v1-to-v2 starter migration is a server-reviewed exception: after the full
+v1 payload fingerprint matches, it archives that payload and writes the
+complete reviewed v2 payload, including its reviewed provenance. This keeps
+the migrated row equivalent to a fresh v2 seed while the ordinary user update
+path continues to clear provenance after fact edits.
+
 When a workspace reports dataset version 1, startup applies the v1-to-v2
 corrections only to rows whose complete stored payload still exactly matches
 the originally seeded v1 payload. The immutable fingerprints cover the

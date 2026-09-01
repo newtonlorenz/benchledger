@@ -221,10 +221,6 @@ function catalogFactsChanged(current: CatalogProduct, changes: Record<string, un
   return fields.some((field) => Object.hasOwn(changes, field) && !sameCatalogFact(currentRecord[field], changes[field]));
 }
 
-function catalogProvenanceChanged(current: CatalogProduct, changes: Record<string, unknown>): boolean {
-  return Object.hasOwn(changes, "provenance") && !sameCatalogFact(current.provenance, changes.provenance);
-}
-
 function parseInventoryProductProfile(row: SqliteRow): InventoryProductProfile {
   const profile = inventoryProductProfileSchema.parse({
     id: text(row, "id"),
@@ -356,13 +352,12 @@ export class CatalogProductRepository {
       version: current.version + 1
     };
     const factsChanged = catalogFactsChanged(current, changedRecord);
-    const provenanceChanged = catalogProvenanceChanged(current, changedRecord);
     const merged = factsChanged
       ? Object.fromEntries(Object.entries(mergedCandidate).filter(([key]) => key !== "provenance"))
       : mergedCandidate;
     const parsed = catalogProductSchema.parse(merged);
     this.database.transaction(() => {
-      if (factsChanged || provenanceChanged) {
+      if (factsChanged) {
         this.database.run(
           "INSERT INTO catalog_product_history (id, catalog_product_id, superseded_version, payload_json, superseded_at) VALUES (?, ?, ?, ?, ?)",
           [createId("catalog-history"), id, current.version, JSON.stringify(current), parsed.updatedAt],
@@ -378,6 +373,48 @@ export class CatalogProductRepository {
       }
     });
     return parsed;
+  }
+
+  /**
+   * Apply a server-reviewed catalog correction after the caller has established
+   * ownership of the current row. Unlike a public fact update, this writes the
+   * complete reviewed payload, including its provenance, while retaining the
+   * current row's stable identity metadata and incrementing its version.
+   */
+  public applyReviewedCorrection(id: string, reviewed: CatalogProduct, expected: number): CatalogProduct {
+    const expectedValue = expectedVersion(expected);
+    let corrected: CatalogProduct | undefined;
+    this.database.transaction(() => {
+      const current = this.get(id);
+      if (current === undefined) throw new DomainError("catalog_product_not_found", `catalog product ${id} does not exist`);
+      if (current.version !== expectedValue) conflict("catalog product", id, expectedValue, current.version);
+      if (reviewed.id !== id) throw new DomainError("invalid_update", "catalog product id cannot change");
+      if (reviewed.kind !== current.kind) throw new DomainError("invalid_update", "catalog product kind cannot change");
+
+      const parsed = catalogProductSchema.parse({
+        ...structuredClone(reviewed),
+        id,
+        kind: current.kind,
+        createdAt: current.createdAt,
+        updatedAt: nowIso(),
+        version: current.version + 1,
+      });
+      this.database.run(
+        "INSERT INTO catalog_product_history (id, catalog_product_id, superseded_version, payload_json, superseded_at) VALUES (?, ?, ?, ?, ?)",
+        [createId("catalog-history"), id, current.version, JSON.stringify(current), parsed.updatedAt],
+      );
+      const result = this.database.run(
+        "UPDATE catalog_products SET payload_json = ?, version = ?, updated_at = ? WHERE id = ? AND version = ?",
+        [JSON.stringify(parsed), parsed.version, parsed.updatedAt, id, expectedValue],
+      ) as { changes?: number | bigint };
+      if (typeof result?.changes === "number" ? result.changes !== 1 : typeof result?.changes === "bigint" ? result.changes !== 1n : this.get(id)?.version !== parsed.version) {
+        const actual = this.get(id)?.version ?? expectedValue;
+        conflict("catalog product", id, expectedValue, actual);
+      }
+      corrected = parsed;
+    });
+    if (corrected === undefined) throw new Error(`catalog product ${id} correction did not complete`);
+    return corrected;
   }
 
   public updateCatalogProduct(id: string, changes: CatalogProductPatch, expectedVersion: number): CatalogProduct {

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { BenchDatabase, CatalogProductRepository, migrateCatalogSchema } from "@benchledger/database";
+import type { CatalogProduct } from "@benchledger/api-contract";
 import { STARTER_CATALOG_DATASET_VERSION, STARTER_CATALOG_PRODUCTS, STARTER_CATALOG_V1_LATE_PRODUCTS, STARTER_CATALOG_V1_PRODUCTS, STARTER_FILAMENTS, STARTER_PRINTERS } from "./starter-catalog-data.js";
 import { createProductionRuntime, type ProductionRuntime } from "./index.js";
 import { seedStarterCatalog } from "./starter-catalog.js";
@@ -60,6 +61,15 @@ function seedOriginalV1CatalogWithRenamedProduct(database: BenchDatabase): void 
       verifiedAt: "2026-09-01T00:00:00.000Z",
     },
     materialSubtype: "PA6-GF",
+  });
+}
+
+function expectCompleteReviewedProduct(actual: CatalogProduct | undefined, expected: CatalogProduct, version: number): void {
+  expect(actual).toBeDefined();
+  expect(actual).toEqual({
+    ...expected,
+    version,
+    updatedAt: actual!.updatedAt,
   });
 }
 
@@ -247,12 +257,6 @@ describe("reviewed starter catalog", () => {
     expect(repository.get("starter-printer-anycubic-kobra-2")).toMatchObject({ version: 2, buildVolumeMm: { x: 220, y: 220, z: 250 } });
     expect(repository.get("starter-printer-anycubic-kobra-2-pro")).toMatchObject({ version: 2, buildVolumeMm: { x: 220, y: 220, z: 250 } });
     expect(repository.get("starter-printer-anycubic-kobra-s1")).toMatchObject({ version: 2, buildVolumeMm: { x: 250, y: 250, z: 250 } });
-    for (const id of [
-      "starter-printer-anycubic-kobra-2",
-      "starter-printer-anycubic-kobra-2-pro",
-      "starter-printer-anycubic-kobra-s1",
-    ]) expect(repository.get(id)?.provenance).toBeUndefined();
-
     const history = database.all<{ readonly catalog_product_id: string; readonly superseded_version: number; readonly payload_json: string }>(
       "SELECT catalog_product_id, superseded_version, payload_json FROM catalog_product_history ORDER BY catalog_product_id",
     );
@@ -283,16 +287,7 @@ describe("reviewed starter catalog", () => {
     const currentById = new Map(STARTER_CATALOG_PRODUCTS.map((product) => [product.id, product]));
     for (const [id, expected] of currentById) {
       if (!STARTER_CATALOG_V1_PRODUCTS.some((product) => product.id === id)) continue;
-      const actual = repository.get(id);
-      expect(actual).toBeDefined();
-      for (const field of ["kind", "manufacturer", "productName", "materialFamily", "materialSubtype", "colourName", "colourCode", "sku", "diameterMm", "nominalNetMassG", "lengthBasis", "nominalLengthM", "densityGcm3", "exactModel", "exactVariant", "technology", "buildVolumeMm"]) {
-        expect((actual as Record<string, unknown>)[field]).toEqual((expected as Record<string, unknown>)[field]);
-      }
-    }
-    expect(repository.get("starter-filament-polymaker-polymax-petg-black")?.provenance).toEqual(currentById.get("starter-filament-polymaker-polymax-petg-black")?.provenance);
-    expect(repository.get("starter-filament-bambu-tpu-95a-hf-black")?.provenance).toEqual(currentById.get("starter-filament-bambu-tpu-95a-hf-black")?.provenance);
-    for (const id of history.map((entry) => entry.catalog_product_id).filter((id) => !["starter-filament-bambu-abs-gf-black", "starter-filament-bambu-tpu-95a-hf-black", "starter-filament-polymaker-polymax-petg-black"].includes(id))) {
-      expect(repository.get(id)?.provenance).toBeUndefined();
+      expectCompleteReviewedProduct(repository.get(id), expected, 2);
     }
     expect(database.get<{ readonly count: number }>("SELECT COUNT(*) AS count FROM inventory_items")?.count).toBe(0);
     expect(database.get<{ readonly count: number }>("SELECT COUNT(*) AS count FROM inventory_product_profiles")?.count).toBe(0);
@@ -323,8 +318,9 @@ describe("reviewed starter catalog", () => {
     seedStarterCatalog(database);
 
     const repository = new CatalogProductRepository(database);
-    expect(repository.get("starter-filament-prusament-asa-jet-black")).toMatchObject({ version: 2, nominalNetMassG: 800 });
-    expect(repository.get("starter-filament-prusament-pc-blend-black")).toMatchObject({ version: 2, nominalNetMassG: 900 });
+    const currentById = new Map(STARTER_CATALOG_PRODUCTS.map((product) => [product.id, product]));
+    expectCompleteReviewedProduct(repository.get("starter-filament-prusament-asa-jet-black"), currentById.get("starter-filament-prusament-asa-jet-black")!, 2);
+    expectCompleteReviewedProduct(repository.get("starter-filament-prusament-pc-blend-black"), currentById.get("starter-filament-prusament-pc-blend-black")!, 2);
     expect(repository.get("starter-printer-anycubic-kobra-2")).toMatchObject({ version: 1, buildVolumeMm: { x: 220, y: 220, z: 250 } });
     expect(database.all<{ readonly catalog_product_id: string }>("SELECT catalog_product_id FROM catalog_product_history ORDER BY catalog_product_id").map((entry) => entry.catalog_product_id)).toEqual([
       "starter-filament-prusament-asa-jet-black",

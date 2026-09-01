@@ -39,11 +39,6 @@ function seedProduct(database: BenchDatabase, repository: StarterCatalogProductW
   return true;
 }
 
-function sameValue(left: unknown, right: unknown): boolean {
-  if (left === undefined || right === undefined) return left === right;
-  return deterministicJson(left) === deterministicJson(right);
-}
-
 function correctV1Product(
   repository: CatalogProductRepository,
   correction: (typeof STARTER_CATALOG_V1_CORRECTIONS)[number],
@@ -58,15 +53,7 @@ function correctV1Product(
   // untouched while the dataset metadata can still advance transactionally.
   if (deterministicJson(current) !== deterministicJson(correction.v1)) return false;
 
-  const currentRecord = current as unknown as Record<string, unknown>;
-  const v2Record = v2Product as unknown as Record<string, unknown>;
-  const changes = Object.fromEntries(
-    [...new Set([...Object.keys(currentRecord), ...Object.keys(v2Record)])]
-      .filter((field) => !["id", "kind", "createdAt", "updatedAt", "version"].includes(field))
-      .filter((field) => !sameValue(currentRecord[field], v2Record[field]))
-      .map((field) => [field, structuredClone(v2Record[field])]),
-  );
-  repository.update(current.id, changes, current.version);
+  repository.applyReviewedCorrection(current.id, v2Product, current.version);
   return true;
 }
 
