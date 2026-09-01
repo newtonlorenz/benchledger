@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApplicationError, type ApplicationService } from "@benchledger/application";
+import { McpAdapter } from "./adapter.js";
 import { createApplicationBackend } from "./application-backend.js";
 import type { McpRequestContext } from "./types.js";
 
@@ -227,6 +228,30 @@ describe("createApplicationBackend translation coverage", () => {
     await expect(backend.inventory.list({ location: "late cabinet", cursor: "not-a-filtered-cursor" }, context)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
     const first = await backend.inventory.list({ location: "late cabinet", limit: 1 }, context);
     await expect(backend.inventory.list({ location: "late cabinet", limit: 1, cursor: first.nextCursor! }, context)).rejects.toMatchObject({ code: "BACKEND_ERROR" });
+  });
+
+  it("accepts long filtered inventory and offer cursors emitted by the application backend", async () => {
+    const service = serviceFixture();
+    const sourceCursor = "s".repeat(200);
+    service.listInventory.mockImplementation(async ({ cursor }: { cursor?: string }) => cursor === undefined
+      ? { data: [apiItem({ id: "inventory-first", location: "late cabinet" })], limit: 200, nextCursor: sourceCursor }
+      : { data: [apiItem({ id: "inventory-second", location: "late cabinet" })], limit: 200 });
+    service.listOffers.mockImplementation(async (_itemId: string | undefined, _limit: number, cursor?: string) => cursor === undefined
+      ? { data: [apiOffer({ id: "offer-first", supplier: "Late supplier" })], limit: 200, nextCursor: sourceCursor }
+      : { data: [apiOffer({ id: "offer-second", supplier: "Late supplier" })], limit: 200 });
+
+    const adapter = new McpAdapter(createApplicationBackend(service));
+    const firstInventory = await adapter.callTool("list_inventory", { location: "late cabinet", limit: 1 }, context);
+    expect(firstInventory.isError).toBe(false);
+    const inventoryCursor = (firstInventory.structuredContent as { nextCursor: string }).nextCursor;
+    expect(inventoryCursor.length).toBeGreaterThan(200);
+    await expect(adapter.callTool("list_inventory", { location: "late cabinet", limit: 1, cursor: inventoryCursor }, context)).resolves.toMatchObject({ isError: false, structuredContent: { items: [{ id: "inventory-second" }], nextCursor: null, hasMore: false } });
+
+    const firstOffers = await adapter.callTool("list_offers", { query: "late", limit: 1 }, context);
+    expect(firstOffers.isError).toBe(false);
+    const offerCursor = (firstOffers.structuredContent as { nextCursor: string }).nextCursor;
+    expect(offerCursor.length).toBeGreaterThan(200);
+    await expect(adapter.callTool("list_offers", { query: "late", limit: 1, cursor: offerCursor }, context)).resolves.toMatchObject({ isError: false, structuredContent: { items: [{ id: "offer-second" }], nextCursor: null, hasMore: false } });
   });
 
   it("preserves candidate-level BOM compatibility and omits ambiguous quantities", async () => {

@@ -374,7 +374,9 @@ function textFields(input: UnknownRecord, label: string, output: Record<string, 
 export function inventoryList(value: unknown): InventoryListInput {
   const input = record(value ?? {}, "arguments");
   keys(input, ["limit", "cursor", "query", "category", "availability", "location"], "arguments");
-  const page = parsePageInput({ limit: input.limit, cursor: input.cursor });
+  // Location filtering is applied after bounded application pages and uses a
+  // compact opaque cursor that can contain a near-maximum source cursor.
+  const page = parsePageInput({ limit: input.limit, cursor: input.cursor }, "arguments", 512);
   return {
     ...page,
     query: optionalString(input.query, "arguments.query", 256),
@@ -762,7 +764,9 @@ export function retireArtifact(value: unknown): RetireArtifactInput {
 export function offerList(value: unknown): OfferListInput {
   const input = record(value, "arguments");
   keys(input, ["itemId", "query", "supplier", "limit", "cursor"], "arguments");
-  return { ...parsePageInput({ limit: input.limit, cursor: input.cursor }), itemId: optionalId(input.itemId, "arguments.itemId"), query: optionalString(input.query, "arguments.query", 256), supplier: optionalString(input.supplier, "arguments.supplier", 256) };
+  // Offer query/supplier filters are applied across bounded application pages
+  // and therefore share the larger opaque cursor bound with filtered inventory.
+  return { ...parsePageInput({ limit: input.limit, cursor: input.cursor }, "arguments", 512), itemId: optionalId(input.itemId, "arguments.itemId"), query: optionalString(input.query, "arguments.query", 256), supplier: optionalString(input.supplier, "arguments.supplier", 256) };
 }
 
 function money(value: unknown, label: string): { minor: number; currency: string } {

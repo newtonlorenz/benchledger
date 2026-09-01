@@ -44,8 +44,27 @@ describe("BenchLedger HTTP API", () => {
     const runtime = createSyntheticRuntime();
     await runtime.inventoryCategories.createCategory({ id: "category-demo-zebra", name: "Zebra", sortOrder: 100 });
     await runtime.inventoryCategories.createCategory({ id: "category-demo-eclair", name: "Éclair", sortOrder: 100 });
+    await runtime.inventoryCategories.createCategory({ id: "category-demo-cafe", name: "Café", sortOrder: 101 });
+    expect(() => runtime.inventoryCategories.createCategory({ id: "category-demo-cafe-composed", name: "Cafe\u0301", sortOrder: 102 })).toThrow(/already exists|category/i);
     const page = await runtime.inventoryCategories.listCategories({ limit: 200, includeArchived: false });
     expect(page.data.filter((value) => value.sortOrder === 100).map((value) => value.id)).toEqual(["category-demo-zebra", "category-demo-eclair"]);
+  });
+
+  it("uses canonical category cursors and rejects malformed cursors in the synthetic runtime", async () => {
+    const runtime = createSyntheticRuntime();
+    const firstId = "category-" + "a".repeat(151);
+    const secondId = "category-" + "b".repeat(151);
+    await runtime.inventoryCategories.createCategory({ id: firstId, name: "ﬃ".repeat(120), sortOrder: 0 });
+    await runtime.inventoryCategories.createCategory({ id: secondId, name: "G".repeat(120), sortOrder: 0 });
+
+    const first = await runtime.inventoryCategories.listCategories({ limit: 1, includeArchived: false });
+    expect(first.data[0]?.id).toBe(firstId);
+    expect(first.nextCursor).toBe(Buffer.from(firstId, "utf8").toString("base64url"));
+    expect(first.nextCursor?.length).toBeGreaterThan(200);
+    const cursor = first.nextCursor;
+    if (cursor === undefined) throw new Error("expected a continuation cursor");
+    expect((await runtime.inventoryCategories.listCategories({ limit: 1, includeArchived: false, cursor })).data[0]?.id).toBe(secondId);
+    expect(() => runtime.inventoryCategories.listCategories({ limit: 1, includeArchived: false, cursor: "1" })).toThrow(/invalid/i);
   });
 
   it("keeps health public but protects inventory", async () => {
@@ -102,8 +121,10 @@ describe("BenchLedger HTTP API", () => {
     expect(archivedParent.statusCode).toBe(200);
     const archivedList = await app.inject({ method: "GET", url: "/api/v1/inventory/categories?includeArchived=true&limit=200", headers });
     expect(archivedList.json<{ data: Array<{ id: string; archived: boolean }> }>().data.find((value) => value.id === "http-category")?.archived).toBe(true);
-    const malformedCursor = await app.inject({ method: "GET", url: "/api/v1/inventory/categories?cursor=malformed", headers });
-    expect(malformedCursor.statusCode).toBe(400);
+    for (const cursor of ["malformed", "1"]) {
+      const malformedCursor = await app.inject({ method: "GET", url: `/api/v1/inventory/categories?cursor=${cursor}`, headers });
+      expect(malformedCursor.statusCode).toBe(400);
+    }
     await app.close();
   });
 

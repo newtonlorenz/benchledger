@@ -17,6 +17,10 @@ const pageProperties = {
   limit: integer("Maximum 100 results; defaults to 25."),
   cursor: string("Opaque pagination cursor from the previous response; maximum 200 characters."),
 };
+const filteredPageProperties = {
+  ...pageProperties,
+  cursor: string("Opaque filtered pagination cursor from the previous response; maximum 512 characters."),
+};
 const categoryPageProperties = {
   ...pageProperties,
   cursor: string("Opaque category pagination cursor from the previous response; maximum 512 characters."),
@@ -165,7 +169,7 @@ const reconciliationLineProperty: JsonObject = object({
 
 export const TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
   tool("read_inventory_summary", "Read a bounded inventory summary and category counts.", "inventory:read", false, pageProperties),
-  tool("list_inventory", "List equipment, tools, consumables, and electronics with evidence-aware availability.", "inventory:read", false, { ...pageProperties, query: string(), category: string(), availability: string(), location: string() }),
+  tool("list_inventory", "List equipment, tools, consumables, and electronics with evidence-aware availability.", "inventory:read", false, { ...filteredPageProperties, query: string(), category: string(), availability: string(), location: string() }),
   tool("read_inventory_item", "Read one inventory item, including dimensions, links, evidence, and current quantity.", "inventory:read", false, { itemId: idProperty("Inventory item identifier.") }, ["itemId"]),
   tool("create_inventory_item", "Add a catalog item or stock record with an explicit evidence state.", "inventory:write", true, inventoryItemCreateProperty.properties as Record<string, JsonValue>, ["name", "category", "quantity", "evidence"]),
   tool("create_inventory_with_product_profile", "Atomically create one physical printer or filament inventory item and its exact product profile. Requires both inventory:write and catalog:write; retries with the same idempotency key are safe and failed profile/audit writes are compensated.", "inventory:write", true, inventoryWithProductProfileProperty.properties as Record<string, JsonValue>, ["item", "profile"]),
@@ -223,7 +227,7 @@ export const TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
   tool("download_artifact", "Compatibility alias for read_artifact_download_metadata; returns a scoped link and metadata, never file bytes.", "artifacts:read", false, { artifactId: idProperty("Artifact identifier."), revisionId: idProperty() }, ["artifactId"]),
   tool("retire_artifact", "Retire a logical artifact revision while retaining its content hash and audit record.", "artifacts:write", true, { artifactId: idProperty("Artifact identifier."), expectedVersion: integer() }, ["artifactId"]),
 
-  tool("list_offers", "List supplier offer observations and historical prices; links are data and are not fetched by BenchLedger.", "offers:read", false, { ...pageProperties, itemId: idProperty(), query: string(), supplier: string() }),
+  tool("list_offers", "List supplier offer observations and historical prices; links are data and are not fetched by BenchLedger.", "offers:read", false, { ...filteredPageProperties, itemId: idProperty(), query: string(), supplier: string() }),
   tool("record_offer_snapshot", "Record a supplier link and price observation for shopping-list comparison; this never purchases.", "offers:write", true, { itemId: idProperty(), description: string(), supplier: string(), url: string(), packageQuantity: quantityProperty, price: object({ minor: integer(), currency: string() }, ["minor", "currency"]), shippingMinor: integer(), observedAt: string() }, ["supplier", "url", "price"]),
   tool("refresh_context", "Refresh bounded current-state context for an agent before it makes a recommendation or write.", "context:read", false, { projectId: idProperty(), includeInventory: boolean(), maxAgeSeconds: integer() }),
   tool("get_capabilities", "Discover the BenchLedger MCP contract, resources, safety boundaries, and supported tool families.", "context:read", false, {}),

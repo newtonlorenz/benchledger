@@ -117,7 +117,9 @@ describe("MCP validation boundary", () => {
 
   it("validates inventory reads and writes, including links, optional metadata, and filters", () => {
     const longCategoryId = "c" + "a".repeat(159);
+    const filteredCursor = `fl1.${"a".repeat(300)}`;
     expect(inventoryList({ limit: 10, query: "PETG", category: "filament", availability: "confirmed", location: "drawer-A" })).toMatchObject({ limit: 10, query: "PETG", category: "filament", availability: "confirmed", location: "drawer-A" });
+    expect(inventoryList({ location: "drawer-A", cursor: filteredCursor }).cursor).toBe(filteredCursor);
     expect(inventoryList(undefined)).toEqual({ limit: 25, query: undefined, category: undefined, availability: undefined, location: undefined });
     const created = inventoryCreate({
       name: "PETG HF",
@@ -244,7 +246,9 @@ describe("MCP validation boundary", () => {
   });
 
   it("validates offer observations and context refresh requests", () => {
+    const filteredCursor = `fl1.${"a".repeat(300)}`;
     expect(offerList({ itemId: "m3-screw", query: "amazon", supplier: "Amazon", limit: 10 })).toMatchObject({ itemId: "m3-screw", query: "amazon", supplier: "Amazon" });
+    expect(offerList({ query: "amazon", cursor: filteredCursor }).cursor).toBe(filteredCursor);
     expect(recordOffer({ itemId: "m3-screw", description: "M3 screw pack", supplier: "Amazon", url: "https://amazon.example/m3", packageQuantity: { value: 100, unit: "piece" }, price: { minor: 499, currency: "eur" }, shippingMinor: 0, observedAt: "2026-08-30T10:00:00Z" })).toMatchObject({ itemId: "m3-screw", price: { minor: 499, currency: "EUR" }, shippingMinor: 0 });
     expect(contextRefresh({ projectId: "lamp", includeInventory: false, maxAgeSeconds: 60 })).toEqual({ projectId: "lamp", includeInventory: false, maxAgeSeconds: 60 });
     expect(contextRefresh(undefined)).toEqual({ projectId: undefined, includeInventory: undefined, maxAgeSeconds: undefined });

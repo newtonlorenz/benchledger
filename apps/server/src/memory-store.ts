@@ -21,6 +21,9 @@ import { BUILTIN_INVENTORY_CATEGORIES, compareInventoryCategoryKeys, normalizeIn
 
 const clone = <T>(value: T): T => structuredClone(value);
 
+const MAX_CATEGORY_CURSOR_LENGTH = 512;
+const CATEGORY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
+
 function iso(): string {
   return new Date().toISOString();
 }
@@ -29,15 +32,42 @@ function id(prefix: string, counter: number): string {
   return `${prefix}-${counter.toString(36)}-${Date.now().toString(36)}`;
 }
 
-function page<T>(items: readonly T[], limit: number, cursor?: string, options: { readonly rejectInvalidCursor?: boolean } = {}): Page<T> {
+function page<T>(items: readonly T[], limit: number, cursor?: string): Page<T> {
   const offset = cursor === undefined ? 0 : Number.parseInt(cursor, 10);
-  if (options.rejectInvalidCursor && cursor !== undefined && (!/^(?:0|[1-9][0-9]*)$/u.test(cursor) || !Number.isSafeInteger(offset) || offset < 0)) {
-    throw new ApplicationError("validation", "cursor is invalid");
-  }
   const safeOffset = Number.isSafeInteger(offset) && offset >= 0 ? offset : 0;
   const selected = items.slice(safeOffset, safeOffset + limit);
   const next = safeOffset + selected.length < items.length ? String(safeOffset + selected.length) : undefined;
   return { data: clone(selected), limit, ...(next ? { nextCursor: next } : {}), total: items.length };
+}
+
+function encodeCategoryCursor(categoryId: string): string {
+  return Buffer.from(categoryId, "utf8").toString("base64url");
+}
+
+function decodeCategoryCursor(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  try {
+    if (value.length === 0 || value.length > MAX_CATEGORY_CURSOR_LENGTH) throw new Error("cursor length out of bounds");
+    // Match the production repository's strict, unpadded base64url contract;
+    // Buffer.from alone accepts punctuation and non-canonical encodings.
+    if (!/^[A-Za-z0-9_-]+$/u.test(value) || value.length % 4 === 1) throw new Error("invalid base64url");
+    const bytes = Buffer.from(value, "base64url");
+    if (bytes.toString("base64url") !== value) throw new Error("non-canonical base64url");
+    const decoded = bytes.toString("utf8");
+    let categoryId = decoded;
+    // Preserve cursors emitted by the superseded JSON form while new cursors
+    // remain compact and contain only the immutable category ID.
+    if (decoded.startsWith("{")) {
+      const parsed: unknown = JSON.parse(decoded);
+      if (parsed === null || typeof parsed !== "object") throw new Error("not object");
+      const candidate = parsed as Record<string, unknown>;
+      categoryId = typeof candidate.id === "string" ? candidate.id : "";
+    }
+    if (!CATEGORY_ID_PATTERN.test(categoryId) || categoryId.length > 160) throw new Error("invalid fields");
+    return categoryId;
+  } catch {
+    throw new ApplicationError("validation", "cursor is invalid or expired");
+  }
 }
 
 function compareInventoryCategories(left: InventoryCategory, right: InventoryCategory): number {
@@ -211,10 +241,15 @@ class MemoryInventoryCategories implements InventoryCategoryPort {
   }
 
   listCategories(options: InventoryCategoryListOptions): Promise<Page<InventoryCategory>> {
-    const values = [...this.categories.values()]
-      .filter((category) => options.includeArchived || !category.archived)
-      .sort(compareInventoryCategories);
-    return Promise.resolve(page(values, options.limit, options.cursor, { rejectInvalidCursor: true }));
+    const all = [...this.categories.values()].sort(compareInventoryCategories);
+    const cursorId = decodeCategoryCursor(options.cursor);
+    const cursorCategory = cursorId === undefined ? undefined : this.categories.get(cursorId);
+    if (cursorId !== undefined && cursorCategory === undefined) throw new ApplicationError("validation", "cursor is invalid or expired");
+    const visible = all.filter((category) => (options.includeArchived || !category.archived) && (cursorCategory === undefined || compareInventoryCategories(category, cursorCategory) > 0));
+    const total = all.filter((category) => options.includeArchived || !category.archived).length;
+    const selected = visible.slice(0, options.limit);
+    const last = selected.at(-1);
+    return Promise.resolve({ data: clone(selected), limit: options.limit, total, ...(visible.length > selected.length && last !== undefined ? { nextCursor: encodeCategoryCursor(last.id) } : {}) });
   }
 
   getCategory(categoryId: string): Promise<InventoryCategory | null> {
