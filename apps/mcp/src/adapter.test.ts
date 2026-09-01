@@ -311,6 +311,7 @@ describe("McpAdapter", () => {
     const adapter = new McpAdapter(backend());
     const names = adapter.listTools().map((tool) => tool.name);
 
+    expect(new Set(names).size).toBe(names.length);
     expect(names).toContain("calculate_bom_gaps");
     expect(names).toContain("refresh_context");
     const categoryUpdate = adapter.listTools().find((tool) => tool.name === "update_inventory_category");

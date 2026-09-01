@@ -1074,6 +1074,7 @@ function InventoryDrawer({ item, categories, categoriesLoading, categoriesError,
         ...(commissionNote.trim() ? { note: commissionNote.trim() } : {})
       }, item.version);
       setCommissionQuantity(String(result.quantity));
+      setQuantity(String(result.quantity));
       setCommissionSaved(`Commissioned ${formatQuantity(result.quantity, result.unit)} as confirmed stock.`);
     } catch (error: unknown) {
       setCommissionError(normalizeApiError(error).message);

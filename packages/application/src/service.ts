@@ -33,6 +33,7 @@ import { z } from "zod";
 import { buildReconciliationDocument, reconciliationCommitId, reconciliationDraftId, type ReconciliationSourceSnapshot } from "./reconciliation.js";
 
 const CONFIRMED_EVIDENCE = new Set(["physically_counted", "commissioned"]);
+const COMMISSIONABLE_EVIDENCE = new Set(["delivered_uncounted", "ordered_unverified"]);
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const ALLOWED_BINARY_MEDIA = new Set([
   "application/pdf", "image/jpeg", "image/png", "image/webp", "application/octet-stream",
@@ -823,8 +824,8 @@ export class ApplicationService {
     return this.mutate(commandCtx, "inventory.item.commission", "inventory_item", parsedId, async () => {
       const current = await this.ports.inventory.getItem(parsedId);
       if (!current) throw notFound("Inventory item", parsedId);
-      if (CONFIRMED_EVIDENCE.has(current.evidence.state)) {
-        throw conflict("Inventory item is already confirmed; record a physical count if the quantity changed");
+      if (!COMMISSIONABLE_EVIDENCE.has(current.evidence.state)) {
+        throw conflict("Only delivered or ordered inventory can be commissioned; record a physical count for other evidence states");
       }
       if (this.ports.inventory.commissionItem === undefined) {
         throw new ApplicationError("integrity_error", "This runtime does not support inventory commissioning");

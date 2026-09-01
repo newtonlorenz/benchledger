@@ -156,6 +156,11 @@ describe("inventory creation invariants", () => {
     try {
       for (const runtime of runtimes) {
         const service = new ApplicationService(runtime);
+        for (const state of ["unknown", "allocated", "consumed"] as const) {
+          const ineligible = { ...uncertain, id: `${state}-commission-item`, evidence: { state } };
+          await service.createInventoryItem(ineligible, context);
+          await expect(service.commissionInventoryItem(ineligible.id, commission, 1, context)).rejects.toMatchObject({ code: "conflict" });
+        }
         await service.createInventoryItem(uncertain, context);
         const mutation = await service.commissionInventoryItem(uncertain.id, commission, 1, context);
         expect(mutation.data.item).toMatchObject({ quantity: 8, availableQuantity: 8, version: 2, evidence: commission.evidence });
