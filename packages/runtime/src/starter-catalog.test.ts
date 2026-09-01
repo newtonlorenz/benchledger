@@ -39,12 +39,61 @@ describe("reviewed starter catalog", () => {
     expect(products.data.every((product) => !product.provenance?.sourceUrl.includes("/collections/"))).toBe(true);
     expect(STARTER_FILAMENTS.every((product) => product.kind !== "filament" || product.nominalLengthM !== undefined || product.lengthBasis === "unknown")).toBe(true);
     const byId = new Map(products.data.map((product) => [product.id, product]));
+    expect(byId.get("starter-filament-bambu-pla-basic-black")).toMatchObject({
+      kind: "filament",
+      colourName: "Black",
+      colourCode: "10101",
+      diameterMm: 1.75,
+      nominalNetMassG: 1000,
+      provenance: { sourceUrl: "https://us.store.bambulab.com/products/pla-basic-filament?id=43992829952219" },
+    });
     expect(byId.get("starter-filament-bambu-pla-matte-charcoal")).toMatchObject({
       kind: "filament",
-      colourName: "Matte Charcoal",
+      colourName: "Charcoal",
       colourCode: "11101",
       diameterMm: 1.75,
       nominalNetMassG: 1000,
+      provenance: { sourceUrl: "https://us.store.bambulab.com/products/pla-matte-filament?id=43992833261787" },
+    });
+    expect(byId.get("starter-filament-bambu-petg-hf-black")).toMatchObject({
+      kind: "filament",
+      colourName: "Black",
+      colourCode: "33102",
+      diameterMm: 1.75,
+      nominalNetMassG: 1000,
+      provenance: { sourceUrl: "https://us.store.bambulab.com/products/petg-hf?id=49068714754396" },
+    });
+    expect(byId.get("starter-filament-bambu-abs-gf-black")).toMatchObject({
+      kind: "filament",
+      colourName: "Black",
+      colourCode: "41101",
+      diameterMm: 1.75,
+      nominalNetMassG: 1000,
+      provenance: { sourceUrl: "https://us.store.bambulab.com/products/abs-gf?id=48011475911004" },
+    });
+    expect(byId.get("starter-filament-bambu-asa-black")).toMatchObject({
+      kind: "filament",
+      colourName: "Black",
+      colourCode: "45101",
+      diameterMm: 1.75,
+      nominalNetMassG: 1000,
+      provenance: { sourceUrl: "https://us.store.bambulab.com/products/asa-filament?id=46930444222812" },
+    });
+    expect(byId.get("starter-filament-bambu-tpu-95a-hf-black")).toMatchObject({
+      kind: "filament",
+      colourName: "Black",
+      colourCode: "51100",
+      diameterMm: 1.75,
+      nominalNetMassG: 1000,
+      provenance: { sourceUrl: "https://eu.store.bambulab.com/products/tpu-95a-hf?id=47305218687324" },
+    });
+    expect(byId.get("starter-filament-bambu-pla-cf-black")).toMatchObject({
+      kind: "filament",
+      colourName: "Black",
+      colourCode: "14100",
+      diameterMm: 1.75,
+      nominalNetMassG: 1000,
+      provenance: { sourceUrl: "https://us.store.bambulab.com/products/pla-cf?id=43944001994971" },
     });
     expect(byId.get("starter-filament-polymaker-polymax-petg-black")).toMatchObject({
       kind: "filament",
@@ -52,6 +101,7 @@ describe("reviewed starter catalog", () => {
       sku: "PB02001",
       diameterMm: 1.75,
       nominalNetMassG: 750,
+      provenance: { sourceUrl: "https://shop.polymaker.com/products/polymax-petg?variant=39574348169273" },
     });
     expect(byId.get("starter-filament-polymaker-polymide-pa6-gf-black")).toMatchObject({
       kind: "filament",
@@ -59,6 +109,7 @@ describe("reviewed starter catalog", () => {
       sku: "PG02001",
       diameterMm: 1.75,
       nominalNetMassG: 500,
+      provenance: { sourceUrl: "https://us-wholesale.polymaker.com/products/polymide-pa6-gf?variant=40556798083174" },
     });
     expect(byId.get("starter-filament-prusament-asa-jet-black")).toMatchObject({
       kind: "filament",
@@ -137,6 +188,7 @@ describe("reviewed starter catalog", () => {
     expect(() => seedStarterCatalog(database, failingWriter)).toThrow("injected starter catalog failure");
     expect(database.get("SELECT value FROM forge_meta WHERE key = ?", ["starter_catalog_dataset_version"])).toBeUndefined();
     expect(database.get<{ readonly count: number }>("SELECT COUNT(*) AS count FROM catalog_products")?.count).toBe(0);
+    expect(database.get<{ readonly count: number }>("SELECT COUNT(*) AS count FROM catalog_product_history")?.count).toBe(0);
     database.close();
   });
 });

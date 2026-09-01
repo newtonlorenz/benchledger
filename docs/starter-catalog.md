@@ -23,9 +23,9 @@ catalog should be refreshed when manufacturers retire, rename, or materially
 change a product.
 
 The seed keeps one direct product/variant URL per record. Examples of the
-reviewed manufacturer pages include [Bambu PLA Matte Charcoal](https://jp.store.bambulab.com/products/pla-matte-filament?variant=48933736743204),
-[PolyMax PETG](https://shop.polymaker.com/products/polymax-PETG),
-[PolyMide PA6-GF](https://us-wholesale.polymaker.com/products/polymide-pa6-gf),
+reviewed manufacturer pages include [Bambu PLA Matte Charcoal](https://us.store.bambulab.com/products/pla-matte-filament?id=43992833261787),
+[PolyMax PETG](https://shop.polymaker.com/products/polymax-petg?variant=39574348169273),
+[PolyMide PA6-GF](https://us-wholesale.polymaker.com/products/polymide-pa6-gf?variant=40556798083174),
 [Prusament PLA Jet Black](https://www.prusa3d.com/product/prusament-pla-jet-black-1kg/),
 [eSUN PETG](https://www.esun3d.com/petg-product/),
 [SUNLU PLA Meta](https://www.sunlu.com/products/261), and
@@ -36,9 +36,10 @@ used as evidence for an exact seeded identity or variant.
 Each seeded product carries its source URL and review timestamp as
 server-owned read-only provenance. Provenance is returned by catalog reads,
 excluded from create/update schemas, and excluded from identity-field search.
-When an identity or specification fact is corrected, its old provenance is
-cleared until the corrected value is verified again; no-op updates retain
-valid provenance.
+When an identity or specification fact is corrected, its current provenance
+is cleared until the corrected value is verified again, while the complete
+superseded payload and provenance remain in append-only history. No-op updates
+retain valid provenance.
 The source links are observations, not a live lookup or an availability
 claim; the catalog does not fetch arbitrary URLs.
 

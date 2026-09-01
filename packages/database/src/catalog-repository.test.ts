@@ -205,6 +205,16 @@ describe("v2 catalog and physical profile repositories", () => {
     expect(historyAfterSecondCorrection.map((entry) => entry.superseded_version)).toEqual([2, 3]);
     expect(JSON.parse(historyAfterSecondCorrection[1]!.payload_json)).toMatchObject({ colourName: "Graphite", version: 3 });
 
+    const specificationChanged = products.update(sourced.id, { nominalNetMassG: 750 }, 4);
+    expect(specificationChanged).toMatchObject({ nominalNetMassG: 750, version: 5 });
+    expect(specificationChanged.provenance).toBeUndefined();
+    const specificationHistory = database.all<{ readonly superseded_version: number; readonly payload_json: string }>(
+      "SELECT superseded_version, payload_json FROM catalog_product_history WHERE catalog_product_id = ? ORDER BY superseded_version",
+      [sourced.id],
+    );
+    expect(specificationHistory.map((entry) => entry.superseded_version)).toEqual([2, 3, 4]);
+    expect(JSON.parse(specificationHistory[2]!.payload_json)).toMatchObject({ colourName: "Slate", nominalNetMassG: 1000, version: 4 });
+
     const profiles = new InventoryProductProfileRepository(database);
     profiles.create(spoolProfile());
     const promoted = profiles.update("profile-spool-1", { linkState: "confirmed" }, 1);

@@ -103,13 +103,13 @@ const anycubicKobra3 = "https://store.anycubic.com/products/anycubic-kobra-3";
 const anycubicKobra3Combo = "https://store.anycubic.com/products/kobra-3-combo";
 const anycubicKobraS1 = "https://store.anycubic.com/products/anycubic-kobra-s1";
 
-const bambuPlaBasic = "https://us.store.bambulab.com/products/pla-basic-filament?variant=43045599019144";
-const bambuPlaMatteCharcoal = "https://jp.store.bambulab.com/products/pla-matte-filament?variant=48933736743204";
-const bambuPetgHf = "https://us.store.bambulab.com/products/petg-hf?from=home_web";
-const bambuAbsGf = "https://us.store.bambulab.com/products/abs-gf";
-const bambuAsa = "https://us.store.bambulab.com/products/asa-filament";
-const bambuTpu95aHf = "https://bambulab-us.myshopify.com/products/tpu-95a-hf";
-const bambuPlaCf = "https://us.store.bambulab.com/products/pla-cf?id=41158283591816";
+const bambuPlaBasic = "https://us.store.bambulab.com/products/pla-basic-filament?id=43992829952219";
+const bambuPlaMatteCharcoal = "https://us.store.bambulab.com/products/pla-matte-filament?id=43992833261787";
+const bambuPetgHf = "https://us.store.bambulab.com/products/petg-hf?id=49068714754396";
+const bambuAbsGf = "https://us.store.bambulab.com/products/abs-gf?id=48011475911004";
+const bambuAsa = "https://us.store.bambulab.com/products/asa-filament?id=46930444222812";
+const bambuTpu95aHf = "https://eu.store.bambulab.com/products/tpu-95a-hf?id=47305218687324";
+const bambuPlaCf = "https://us.store.bambulab.com/products/pla-cf?id=43944001994971";
 const prusamentPla = "https://www.prusa3d.com/product/prusament-pla-jet-black-1kg/";
 const prusamentPetg = "https://www.prusa3d.com/product/prusament-petg-jet-black-1kg/";
 const prusamentPlaGalaxyBlack = "https://www.prusa3d.com/product/prusament-pla-prusa-galaxy-black-1kg/";
@@ -118,9 +118,9 @@ const prusamentPcBlend = "https://www.prusa3d.com/product/prusament-pc-blend-jet
 const polymakerPolyLitePla = "https://shop.polymaker.com/products/polylite-pla?variant=43818025812025";
 const polymakerPolyTerraPla = "https://us-wholesale.polymaker.com/products/polymaker-polyterra?variant=46581395619942";
 const polymakerPolyLitePetg = "https://shop.polymaker.com/products/petg?variant=41266031132729";
-const polymakerPolyMaxPetg = "https://shop.polymaker.com/products/polymax-PETG";
+const polymakerPolyMaxPetg = "https://shop.polymaker.com/products/polymax-petg?variant=39574348169273";
 const polymakerPolyLiteAsa = "https://shop.polymaker.com/products/asa?variant=39574343254073";
-const polymakerPolyMidePa6Gf = "https://us-wholesale.polymaker.com/products/polymide-pa6-gf";
+const polymakerPolyMidePa6Gf = "https://us-wholesale.polymaker.com/products/polymide-pa6-gf?variant=40556798083174";
 const esunPlaPlus = "https://www.esun3d.com/pla-pro-product";
 const esunPetg = "https://www.esun3d.com/petg-product/";
 const esunAbsPlus = "https://www.esun3d.com/abs-pro-product";
@@ -129,9 +129,9 @@ const sunluPlaMeta = "https://www.sunlu.com/products/261";
 const sunluPlaPlus = "https://uk.store.sunlu.com/products/1-75mm-sunlu-pla-plus-3d-printer-filament-1kg-roll";
 const sunluPetg = "https://www.sunlu.com/products/petg-3d-printing-filament";
 const sunluTpu = "https://www.sunlu.com/products/267";
-const overturePla = "https://overture3d.com/products/overture-pla";
-const overturePetg = "https://overture3d.com/products/overture-high-speed-petg";
-const overtureTpu = "https://overture3d.com/products/overture-tpu?variant=46988794921214";
+const overturePla = "https://overture3d.com/products/overture-pla?variant=42105033359614";
+const overturePetg = "https://overture3d.com/products/overture-high-speed-petg?variant=42224802660606";
+const overtureTpu = "https://overture3d.com/products/overture-tpu?variant=39545804783804";
 
 /** Curated exact FFF printer identities with only manufacturer-published core dimensions. */
 export const STARTER_PRINTERS: readonly CatalogProduct[] = [
@@ -174,13 +174,13 @@ export const STARTER_PRINTERS: readonly CatalogProduct[] = [
 
 /** Curated exact filament identities. A missing length is intentional: it is not inferred from density. */
 export const STARTER_FILAMENTS: readonly CatalogProduct[] = [
-  filament("starter-filament-bambu-pla-basic-black", "Bambu Lab", "PLA Basic", "PLA", bambuPlaBasic, { colourName: "Black", colourCode: "#000000", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }),
-  filament("starter-filament-bambu-pla-matte-charcoal", "Bambu Lab", "PLA Matte", "PLA", bambuPlaMatteCharcoal, { colourName: "Matte Charcoal", colourCode: "11101", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "Matte"),
-  filament("starter-filament-bambu-petg-hf-black", "Bambu Lab", "PETG HF", "PETG", bambuPetgHf, { colourName: "Black", colourCode: "#000000", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "HF"),
+  filament("starter-filament-bambu-pla-basic-black", "Bambu Lab", "PLA Basic", "PLA", bambuPlaBasic, { colourName: "Black", colourCode: "10101", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }),
+  filament("starter-filament-bambu-pla-matte-charcoal", "Bambu Lab", "PLA Matte", "PLA", bambuPlaMatteCharcoal, { colourName: "Charcoal", colourCode: "11101", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "Matte"),
+  filament("starter-filament-bambu-petg-hf-black", "Bambu Lab", "PETG HF", "PETG", bambuPetgHf, { colourName: "Black", colourCode: "33102", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "HF"),
   filament("starter-filament-bambu-abs-gf-black", "Bambu Lab", "ABS-GF", "ABS", bambuAbsGf, { colourName: "Black", colourCode: "41101", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "ABS-GF"),
-  filament("starter-filament-bambu-asa-black", "Bambu Lab", "ASA", "ASA", bambuAsa, { colourName: "Black", colourCode: "#000000", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }),
+  filament("starter-filament-bambu-asa-black", "Bambu Lab", "ASA", "ASA", bambuAsa, { colourName: "Black", colourCode: "45101", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }),
   filament("starter-filament-bambu-tpu-95a-hf-black", "Bambu Lab", "TPU 95A HF", "TPU", bambuTpu95aHf, { colourName: "Black", colourCode: "51100", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "95A HF"),
-  filament("starter-filament-bambu-pla-cf-black", "Bambu Lab", "PLA-CF", "PLA", bambuPlaCf, { colourName: "Black", colourCode: "#000000", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "PLA-CF"),
+  filament("starter-filament-bambu-pla-cf-black", "Bambu Lab", "PLA-CF", "PLA", bambuPlaCf, { colourName: "Black", colourCode: "14100", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "PLA-CF"),
 
   filament("starter-filament-prusament-pla-jet-black", "Prusament", "PLA", "PLA", prusamentPla, { colourName: "Jet Black", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }),
   filament("starter-filament-prusament-petg-jet-black", "Prusament", "PETG", "PETG", prusamentPetg, { colourName: "Jet Black", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }),
@@ -192,7 +192,7 @@ export const STARTER_FILAMENTS: readonly CatalogProduct[] = [
   filament("starter-filament-polymaker-polyterra-pla-charcoal-black", "Polymaker", "PolyTerra PLA", "PLA", polymakerPolyTerraPla, { colourName: "Matte Charcoal Black", colourCode: "#2F2E30", sku: "PM70820", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "PolyTerra"),
   filament("starter-filament-polymaker-polylite-petg-black", "Polymaker", "Polymaker PETG", "PETG", polymakerPolyLitePetg, { colourName: "Black", colourCode: "#070908", sku: "PB05001", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "New Formula"),
   filament("starter-filament-polymaker-polymax-petg-black", "Polymaker", "PolyMax PETG", "PETG", polymakerPolyMaxPetg, { colourName: "Black", sku: "PB02001", diameterMm: 1.75, nominalNetMassG: 750, lengthBasis: "unknown" }),
-  filament("starter-filament-polymaker-polylite-asa-black", "Polymaker", "Polymaker ASA", "ASA", polymakerPolyLiteAsa, { colourName: "Black", sku: "PF01001", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "Formerly PolyLite ASA"),
+  filament("starter-filament-polymaker-polylite-asa-black", "Polymaker", "Polymaker ASA", "ASA", polymakerPolyLiteAsa, { colourName: "Black", colourCode: "#17161A", sku: "PF01001", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "Formerly PolyLite ASA"),
   filament("starter-filament-polymaker-polymide-pa6-gf-black", "Polymaker", "PolyMide PA6-GF", "PA", polymakerPolyMidePa6Gf, { colourName: "Grey", sku: "PG02001", diameterMm: 1.75, nominalNetMassG: 500, lengthBasis: "unknown" }, "PA6-GF"),
 
   filament("starter-filament-esun-pla-plus-black", "eSUN", "PLA+", "PLA", esunPlaPlus, { colourName: "Black", colourCode: "#272729", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }),
@@ -205,9 +205,9 @@ export const STARTER_FILAMENTS: readonly CatalogProduct[] = [
   filament("starter-filament-sunlu-petg-black", "SUNLU", "PETG", "PETG", sunluPetg, { colourName: "Black", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }),
   filament("starter-filament-sunlu-tpu-black", "SUNLU", "TPU", "TPU", sunluTpu, { colourName: "Black", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }),
 
-  filament("starter-filament-overture-pla-black", "OVERTURE", "PLA", "PLA", overturePla, { colourName: "Black", colourCode: "#000000", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }),
-  filament("starter-filament-overture-petg-black", "OVERTURE", "High Speed PETG", "PETG", overturePetg, { colourName: "Black", colourCode: "#000000", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "High Speed"),
-  filament("starter-filament-overture-tpu-black", "OVERTURE", "TPU 95A", "TPU", overtureTpu, { colourName: "Matte Black", colourCode: "#000000", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "95A"),
+  filament("starter-filament-overture-pla-black", "OVERTURE", "PLA", "PLA", overturePla, { colourName: "Black", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }),
+  filament("starter-filament-overture-petg-black", "OVERTURE", "High Speed PETG", "PETG", overturePetg, { colourName: "Black", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "High Speed"),
+  filament("starter-filament-overture-tpu-black", "OVERTURE", "TPU 95A", "TPU", overtureTpu, { colourName: "Matte Black", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "95A"),
 ];
 
 export const STARTER_CATALOG_PRODUCTS: readonly CatalogProduct[] = [...STARTER_PRINTERS, ...STARTER_FILAMENTS];

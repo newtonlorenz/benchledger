@@ -31,6 +31,23 @@ describe("exact-product UI edge rendering", () => {
     expect(result.pageCount).toBe(2);
   });
 
+  it("follows bounded facet cursors until every product is loaded", async () => {
+    const first: CatalogProduct = { id: "page-one", kind: "filament", manufacturer: "Maker One" };
+    const second: CatalogProduct = { id: "page-two", kind: "filament", manufacturer: "Maker Two" };
+    const calls: Array<{ readonly limit: number; readonly cursor?: string }> = [];
+    const result = await loadCompleteCatalogProducts("filament", async (_kind, _query, options) => {
+      calls.push(options);
+      return options.cursor === undefined
+        ? { products: [first], limit: options.limit, total: 2, nextCursor: "page-two" }
+        : { products: [second], limit: options.limit, total: 2 };
+    }, { pageSize: 1, maxProducts: 2 });
+
+    expect(calls).toEqual([{ limit: 1 }, { limit: 1, cursor: "page-two" }]);
+    expect(result.products).toEqual([first, second]);
+    expect(result.partial).toBe(false);
+    expect(result.pageCount).toBe(2);
+  });
+
   it("renders empty and no-match facet states with an unlisted fallback", () => {
     const unknown: CatalogProduct = { id: "unknown-filament", kind: "filament", manufacturer: "Acme", materialFamily: "PLA", colourName: "Blue", diameterMm: 1.75, nominalNetMassG: 750, lengthBasis: "unknown" };
     expect(catalogFacetValues([unknown], "filament", "subtype")).toEqual([]);
