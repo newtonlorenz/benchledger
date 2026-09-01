@@ -15,6 +15,23 @@ Content-Type: application/json
 Authorization: Bearer <scoped-token>
 ```
 
+Browser access and MCP access are separate authentication boundaries. The
+browser has two workspace modes, selected by an administrator in Settings:
+
+- `lan_open`: browser session routes do not require a workspace password. This
+  is intended only for a trusted LAN. Anyone who can reach the configured
+  interface and port can use the browser workspace as an authenticated user,
+  including write actions available to that session; do not expose this mode to
+  the public internet or an untrusted network.
+- `password`: browser sessions require the configured workspace password.
+
+These modes affect browser sessions only. `/api/v1/mcp` never receives implicit
+LAN access: every MCP request still requires a scoped bearer token, and its
+read/write/project allow-list rules remain unchanged. Changing the browser
+mode or workspace password invalidates existing browser sessions; the browser
+must sign in again. Credential and authentication-setting changes are explicit
+human-approval actions and are not MCP capabilities.
+
 Local MCP clients may use the newline-delimited stdio bridge exported by
 `runStdio` from `@benchledger/mcp`. The host application supplies the backend
 and actor context; the adapter never opens a database or shell itself.
@@ -237,6 +254,11 @@ read-only. Indirect ancestry is resolved from durable host state rather than a
 request-local cache. The application service's repository-backed defaults cover
 historical BOM/reservation records and upload sessions; hosts may provide an
 explicit resolver for a different durable store.
+
+The browser access mode does not change this bearer-token contract. A
+`lan_open` browser workspace still requires the same scoped bearer token at
+`/api/v1/mcp`; agents must not infer MCP authorization from LAN reachability or
+from a browser session.
 
 For the full tool/resource matrix, see [`docs/capability-map.md`](../../docs/capability-map.md),
 [`docs/stock-evidence-semantics.md`](../../docs/stock-evidence-semantics.md),

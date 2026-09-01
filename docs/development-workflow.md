@@ -25,6 +25,17 @@ Use synthetic data for development and tests. Real instance data, private host
 details, credentials, databases, artifacts, logs, and backups remain outside
 the checkout.
 
+Browser authentication has two explicit modes. A fresh no-hash development or
+trusted-LAN install starts in `lan_open`; this removes the browser password but
+does not protect a reachable service from other devices on that network. An
+administrator can select `password` in Settings and set a workspace password.
+Demo mode remains password-protected. Existing installations with
+`BENCHLEDGER_ADMIN_PASSWORD_HASH` remain password-protected while that hash is
+imported into durable settings once; the durable setting wins on later starts.
+Changing the browser mode or password invalidates existing browser sessions.
+These settings affect browser sessions only: MCP still requires a scoped
+bearer token at `/api/v1/mcp`.
+
 ## 2. Verify locally
 
 Run focused checks while iterating, then the public-source and full gates before
@@ -69,6 +80,12 @@ Reachability is not revision parity. Authenticated or state-changing integration
 tests require explicit maintainer approval, least-privilege credentials, and
 synthetic isolated records with a documented cleanup plan.
 
+When checking authentication behavior, keep the scenarios separate: verify
+browser `lan_open`/`password` behavior and session invalidation, then verify
+that `/api/v1/mcp` rejects a request without a scoped bearer token in both
+browser modes. Do not treat a successful browser request as evidence that an
+agent may use MCP.
+
 Do not deploy, rebuild, restart, exec into, migrate, import, restore, prune, or
 otherwise alter the remote container or host as part of routine integration
 testing. Do not read remote secrets, environment variables, databases, volumes,
@@ -78,6 +95,12 @@ Capture only non-sensitive evidence: local commit, test deployment role,
 endpoint paths checked, HTTP outcomes, reported application version, focused
 scenario result, and timestamp. State clearly when remote integration was not
 run.
+
+If a password-managed deployment is rolled back to code from before durable
+browser settings, restore `BENCHLEDGER_ADMIN_PASSWORD_HASH` from the private
+secret store before starting the older code. Older code cannot read a
+Settings-managed password or browser mode. Verify the resulting browser session
+behavior after rollback.
 
 ## 4. Contribute through GitHub
 

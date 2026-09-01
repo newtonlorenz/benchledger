@@ -22,6 +22,10 @@ export interface AuthConfig {
   readonly bearerTokens?: readonly BearerTokenRecord[];
   readonly secureCookies?: boolean;
   readonly sessionTtlSeconds?: number;
+  /** Runtime-backed verification for the durable workspace credential. */
+  readonly workspacePasswordVerifier?: (password: string) => Promise<boolean>;
+  /** Current durable credential revision, captured by the server host. */
+  readonly credentialRevision?: () => number;
 }
 
 const TOKEN_HASH_PATTERN = /^[a-f0-9]{64}$/u;
@@ -148,6 +152,7 @@ interface SessionPayload {
   readonly issuedAt: number;
   readonly expiresAt: number;
   readonly csrf: string;
+  readonly credentialRevision: number;
 }
 
 const SESSION_COOKIE = "forge_session";
@@ -191,9 +196,9 @@ function decodeSession(value: string, secret: string): SessionPayload | null {
   if (!safeEqualText(signature, expected)) return null;
   try {
     const parsed = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as Partial<SessionPayload>;
-    if (typeof parsed.actor !== "string" || typeof parsed.issuedAt !== "number" || typeof parsed.expiresAt !== "number" || typeof parsed.csrf !== "string") return null;
+    if (typeof parsed.actor !== "string" || typeof parsed.issuedAt !== "number" || typeof parsed.expiresAt !== "number" || typeof parsed.csrf !== "string" || typeof parsed.credentialRevision !== "number" || !Number.isSafeInteger(parsed.credentialRevision) || parsed.credentialRevision < 1) return null;
     if (parsed.expiresAt <= Date.now()) return null;
-    return { actor: parsed.actor, issuedAt: parsed.issuedAt, expiresAt: parsed.expiresAt, csrf: parsed.csrf };
+    return { actor: parsed.actor, issuedAt: parsed.issuedAt, expiresAt: parsed.expiresAt, csrf: parsed.csrf, credentialRevision: parsed.credentialRevision };
   } catch {
     return null;
   }
@@ -214,7 +219,7 @@ export function hashBearerToken(token: string): string {
  * bootstrap and has a deliberately expensive work factor.
  */
 export async function hashAdminPassword(password: string): Promise<string> {
-  if (!password || password.length < 12) throw new Error("Admin password must contain at least 12 characters");
+  if (!password || password.length < 12 || password.length > 512) throw new Error("Admin password must contain between 12 and 512 characters");
   const { scrypt } = await import("node:crypto");
   const salt = randomBytes(16).toString("base64url");
   const derived = await new Promise<Buffer>((resolve, reject) => {
@@ -260,6 +265,7 @@ export class AuthManager {
 
   async verifyPassword(password: string): Promise<boolean> {
     if (this.config.demo && this.config.demoPassword && safeEqualText(password, this.config.demoPassword)) return true;
+    if (this.config.workspacePasswordVerifier) return this.config.workspacePasswordVerifier(password);
     if (!this.config.adminPasswordHash) return false;
     if (this.config.adminPasswordHash.startsWith("scrypt$")) return verifyScrypt(password, this.config.adminPasswordHash);
     if (this.config.adminPasswordHash.startsWith("$argon2id$") && this.config.passwordVerifier) {
@@ -270,10 +276,10 @@ export class AuthManager {
     return false;
   }
 
-  issueSession(reply: FastifyReply, actor = "admin"): { readonly csrf: string; readonly expiresAt: number } {
+  issueSession(reply: FastifyReply, actor = "workspace-admin"): { readonly csrf: string; readonly expiresAt: number; readonly credentialRevision: number } {
     const now = Date.now();
     const csrf = randomBytes(24).toString("base64url");
-    const payload: SessionPayload = { actor, issuedAt: now, expiresAt: now + this.sessionTtlMs, csrf };
+    const payload: SessionPayload = { actor, issuedAt: now, expiresAt: now + this.sessionTtlMs, csrf, credentialRevision: this.config.credentialRevision?.() ?? 1 };
     const value = encodeSession(payload, this.config.sessionSecret);
     const secure = this.config.secureCookies ?? true;
     reply.setCookie(SESSION_COOKIE, value, {
@@ -282,7 +288,7 @@ export class AuthManager {
     reply.setCookie(CSRF_COOKIE, csrf, {
       httpOnly: false, sameSite: "lax", secure, path: "/", maxAge: Math.floor(this.sessionTtlMs / 1000)
     });
-    return { csrf, expiresAt: payload.expiresAt };
+    return { csrf, expiresAt: payload.expiresAt, credentialRevision: payload.credentialRevision };
   }
 
   clearSession(reply: FastifyReply): void {
@@ -292,7 +298,8 @@ export class AuthManager {
 
   authenticate(request: FastifyRequest): Principal | null {
     const authorization = request.headers.authorization;
-    if (authorization?.startsWith("Bearer ")) {
+    if (authorization !== undefined) {
+      if (!authorization.startsWith("Bearer ")) return null;
       const token = authorization.slice("Bearer ".length).trim();
       if (!token || token.length > 4096) return null;
       const hash = digest(token);
@@ -306,7 +313,8 @@ export class AuthManager {
     if (!session) return null;
     const payload = decodeSession(session, this.config.sessionSecret);
     if (!payload) return null;
-    return { actor: payload.actor, source: "ui", scopes: new Set<AuthScope>(["read", "write"]), via: "session" };
+    if (payload.credentialRevision !== (this.config.credentialRevision?.() ?? 1)) return null;
+    return { actor: payload.actor, source: "ui", scopes: new Set<AuthScope>(["read", "write", "admin"]), via: "session" };
   }
 
   csrfValid(request: FastifyRequest, principal: Principal): boolean {

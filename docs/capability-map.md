@@ -37,6 +37,29 @@ items, historical revisions and BOM lines/reservations, artifact records, and
 upload sessions; a host may supply a resolver when its storage has additional
 ancestry. The adapter does not keep request-local ID maps.
 
+## Browser session authentication
+
+Browser session access is configured separately from MCP authorization. An
+administrator selects the browser workspace mode in Settings:
+
+| Browser mode | Browser session behavior | MCP behavior |
+| --- | --- | --- |
+| `lan_open` | No workspace password is required to establish a browser session. Use only on a trusted LAN. Anyone who can reach the configured interface and port can use the browser workspace as an authenticated user, including write actions available to that session. | No change: `/api/v1/mcp` still requires a scoped bearer token. LAN reachability never grants MCP access. |
+| `password` | The configured workspace password is required to establish a browser session. | No change: scoped bearer tokens and their read/write/project allow-list rules still apply. |
+
+Fresh installations with no password hash start in `lan_open` mode. Existing
+hash-configured installations remain password-protected and import that hash
+into durable settings once. After initialization, the durable setting wins over
+bootstrap configuration. Demo mode remains password-protected regardless of the
+browser setting. Changing the browser mode or workspace password invalidates
+existing browser sessions, so the browser must sign in again.
+
+The MCP adapter never treats a browser session, a private address, or LAN
+reachability as a bearer token. `/api/v1/mcp` has no implicit LAN access in
+either browser mode. Changing the browser mode, workspace password, or other
+credential/authentication settings is an explicit human-approval action and is
+not an MCP capability.
+
 ## Typed atomic tools
 
 Every tool accepts an object with `additionalProperties: false` and rejects
@@ -155,7 +178,9 @@ allowed to proceed.
 
 ## Deliberate non-capabilities
 
-There is no arbitrary path, shell, SQL, URL-fetch, browser, credential, purchase,
-cart, print, printer-control, heater, firmware-flash, or model-execution tool.
+There is no arbitrary path, shell, SQL, URL-fetch, browser-automation, credential,
+purchase, cart, print, printer-control, heater, firmware-flash, or model-execution
+tool. The browser session mode described above does not add a browser-automation
+tool or bypass MCP bearer authentication.
 Offer links are stored as observations; the backend does not fetch them. Public
 publication and deployment are proposals that require explicit human approval.

@@ -342,7 +342,7 @@ describe("BenchLedger HTTP API", () => {
     expect(usage.statusCode).toBe(201);
     expect(usage.json()).toMatchObject({
       data: {
-        event: { type: "consume", itemId: "board-esp32", projectId, actor: "admin", source: "ui" },
+        event: { type: "consume", itemId: "board-esp32", projectId, actor: "workspace-admin", source: "ui" },
         item: { id: "board-esp32", quantity: 1, availableQuantity: 1 }
       },
       audit: { action: "project.usage.record" },
@@ -583,13 +583,13 @@ describe("BenchLedger HTTP API", () => {
       const uiBegin = await app.inject({ method: "POST", url: "/api/v1/artifacts/uploads", headers: { cookie, "x-csrf-token": csrf }, payload: { projectId: "synthetic-project-lamp", filename: "ui-source.step", role: "step", mediaType: "model/step", byteSize: body.byteLength, sha256 } });
       expect(uiBegin.statusCode).toBe(201);
       const afterUiAudit = await runtime.ports.audit.list(100);
-      expect(afterUiAudit.data.filter((event) => event.action === "artifact.upload.begin").slice(-1)[0]).toMatchObject({ actor: "admin", source: "ui" });
+      expect(afterUiAudit.data.filter((event) => event.action === "artifact.upload.begin").slice(-1)[0]).toMatchObject({ actor: "workspace-admin", source: "ui" });
     } finally {
       await app.close();
     }
   });
 
-  it("serves the built SPA shell and mounts the authenticated MCP JSON-RPC surface", async () => {
+  it("serves the built SPA shell and keeps MCP bearer-only", async () => {
     const { app, cookie, csrf } = await loggedIn();
     const shell = await app.inject({ method: "GET", url: "/" });
     expect(shell.statusCode).toBe(200);
@@ -597,8 +597,7 @@ describe("BenchLedger HTTP API", () => {
     const mcp = await app.inject({ method: "POST", url: "/api/v1/mcp", headers: { cookie, "x-csrf-token": csrf }, payload: {
       jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" }
     } });
-    expect(mcp.statusCode).toBe(200);
-    expect(mcp.json()).toMatchObject({ jsonrpc: "2.0", id: 1, result: { serverInfo: { name: "benchledger" } } });
+    expect(mcp.statusCode).toBe(401);
     await app.close();
   });
 

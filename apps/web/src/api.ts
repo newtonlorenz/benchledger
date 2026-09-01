@@ -139,6 +139,22 @@ export class ApiError extends Error {
 }
 
 export interface LoginResult { authenticated: true; actor: string; csrfToken: string; expiresAt: string }
+export type WorkspaceAccessMode = "lan_open" | "password";
+export interface WorkspaceAccess {
+  mode: WorkspaceAccessMode;
+  demo: boolean;
+  authenticated?: boolean;
+  version?: number;
+}
+export type WorkspaceAccessUpdateInput =
+  | { operation: "enable"; newPassword: string }
+  | { operation: "disable"; currentPassword: string }
+  | { operation: "change_password"; currentPassword: string; newPassword: string };
+export interface WorkspaceAccessUpdateOptions { retry?: boolean }
+export interface WorkspaceAccessUpdateResult {
+  access: WorkspaceAccess;
+  session?: LoginResult;
+}
 export interface SessionResult { authenticated: true; actor: string; source?: string; scopes: string[]; projectIds?: string[] }
 export interface WorkspaceSnapshot { inventory: InventoryItem[]; projects: Project[]; offers: Offer[]; source: "api" | "synthetic"; fetchedAt: string; health?: ServerHealth }
 export interface InventoryCategoryPage { data: readonly ManagedInventoryCategory[]; nextCursor?: string; limit: number; total?: number }
@@ -186,6 +202,12 @@ export interface InventoryBulkUpdateResult {
 export interface WorkspaceAdapter {
   clearAuthenticatedState(): void;
   checkHealth(): Promise<ServerHealth>;
+  getWorkspaceAccess(): Promise<WorkspaceAccess>;
+  openLanSession(): Promise<LoginResult>;
+  updateWorkspaceAccess(input: WorkspaceAccessUpdateInput, expectedVersion?: number, options?: WorkspaceAccessUpdateOptions): Promise<WorkspaceAccessUpdateResult>;
+  hasPendingWorkspaceAccessRetry(): boolean;
+  getWorkspaceAccessRetry(): WorkspaceAccessRetry | undefined;
+  clearWorkspaceAccessRetry(): void;
   session(): Promise<SessionResult>;
   login(password: string): Promise<LoginResult>;
   logout(): Promise<void>;
@@ -348,6 +370,46 @@ function firstNumber(record: UnknownRecord, ...keys: string[]): number | undefin
 
 function mapCatalogKind(value: unknown): CatalogKind | undefined {
   return value === "filament" || value === "printer" ? value : undefined;
+}
+
+function unwrapData(value: unknown): unknown {
+  const record = asRecord(value);
+  return record?.data !== undefined ? record.data : value;
+}
+
+function workspaceAccessRecord(value: unknown): UnknownRecord | undefined {
+  const first = asRecord(unwrapData(value));
+  if (!first) return undefined;
+  const nested = first.access ?? first.workspaceAccess;
+  return asRecord(nested) ?? first;
+}
+
+export function mapWorkspaceAccess(value: unknown): WorkspaceAccess {
+  const record = workspaceAccessRecord(value);
+  if (!record) throw new ApiError("The service returned an incomplete workspace access status", { kind: "server", status: 502 });
+  const modeValue = record.mode ?? record.accessMode ?? record.workspaceAccessMode;
+  const mode: WorkspaceAccessMode = modeValue === "lan_open" || modeValue === "open" || record.passwordRequired === false ? "lan_open" : "password";
+  const demo = typeof record.demo === "boolean" ? record.demo : false;
+  const authenticated = typeof record.authenticated === "boolean" ? record.authenticated : undefined;
+  const version = typeof record.version === "number" && Number.isSafeInteger(record.version) && record.version > 0 ? record.version : undefined;
+  return { mode, demo, ...(authenticated === undefined ? {} : { authenticated }), ...(version === undefined ? {} : { version }) };
+}
+
+function mapLoginResult(value: unknown): LoginResult {
+  const record = asRecord(unwrapData(value));
+  if (!record || record.authenticated !== true || typeof record.actor !== "string" || typeof record.csrfToken !== "string" || typeof record.expiresAt !== "string") {
+    throw new ApiError("The service did not provide a usable workspace session", { kind: "csrf", status: 502 });
+  }
+  return { authenticated: true, actor: record.actor, csrfToken: record.csrfToken, expiresAt: record.expiresAt };
+}
+
+function mapWorkspaceAccessUpdate(value: unknown): WorkspaceAccessUpdateResult {
+  const root = asRecord(value);
+  const access = mapWorkspaceAccess(value);
+  const candidate = asRecord(unwrapData(value));
+  const sessionValue = candidate?.session ?? root?.session ?? (candidate?.authenticated === true && candidate?.csrfToken !== undefined ? candidate : undefined);
+  const session = sessionValue === undefined ? undefined : mapLoginResult(sessionValue);
+  return { access, ...(session === undefined ? {} : { session }) };
 }
 
 export function mapCatalogProduct(value: unknown, fallbackKind?: CatalogKind): CatalogProduct | undefined {
@@ -1022,6 +1084,48 @@ function idempotencyKey(prefix: string): string {
   return `web-${prefix}-${random}`;
 }
 
+const WORKSPACE_ACCESS_RETRY_STORAGE_KEY = "benchledger:workspace-access-retry:v1";
+export type WorkspaceAccessRetry = {
+  readonly key: string;
+  readonly operation: WorkspaceAccessUpdateInput["operation"];
+  readonly expectedVersion: number;
+};
+
+let inMemoryWorkspaceAccessRetry: WorkspaceAccessRetry | undefined;
+
+function workspaceAccessRetryStorage(): Storage | undefined {
+  try { return typeof sessionStorage === "undefined" ? undefined : sessionStorage; } catch { return undefined; }
+}
+
+function readWorkspaceAccessRetry(): WorkspaceAccessRetry | undefined {
+  const storage = workspaceAccessRetryStorage();
+  if (!storage) return inMemoryWorkspaceAccessRetry;
+  try {
+    const raw = storage.getItem(WORKSPACE_ACCESS_RETRY_STORAGE_KEY);
+    if (raw !== null && raw !== undefined) {
+      const parsed = JSON.parse(raw) as Partial<WorkspaceAccessRetry>;
+      if (typeof parsed.key === "string" && parsed.key.length > 0 && (parsed.operation === "enable" || parsed.operation === "disable" || parsed.operation === "change_password") && typeof parsed.expectedVersion === "number" && Number.isSafeInteger(parsed.expectedVersion) && parsed.expectedVersion > 0) return parsed as WorkspaceAccessRetry;
+      storage.removeItem(WORKSPACE_ACCESS_RETRY_STORAGE_KEY);
+    }
+    return undefined;
+  } catch { /* session storage is an optional recovery aid */ }
+  return inMemoryWorkspaceAccessRetry;
+}
+
+function writeWorkspaceAccessRetry(record: WorkspaceAccessRetry): void {
+  inMemoryWorkspaceAccessRetry = record;
+  try { workspaceAccessRetryStorage()?.setItem(WORKSPACE_ACCESS_RETRY_STORAGE_KEY, JSON.stringify(record)); } catch { /* keep the in-memory fallback */ }
+}
+
+function clearWorkspaceAccessRetryRecord(): void {
+  inMemoryWorkspaceAccessRetry = undefined;
+  try { workspaceAccessRetryStorage()?.removeItem(WORKSPACE_ACCESS_RETRY_STORAGE_KEY); } catch { /* storage can be unavailable in private browsing */ }
+}
+
+export function getWorkspaceAccessRetry(): WorkspaceAccessRetry | undefined {
+  return readWorkspaceAccessRetry();
+}
+
 type RevisionRequestBody = {
   readonly name: string;
   readonly notes?: string;
@@ -1612,6 +1716,12 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
   return {
     clearAuthenticatedState() {},
     async checkHealth() { return { status: "ok", service: "benchledger", version: "sample", demo: true, now: new Date().toISOString() }; },
+    async getWorkspaceAccess() { return { mode: "password", demo: true, authenticated: true, version: 1 }; },
+    async openLanSession() { return { authenticated: true, actor: "sample", csrfToken: "sample", expiresAt: new Date(Date.now() + 3_600_000).toISOString() }; },
+    async updateWorkspaceAccess() { throw new ApiError("Workspace access settings are unavailable in the sample workspace", { kind: "forbidden", status: 403 }); },
+    hasPendingWorkspaceAccessRetry() { return false; },
+    getWorkspaceAccessRetry() { return undefined; },
+    clearWorkspaceAccessRetry() {},
     async session() { return { authenticated: true, actor: "sample", source: "demo", scopes: ["read", "write"] }; },
     async login() { return { authenticated: true, actor: "sample", csrfToken: "sample", expiresAt: new Date(Date.now() + 3_600_000).toISOString() }; },
     async logout() {},
@@ -1862,6 +1972,48 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       projectCache.clear();
     },
     async checkHealth() { health = await request<ServerHealth>("/health"); return health; },
+    async getWorkspaceAccess() {
+      return mapWorkspaceAccess(await request<unknown>("/auth/access"));
+    },
+    async openLanSession() {
+      const result = mapLoginResult(await request<unknown>("/auth/lan-session", { method: "POST", headers: { "Idempotency-Key": idempotencyKey("lan-session") } }));
+      csrfToken = result.csrfToken || cookieValue("forge_csrf");
+      if (!csrfToken) throw new ApiError("The service did not provide a CSRF token", { kind: "csrf", status: 403 });
+      return result;
+    },
+    async updateWorkspaceAccess(input, expectedVersion, options = {}) {
+      const token = csrfToken ?? cookieValue("forge_csrf");
+      if (!token) throw new ApiError("Your session needs a fresh CSRF token before changing workspace security", { kind: "csrf", status: 403 });
+      if (expectedVersion === undefined || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+        throw new ApiError("Workspace security settings need a current version before they can change", { kind: "validation", status: 400, code: "missing_access_version" });
+      }
+      const body: WorkspaceAccessUpdateInput & { readonly expectedVersion: number } = { ...input, expectedVersion };
+      const pending = readWorkspaceAccessRetry();
+      const retryMatches = options.retry === true && pending?.operation === input.operation && pending.expectedVersion === expectedVersion;
+      const key = retryMatches ? pending.key : idempotencyKey("workspace-access");
+      writeWorkspaceAccessRetry({ key, operation: input.operation, expectedVersion });
+      try {
+        const response = await request<unknown>("/auth/access", {
+          method: "PATCH",
+          headers: {
+            "Idempotency-Key": key,
+            "If-Match": String(expectedVersion)
+          },
+          body: JSON.stringify(body)
+        }, token);
+        clearWorkspaceAccessRetryRecord();
+        const result = mapWorkspaceAccessUpdate(response);
+        if (result.session) csrfToken = result.session.csrfToken || cookieValue("forge_csrf");
+        else csrfToken = cookieValue("forge_csrf") ?? csrfToken;
+        return result;
+      } catch (error) {
+        if (!mutationFailureIsAmbiguous(error)) clearWorkspaceAccessRetryRecord();
+        throw error;
+      }
+    },
+    hasPendingWorkspaceAccessRetry() { return readWorkspaceAccessRetry() !== undefined; },
+    getWorkspaceAccessRetry() { return getWorkspaceAccessRetry(); },
+    clearWorkspaceAccessRetry() { clearWorkspaceAccessRetryRecord(); },
     async session() { return request<SessionResult>("/auth/session"); },
     async login(password) {
       const result = await request<LoginResult>("/auth/login", { method: "POST", body: JSON.stringify({ password }) });

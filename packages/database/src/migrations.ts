@@ -1,6 +1,28 @@
 import type { BenchDatabase, SqliteRow } from "./sqlite.js";
-import { CATALOG_SCHEMA_SQL, INVENTORY_CATEGORY_SCHEMA_SQL } from "./schema.js";
+import { CATALOG_SCHEMA_SQL, INVENTORY_CATEGORY_SCHEMA_SQL, WORKSPACE_SECURITY_SCHEMA_SQL } from "./schema.js";
 import { BUILTIN_INVENTORY_CATEGORIES, normalizeInventoryCategoryKey } from "@benchledger/domain";
+
+export const WORKSPACE_SECURITY_SCHEMA_VERSION = 1;
+export const WORKSPACE_SECURITY_SCHEMA_MIGRATION_SQL = WORKSPACE_SECURITY_SCHEMA_SQL;
+
+/** Additive workspace access migration; safe to run on every startup. */
+export function migrateWorkspaceSecuritySchema(database: BenchDatabase): void {
+  database.transaction(() => {
+    const current = database.get<{ readonly value: unknown }>("SELECT value FROM forge_meta WHERE key = ?", ["workspace_security_schema_version"]);
+    const currentVersion = current === undefined ? 0 : Number(current.value);
+    if (!Number.isInteger(currentVersion) || currentVersion < 0) {
+      throw new Error("BenchLedger workspace security schema version is invalid");
+    }
+    if (currentVersion > WORKSPACE_SECURITY_SCHEMA_VERSION) {
+      throw new Error(`BenchLedger workspace security schema ${currentVersion} is newer than supported version ${WORKSPACE_SECURITY_SCHEMA_VERSION}`);
+    }
+    database.exec(WORKSPACE_SECURITY_SCHEMA_MIGRATION_SQL);
+    database.run(
+      "INSERT INTO forge_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      ["workspace_security_schema_version", String(WORKSPACE_SECURITY_SCHEMA_VERSION)]
+    );
+  });
+}
 
 /** Additive exact-product migration; safe to run on every startup. */
 export const CATALOG_SCHEMA_VERSION = 3;

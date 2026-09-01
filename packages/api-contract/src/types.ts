@@ -26,7 +26,8 @@ import type {
   reconciliationPreviewAssetSchema, reconciliationStockChangeSchema,
   reconciliationReservationChangeSchema,
   reconciliationDraftSchema, saveReconciliationDraftSchema, commitReconciliationSchema,
-  reconciliationCommitSchema
+  reconciliationCommitSchema,
+  workspaceSecurityModeSchema, workspaceSecurityStatusSchema, workspaceSecurityMutationSchema
 } from "./schemas.js";
 
 export type Dimension = z.infer<typeof dimensionSchema>;
@@ -112,3 +113,6 @@ export type SaveReconciliationDraft = z.infer<typeof saveReconciliationDraftSche
 export type CommitReconciliation = z.infer<typeof commitReconciliationSchema>;
 export type ReconciliationCommit = z.infer<typeof reconciliationCommitSchema>;
 export type CreateArtifactBuildConfigurationBinding = z.infer<typeof createArtifactBuildConfigurationBindingSchema>;
+export type WorkspaceSecurityMode = z.infer<typeof workspaceSecurityModeSchema>;
+export type WorkspaceSecurityStatus = z.infer<typeof workspaceSecurityStatusSchema>;
+export type WorkspaceSecurityMutation = z.infer<typeof workspaceSecurityMutationSchema>;
