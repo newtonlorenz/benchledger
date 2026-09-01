@@ -37,7 +37,8 @@ test("filters, edits, and physically counts evidence-aware inventory", async ({ 
   await expect(headers.nth(4)).toHaveText("Location");
   await expect(headers.nth(5)).toHaveText("Open");
   await expect(page.getByRole("columnheader", { name: "Evidence source", exact: true })).toHaveCount(0);
-  await expect(page.getByLabel("Filter inventory by category")).toHaveCount(0);
+  await expect(page.getByLabel("Filter inventory by category")).toBeVisible();
+  await page.getByLabel("Filter inventory by category").selectOption("__unassigned__");
   await page.getByLabel("Filter inventory by kind").selectOption("electronic");
   await page.getByLabel("Filter inventory by evidence").selectOption("physically_counted");
   await page.getByLabel("Filter inventory by availability").selectOption("available");
@@ -51,6 +52,7 @@ test("filters, edits, and physically counts evidence-aware inventory", async ({ 
       && url.searchParams.get("kind") === "electronic"
       && url.searchParams.get("evidence") === "physically_counted"
       && url.searchParams.get("available") === "true"
+      && url.searchParams.get("unassigned") === "true"
       && url.searchParams.get("limit") === "25";
   })).toBe(true);
   await expect(espRow).toContainText("Ready to use");
