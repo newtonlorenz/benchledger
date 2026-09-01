@@ -271,7 +271,7 @@ describe("production inventory and procurement adapters", () => {
 
     await expect(runtime.ports.inventory.listItems({ limit: 10, q: "  CONTROLLER ", kind: "electronic", evidence: "physically_counted", available: true })).resolves.toMatchObject({ data: [{ id: confirmed.id }], total: 1 });
     await expect(runtime.ports.inventory.listItems({ limit: 10, evidence: "delivered_uncounted", available: false })).resolves.toMatchObject({ data: [{ id: uncertain.id }] });
-    await expect(runtime.ports.inventory.listItems({ limit: 1, cursor: "bad" })).resolves.toMatchObject({ data: [{ id: "adapter-board" }], nextCursor: "1", total: 2 });
+    await expect(runtime.ports.inventory.listItems({ limit: 1, cursor: "bad" })).rejects.toMatchObject({ code: "invalid_cursor" });
     await expect(runtime.ports.inventory.listItems({ limit: 10, q: "does-not-exist" })).resolves.toMatchObject({ data: [], total: 0 });
 
     const updated = await runtime.ports.inventory.updateItem(confirmed.id, {
@@ -333,6 +333,60 @@ describe("production inventory and procurement adapters", () => {
     await (runtime.ports.inventory as ProductionInventoryAdapter).rollbackCreatedItem(item.id);
     expect(runtime.database.get("SELECT category_node_id FROM inventory_item_category_assignments WHERE item_id = ?", [item.id])).toBeUndefined();
     expect(await categories.archiveCategory(referenced.id, 1, context())).toMatchObject({ archived: true, version: 2 });
+  });
+
+  it("uses offset cursors as opaque inventory page tokens and rejects malformed values", async () => {
+    const runtime = await makeRuntime();
+    for (const id of ["page-c", "page-a", "page-b"]) {
+      await runtime.ports.inventory.createItem({ id, name: "Same name", kind: "tool", quantity: 1, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
+    }
+    const first = await runtime.ports.inventory.listItems({ limit: 1 });
+    expect(first.data[0]?.id).toBe("page-a");
+    expect(first.nextCursor).toBe("1");
+    const second = await runtime.ports.inventory.listItems({ limit: 1, cursor: first.nextCursor! });
+    expect(second.data[0]?.id).toBe("page-b");
+    expect(second.nextCursor).toBe("2");
+    await expect(runtime.ports.inventory.listItems({ limit: 1, cursor: second.nextCursor! })).resolves.toMatchObject({ data: [{ id: "page-c" }] });
+    await expect(runtime.ports.inventory.listItems({ limit: 1, cursor: "-1" })).rejects.toMatchObject({ code: "invalid_cursor" });
+    await expect(runtime.ports.inventory.listItems({ limit: 1, cursor: "not-a-cursor" })).rejects.toMatchObject({ code: "invalid_cursor" });
+  });
+
+  it("applies managed and unassigned category filters before inventory pagination", async () => {
+    const runtime = await makeRuntime();
+    const categories = runtime.ports.inventoryCategories!;
+    await categories.createCategory({ id: "page-category-tools", name: "Paged tools", sortOrder: 950 }, context());
+    for (const item of [
+      { id: "page-category-a", name: "Alpha tool", categoryNodeId: "page-category-tools" },
+      { id: "page-category-b", name: "Beta tool", categoryNodeId: "page-category-tools" },
+      { id: "page-unassigned", name: "Legacy tool" }
+    ] as const) {
+      await runtime.ports.inventory.createItem({ ...item, kind: "tool", quantity: 1, unit: "each", tags: [], links: [], evidence: { state: "unknown" } }, context());
+    }
+
+    const first = await runtime.ports.inventory.listItems({ categoryNodeId: "page-category-tools", limit: 1 });
+    expect(first).toMatchObject({ data: [{ id: "page-category-a" }], total: 2, nextCursor: "1" });
+    await expect(runtime.ports.inventory.listItems({ categoryNodeId: "page-category-tools", limit: 1, cursor: first.nextCursor! })).resolves.toMatchObject({ data: [{ id: "page-category-b" }], total: 2 });
+    await expect(runtime.ports.inventory.listItems({ unassigned: true, limit: 10 })).resolves.toMatchObject({ data: [{ id: "page-unassigned" }], total: 1 });
+  });
+
+  it("keeps every native accessory category in the canonical accessory filter", async () => {
+    const runtime = await makeRuntime();
+    const now = "2026-08-30T10:00:00.000Z";
+    for (const [id, category, name] of [
+      ["native-accessory", "printer_accessory", "Accessory mount"],
+      ["native-part", "printer_part", "Replacement nozzle"],
+      ["native-workshop", "workshop", "Workshop tray"]
+    ] as const) {
+      runtime.database.run(
+        `INSERT INTO inventory_items
+          (id, name, category, variant, purchased_quantity, unit, source_status, reuse_policy, confidence, reported_quantity, source_json, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, name, category, null, 1, "each", "delivered_uncounted", "inspect_first", "inspect_first", 1, null, now, now]
+      );
+    }
+    const page = await runtime.ports.inventory.listItems({ kind: "accessory", limit: 10 });
+    expect(page.data.map((item) => item.id)).toEqual(["native-accessory", "native-part", "native-workshop"]);
+    expect(page.data.every((item) => item.kind === "accessory")).toBe(true);
   });
 
   it("maps every stock event type and actor source while preserving ledger history", async () => {

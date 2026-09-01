@@ -32,7 +32,7 @@ describe("MCP error boundary", () => {
   });
 
   it("maps validation and storage failures without leaking backend detail", () => {
-    for (const code of ["validation", "quota_exceeded", "unsupported_media"]) {
+    for (const code of ["validation", "invalid_cursor", "quota_exceeded", "unsupported_media"]) {
       expect(mapBackendError(codedError(code))).toMatchObject({ code: "INVALID_ARGUMENT", message: "The request arguments are invalid." });
     }
     expect(mapBackendError(new Error("secret SQL details"))).toMatchObject({ code: "BACKEND_ERROR", message: "The application service could not complete this operation." });

@@ -268,6 +268,8 @@ export function createApplicationBackend(service: ApplicationService, options: P
               ...(cursor === undefined ? {} : { cursor }),
               ...(input.query === undefined ? {} : { q: input.query }),
               ...(input.category === undefined ? {} : { kind: toApiKind(input.category) }),
+              ...(input.categoryNodeId === undefined ? {} : { categoryNodeId: input.categoryNodeId }),
+              ...(input.unassigned === undefined ? {} : { unassigned: input.unassigned }),
               ...(input.availability === undefined ? {} : { evidence: toApiEvidence(input.availability) }),
             }),
             matches: (item) => toMcpInventoryItem(item).location === input.location,
@@ -281,6 +283,8 @@ export function createApplicationBackend(service: ApplicationService, options: P
           ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
           ...(input.query === undefined ? {} : { q: input.query }),
           ...(input.category === undefined ? {} : { kind: toApiKind(input.category) }),
+          ...(input.categoryNodeId === undefined ? {} : { categoryNodeId: input.categoryNodeId }),
+          ...(input.unassigned === undefined ? {} : { unassigned: input.unassigned }),
           ...(input.availability === undefined ? {} : { evidence: toApiEvidence(input.availability) }),
         });
         return appPage(page.data.map(toMcpInventoryItem), page);

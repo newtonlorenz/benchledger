@@ -85,9 +85,15 @@ to use `kind`. If the add form has no active categories, choose **Open Settings*
 from that form, create one, and return to Inventory. Existing legacy items may
 be unassigned until edited.
 
+For paged inventory reads, pass `categoryNodeId` to filter by an exact managed
+node or `unassigned: true` to select legacy items without an assignment. These
+filters are applied before pagination and cannot be combined.
+
 All list responses are bounded pages. Follow `nextCursor`; never request an
-unbounded database dump. Read the project resources for context, BOM, and
-artifact metadata when working in a project.
+unbounded database dump. Inventory cursors are opaque read-committed continuation
+tokens: concurrent writes can affect later pages, and keyset snapshot semantics
+are not yet provided. Read the project resources for context, BOM, and artifact
+metadata when working in a project.
 
 ## Minute 2–4: beginner path
 

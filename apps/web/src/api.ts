@@ -8,6 +8,7 @@ import type {
   CatalogProduct,
   CurrencyCode,
   InventoryItem,
+  InventoryEvidenceState,
   InventoryProductProfile,
   Offer,
   Project,
@@ -126,12 +127,31 @@ export interface LoginResult { authenticated: true; actor: string; csrfToken: st
 export interface SessionResult { authenticated: true; actor: string; source?: string; scopes: string[]; projectIds?: string[] }
 export interface WorkspaceSnapshot { inventory: InventoryItem[]; projects: Project[]; offers: Offer[]; source: "api" | "synthetic"; fetchedAt: string; health?: ServerHealth }
 export interface InventoryCategoryPage { data: readonly ManagedInventoryCategory[]; nextCursor?: string; limit: number; total?: number }
+export type InventoryKindQuery = "printer" | "tool" | "accessory" | "consumable" | "electronic" | "fastener" | "filament" | "wire" | "adhesive" | "other";
+export interface InventoryListQuery {
+  q?: string;
+  kind?: InventoryKindQuery;
+  evidence?: InventoryEvidenceState;
+  available?: boolean;
+  categoryNodeId?: string;
+  unassigned?: boolean;
+  limit: number;
+  cursor?: string;
+}
+export interface InventoryPage {
+  items: InventoryItem[];
+  limit: number;
+  total?: number;
+  nextCursor?: string;
+}
 export interface WorkspaceAdapter {
+  clearAuthenticatedState(): void;
   checkHealth(): Promise<ServerHealth>;
   session(): Promise<SessionResult>;
   login(password: string): Promise<LoginResult>;
   logout(): Promise<void>;
   loadWorkspace(): Promise<WorkspaceSnapshot>;
+  listInventory(query: InventoryListQuery): Promise<InventoryPage>;
   recordCount(itemId: string, quantity: number): Promise<InventoryItem>;
   commissionInventoryItem(itemId: string, input: InventoryCommissionInput, expectedVersion: number): Promise<InventoryItem>;
   updateInventoryItem(itemId: string, input: Partial<InventoryUpdateInput>, expectedVersion?: number): Promise<InventoryItem>;
@@ -152,6 +172,8 @@ export interface WorkspaceAdapter {
   saveReconciliationDraft(projectId: string, revisionId: string, model: ReconciliationViewModel): Promise<ReconciliationViewModel>;
   commitReconciliation(projectId: string, revisionId: string, model: ReconciliationViewModel): Promise<ReconciliationViewModel>;
 }
+
+export const MAX_INVENTORY_SEARCH_LENGTH = 200;
 
 function apiRoot(): string {
   const configured = import.meta.env.VITE_BENCHLEDGER_API_URL as string | undefined;
@@ -224,6 +246,12 @@ function mapEvidence(state: string): InventoryItem["evidence"] {
   if (state === "commissioned") return "commissioned";
   if (state === "ordered_unverified") return "ordered";
   return "delivered";
+}
+
+function mapServerEvidence(state: string): InventoryEvidenceState {
+  return state === "physically_counted" || state === "commissioned" || state === "delivered_uncounted"
+    || state === "ordered_unverified" || state === "allocated" || state === "consumed" || state === "unknown"
+    ? state : "unknown";
 }
 
 function mapStockState(item: ServerInventoryItem): InventoryItem["state"] {
@@ -687,7 +715,7 @@ export function mapInventoryItem(item: ServerInventoryItem): InventoryItem {
     ...(item.model ? { model: item.model } : {}),
     description: item.description?.trim() || "No description recorded.", quantity: item.quantity, availableQuantity: item.availableQuantity, unit: mapUnit(item.unit),
     reserved: confirmed ? Math.max(item.quantity - item.availableQuantity, 0) : 0,
-    state, evidence: mapEvidence(item.evidence.state), location: item.location?.trim() || "Unassigned",
+    state, evidence: mapEvidence(item.evidence.state), serverEvidence: mapServerEvidence(item.evidence.state), location: item.location?.trim() || "Unassigned",
     ...(dimensions ? { dimensions } : {}), ...(item.manufacturer ? { manufacturer: item.manufacturer } : {}), ...(item.sku ? { sku: item.sku } : {}),
     tags: [...item.tags], compatibility: [],
     provenance: {
@@ -1293,6 +1321,53 @@ function syntheticSnapshot(): WorkspaceSnapshot {
   return { inventory: structuredClone(fallbackInventory), projects: structuredClone(fallbackProjects), offers: structuredClone(fallbackOffers), source: "synthetic", fetchedAt: new Date().toISOString() };
 }
 
+function compareInventoryItems(left: Pick<InventoryItem, "name" | "id">, right: Pick<InventoryItem, "name" | "id">): number {
+  return left.name.trim().toLocaleLowerCase().localeCompare(right.name.trim().toLocaleLowerCase())
+    || left.name.localeCompare(right.name)
+    || left.id.localeCompare(right.id);
+}
+
+function canonicalSampleEvidence(item: InventoryItem): InventoryEvidenceState {
+  if (item.serverEvidence !== undefined) return item.serverEvidence;
+  if (item.evidence === "counted") return "physically_counted";
+  if (item.evidence === "commissioned") return "commissioned";
+  if (item.evidence === "ordered") return "ordered_unverified";
+  return "delivered_uncounted";
+}
+
+function sampleInventoryPage(items: readonly InventoryItem[], query: InventoryListQuery): InventoryPage {
+  const cursor = query.cursor;
+  if (query.q !== undefined && query.q.length > MAX_INVENTORY_SEARCH_LENGTH) {
+    throw new ApiError(`Inventory search must be at most ${MAX_INVENTORY_SEARCH_LENGTH} characters`, { kind: "validation", status: 400, demo: true });
+  }
+  if (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > 200) {
+    throw new ApiError("Inventory page size must be an integer between 1 and 200", { kind: "validation", status: 400, demo: true });
+  }
+  if (cursor !== undefined && cursor.length > 200) {
+    throw new ApiError("The inventory pagination cursor is too long", { kind: "validation", status: 400, code: "invalid_cursor", demo: true });
+  }
+  if (cursor !== undefined && (!/^(0|[1-9][0-9]*)$/u.test(cursor) || !Number.isSafeInteger(Number(cursor)))) {
+    throw new ApiError("The inventory pagination cursor is invalid", { kind: "validation", status: 400, code: "invalid_cursor", demo: true });
+  }
+  if (query.categoryNodeId !== undefined && query.unassigned === true) {
+    throw new ApiError("categoryNodeId and unassigned cannot be combined", { kind: "validation", status: 400, demo: true });
+  }
+  const offset = cursor === undefined ? 0 : Number(cursor);
+  const normalized = query.q?.trim().toLocaleLowerCase();
+  const filtered = items.filter((item) => {
+    if (query.kind !== undefined && item.kind !== query.kind) return false;
+    if (query.evidence !== undefined && canonicalSampleEvidence(item) !== query.evidence) return false;
+    if (query.available !== undefined && ((item.availableQuantity ?? 0) > 0) !== query.available) return false;
+    if (query.categoryNodeId !== undefined && item.categoryNodeId !== query.categoryNodeId) return false;
+    if (query.unassigned === true && item.categoryNodeId !== undefined) return false;
+    if (!normalized) return true;
+    return [item.name, item.variant, item.description, item.location, item.manufacturer, item.model, item.sku, ...item.tags].filter(Boolean).join(" ").toLocaleLowerCase().includes(normalized);
+  }).sort(compareInventoryItems);
+  const selected = filtered.slice(offset, offset + query.limit);
+  const nextOffset = offset + selected.length < filtered.length ? offset + selected.length : undefined;
+  return { items: selected.map((item) => structuredClone(item)), limit: query.limit, total: filtered.length, ...(nextOffset === undefined ? {} : { nextCursor: String(nextOffset) }) };
+}
+
 /** Explicit sample-only adapter. The UI enables it only after the service reports demo mode. */
 export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
   const state = syntheticSnapshot();
@@ -1309,11 +1384,13 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     serverRevisionId: `sample-revision-${Date.now()}`
   });
   return {
+    clearAuthenticatedState() {},
     async checkHealth() { return { status: "ok", service: "benchledger", version: "sample", demo: true, now: new Date().toISOString() }; },
     async session() { return { authenticated: true, actor: "sample", source: "demo", scopes: ["read", "write"] }; },
     async login() { return { authenticated: true, actor: "sample", csrfToken: "sample", expiresAt: new Date(Date.now() + 3_600_000).toISOString() }; },
     async logout() {},
     async loadWorkspace() { return state; },
+    async listInventory(query) { return sampleInventoryPage(state.inventory, query); },
     async recordCount(itemId, quantity) {
       const item = state.inventory.find((candidate) => candidate.id === itemId);
       if (!item) throw new ApiError("Inventory item not found", { kind: "validation", status: 404 });
@@ -1523,6 +1600,12 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
   const pendingReconciliationDraftCommands = new Map<string, PendingReconciliationCommand<ReconciliationDraftRequestBody>>();
   const pendingReconciliationCommitCommands = new Map<string, PendingReconciliationCommand<ReconciliationCommitRequestBody>>();
   const adapter: WorkspaceAdapter = {
+    clearAuthenticatedState() {
+      csrfToken = undefined;
+      serverUnits.clear();
+      inventoryCache.clear();
+      projectCache.clear();
+    },
     async checkHealth() { health = await request<ServerHealth>("/health"); return health; },
     async session() { return request<SessionResult>("/auth/session"); },
     async login(password) {
@@ -1553,6 +1636,34 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       projectCache.clear();
       mappedProjects.forEach((project) => projectCache.set(project.id, project));
       return { inventory: mappedInventory, projects: mappedProjects, offers: workspace.offers.map(mapOffer), source: "api", fetchedAt: workspace.fetchedAt || new Date().toISOString(), health: currentHealth };
+    },
+    async listInventory(query) {
+      const params = new URLSearchParams();
+      const normalizedQuery = query.q?.trim().slice(0, MAX_INVENTORY_SEARCH_LENGTH);
+      if (normalizedQuery) params.set("q", normalizedQuery);
+      if (query.kind) params.set("kind", query.kind);
+      if (query.evidence) params.set("evidence", query.evidence);
+      if (query.available !== undefined) params.set("available", String(query.available));
+      if (query.categoryNodeId) params.set("categoryNodeId", query.categoryNodeId);
+      if (query.unassigned !== undefined) params.set("unassigned", String(query.unassigned));
+      params.set("limit", String(query.limit));
+      if (query.cursor !== undefined) params.set("cursor", query.cursor);
+      const payload = await request<unknown>(`/inventory?${params.toString()}`);
+      const record = asRecord(payload);
+      const rawData = record?.data;
+      const values = Array.isArray(rawData) ? rawData : asRecord(rawData)?.data && Array.isArray(asRecord(rawData)?.data) ? asRecord(rawData)?.data as unknown[] : [];
+      const mappedItems = values.map((value) => mapInventoryItem(value as ServerInventoryItem));
+      mappedItems.forEach((item, index) => {
+        const source = values[index] as ServerInventoryItem;
+        serverUnits.set(item.id, source.unit);
+        inventoryCache.set(item.id, item);
+      });
+      return {
+        items: mappedItems,
+        limit: typeof record?.limit === "number" ? record.limit : query.limit,
+        ...(typeof record?.total === "number" ? { total: record.total } : {}),
+        ...(typeof record?.nextCursor === "string" ? { nextCursor: record.nextCursor } : {})
+      };
     },
     async recordCount(itemId, quantity) {
       const token = csrfToken ?? cookieValue("forge_csrf");

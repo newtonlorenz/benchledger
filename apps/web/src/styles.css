@@ -194,6 +194,12 @@ kbd { display: inline-block; padding: 1px 5px; border: 1px solid var(--line); bo
 
 .inventory-section { padding: 0; overflow: hidden; }
 .inventory-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 17px; padding: 16px 18px; border-bottom: 1px solid var(--line); }
+.inventory-page-status { min-height: 38px; display: flex; align-items: center; padding: 0 18px; border-bottom: 1px solid var(--line); color: var(--ink-muted); font-size: .68rem; }
+.inventory-load-error { display: flex; align-items: center; justify-content: space-between; gap: 13px; margin: 17px 18px; padding: 12px 13px; border: 1px solid oklch(59% .13 28 / .28); color: oklch(47% .11 28); background: oklch(96% .025 28); font-size: .72rem; }
+.inventory-load-error .button { flex: 0 0 auto; min-height: 36px; }
+.inventory-loading { padding: 44px 18px; color: var(--ink-muted); text-align: center; font-size: .75rem; }
+.inventory-load-more { display: flex; justify-content: center; padding: 16px 18px 18px; border-top: 1px solid var(--line); }
+.inventory-load-more .button { min-width: 130px; }
 .field-search { width: min(370px, 100%); height: 40px; }
 .inventory-filter-grid { min-width: 0; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .category-control { min-width: 190px; min-height: 44px; display: flex; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; color: var(--ink-muted); background: var(--surface-strong); }
@@ -614,6 +620,9 @@ kbd { display: inline-block; padding: 1px 5px; border: 1px solid var(--line); bo
 @media (max-width: 800px) {
   .inventory-filter-grid { width: 100%; justify-content: stretch; }
   .inventory-filter-grid .category-control { flex: 1 1 210px; }
+  .inventory-page-status { padding: 0 13px; }
+  .inventory-load-error { align-items: flex-start; flex-direction: column; margin: 13px; }
+  .inventory-load-error .button { width: 100%; }
   .inventory-edit-grid, .provenance-panel dl { grid-template-columns: 1fr; }
   .reconciliation-shell { padding: 31px 18px 65px; }
   .reconciliation-header { align-items: flex-start; flex-direction: column; gap: 16px; }

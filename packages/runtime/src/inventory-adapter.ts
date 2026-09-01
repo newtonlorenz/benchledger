@@ -1,6 +1,7 @@
 import { createId, createStockEvent, DomainError } from "@benchledger/domain";
 import type { CommissionInventoryItem, InventoryItem as ApiInventoryItem, CreateInventoryItem, StockEvent as ApiStockEvent, StockEventInput } from "@benchledger/api-contract";
 import type { InventoryItem, StockEvent } from "@benchledger/domain";
+import { parseInventoryCursor } from "@benchledger/application";
 import type { InventoryListOptions, InventoryPort, Page, RequestContext, StockMutation, UnitOfWorkPort, UpdateInventoryInput } from "@benchledger/application";
 import { InventoryRepository } from "@benchledger/database";
 import type { BenchDatabase, InventoryCategoryRepository } from "@benchledger/database";
@@ -26,6 +27,12 @@ function isSearchMatch(item: ApiInventoryItem, query: string | undefined): boole
     .join(" ")
     .toLocaleLowerCase()
     .includes(needle);
+}
+
+function compareInventoryItems(left: Pick<ApiInventoryItem, "name" | "id">, right: Pick<ApiInventoryItem, "name" | "id">): number {
+  return left.name.trim().toLocaleLowerCase().localeCompare(right.name.trim().toLocaleLowerCase())
+    || left.name.localeCompare(right.name)
+    || left.id.localeCompare(right.id);
 }
 
 function mergeInventoryInput(current: ApiInventoryItem, input: UpdateInventoryInput): CreateInventoryItem {
@@ -92,15 +99,25 @@ export class ProductionInventoryAdapter implements InventoryPort {
 
   async listItems(options: InventoryListOptions): Promise<Page<ApiInventoryItem>> {
     return this.unitOfWork.exclusive(() => attempt(async () => {
+      const offset = parseInventoryCursor(options.cursor);
       const records = this.repository.list({ includeRetired: true });
       const items = records.map((item) => this.toApi(item)).filter((item) => {
         if (!options.includeRetired && item.retiredAt !== undefined) return false;
         if (options.kind !== undefined && item.kind !== options.kind) return false;
         if (options.evidence !== undefined && item.evidence.state !== options.evidence) return false;
         if (options.available !== undefined && (item.availableQuantity > 0) !== options.available) return false;
+        if (options.categoryNodeId !== undefined && item.categoryNodeId !== options.categoryNodeId) return false;
+        if (options.unassigned === true && item.categoryNodeId !== undefined) return false;
         return isSearchMatch(item, options.q);
-      }).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
-      return page(items, options.limit, options.cursor);
+      }).sort(compareInventoryItems);
+      const data = items.slice(offset, offset + options.limit);
+      const nextOffset = offset + data.length < items.length ? offset + data.length : undefined;
+      return {
+        data,
+        limit: options.limit,
+        total: items.length,
+        ...(nextOffset === undefined ? {} : { nextCursor: String(nextOffset) })
+      };
     }));
   }
 

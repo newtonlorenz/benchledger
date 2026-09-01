@@ -51,3 +51,15 @@ Meet WCAG 2.2 AA. All core flows work by keyboard and with assistive technology.
 Never rely on color alone for inventory or risk state. Respect reduced motion,
 support 200% zoom and narrow mobile layouts, maintain readable contrast, provide
 plain-language labels by default, and keep dense expert views structurally clear.
+
+## Inventory paging
+
+The Inventory destination reads its own server-backed `/inventory` pages rather
+than slicing the bounded workspace preview. Search and the Kind, exact Evidence,
+and Availability filters are applied before the server orders and slices rows;
+the default page size is 25 and continuation is exposed as **Load more**. A
+page reports the loaded count against the server total and keeps loaded rows
+visible if a continuation request fails. Filter changes and inventory mutations
+restart at page one. Pagination is read-committed, so concurrent writes can
+shift later pages; the current offset cursor is opaque and keyset snapshots are
+deferred.

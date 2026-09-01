@@ -104,8 +104,9 @@ describe("ApplicationService", () => {
     const service = new ApplicationService(ports, "test-version");
 
     expect(service.getVersion()).toBe("test-version");
-    await expect(service.listInventory({ q: "PET", kind: "filament", evidence: "physically_counted", available: true, limit: 25, cursor: "item-cursor" })).resolves.toMatchObject({ nextCursor: "next-item" });
-    expect(inventoryQuery).toEqual({ q: "PET", kind: "filament", evidence: "physically_counted", available: true, limit: 25, cursor: "item-cursor" });
+    await expect(service.listInventory({ q: "PET", kind: "filament", evidence: "physically_counted", available: true, limit: 25, cursor: "0" })).resolves.toMatchObject({ nextCursor: "next-item" });
+    expect(inventoryQuery).toEqual({ q: "PET", kind: "filament", evidence: "physically_counted", available: true, limit: 25, cursor: "0" });
+    await expect(service.listInventory({ limit: 25, cursor: "-1" })).rejects.toMatchObject({ code: "invalid_cursor" });
     await expect(service.getInventoryItem("item-1")).resolves.toMatchObject({ id: "item-1" });
     await expect(service.listStockEvents("item-1", 0, "event-cursor")).resolves.toMatchObject({ limit: 1 });
     expect(stockEventLimit).toBe(1);

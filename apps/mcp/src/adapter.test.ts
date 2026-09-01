@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ApplicationError } from "@benchledger/application";
 import { McpAdapter } from "./adapter.js";
 import type {
   BuildConfigurationSnapshot,
@@ -234,6 +235,15 @@ describe("McpAdapter", () => {
     expect(result.content[0]).toMatchObject({ type: "text" });
   });
 
+  it("maps an application invalid cursor from list_inventory to INVALID_ARGUMENT", async () => {
+    const failing = backend();
+    failing.inventory.list = async () => { throw new ApplicationError("invalid_cursor", "The inventory pagination cursor is invalid"); };
+
+    const result = await new McpAdapter(failing).callTool("list_inventory", { cursor: "-1" }, context);
+
+    expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
+  });
+
   it("requires a write scope for stock events", async () => {
     const adapter = new McpAdapter(backend());
     const readOnly = { actorId: "reader", scopes: ["inventory:read"] as const };
@@ -322,6 +332,8 @@ describe("McpAdapter", () => {
     expect(categoryList?.inputSchema.properties.cursor).toMatchObject({ description: expect.stringContaining("512") });
     const inventoryList = adapter.listTools().find((tool) => tool.name === "list_inventory");
     expect(inventoryList?.inputSchema.properties.cursor).toMatchObject({ description: expect.stringContaining("512") });
+    expect(inventoryList?.inputSchema.properties.categoryNodeId).toMatchObject({ type: "string", maxLength: 160 });
+    expect(inventoryList?.inputSchema.properties.unassigned).toMatchObject({ type: "boolean" });
     const offerList = adapter.listTools().find((tool) => tool.name === "list_offers");
     expect(offerList?.inputSchema.properties.cursor).toMatchObject({ description: expect.stringContaining("512") });
     const categoryRead = adapter.listTools().find((tool) => tool.name === "read_inventory_category");

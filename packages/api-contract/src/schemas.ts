@@ -97,9 +97,11 @@ export const inventoryListQuerySchema = z.object({
   kind: itemKindSchema.optional(),
   evidence: stockEvidenceSchema.optional(),
   available: z.preprocess((value) => value === "true" ? true : value === "false" ? false : value, z.boolean()).optional(),
+  categoryNodeId: idSchema.optional(),
+  unassigned: z.preprocess((value) => value === "true" ? true : value === "false" ? false : value, z.boolean()).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   cursor: z.string().max(200).optional()
-}).strict();
+}).strict().refine(({ categoryNodeId, unassigned }) => !(categoryNodeId !== undefined && unassigned === true), { message: "categoryNodeId and unassigned cannot be combined" });
 
 /** User-managed taxonomy identity; intentionally has no `kind` discriminator. */
 export const inventoryCategorySchema = z.object({

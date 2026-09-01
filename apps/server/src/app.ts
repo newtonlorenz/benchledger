@@ -552,6 +552,16 @@ function jsonOpenApi(version: string): Record<string, unknown> {
   };
   const categoryIdParameter = { name: "id", in: "path", required: true, schema: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" } };
   const categoryVersionParameter = { name: "If-Match", in: "header", required: true, description: "Required category version for optimistic concurrency.", schema: { type: "string", pattern: "^[1-9][0-9]*$" } };
+  const inventoryQueryParameters = [
+    { name: "q", in: "query", required: false, schema: { type: "string", maxLength: 200 } },
+    { name: "kind", in: "query", required: false, schema: { type: "string", enum: ["printer", "tool", "accessory", "consumable", "electronic", "fastener", "filament", "wire", "adhesive", "other"] } },
+    { name: "evidence", in: "query", required: false, schema: { type: "string", enum: ["physically_counted", "commissioned", "delivered_uncounted", "ordered_unverified", "allocated", "consumed", "unknown"] } },
+    { name: "available", in: "query", required: false, schema: { type: "boolean" } },
+    { name: "categoryNodeId", in: "query", required: false, description: "Exact managed category or subcategory ID. Mutually exclusive with unassigned=true.", schema: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" } },
+    { name: "unassigned", in: "query", required: false, description: "Return inventory without a managed category assignment. Mutually exclusive with categoryNodeId.", schema: { type: "boolean" } },
+    { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } },
+    { name: "cursor", in: "query", required: false, schema: { type: "string", maxLength: 200 } }
+  ];
   return {
     openapi: "3.1.0",
     info: { title: "BenchLedger API", version, description: "Evidence-based maker inventory and project workspace API." },
@@ -578,7 +588,7 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       "/ready": { get: { security: [], responses: { "200": { description: "Readiness checks" }, "503": { description: "Not ready" } } } },
       "/auth/login": { post: { security: [], responses: { "200": { description: "Session created" }, "401": { description: "Invalid credentials" } } } },
       "/workspace": { get: { responses: { "200": { description: "Authenticated aggregate workspace snapshot" } } } },
-      "/inventory": { get: { responses: { "200": { description: "Inventory page" } } }, post: { responses: { "201": { description: "Inventory item" } } } },
+      "/inventory": { get: { description: "Returns a bounded inventory page; categoryNodeId and unassigned=true are mutually exclusive.", parameters: inventoryQueryParameters, responses: { "200": { description: "Inventory page" } } }, post: { responses: { "201": { description: "Inventory item" } } } },
       "/inventory/categories": {
         get: { parameters: [
           { name: "includeArchived", in: "query", required: false, schema: { type: "boolean", default: false } },
@@ -778,6 +788,7 @@ async function scopedProjectPage(service: ApplicationService, query: ProjectList
 function errorStatus(error: ApplicationError): number {
   switch (error.code) {
     case "not_found": return 404;
+    case "invalid_cursor": return 400;
     case "conflict": case "idempotency_conflict": case "integrity_error": return 409;
     case "forbidden": return 403;
     case "quota_exceeded": return 413;
@@ -946,7 +957,15 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const params = request.params as { id: string };
     return service.updateCatalogProduct(params.id, parseBody(updateCatalogProductSchema, request.body), parseExpectedVersion(request), requestContext(request));
   });
-  app.get(route("/inventory"), async (request) => { requireScope(request, "read", auth); const query = parseBody(inventoryListQuerySchema, request.query); return service.listInventory(query); });
+  app.get(route("/inventory"), async (request) => {
+    requireScope(request, "read", auth);
+    const query = parseBody(inventoryListQuerySchema, request.query);
+    const page = await service.listInventory(query);
+    const inventory = request.principal?.projectIds === undefined
+      ? await hydrateWorkspaceInventory(service, page.data)
+      : page.data;
+    return { ...page, data: inventory };
+  });
   app.get(route("/inventory/categories"), async (request) => { requireScope(request, "read", auth); return service.listInventoryCategories(parseBody(inventoryCategoryListQuerySchema, request.query)); });
   app.post(route("/inventory/categories"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const mutation = await service.createInventoryCategory(parseBody(createInventoryCategorySchema, request.body), requestContext(request)); return reply.code(201).send(mutationBody(mutation)); });
   app.get(route("/inventory/categories/:id"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; return service.getInventoryCategory(params.id); });

@@ -236,6 +236,46 @@ describe("authenticated BenchLedger API adapter", () => {
     await expect(adapter.updateInventoryCategory("category-tools", { name: "Filament" }, 1)).rejects.toMatchObject({ status: 409, message: "A category with this name already exists beside it." });
   });
 
+  it("filters sample inventory by managed assignment before paginating", async () => {
+    const adapter = createSampleWorkspaceAdapter();
+    const assigned = await adapter.createInventoryItem({ name: "Assigned driver", category: "Accessories", categoryNodeId: "category-tools", kind: "tool", quantity: 1, unit: "each" });
+    const categoryPage = await adapter.listInventory({ categoryNodeId: "category-tools", limit: 1 });
+    expect(categoryPage).toMatchObject({ items: [{ id: assigned.id }], total: 1 });
+    const unassignedPage = await adapter.listInventory({ unassigned: true, limit: 200 });
+    expect(unassignedPage.items.some((item) => item.id === assigned.id)).toBe(false);
+  });
+
+  it("keeps sample inventory pagination bounds aligned with the REST contract", async () => {
+    const adapter = createSampleWorkspaceAdapter();
+    await expect(adapter.listInventory({ q: "x".repeat(201), limit: 25 })).rejects.toMatchObject({ kind: "validation", status: 400 });
+    await expect(adapter.listInventory({ limit: 201 })).rejects.toMatchObject({ kind: "validation", status: 400 });
+    await expect(adapter.listInventory({ cursor: "1".repeat(201), limit: 25 })).rejects.toMatchObject({ kind: "validation", status: 400, code: "invalid_cursor" });
+    await expect(adapter.listInventory({ categoryNodeId: "category-tools", unassigned: true, limit: 25 })).rejects.toMatchObject({ kind: "validation", status: 400 });
+  });
+
+  it("requests inventory pages from the server and maps pagination without slicing a workspace snapshot", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({
+      data: [serverItem({ id: "item-page", name: "Paged item" })], limit: 10, total: 21, nextCursor: "10"
+    }));
+    const adapter = createWorkspaceAdapter();
+    const result = await adapter.listInventory({ q: "  ESP32 ", kind: "electronic", evidence: "physically_counted", available: true, categoryNodeId: "category-electronics", limit: 10, cursor: "20" });
+    expect(result).toMatchObject({ items: [{ id: "item-page", name: "Paged item" }], limit: 10, total: 21, nextCursor: "10" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url] = fetchMock.mock.calls[0]!;
+    expect(url).toContain("/api/v1/inventory?");
+    expect(new URL(String(url), "http://localhost").search).toBe("?q=ESP32&kind=electronic&evidence=physically_counted&available=true&categoryNodeId=category-electronics&limit=10&cursor=20");
+  });
+
+  it("bounds an overlong inventory search before sending it to the server", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({ data: [], limit: 25, total: 0 }));
+    const adapter = createWorkspaceAdapter();
+
+    await adapter.listInventory({ q: `${"x".repeat(201)}  `, limit: 25 });
+
+    const [url] = fetchMock.mock.calls[0]!;
+    expect(new URL(String(url), "http://localhost").searchParams.get("q")).toBe("x".repeat(200));
+  });
+
   it("surfaces an authentication boundary instead of silently showing synthetic data", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "0.1.0", demo: false, now: "2026-08-30T10:00:00.000Z" }))
       .mockResolvedValueOnce(jsonResponse({ error: { code: "unauthenticated", message: "Authentication is required" } }, 401));
@@ -958,6 +998,16 @@ describe("API boundaries and mutation guards", () => {
 });
 
 describe("sample workspace adapter", () => {
+  it("keeps demo pagination server-shaped and rejects malformed cursors", async () => {
+    const adapter = createSampleWorkspaceAdapter();
+    const first = await adapter.listInventory({ limit: 1 });
+    expect(first.items).toHaveLength(1);
+    expect(first.nextCursor).toBeDefined();
+    await expect(adapter.listInventory({ limit: 1, cursor: first.nextCursor! })).resolves.toMatchObject({ items: expect.any(Array) });
+    await expect(adapter.listInventory({ limit: 1, cursor: "-1" })).rejects.toMatchObject({ code: "invalid_cursor", status: 400 });
+    await expect(adapter.listInventory({ limit: 1, cursor: "not-a-cursor" })).rejects.toMatchObject({ code: "invalid_cursor", status: 400 });
+  });
+
   it("keeps a complete local vertical slice for demos without pretending it is counted stock", async () => {
     const adapter = createSampleWorkspaceAdapter();
     await expect(adapter.checkHealth()).resolves.toMatchObject({ status: "ok", demo: true, version: "sample" });
