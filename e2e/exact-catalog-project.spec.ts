@@ -273,3 +273,39 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
     filamentSelections: persistedBeforeUpload.body.filamentSelections,
   });
 });
+
+test("keeps the starter catalog facet path accessible and honest at 390px", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await signIn(page);
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await page.getByRole("button", { name: "Add item", exact: true }).click();
+  const addDialog = page.getByRole("dialog");
+  const completeCatalog = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === "GET"
+      && response.status() === 200
+      && url.pathname.endsWith("/api/v1/catalog/products")
+      && url.searchParams.get("kind") === "filament"
+      && url.searchParams.get("limit") === "100"
+      && !url.searchParams.has("q");
+  });
+  await addDialog.getByRole("button", { name: /^Filament\b/u }).click();
+  await completeCatalog;
+
+  await addDialog.getByLabel("Manufacturer / brand").selectOption({ label: "Bambu Lab" });
+  await addDialog.getByLabel("Product line / material family").selectOption({ label: "PETG" });
+  const materialSubtype = addDialog.getByLabel("Material subtype");
+  if (await materialSubtype.locator("option").filter({ hasText: "HF" }).count()) {
+    await materialSubtype.selectOption({ label: "HF" });
+  }
+  await addDialog.locator("#catalog-facet-filament-colour").selectOption({ label: "Black" });
+  await addDialog.locator("#catalog-facet-filament-diameterMm").selectOption({ label: "1.75 mm" });
+  await addDialog.locator("#catalog-facet-filament-netMassG").selectOption({ label: "1,000 g net" });
+
+  await expect(addDialog.getByRole("listbox", { name: "Exact filament products" })).toContainText("PETG HF");
+  await expect(addDialog).toContainText("Catalog entries describe products only");
+  await expect(addDialog).not.toContainText(/(?:In stock|Available now|Owned product)/u);
+  const dialogBox = await addDialog.boundingBox();
+  expect(dialogBox?.width).toBeLessThanOrEqual(358);
+});

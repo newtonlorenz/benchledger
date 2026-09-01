@@ -185,6 +185,42 @@ function parseCatalogProduct(row: SqliteRow): CatalogProduct {
   return product;
 }
 
+const FILAMENT_FACT_FIELDS = [
+  "manufacturer",
+  "productName",
+  "sku",
+  "materialFamily",
+  "materialSubtype",
+  "colourName",
+  "colourCode",
+  "diameterMm",
+  "nominalNetMassG",
+  "nominalLengthM",
+  "lengthBasis",
+  "densityGcm3",
+] as const;
+
+const PRINTER_FACT_FIELDS = [
+  "manufacturer",
+  "exactModel",
+  "exactVariant",
+  "technology",
+  "buildVolumeMm",
+] as const;
+
+function sameCatalogFact(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") return false;
+  return canonicalJson(left) === canonicalJson(right);
+}
+
+/** A corrected identity/specification fact invalidates the old verification. */
+function catalogFactsChanged(current: CatalogProduct, changes: Record<string, unknown>): boolean {
+  const currentRecord = current as unknown as Record<string, unknown>;
+  const fields = current.kind === "filament" ? FILAMENT_FACT_FIELDS : PRINTER_FACT_FIELDS;
+  return fields.some((field) => Object.hasOwn(changes, field) && !sameCatalogFact(currentRecord[field], changes[field]));
+}
+
 function parseInventoryProductProfile(row: SqliteRow): InventoryProductProfile {
   const profile = inventoryProductProfileSchema.parse({
     id: text(row, "id"),
@@ -306,7 +342,7 @@ export class CatalogProductRepository {
     const changedRecord = changes as Record<string, unknown>;
     if (changedRecord.id !== undefined && changedRecord.id !== id) throw new DomainError("invalid_update", "catalog product id cannot change");
     if (changedRecord.kind !== undefined && changedRecord.kind !== current.kind) throw new DomainError("invalid_update", "catalog product kind cannot change");
-    const merged = {
+    const mergedCandidate = {
       ...current,
       ...changedRecord,
       id,
@@ -315,6 +351,9 @@ export class CatalogProductRepository {
       updatedAt: changedRecord.updatedAt ?? nowIso(),
       version: current.version + 1
     };
+    const merged = catalogFactsChanged(current, changedRecord)
+      ? Object.fromEntries(Object.entries(mergedCandidate).filter(([key]) => key !== "provenance"))
+      : mergedCandidate;
     const parsed = catalogProductSchema.parse(merged);
     const result = this.database.run(
       "UPDATE catalog_products SET payload_json = ?, version = ?, updated_at = ? WHERE id = ? AND version = ?",

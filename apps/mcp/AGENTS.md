@@ -54,6 +54,13 @@ parentage is immutable after creation, only one subcategory level is allowed,
 and update/archive commands require an expected version. Project-scoped tokens
 may read categories but cannot mutate this workspace-global taxonomy.
 
+Fresh production runtimes include a curated, versioned starter catalog of major
+FFF printers and filament products. `search_catalog_products` searches only
+explicit identity/specification fields; a product's server-owned manufacturer
+provenance URL is read-only metadata and is not a search field. Startup seeding
+is insert-missing-only and creates no inventory, profiles, or stock events, so a
+workspace's existing or custom catalog rows remain authoritative.
+
 The adapter exposes bounded pages. Continue with the returned cursor instead of
 requesting an unbounded dump. A project resource is similarly scoped:
 

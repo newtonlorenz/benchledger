@@ -161,6 +161,21 @@ describe("v2 catalog and physical profile repositories", () => {
     expect(changed).toMatchObject({ id: filament.id, colourName: "Graphite", version: 2 });
     expect(() => products.update(filament.id, { colourName: "Stale" }, 1)).toThrow(/version|conflict/i);
 
+    const sourced = {
+      ...filament,
+      id: "catalog-sourced-filament",
+      provenance: {
+        sourceUrl: "https://materials.example.test/pla",
+        sourceLabel: "Example manufacturer product page",
+        verifiedAt: time,
+      },
+    } satisfies CatalogProduct;
+    products.create(sourced);
+    const noOp = products.update(sourced.id, { colourName: sourced.colourName }, 1);
+    expect(noOp.provenance).toEqual(sourced.provenance);
+    const corrected = products.update(sourced.id, { colourName: "Graphite" }, 2);
+    expect(corrected.provenance).toBeUndefined();
+
     const profiles = new InventoryProductProfileRepository(database);
     profiles.create(spoolProfile());
     const promoted = profiles.update("profile-spool-1", { linkState: "confirmed" }, 1);

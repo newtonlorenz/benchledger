@@ -19,7 +19,38 @@ const CATALOG_PRODUCT = "catalog_product";
 const INVENTORY_PROFILE = "inventory_product_profile";
 
 function searchText(product: CatalogProduct): string {
-  return JSON.stringify(product).toLocaleLowerCase();
+  // Search only identity/specification fields. Provenance URLs and server
+  // metadata are intentionally excluded so a URL fragment cannot make a
+  // product appear to match and source changes do not alter search results.
+  const fields = product.kind === "filament"
+    ? [
+      product.id,
+      product.kind,
+      product.manufacturer,
+      product.productName,
+      product.sku,
+      product.materialFamily,
+      product.materialSubtype,
+      product.colourName,
+      product.colourCode,
+      product.diameterMm,
+      product.nominalNetMassG,
+      product.nominalLengthM,
+      product.lengthBasis,
+      product.densityGcm3,
+    ]
+    : [
+      product.id,
+      product.kind,
+      product.manufacturer,
+      product.exactModel,
+      product.exactVariant,
+      product.technology,
+      product.buildVolumeMm.x,
+      product.buildVolumeMm.y,
+      product.buildVolumeMm.z,
+    ];
+  return fields.filter((value) => value !== undefined).join(" ").toLocaleLowerCase();
 }
 
 /** Bridges canonical catalog repositories to the application ports. */

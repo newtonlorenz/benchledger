@@ -14,7 +14,7 @@ resource byte budget.
 | URI | Purpose | Scope |
 | --- | --- | --- |
 | `benchledger://capabilities` | Tool, resource, evidence, transfer, and safety contract | `context:read` |
-| `benchledger://catalog/products/{productId}` | One exact printer or filament catalog identity | `catalog:read` |
+| `benchledger://catalog/products/{productId}` | One exact printer or filament catalog identity, with read-only manufacturer provenance when present | `catalog:read` |
 | `benchledger://inventory/summary` | Current counts and categories | `inventory:read` |
 | `benchledger://inventory/categories` | Bounded user-managed category taxonomy; archived nodes are opt-in | `inventory:read` |
 | `benchledger://inventory/items/{itemId}` | One item with quantity, dimensions, links, and evidence | `inventory:read` |
@@ -70,6 +70,16 @@ and invalid hashes. Mutating tools use optimistic versions where applicable.
 The server's `tools/list` response contains only MCP's public fields (`name`,
 `description`, and `inputSchema`). Scope and mutation metadata are intentionally
 kept in the checked-in capability contract and enforced server-side.
+
+The production runtime seeds a curated, versioned starter catalog on startup:
+at least 24 FFF printer identities spanning Bambu Lab, Prusa Research,
+Creality, ELEGOO, and Anycubic, plus at least 24 exact 1.75 mm filament
+identities spanning Bambu Lab, Prusament, Polymaker, eSUN, SUNLU, and
+OVERTURE. Seeding is insert-missing-only and never creates inventory items,
+physical product profiles, or stock events. Existing rows, including custom
+rows that reuse a starter identifier, are preserved byte-for-byte. Curated
+records may include server-owned manufacturer provenance; it is read-only and
+excluded from create/update inputs and catalog identity search.
 
 ## UI parity
 

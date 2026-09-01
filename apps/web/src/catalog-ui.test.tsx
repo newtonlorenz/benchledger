@@ -2,9 +2,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
   BuildSetupSummary,
+  CATALOG_FACET_MAX_PRODUCTS,
+  CatalogFacetPicker,
   CatalogCombobox,
   CatalogInventoryFlow,
   CatalogProductCreateForm,
+  catalogFacetValues,
+  filterCatalogProductsByFacets,
+  loadCompleteCatalogProducts,
   reduceComboboxKey
 } from "./catalog-ui";
 import { buildSetupSummary, exactProductLabel } from "./domain";
@@ -23,6 +28,93 @@ function exactItem(item: InventoryItem, product: CatalogProduct): InventoryItem 
 }
 
 describe("catalog selection UI", () => {
+  it("follows catalog cursors beyond the first facet page and reports the safety cap", async () => {
+    const calls: Array<{ limit: number; cursor?: string }> = [];
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({ ...filamentProduct, id: `facet-${index}` }));
+    const secondPage = Array.from({ length: 100 }, (_, index) => ({ ...filamentProduct, id: `facet-${100 + index}` }));
+    const result = await loadCompleteCatalogProducts("filament", async (_kind, _query, options) => {
+      calls.push(options);
+      return options.cursor ? { products: secondPage, limit: options.limit, total: 200, nextCursor: "200" } : { products: firstPage, limit: options.limit, total: 200, nextCursor: "100" };
+    }, { maxProducts: 150 });
+    expect(result.products).toHaveLength(150);
+    expect(result.partial).toBe(true);
+    expect(result.partialReason).toBe("cap");
+    expect(result.pageCount).toBe(2);
+    expect(calls).toEqual([{ limit: 100 }, { limit: 100, cursor: "100" }]);
+    expect(CATALOG_FACET_MAX_PRODUCTS).toBe(1000);
+  });
+
+  it("stops when a cursor page adds no new product ids, even when its cursor advances", async () => {
+    const product = { ...filamentProduct, id: "repeated-facet-product" };
+    const cursors: Array<string | undefined> = [];
+    const result = await loadCompleteCatalogProducts("filament", async (_kind, _query, options) => {
+      cursors.push(options.cursor);
+      return options.cursor
+        ? { products: [product], limit: options.limit, total: 3, nextCursor: "cursor-after-duplicate" }
+        : { products: [product], limit: options.limit, total: 3, nextCursor: "cursor-duplicate" };
+    });
+    expect(result.products).toEqual([product]);
+    expect(result.partial).toBe(true);
+    expect(result.partialReason).toBe("no-progress");
+    expect(result.pageCount).toBe(2);
+    expect(cursors).toEqual([undefined, "cursor-duplicate"]);
+  });
+
+  it("finishes the facet cache when the API has no next cursor", async () => {
+    const result = await loadCompleteCatalogProducts("filament", async (_kind, _query, options) => ({ products: [filamentProduct], limit: options.limit, total: 1 }));
+    expect(result).toMatchObject({ products: [filamentProduct], partial: false, pageCount: 1 });
+  });
+
+  it("does not call an exactly full, cursorless catalog partial", async () => {
+    const products = Array.from({ length: 4 }, (_, index) => ({ ...filamentProduct, id: `exact-cap-${index}` }));
+    const result = await loadCompleteCatalogProducts("filament", async (_kind, _query, options) => ({ products, limit: options.limit, total: products.length }), { pageSize: 4, maxProducts: 4 });
+    expect(result).toMatchObject({ products, partial: false, pageCount: 1 });
+  });
+
+  it("derives bounded, case-insensitive filament facets without stock claims", () => {
+    const products: CatalogProduct[] = [
+      { ...filamentProduct, id: "filament-pla-black", manufacturer: "Bambu Lab", materialFamily: "PLA", materialSubtype: "Basic", colourName: "Black", colourCode: "BK", diameterMm: 1.75, nominalNetMassG: 1000 },
+      { ...filamentProduct, id: "filament-pla-white", manufacturer: "bambu lab", materialFamily: "PLA", materialSubtype: "Basic", colourName: "White", colourCode: "WH", diameterMm: 1.75, nominalNetMassG: 1000 },
+      { ...filamentProduct, id: "filament-petg", manufacturer: "Bambu Lab", materialFamily: "PETG", materialSubtype: "HF", colourName: "Black", colourCode: "BK", diameterMm: 1.75, nominalNetMassG: 1000 }
+    ];
+    expect(catalogFacetValues(products, "filament", "manufacturer")).toEqual(["Bambu Lab"]);
+    expect(catalogFacetValues(products, "filament", "family")).toEqual(["PETG", "PLA"]);
+    expect(filterCatalogProductsByFacets(products, "filament", { manufacturer: "bambu lab", family: "PLA", colour: "black", diameterMm: "1.75", netMassG: "1000" })).toHaveLength(1);
+
+    const markup = renderToStaticMarkup(<CatalogFacetPicker kind="filament" products={products} selected={products[0]} onSelect={() => undefined} onAddUnlisted={() => undefined} />);
+    expect(markup).toContain("Manufacturer / brand");
+    expect(markup).toContain("Product line / material family");
+    expect(markup).toContain("Material subtype");
+    expect(markup).toContain("Colour code");
+    expect(markup).toContain("1.75 mm");
+    expect(markup).toContain("1,000 g net");
+    expect(markup).toContain("Exact product");
+    expect(markup).toContain("Catalog entries describe products only");
+    expect(markup).not.toContain("in stock");
+    expect(markup).not.toContain("Available:");
+    const partialMarkup = renderToStaticMarkup(<CatalogFacetPicker kind="filament" products={products} onSelect={() => undefined} partial partialCount={150} partialReason="cap" />);
+    expect(partialMarkup).toContain("Showing the first 150 catalog entries (safety cap)");
+    expect(partialMarkup).toContain("Narrow the search");
+    const noProgressMarkup = renderToStaticMarkup(<CatalogFacetPicker kind="filament" products={products} onSelect={() => undefined} partial partialCount={3} partialReason="no-progress" />);
+    expect(noProgressMarkup).toContain("Only 3 catalog entries loaded");
+    expect(noProgressMarkup).toContain("paging stopped before another unique entry was found");
+    expect(noProgressMarkup).not.toContain("first 1,000");
+  });
+
+  it("progresses printer facets to an exact model and variant", () => {
+    const products: CatalogProduct[] = [
+      { ...printerProduct, id: "printer-a", manufacturer: "Bambu Lab", exactModel: "H2D", exactVariant: "AMS Combo" },
+      { ...printerProduct, id: "printer-b", manufacturer: "Bambu Lab", exactModel: "H2D", exactVariant: "Standard" },
+      { ...printerProduct, id: "printer-c", manufacturer: "Creality", exactModel: "K1", exactVariant: "Max" }
+    ];
+    expect(catalogFacetValues(products, "printer", "model")).toEqual(["H2D", "K1"]);
+    expect(filterCatalogProductsByFacets(products, "printer", { manufacturer: "Bambu Lab", model: "H2D", variant: "AMS Combo" })).toHaveLength(1);
+    const markup = renderToStaticMarkup(<CatalogFacetPicker kind="printer" products={products} selected={products[0]} onSelect={() => undefined} />);
+    expect(markup).toContain("Exact model");
+    expect(markup).toContain("Variant");
+    expect(markup).toContain("Bambu Lab · H2D · H2D · AMS Combo");
+  });
+
   it("keeps keyboard navigation bounded and dismissible", () => {
     expect(reduceComboboxKey({ activeIndex: 0, open: true }, "ArrowDown", 2)).toEqual({ activeIndex: 1, open: true });
     expect(reduceComboboxKey({ activeIndex: 1, open: true }, "ArrowDown", 2)).toEqual({ activeIndex: 1, open: true });

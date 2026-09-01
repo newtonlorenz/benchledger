@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { CatalogProduct } from "@benchledger/api-contract";
 import { createMemoryRuntime, MemoryUnitOfWork } from "./memory-store.js";
 
 describe("MemoryInventory", () => {
@@ -50,6 +51,25 @@ describe("MemoryInventory", () => {
     });
   });
 });
+const sourcedFilament: CatalogProduct = {
+  id: "memory-sourced-filament",
+  kind: "filament",
+  manufacturer: "Example Materials",
+  productName: "PLA Black",
+  materialFamily: "PLA",
+  colourName: "Black",
+  diameterMm: 1.75,
+  nominalNetMassG: 1000,
+  lengthBasis: "unknown",
+  provenance: {
+    sourceUrl: "https://materials.example.test/pla",
+    sourceLabel: "Example manufacturer product page",
+    verifiedAt: "2026-08-30T12:00:00.000Z",
+  },
+  createdAt: "2026-08-30T12:00:00.000Z",
+  updatedAt: "2026-08-30T12:00:00.000Z",
+  version: 1,
+};
 
 describe("MemoryUnitOfWork", () => {
   it("serializes concurrent work and permits nested calls", async () => {
@@ -84,5 +104,18 @@ describe("MemoryUnitOfWork", () => {
     const unitOfWork = new MemoryUnitOfWork();
     await expect(unitOfWork.run(() => { throw new Error("expected"); })).rejects.toThrow("expected");
     await expect(unitOfWork.exclusive(() => "ready")).resolves.toBe("ready");
+  });
+});
+
+describe("MemoryCatalog provenance parity", () => {
+  it("preserves provenance for no-op facts and clears it for corrected facts", async () => {
+    const runtime = createMemoryRuntime();
+    runtime.catalog.products.set(sourcedFilament.id, structuredClone(sourcedFilament));
+
+    const noOp = await runtime.catalog.updateProduct(sourcedFilament.id, { colourName: sourcedFilament.colourName }, 1);
+    expect(noOp.provenance).toEqual(sourcedFilament.provenance);
+
+    const corrected = await runtime.catalog.updateProduct(sourcedFilament.id, { colourName: "Graphite" }, 2);
+    expect(corrected.provenance).toBeUndefined();
   });
 });
