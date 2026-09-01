@@ -83,8 +83,9 @@ describe("production catalog adapter", () => {
     const catalog = runtime.ports.catalog!;
     const created = await catalog.createProduct(filamentCreate, context);
     expect(created).toMatchObject({ kind: "filament", manufacturer: filament.manufacturer, version: 1 });
-    const listed = await catalog.listProducts({ limit: 10, q: "pla" });
-    expect(listed).toMatchObject({ data: [expect.objectContaining({ id: created.id })], total: 1 });
+    const listed = await catalog.listProducts({ limit: 200, q: "pla" });
+    expect(listed.data.some((product) => product.id === created.id)).toBe(true);
+    expect(listed.total).toBeGreaterThan(1);
     const noMatch = await catalog.listProducts({ limit: 10, q: "not-found" });
     expect(noMatch.data).toEqual([]);
     expect(await catalog.getProduct("missing-product")).toBeNull();

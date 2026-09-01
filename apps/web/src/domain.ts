@@ -20,6 +20,13 @@ export type InventoryCategory =
 export type CatalogKind = "filament" | "printer";
 export type LinkState = "reported" | "suggested" | "confirmed";
 
+/** Read-only source context for curated catalog identity facts. */
+export interface CatalogProductProvenance {
+  sourceUrl: string;
+  sourceLabel: string;
+  verifiedAt: string;
+}
+
 export interface CatalogProduct {
   id: string;
   kind: CatalogKind;
@@ -49,6 +56,7 @@ export interface CatalogProduct {
   productCode?: string;
   /** Canonical catalog spelling retained for expert/API views. */
   sku?: string;
+  provenance?: CatalogProductProvenance;
   version?: number;
   evidence?: string;
   contentHash?: string;

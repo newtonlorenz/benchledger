@@ -4,8 +4,10 @@ import {
   beginUploadSchema,
   buildConfigurationSnapshotSchema,
   createBuildConfigurationSnapshotSchema,
+  createCatalogProductSchema,
   createInventoryWithProductProfileSchema,
   catalogProductSchema,
+  updateCatalogProductSchema,
   inventoryProductProfileSchema,
 } from "./schemas.js";
 
@@ -57,6 +59,35 @@ describe("v2 canonical catalog schemas", () => {
     expect(() => catalogProductSchema.parse({ ...printer, buildVolumeMm: { x: 325, y: 320, z: 325, width: 1 } })).toThrow();
     expect(() => catalogProductSchema.parse({ ...filament, manufacturer: undefined })).toThrow();
     expect(() => catalogProductSchema.parse({ ...printer, manufacturer: undefined })).toThrow();
+  });
+
+  it("keeps curated provenance read-only at the public mutation boundary", () => {
+    const sourced = {
+      ...filament,
+      provenance: {
+        sourceUrl: "https://example.com/products/pla-cf",
+        sourceLabel: "Manufacturer product page",
+        verifiedAt: timestamps.updatedAt,
+      },
+    };
+    const createInput = {
+      kind: filament.kind,
+      manufacturer: filament.manufacturer,
+      productName: filament.productName,
+      materialFamily: filament.materialFamily,
+      materialSubtype: filament.materialSubtype,
+      colourName: filament.colourName,
+      colourCode: filament.colourCode,
+      diameterMm: filament.diameterMm,
+      nominalNetMassG: filament.nominalNetMassG,
+      nominalLengthM: filament.nominalLengthM,
+      lengthBasis: filament.lengthBasis,
+      densityGcm3: filament.densityGcm3,
+    };
+    expect(createCatalogProductSchema.parse(createInput)).toEqual(createInput);
+    expect(catalogProductSchema.parse(sourced)).toMatchObject({ provenance: sourced.provenance });
+    expect(() => createCatalogProductSchema.parse({ ...createInput, provenance: sourced.provenance })).toThrow();
+    expect(() => updateCatalogProductSchema.parse({ provenance: sourced.provenance })).toThrow();
   });
 });
 

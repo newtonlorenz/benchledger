@@ -5,7 +5,7 @@ import { ArtifactStore } from "@benchledger/artifacts";
 import {
   AuditRepository, BomRepository, BenchDatabase, InventoryRepository, ProcurementRepository,
   ProjectRepository, ReservationRepository, CanonicalCatalogRepository,
-  ReconciliationRepository
+  ReconciliationRepository, migrateCatalogSchema
 } from "@benchledger/database";
 import { ProductionArtifactAdapter } from "./artifact-adapter.js";
 import { ProductionAuditAdapter } from "./audit-adapter.js";
@@ -19,6 +19,7 @@ import { ProductionUnitOfWork } from "./unit-of-work.js";
 import { ProductionBuildConfigurationAdapter, ProductionCatalogAdapter } from "./catalog-adapter.js";
 import { ProductionReconciliationAdapter } from "./reconciliation-adapter.js";
 import { ProductionInventoryCategoryAdapter } from "./category-adapter.js";
+import { seedStarterCatalog } from "./starter-catalog.js";
 
 export interface ProductionRuntimeOptions {
   /** A persistent directory outside the source checkout. */
@@ -87,6 +88,8 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
   const database = new BenchDatabase(databasePath);
   try {
     migrateRuntimeSchema(database);
+    migrateCatalogSchema(database);
+    seedStarterCatalog(database);
     const artifacts = new ArtifactStore({ root: artifactDir, maxUploadBytes, maxStorageBytes });
     const initialized = await artifacts.init();
     if (!initialized.ok) throw new Error(`artifact store initialization failed: ${initialized.error.message}`);
@@ -155,3 +158,5 @@ export * from "./persistence.js";
 export * from "./unit-of-work.js";
 export * from "./reconciliation-adapter.js";
 export * from "./category-adapter.js";
+export * from "./starter-catalog-data.js";
+export * from "./starter-catalog.js";

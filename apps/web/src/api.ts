@@ -94,6 +94,20 @@ export type CatalogProductDraft = {
   buildVolumeMm?: { x: number; y: number; z: number };
 };
 
+/** Optional bounded search controls used by the complete-kind facet cache. */
+export interface CatalogSearchOptions {
+  limit?: number;
+  cursor?: string;
+}
+
+/** A catalog page retains the cursor metadata needed by progressive facets. */
+export interface CatalogProductPage {
+  products: CatalogProduct[];
+  limit: number;
+  total?: number;
+  nextCursor?: string;
+}
+
 export type ExactInventoryInput = {
   category: "Filament" | "Printers";
   categoryNodeId?: string;
@@ -186,7 +200,8 @@ export interface WorkspaceAdapter {
   createInventoryCategory(input: CategoryCreateInput): Promise<ManagedInventoryCategory>;
   updateInventoryCategory(id: string, input: CategoryUpdateInput, expectedVersion: number): Promise<ManagedInventoryCategory>;
   archiveInventoryCategory(id: string, expectedVersion: number): Promise<ManagedInventoryCategory>;
-  searchCatalogProducts(kind: CatalogKind, query?: string): Promise<CatalogProduct[]>;
+  searchCatalogProducts(kind: CatalogKind, query?: string, options?: CatalogSearchOptions): Promise<CatalogProduct[]>;
+  listCatalogProductPage?(kind: CatalogKind, query?: string, options?: CatalogSearchOptions): Promise<CatalogProductPage>;
   createCatalogProduct(input: CatalogProductDraft): Promise<CatalogProduct>;
   createExactInventoryItem(input: ExactInventoryInput): Promise<InventoryItem>;
   createProject(input: Pick<Project, "name" | "description">): Promise<Project>;
@@ -360,6 +375,13 @@ export function mapCatalogProduct(value: unknown, fallbackKind?: CatalogKind): C
   const version = numberValue(record.version);
   const evidence = firstString(record, "evidence", "evidenceState");
   const contentHash = firstString(record, "contentHash", "hash", "sha256");
+  const provenanceRecord = asRecord(record.provenance);
+  const provenanceSourceUrl = firstString(provenanceRecord ?? {}, "sourceUrl");
+  const provenanceSourceLabel = firstString(provenanceRecord ?? {}, "sourceLabel");
+  const provenanceVerifiedAt = firstString(provenanceRecord ?? {}, "verifiedAt");
+  const provenance = provenanceSourceUrl && provenanceSourceLabel && provenanceVerifiedAt
+    ? { sourceUrl: provenanceSourceUrl, sourceLabel: provenanceSourceLabel, verifiedAt: provenanceVerifiedAt }
+    : undefined;
   const buildVolume = asRecord(record.buildVolumeMm);
   const buildVolumeMm = buildVolume
     && firstNumber(buildVolume, "x") !== undefined
@@ -393,7 +415,8 @@ export function mapCatalogProduct(value: unknown, fallbackKind?: CatalogKind): C
     ...(productCode ? { productCode, sku: productCode } : {}),
     ...(version !== undefined ? { version } : {}),
     ...(evidence ? { evidence } : {}),
-    ...(contentHash ? { contentHash } : {})
+    ...(contentHash ? { contentHash } : {}),
+    ...(provenance ? { provenance } : {})
   };
 }
 
@@ -472,6 +495,22 @@ function responseList(value: unknown): unknown[] {
     if (nestedRecord && Array.isArray(nestedRecord.data)) return nestedRecord.data;
   }
   return [];
+}
+
+function mapCatalogProductPage(value: unknown, kind: CatalogKind, requestedLimit: number): CatalogProductPage {
+  const record = asRecord(value);
+  const nextCursor = stringValue(record?.nextCursor);
+  const total = numberValue(record?.total);
+  const limit = numberValue(record?.limit) ?? requestedLimit;
+  const products = responseList(value)
+    .map((product) => mapCatalogProduct(product, kind))
+    .filter((product): product is CatalogProduct => product !== undefined);
+  return {
+    products,
+    limit,
+    ...(total === undefined ? {} : { total }),
+    ...(nextCursor ? { nextCursor } : {})
+  };
 }
 
 function responseValue<T>(value: unknown): T | undefined {
@@ -624,6 +663,13 @@ function isoDateValue(value: string): string {
 function exactInventoryBody(input: ExactInventoryInput): UnknownRecord {
   const product = input.product;
   const placement = input.filament?.placement ?? input.printer?.placement;
+  // A catalog match and an exact-product report do not commission a printer.
+  // Only the guided flow's explicit confirmed link plus commissioning date is
+  // enough to create confirmed machine stock; every other path stays
+  // inspect-first until a commissioning/count command records evidence.
+  const printerIsExplicitlyCommissioned = input.category === "Printers"
+    && input.linkState === "confirmed"
+    && Boolean(input.printer?.commissionedAt);
   const dimensions = input.category === "Filament" && product.diameterMm !== undefined
     ? { diameterMm: product.diameterMm, measured: false }
     : undefined;
@@ -640,7 +686,7 @@ function exactInventoryBody(input: ExactInventoryInput): UnknownRecord {
     ...(dimensions ? { dimensions } : {}),
     tags: [input.category.toLowerCase(), "exact-product"],
     links: [],
-    evidence: { state: input.category === "Printers" ? "commissioned" : "unknown", source: "ui" }
+    evidence: { state: printerIsExplicitlyCommissioned ? "commissioned" : "unknown", source: "ui" }
   };
 }
 
@@ -1532,6 +1578,27 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
   const state = syntheticSnapshot();
   const catalogState = structuredClone(fallbackCatalogProducts);
   let categoryState = structuredClone(DEFAULT_MANAGED_INVENTORY_CATEGORIES);
+  const sampleCatalogPage = (kind: CatalogKind, query = "", options?: CatalogSearchOptions): CatalogProductPage => {
+    const needle = query.trim().toLocaleLowerCase();
+    const values = catalogState.filter((product) => product.kind === kind && (!needle || [
+      product.manufacturer, product.productName, product.materialFamily, product.materialSubtype,
+      product.family, product.model, product.variant, product.exactModel, product.exactVariant,
+      product.colourName, product.colour, product.color, product.colourCode, product.colorCode,
+      product.productCode, product.sku
+    ].filter(Boolean).join(" ").toLocaleLowerCase().includes(needle)));
+    const requestedLimit = options?.limit ?? values.length;
+    const limit = Math.max(1, Math.min(Math.floor(requestedLimit), 200));
+    const offset = options?.cursor === undefined ? 0 : Number(options.cursor);
+    const start = Number.isSafeInteger(offset) && offset >= 0 ? offset : 0;
+    const page = values.slice(start, start + limit).map((product) => ({ ...product }));
+    const nextOffset = start + page.length;
+    return {
+      products: page,
+      limit,
+      total: values.length,
+      ...(nextOffset < values.length ? { nextCursor: String(nextOffset) } : {})
+    };
+  };
   const buildConfigs = new Map<string, BuildConfigSnapshot>();
   const nextRevision = (project: Project, input: RevisionInput): Project => ({
     ...project,
@@ -1678,9 +1745,11 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
       categoryState = categoryState.map((category) => category.id === id ? archived : category);
       return archived;
     },
-    async searchCatalogProducts(kind, query = "") {
-      const needle = query.trim().toLocaleLowerCase();
-      return catalogState.filter((product) => product.kind === kind && (!needle || [product.manufacturer, product.family, product.model, product.variant, product.colour, product.color, product.colourCode, product.colorCode, product.productCode].filter(Boolean).join(" ").toLocaleLowerCase().includes(needle))).map((product) => ({ ...product }));
+    async listCatalogProductPage(kind, query = "", options) {
+      return sampleCatalogPage(kind, query, options);
+    },
+    async searchCatalogProducts(kind, query = "", options) {
+      return sampleCatalogPage(kind, query, options).products;
     },
     async createCatalogProduct(input) {
       const product: CatalogProduct = { ...input, id: `sample-catalog-${Date.now()}`, version: 1, evidence: "user" };
@@ -2022,11 +2091,16 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         throw error;
       }
     },
-    async searchCatalogProducts(kind, query = "") {
+    async listCatalogProductPage(kind, query = "", options) {
       const params = new URLSearchParams({ kind });
       if (query.trim()) params.set("q", query.trim());
+      if (options?.limit !== undefined) params.set("limit", String(options.limit));
+      if (options?.cursor !== undefined) params.set("cursor", options.cursor);
       const payload = await request<unknown>(`/catalog/products?${params.toString()}`);
-      return responseList(payload).map((product) => mapCatalogProduct(product, kind)).filter((product): product is CatalogProduct => product !== undefined);
+      return mapCatalogProductPage(payload, kind, options?.limit ?? 50);
+    },
+    async searchCatalogProducts(kind, query = "", options) {
+      return (await adapter.listCatalogProductPage!(kind, query, options)).products;
     },
     async createCatalogProduct(input) {
       const token = csrfToken ?? cookieValue("forge_csrf");

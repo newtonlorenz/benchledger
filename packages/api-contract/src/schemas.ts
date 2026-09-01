@@ -528,11 +528,24 @@ export const catalogProductLengthBasisSchema = z.enum([
   "unknown"
 ]);
 
+/** Server-owned provenance for curated catalog facts. */
+export const catalogProductProvenanceSchema = z.object({
+  sourceUrl: z.string().url().max(2000),
+  sourceLabel: z.string().min(1).max(240),
+  verifiedAt: isoDateSchema
+}).strict();
+
 const catalogProductMetadataShape = {
   id: idSchema,
   createdAt: isoDateSchema,
   updatedAt: isoDateSchema,
-  version: z.number().int().positive()
+  version: z.number().int().positive(),
+  /**
+   * Server-owned source notes for curated records. This is deliberately
+   * absent from the create/update specs below: callers may read provenance,
+   * but cannot claim or rewrite it through the public product mutation API.
+   */
+  provenance: catalogProductProvenanceSchema.optional()
 } as const;
 
 const catalogProductFilamentFields = {

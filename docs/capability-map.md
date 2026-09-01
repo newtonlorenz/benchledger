@@ -14,7 +14,7 @@ resource byte budget.
 | URI | Purpose | Scope |
 | --- | --- | --- |
 | `benchledger://capabilities` | Tool, resource, evidence, transfer, and safety contract | `context:read` |
-| `benchledger://catalog/products/{productId}` | One exact printer or filament catalog identity | `catalog:read` |
+| `benchledger://catalog/products/{productId}` | One exact printer or filament catalog identity, with read-only manufacturer provenance when present | `catalog:read` |
 | `benchledger://inventory/summary` | Current counts and categories | `inventory:read` |
 | `benchledger://inventory/categories` | Bounded user-managed category taxonomy; archived nodes are opt-in | `inventory:read` |
 | `benchledger://inventory/items/{itemId}` | One item with quantity, dimensions, links, and evidence | `inventory:read` |
@@ -71,6 +71,18 @@ The server's `tools/list` response contains only MCP's public fields (`name`,
 `description`, and `inputSchema`). Scope and mutation metadata are intentionally
 kept in the checked-in capability contract and enforced server-side.
 
+The production runtime seeds a curated, versioned starter catalog on startup:
+at least 24 FFF printer identities spanning Bambu Lab, Prusa Research,
+Creality, ELEGOO, and Anycubic, plus at least 24 exact 1.75 mm filament
+identities spanning Bambu Lab, Prusament, Polymaker, eSUN, SUNLU, and
+OVERTURE. Seeding inserts missing IDs and never creates inventory items,
+physical product profiles, or stock events. During the v1-to-v2 upgrade, only
+complete, untouched v1 seed payloads receive the documented corrections; all
+edited or custom rows, including rows that reuse a starter identifier, remain
+authoritative. Curated records may include server-owned manufacturer
+provenance; it is read-only and excluded from create/update inputs and catalog
+identity search.
+
 ## UI parity
 
 The Inventory destination uses the authenticated `GET /api/v1/inventory` page
@@ -90,7 +102,7 @@ profiles when present.
 | Correct metadata across loaded items | Explicit inventory selection and confirmation dialog | `bulk_update_inventory_items` with 1–100 `{itemId, expectedVersion}` targets; location, canonical condition, or normalized tag add/remove only; atomic preflight, deterministic updated/unchanged results, and no-op rows emit no audit/event |
 | Count uncertain stock | Item count form and stock timeline | `read_inventory_item` → `record_stock_event(kind=count_correction)` |
 | Commission delivered or ordered stock | Item commissioning action with observed quantity and provenance | `read_inventory_item` → `commission_inventory_item` |
-| Add an exact printer or spool | Exact-product guided add | catalog search/read → `create_inventory_with_product_profile` |
+| Add an exact printer or spool | Exact-product guided add; reported printers remain inspect-first until explicitly commissioned | catalog search/read → `create_inventory_with_product_profile` |
 | Start a project | Guided project setup | `create_project_with_initial_revision` → `create_work_item`; use `create_project_revision` for later planning baselines |
 | Understand a build gap | BOM editor and gap panel | `list_bom_lines` → `calculate_bom_gaps` |
 | Hold confirmed parts | Reservation panel | `create_reservation` → read BOM/gaps again |

@@ -17,6 +17,7 @@ import type {
   createInventoryWithProductProfileSchema,
   inventoryConditionSchema, inventoryBulkUpdateChangesSchema, inventoryBulkUpdateSchema,
   inventoryBulkUpdateTagsSchema, inventoryBulkUpdateTargetSchema,
+  catalogProductProvenanceSchema,
   reconciliationOutcomeKindSchema, reconciliationEvidenceSchema, reconciliationOutcomeSchema,
   reconciliationLineSchema, reconciliationBasisSchema, reconciliationBasisItemSchema,
   reconciliationBasisReservationSchema, reconciliationBasisBomLineSchema,
@@ -75,6 +76,7 @@ export type Readiness = z.infer<typeof readinessSchema>;
 export type CatalogProduct = z.infer<typeof catalogProductSchema>;
 export type CatalogProductFilament = z.infer<typeof catalogProductFilamentSchema>;
 export type CatalogProductPrinter = z.infer<typeof catalogProductPrinterSchema>;
+export type CatalogProductProvenance = z.infer<typeof catalogProductProvenanceSchema>;
 export type CreateCatalogProduct = z.infer<typeof createCatalogProductSchema>;
 export type UpdateCatalogProduct = z.infer<typeof updateCatalogProductSchema>;
 export type FilamentSpoolProfileDetails = z.infer<typeof filamentSpoolProfileDetailsSchema>;

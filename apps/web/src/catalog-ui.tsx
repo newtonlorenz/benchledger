@@ -9,10 +9,83 @@ import type {
   LinkState
 } from "./domain";
 import { buildSetupSummary, catalogProductLabel, exactProductLabel } from "./domain";
-import type { CatalogProductDraft, ExactInventoryInput } from "./api";
+import type { CatalogProductDraft, CatalogProductPage, CatalogSearchOptions, ExactInventoryInput } from "./api";
 import { Icon } from "./icons";
 
 export type ComboboxKey = "ArrowDown" | "ArrowUp" | "Home" | "End" | "Enter" | "Escape";
+
+export const CATALOG_FACET_PAGE_SIZE = 100;
+export const CATALOG_FACET_MAX_PRODUCTS = 1000;
+export type CatalogFacetPartialReason = "cap" | "no-progress";
+
+export interface CompleteCatalogProductsResult {
+  products: CatalogProduct[];
+  partial: boolean;
+  pageCount: number;
+  partialReason?: CatalogFacetPartialReason | undefined;
+}
+
+export interface CatalogFacetPageOptions {
+  pageSize?: number;
+  maxProducts?: number;
+}
+
+/**
+ * Read the complete-kind catalog in bounded cursor pages for facet choices.
+ * The cap is intentional: a malformed or very large catalog must not make an
+ * inventory dialog unresponsive, and the caller is told when the view is
+ * partial so it can offer the exact search/custom-product path.
+ */
+export async function loadCompleteCatalogProducts(
+  kind: CatalogKind,
+  fetchPage: (kind: CatalogKind, query: string, options: { limit: number; cursor?: string }) => Promise<CatalogProductPage>,
+  options: CatalogFacetPageOptions = {}
+): Promise<CompleteCatalogProductsResult> {
+  const requestedPageSize = options.pageSize ?? CATALOG_FACET_PAGE_SIZE;
+  const pageSize = Number.isFinite(requestedPageSize)
+    ? Math.min(CATALOG_FACET_PAGE_SIZE, Math.max(1, Math.floor(requestedPageSize)))
+    : CATALOG_FACET_PAGE_SIZE;
+  const requestedMaxProducts = options.maxProducts ?? CATALOG_FACET_MAX_PRODUCTS;
+  const maxProducts = Number.isFinite(requestedMaxProducts)
+    ? Math.max(pageSize, Math.floor(requestedMaxProducts))
+    : CATALOG_FACET_MAX_PRODUCTS;
+  const productsById = new Map<string, CatalogProduct>();
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+  let pageCount = 0;
+
+  while (productsById.size < maxProducts) {
+    const sizeBeforePage = productsById.size;
+    const page = await fetchPage(kind, "", cursor ? { limit: pageSize, cursor } : { limit: pageSize });
+    pageCount += 1;
+    let uniqueProductsAdded = 0;
+    for (const product of page.products) {
+      if (productsById.size >= maxProducts) break;
+      if (!productsById.has(product.id)) {
+        productsById.set(product.id, product);
+        uniqueProductsAdded += 1;
+      }
+    }
+
+    const nextCursor = page.nextCursor?.trim();
+    if (uniqueProductsAdded === 0 && nextCursor) return { products: [...productsById.values()], partial: true, partialReason: "no-progress", pageCount };
+    if (productsById.size >= maxProducts) {
+      const pageTruncated = page.products.length > maxProducts - sizeBeforePage;
+      const hasUnloadedProducts = nextCursor !== undefined || page.total !== undefined && page.total > productsById.size;
+      const partial = pageTruncated || hasUnloadedProducts;
+      return { products: [...productsById.values()], partial, ...(partial ? { partialReason: "cap" as const } : {}), pageCount };
+    }
+    if (!nextCursor) {
+      const partial = page.total !== undefined && page.total > productsById.size;
+      return { products: [...productsById.values()], partial, ...(partial ? { partialReason: "no-progress" as const } : {}), pageCount };
+    }
+    if (page.products.length === 0 || seenCursors.has(nextCursor)) return { products: [...productsById.values()], partial: true, partialReason: "no-progress", pageCount };
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  }
+
+  return { products: [...productsById.values()], partial: true, pageCount };
+}
 
 export interface ComboboxState {
   activeIndex: number;
@@ -37,13 +110,173 @@ export function catalogProductDisplayName(product: CatalogProduct): string {
 
 function productDetailLine(product: CatalogProduct): string {
   const details = [
-    product.kind === "filament" && (product.colour ?? product.color),
+    product.kind === "filament" && (product.colourName ?? product.colour ?? product.color),
     product.kind === "filament" && (product.colourCode ?? product.colorCode),
     product.kind === "filament" && product.diameterMm !== undefined ? `${product.diameterMm} mm` : undefined,
-    product.kind === "filament" && product.netMassG !== undefined ? `${product.netMassG.toLocaleString()} g net` : undefined,
-    product.productCode
+    product.kind === "filament" && (product.nominalNetMassG ?? product.netMassG) !== undefined ? `${(product.nominalNetMassG ?? product.netMassG)!.toLocaleString()} g net` : undefined,
+    product.productCode ?? product.sku
   ].filter((value): value is string => Boolean(value));
   return details.concat(product.sku && !product.productCode ? [product.sku] : []).join(" · ");
+}
+
+export type CatalogFacetKey = "manufacturer" | "family" | "subtype" | "colour" | "colourCode" | "diameterMm" | "netMassG" | "model" | "variant";
+
+export interface CatalogFacetSelection {
+  manufacturer?: string;
+  family?: string;
+  subtype?: string;
+  colour?: string;
+  colourCode?: string;
+  diameterMm?: string;
+  netMassG?: string;
+  model?: string;
+  variant?: string;
+}
+
+function catalogFacetValue(product: CatalogProduct, key: CatalogFacetKey): string | undefined {
+  switch (key) {
+    case "manufacturer": return product.manufacturer;
+    case "family": return product.materialFamily ?? product.family;
+    case "subtype": return product.materialSubtype;
+    case "colour": return product.colourName ?? product.colour ?? product.color;
+    case "colourCode": return product.colourCode ?? product.colorCode;
+    case "diameterMm": return product.diameterMm === undefined ? undefined : String(product.diameterMm);
+    case "netMassG": return String(product.nominalNetMassG ?? product.netMassG ?? "");
+    case "model": return product.exactModel ?? product.model ?? product.productName;
+    case "variant": return product.exactVariant ?? product.variant;
+  }
+}
+
+/** Return unique facet values without leaking a product's physical ownership state. */
+export function catalogFacetValues(products: readonly CatalogProduct[], kind: CatalogKind, key: CatalogFacetKey): string[] {
+  const values = new Map<string, string>();
+  products.filter((product) => product.kind === kind).forEach((product) => {
+    const value = catalogFacetValue(product, key)?.trim();
+    if (value && !values.has(value.toLocaleLowerCase())) values.set(value.toLocaleLowerCase(), value);
+  });
+  return [...values.values()].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base", numeric: true }));
+}
+
+function facetEquals(product: CatalogProduct, key: CatalogFacetKey, expected: string | undefined): boolean {
+  if (!expected) return true;
+  return catalogFacetValue(product, key)?.toLocaleLowerCase() === expected.toLocaleLowerCase();
+}
+
+/** Apply the exact, progressive facet choices to a bounded catalog page. */
+export function filterCatalogProductsByFacets(products: readonly CatalogProduct[], kind: CatalogKind, selection: CatalogFacetSelection): CatalogProduct[] {
+  return products.filter((product) => product.kind === kind && (Object.keys(selection) as CatalogFacetKey[]).every((key) => facetEquals(product, key, selection[key])));
+}
+
+function facetLabel(key: CatalogFacetKey, value: string): string {
+  if (key === "diameterMm") return `${value} mm`;
+  if (key === "netMassG") return `${Number(value).toLocaleString()} g net`;
+  return value;
+}
+
+function productFacetSelection(product: CatalogProduct): CatalogFacetSelection {
+  const keys: CatalogFacetKey[] = ["manufacturer", "family", "subtype", "colour", "colourCode", "diameterMm", "netMassG", "model", "variant"];
+  return keys.reduce<CatalogFacetSelection>((selection, key) => {
+    const value = catalogFacetValue(product, key);
+    return value ? { ...selection, [key]: value } : selection;
+  }, {});
+}
+
+interface CatalogFacetSelectProps {
+  id: string;
+  facet: CatalogFacetKey;
+  label: string;
+  value: string;
+  values: readonly string[];
+  disabled?: boolean;
+  optional?: boolean;
+  onChange: (value: string) => void;
+}
+
+function CatalogFacetSelect({ id, facet, label, value, values, disabled = false, optional = false, onChange }: CatalogFacetSelectProps) {
+  return <label className="form-field catalog-facet-field" htmlFor={id}><span>{label} {optional && <small>(optional)</small>}</span><select id={id} value={value} disabled={disabled || values.length === 0} onChange={(event) => onChange(event.target.value)}><option value="">{optional ? `Any ${label.toLocaleLowerCase()}` : `Select ${label.toLocaleLowerCase()}`}</option>{values.map((option) => <option key={option} value={option}>{facetLabel(facet, option)}</option>)}</select></label>;
+}
+
+export interface CatalogFacetPickerProps {
+  kind: CatalogKind;
+  products: readonly CatalogProduct[];
+  selected?: CatalogProduct | undefined;
+  onSelect: (product: CatalogProduct | undefined) => void;
+  onAddUnlisted?: () => void;
+  partial?: boolean;
+  partialCount?: number;
+  partialReason?: CatalogFacetPartialReason | undefined;
+}
+
+/**
+ * A bounded, progressive selector for exact catalog identity. Native selects
+ * keep the path keyboard and mobile accessible; the free-text combobox remains
+ * available below it for users who already know a product name or code.
+ */
+export function CatalogFacetPicker({ kind, products, selected, onSelect, onAddUnlisted, partial = false, partialCount, partialReason }: CatalogFacetPickerProps) {
+  const [facets, setFacets] = useState<CatalogFacetSelection>(() => selected ? productFacetSelection(selected) : {});
+  const isFilament = kind === "filament";
+  const order: readonly CatalogFacetKey[] = isFilament
+    ? ["manufacturer", "family", "subtype", "colour", "colourCode", "diameterMm", "netMassG"]
+    : ["manufacturer", "model", "variant"];
+
+  useEffect(() => {
+    if (selected) setFacets(productFacetSelection(selected));
+  }, [selected?.id]);
+
+  const changeFacet = (key: CatalogFacetKey, value: string) => {
+    const index = order.indexOf(key);
+    const next = order.reduce<CatalogFacetSelection>((result, current, currentIndex) => {
+      if (currentIndex < index) {
+        const existing = facets[current];
+        return existing ? { ...result, [current]: existing } : result;
+      }
+      if (current === key && value) return { ...result, [current]: value };
+      return result;
+    }, {});
+    setFacets(next);
+    onSelect(undefined);
+  };
+
+  const valuesFor = (key: CatalogFacetKey): string[] => {
+    const index = order.indexOf(key);
+    const prior = order.slice(0, index).reduce<CatalogFacetSelection>((result, priorKey) => {
+      const value = facets[priorKey];
+      return value ? { ...result, [priorKey]: value } : result;
+    }, {});
+    return catalogFacetValues(filterCatalogProductsByFacets(products, kind, prior), kind, key);
+  };
+  const matches = filterCatalogProductsByFacets(products, kind, facets);
+  const required = isFilament
+    ? Boolean(facets.manufacturer && facets.family && facets.colour && facets.diameterMm && facets.netMassG)
+    : Boolean(facets.manufacturer && facets.model);
+  const activeFacetCount = Object.keys(facets).length;
+  const selectionId = `catalog-facet-${kind}`;
+  const loadedCount = partialCount ?? products.filter((product) => product.kind === kind).length;
+  const partialMessage = partialReason === "cap"
+    ? `Showing the first ${loadedCount.toLocaleString()} catalog entries (safety cap). Narrow the search or add an unlisted product if the exact entry is not shown.`
+    : `Only ${loadedCount.toLocaleString()} catalog entries loaded; catalog paging stopped before another unique entry was found. Search by exact name/code or add an unlisted product.`;
+
+  return <section className="catalog-facet-picker" aria-labelledby={`${selectionId}-heading`}>
+    <div className="catalog-facet-heading"><div><span className="eyebrow">Choose by details</span><h3 id={`${selectionId}-heading`}>{isFilament ? "Find the exact filament" : "Find the exact printer"}</h3></div><span className="catalog-facet-count">{products.filter((product) => product.kind === kind).length} catalog entries</span></div>
+    <p className="catalog-facet-note">Catalog entries describe products only. They do not indicate that you own, have available, or can use a product.</p>
+    {partial && <p className="catalog-facet-partial" role="status">{partialMessage}</p>}
+    <div className={`catalog-facet-grid ${isFilament ? "is-filament" : "is-printer"}`}>
+      <CatalogFacetSelect id={`${selectionId}-manufacturer`} facet="manufacturer" label="Manufacturer / brand" value={facets.manufacturer ?? ""} values={valuesFor("manufacturer")} onChange={(value) => changeFacet("manufacturer", value)} />
+      {isFilament ? <>
+        <CatalogFacetSelect id={`${selectionId}-family`} facet="family" label="Product line / material family" value={facets.family ?? ""} values={valuesFor("family")} disabled={!facets.manufacturer} onChange={(value) => changeFacet("family", value)} />
+        <CatalogFacetSelect id={`${selectionId}-subtype`} facet="subtype" label="Material subtype" value={facets.subtype ?? ""} values={valuesFor("subtype")} disabled={!facets.family} optional onChange={(value) => changeFacet("subtype", value)} />
+        <CatalogFacetSelect id={`${selectionId}-colour`} facet="colour" label="Colour" value={facets.colour ?? ""} values={valuesFor("colour")} disabled={!facets.family} onChange={(value) => changeFacet("colour", value)} />
+        <CatalogFacetSelect id={`${selectionId}-colourCode`} facet="colourCode" label="Colour code" value={facets.colourCode ?? ""} values={valuesFor("colourCode")} disabled={!facets.colour} optional onChange={(value) => changeFacet("colourCode", value)} />
+        <CatalogFacetSelect id={`${selectionId}-diameterMm`} facet="diameterMm" label="Diameter" value={facets.diameterMm ?? ""} values={valuesFor("diameterMm")} disabled={!facets.colour} onChange={(value) => changeFacet("diameterMm", value)} />
+        <CatalogFacetSelect id={`${selectionId}-netMassG`} facet="netMassG" label="Net mass" value={facets.netMassG ?? ""} values={valuesFor("netMassG")} disabled={!facets.diameterMm} onChange={(value) => changeFacet("netMassG", value)} />
+      </> : <>
+        <CatalogFacetSelect id={`${selectionId}-model`} facet="model" label="Exact model" value={facets.model ?? ""} values={valuesFor("model")} disabled={!facets.manufacturer} onChange={(value) => changeFacet("model", value)} />
+        <CatalogFacetSelect id={`${selectionId}-variant`} facet="variant" label="Variant" value={facets.variant ?? ""} values={valuesFor("variant")} disabled={!facets.model} optional onChange={(value) => changeFacet("variant", value)} />
+      </>}
+    </div>
+    {required && <div className="catalog-exact-choices" aria-live="polite"><div className="catalog-exact-choices-heading"><strong>Exact product</strong><span>{matches.length} match{matches.length === 1 ? "" : "es"}</span></div>{matches.length ? <div className="catalog-exact-choice-list" role="listbox" aria-label={`Exact ${kind} products`}>{matches.map((product) => <button type="button" role="option" aria-selected={selected?.id === product.id} className={`catalog-exact-choice ${selected?.id === product.id ? "is-selected" : ""}`} key={product.id} onClick={() => onSelect(product)}><span className="catalog-option-copy"><strong>{catalogProductDisplayName(product)}</strong><small>{productDetailLine(product) || "Product details not recorded yet"}</small></span><Icon name={selected?.id === product.id ? "check-circle" : "chevron-right"} size={15} /></button>)}</div> : <div className="catalog-facet-empty"><p className="catalog-empty">No exact product matches these details.</p>{onAddUnlisted && <button type="button" className="button button-secondary" onClick={onAddUnlisted}><Icon name="plus" size={15} /> Add product</button>}</div>}</div>}
+    {activeFacetCount > 0 && !required && <p className="field-hint">Keep choosing details to reveal exact product matches.</p>}
+  </section>;
 }
 
 function ProductOption({ id, product, active, onSelect }: { id: string; product: CatalogProduct; active: boolean; onSelect: () => void }) {
@@ -66,14 +299,13 @@ export interface CatalogComboboxProps {
   loading?: boolean;
   disabled?: boolean;
   hint?: string;
-  autoFocus?: boolean;
 }
 
 /**
  * An APG-style combobox: the input owns focus, results are a listbox, and
  * arrow/Home/End/Enter/Escape work without relying on a mouse.
  */
-export function CatalogCombobox({ kind, products, query, selected, onQueryChange, onSelect, label, placeholder = "Search exact products", loading = false, disabled = false, hint, autoFocus = false }: CatalogComboboxProps) {
+export function CatalogCombobox({ kind, products, query, selected, onQueryChange, onSelect, label, placeholder = "Search exact products", loading = false, disabled = false, hint }: CatalogComboboxProps) {
   const listId = useId();
   const inputId = useId();
   const [state, setState] = useState<ComboboxState>({ activeIndex: 0, open: false });
@@ -106,7 +338,7 @@ export function CatalogCombobox({ kind, products, query, selected, onQueryChange
     <label className="form-field catalog-combobox-field" htmlFor={inputId}><span>{label}</span>
       <div className="catalog-input-shell">
         <Icon name="search" size={16} />
-        <input id={inputId} role="combobox" aria-expanded={visible} aria-controls={listId} aria-autocomplete="list" aria-activedescendant={visible ? activeId : undefined} value={inputValue} placeholder={placeholder} disabled={disabled} autoFocus={autoFocus} onFocus={() => { setHasFocus(true); setState((current) => ({ ...current, open: true })); }} onBlur={() => { window.setTimeout(() => { setHasFocus(false); setState((current) => ({ ...current, open: false })); }, 120); }} onChange={(event) => { if (selected) onSelect(undefined); onQueryChange(event.target.value); setState((current) => ({ ...current, activeIndex: 0, open: true })); }} onKeyDown={handleKeyDown} />
+        <input id={inputId} role="combobox" aria-expanded={visible} aria-controls={listId} aria-autocomplete="list" aria-activedescendant={visible ? activeId : undefined} value={inputValue} placeholder={placeholder} disabled={disabled} onFocus={() => { setHasFocus(true); setState((current) => ({ ...current, open: true })); }} onBlur={() => { window.setTimeout(() => { setHasFocus(false); setState((current) => ({ ...current, open: false })); }, 120); }} onChange={(event) => { if (selected) onSelect(undefined); onQueryChange(event.target.value); setState((current) => ({ ...current, activeIndex: 0, open: true })); }} onKeyDown={handleKeyDown} />
         {loading && <span className="catalog-loading" aria-label="Searching">…</span>}
       </div>
     </label>
@@ -266,15 +498,20 @@ export interface CatalogInventoryFlowProps {
   products: CatalogProduct[];
   query: string;
   onQueryChange: (query: string) => void;
-  onSearch: (kind: CatalogKind, query: string) => Promise<CatalogProduct[]>;
+  onSearch: (kind: CatalogKind, query: string, options?: { limit?: number }) => Promise<CatalogProduct[]>;
+  onSearchPage?: (kind: CatalogKind, query: string, options?: CatalogSearchOptions) => Promise<CatalogProductPage>;
   onCreateProduct: (input: CatalogProductDraft) => Promise<CatalogProduct | undefined>;
   onCreate: (input: ExactInventoryInput) => Promise<boolean>;
   onBack: () => void;
 }
 
-export function CatalogInventoryFlow({ category, products, query, onQueryChange, onSearch, onCreateProduct, onCreate, onBack }: CatalogInventoryFlowProps) {
+export function CatalogInventoryFlow({ category, products, query, onQueryChange, onSearch, onSearchPage, onCreateProduct, onCreate, onBack }: CatalogInventoryFlowProps) {
   const kind: CatalogKind = category === "Filament" ? "filament" : "printer";
   const [selected, setSelected] = useState<CatalogProduct>();
+  const [completeProducts, setCompleteProducts] = useState<CatalogProduct[]>(products);
+  const [completeProductsLoaded, setCompleteProductsLoaded] = useState(false);
+  const [completeProductsPartial, setCompleteProductsPartial] = useState(false);
+  const [completeProductsPartialReason, setCompleteProductsPartialReason] = useState<CatalogFacetPartialReason>();
   const [loading, setLoading] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [quantity, setQuantity] = useState(category === "Filament" ? "" : "1");
@@ -292,12 +529,36 @@ export function CatalogInventoryFlow({ category, products, query, onQueryChange,
   useEffect(() => {
     let active = true;
     setLoading(true);
-    void onSearch(kind, query).then((results) => {
-      if (!active) return;
-      // Keep the parent-owned list in sync through the callback contract; the
-      // value is intentionally unused here when the parent already caches it.
-      void results;
-    }).catch(() => undefined).finally(() => { if (active) setLoading(false); });
+    const load = async () => {
+      try {
+        if (!query.trim() && onSearchPage) {
+          const result = await loadCompleteCatalogProducts(kind, (pageKind, pageQuery, options) => onSearchPage(pageKind, pageQuery, options), {});
+          if (active) {
+            setCompleteProducts(result.products);
+            setCompleteProductsPartial(result.partial);
+            setCompleteProductsPartialReason(result.partialReason);
+            setCompleteProductsLoaded(true);
+          }
+          return;
+        }
+        const results = await onSearch(kind, query, { limit: CATALOG_FACET_PAGE_SIZE });
+        if (!active) return;
+        // The parent-owned list drives the searchable combobox. Keep a separate
+        // blank-query page for facets so typing a search cannot collapse them.
+        if (!query.trim()) {
+          setCompleteProducts(results);
+          setCompleteProductsPartial(false);
+          setCompleteProductsPartialReason(undefined);
+          setCompleteProductsLoaded(true);
+        }
+      } catch {
+        // The combobox and custom-product path remain usable when catalog lookup
+        // fails; the parent reports connected-service errors where appropriate.
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    void load();
     return () => { active = false; };
   }, [kind, query]);
 
@@ -342,7 +603,9 @@ export function CatalogInventoryFlow({ category, products, query, onQueryChange,
   };
 
   const confirmation = linkState === "confirmed" ? "I checked the physical item against this exact product." : "Reported for now — confirm the exact product after checking the item.";
-  return <div className="catalog-inventory-flow"><button type="button" className="text-button catalog-back" onClick={onBack}><Icon name="arrow-left" size={15} /> Choose another category</button><CatalogCombobox kind={kind} products={products} query={query} selected={selected} onQueryChange={onQueryChange} onSelect={setSelected} label={`Exact ${category === "Filament" ? "filament product" : "printer model"}`} loading={loading} autoFocus hint="Search the local catalog by manufacturer, family, model, colour, code, or variant." />{!selected && query.trim() && !loading && products.length === 0 && !showCreate && <div className="catalog-no-results"><p>No exact product found. Add the manufacturer and required product facts so future builds can refer to the same identity.</p><button type="button" className="button button-secondary" onClick={() => setShowCreate(true)}><Icon name="plus" size={15} /> Add product</button></div>}{showCreate && <CatalogProductCreateForm kind={kind} onCreate={createProduct} onCancel={() => setShowCreate(false)} />}{selected && <form className="exact-inventory-form" onSubmit={(event) => { void submit(event); }}><div className="exact-product-card"><span className="eyebrow">Exact product selected</span><strong>{catalogProductDisplayName(selected)}</strong><small>{productDetailLine(selected) || "Product details not recorded yet"}</small></div><div className="form-row"><label className="form-field"><span>{category === "Filament" ? "Current mass (g)" : "Owned units"}</span><input type="number" min="0.01" step="any" required value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={submitting} /></label><label className="form-field"><span>Link state</span><select value={linkState} onChange={(event) => setLinkState(event.target.value as LinkState)} disabled={submitting}><option value="reported">Reported (check later)</option><option value="confirmed">Confirmed exact product</option></select></label></div>{category === "Filament" ? <div className="physical-profile-grid"><label className="form-field"><span>Lot / batch <small>(optional)</small></span><input value={lotBatch} onChange={(event) => setLotBatch(event.target.value)} placeholder="Printed spool lot" disabled={submitting} /></label><label className="form-field"><span>Spool state</span><select value={spoolState} onChange={(event) => setSpoolState(event.target.value as "sealed" | "opened")} disabled={submitting}><option value="sealed">Sealed</option><option value="opened">Opened</option></select></label>{spoolState === "opened" && <label className="form-field"><span>Opened date</span><input type="date" value={openedAt} onChange={(event) => setOpenedAt(event.target.value)} disabled={submitting} /></label>}<label className="form-field"><span>Tare mass (g) <small>(optional)</small></span><input type="number" min="0" step="any" value={tareMass} onChange={(event) => setTareMass(event.target.value)} placeholder="Empty spool weight" disabled={submitting} /></label><label className="form-field"><span>Current placement <small>(optional)</small></span><input value={placement} onChange={(event) => setPlacement(event.target.value)} placeholder="Shelf / AMS slot" disabled={submitting} /></label></div> : <div className="physical-profile-grid"><label className="form-field"><span>Asset label <small>(optional)</small></span><input value={assetLabel} onChange={(event) => setAssetLabel(event.target.value)} placeholder="e.g. PRINT-01" disabled={submitting} /></label><label className="form-field"><span>Commissioned date <small>(optional)</small></span><input type="date" value={commissionedAt} onChange={(event) => setCommissionedAt(event.target.value)} disabled={submitting} /></label><label className="form-field"><span>Current placement <small>(optional)</small></span><input value={placement} onChange={(event) => setPlacement(event.target.value)} placeholder="Print room" disabled={submitting} /></label></div>}<p className={`link-state-note ${linkState === "confirmed" ? "is-confirmed" : ""}`}><Icon name={linkState === "confirmed" ? "check-circle" : "info"} size={15} />{confirmation}</p>{formError && <p className="form-error" role="alert">{formError}</p>}<div className="dialog-actions"><button type="button" className="button button-quiet" onClick={() => setSelected(undefined)} disabled={submitting}>Change product</button><button type="submit" className="button button-primary" disabled={submitting}>{submitting ? "Saving…" : `Add ${category === "Filament" ? "filament spool" : "printer"}`}<Icon name="plus" size={16} /></button></div></form>}</div>;
+  const facetProducts = completeProductsLoaded || completeProducts.length === 0 ? completeProducts : products;
+  const noSearchResults = !selected && query.trim() && !loading && products.length === 0 && !showCreate;
+  return <div className="catalog-inventory-flow"><button type="button" className="text-button catalog-back" onClick={onBack}><Icon name="arrow-left" size={15} /> Choose another category</button><CatalogFacetPicker kind={kind} products={facetProducts.length ? facetProducts : products} selected={selected} partial={completeProductsPartial} partialCount={completeProducts.length} partialReason={completeProductsPartialReason} onSelect={setSelected} onAddUnlisted={() => setShowCreate(true)} /><div className="catalog-search-divider"><span>or search by name / code</span></div><CatalogCombobox kind={kind} products={products} query={query} selected={selected} onQueryChange={onQueryChange} onSelect={setSelected} label={`Exact ${category === "Filament" ? "filament product" : "printer model"}`} loading={loading} hint="Search the local catalog. A catalog match does not indicate ownership, available stock, or compatibility." />{noSearchResults && <div className="catalog-no-results"><p>No exact product found. Add the manufacturer and required product facts so future builds can refer to the same identity.</p><button type="button" className="button button-secondary" onClick={() => setShowCreate(true)}><Icon name="plus" size={15} /> Add product</button></div>}{showCreate && <CatalogProductCreateForm kind={kind} onCreate={createProduct} onCancel={() => setShowCreate(false)} />}{selected && <form className="exact-inventory-form" onSubmit={(event) => { void submit(event); }}><div className="exact-product-card"><span className="eyebrow">Exact product selected</span><strong>{catalogProductDisplayName(selected)}</strong><small>{productDetailLine(selected) || "Product details not recorded yet"}</small></div><div className="form-row"><label className="form-field"><span>{category === "Filament" ? "Current mass (g)" : "Owned units"}</span><input type="number" min="0.01" step="any" required value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={submitting} /></label><label className="form-field"><span>Link state</span><select value={linkState} onChange={(event) => setLinkState(event.target.value as LinkState)} disabled={submitting}><option value="reported">Reported (check later)</option><option value="confirmed">Confirmed exact product</option></select></label></div>{category === "Filament" ? <div className="physical-profile-grid"><label className="form-field"><span>Lot / batch <small>(optional)</small></span><input value={lotBatch} onChange={(event) => setLotBatch(event.target.value)} placeholder="Printed spool lot" disabled={submitting} /></label><label className="form-field"><span>Spool state</span><select value={spoolState} onChange={(event) => setSpoolState(event.target.value as "sealed" | "opened")} disabled={submitting}><option value="sealed">Sealed</option><option value="opened">Opened</option></select></label>{spoolState === "opened" && <label className="form-field"><span>Opened date</span><input type="date" value={openedAt} onChange={(event) => setOpenedAt(event.target.value)} disabled={submitting} /></label>}<label className="form-field"><span>Tare mass (g) <small>(optional)</small></span><input type="number" min="0" step="any" value={tareMass} onChange={(event) => setTareMass(event.target.value)} placeholder="Empty spool weight" disabled={submitting} /></label><label className="form-field"><span>Current placement <small>(optional)</small></span><input value={placement} onChange={(event) => setPlacement(event.target.value)} placeholder="Shelf / AMS slot" disabled={submitting} /></label></div> : <div className="physical-profile-grid"><label className="form-field"><span>Asset label <small>(optional)</small></span><input value={assetLabel} onChange={(event) => setAssetLabel(event.target.value)} placeholder="e.g. PRINT-01" disabled={submitting} /></label><label className="form-field"><span>Commissioned date <small>(optional)</small></span><input type="date" value={commissionedAt} onChange={(event) => setCommissionedAt(event.target.value)} disabled={submitting} /></label><label className="form-field"><span>Current placement <small>(optional)</small></span><input value={placement} onChange={(event) => setPlacement(event.target.value)} placeholder="Print room" disabled={submitting} /></label></div>}<p className={`link-state-note ${linkState === "confirmed" ? "is-confirmed" : ""}`}><Icon name={linkState === "confirmed" ? "check-circle" : "info"} size={15} />{confirmation}</p>{formError && <p className="form-error" role="alert">{formError}</p>}<div className="dialog-actions"><button type="button" className="button button-quiet" onClick={() => setSelected(undefined)} disabled={submitting}>Change product</button><button type="submit" className="button button-primary" disabled={submitting}>{submitting ? "Saving…" : `Add ${category === "Filament" ? "filament spool" : "printer"}`}<Icon name="plus" size={16} /></button></div></form>}</div>;
 }
 
 export function splitSetupValues(value: string): string[] {

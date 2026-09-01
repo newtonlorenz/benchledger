@@ -79,6 +79,53 @@ function compareInventoryCategories(left: InventoryCategory, right: InventoryCat
     || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
 }
 
+function catalogSearchText(product: CatalogProduct): string {
+  const fields = product.kind === "filament"
+    ? [product.id, product.kind, product.manufacturer, product.productName, product.sku, product.materialFamily, product.materialSubtype, product.colourName, product.colourCode, product.diameterMm, product.nominalNetMassG, product.nominalLengthM, product.lengthBasis, product.densityGcm3]
+    : [product.id, product.kind, product.manufacturer, product.exactModel, product.exactVariant, product.technology, product.buildVolumeMm.x, product.buildVolumeMm.y, product.buildVolumeMm.z];
+  return fields.filter((value) => value !== undefined).join(" ").toLocaleLowerCase();
+}
+
+const FILAMENT_FACT_FIELDS = [
+  "manufacturer",
+  "productName",
+  "sku",
+  "materialFamily",
+  "materialSubtype",
+  "colourName",
+  "colourCode",
+  "diameterMm",
+  "nominalNetMassG",
+  "nominalLengthM",
+  "lengthBasis",
+  "densityGcm3",
+] as const;
+
+const PRINTER_FACT_FIELDS = [
+  "manufacturer",
+  "exactModel",
+  "exactVariant",
+  "technology",
+  "buildVolumeMm",
+] as const;
+
+function stableCatalogFact(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableCatalogFact).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableCatalogFact(record[key])}`).join(",")}}`;
+}
+
+function sameCatalogFact(left: unknown, right: unknown): boolean {
+  return Object.is(left, right) || stableCatalogFact(left) === stableCatalogFact(right);
+}
+
+/** A corrected identity/specification fact invalidates the old verification. */
+function catalogFactsChanged(current: CatalogProduct, changes: Record<string, unknown>): boolean {
+  const currentRecord = current as unknown as Record<string, unknown>;
+  const fields = current.kind === "filament" ? FILAMENT_FACT_FIELDS : PRINTER_FACT_FIELDS;
+  return fields.some((field) => Object.hasOwn(changes, field) && !sameCatalogFact(currentRecord[field], changes[field]));
+}
 function canCount(evidence: InventoryItem["evidence"]["state"]): boolean {
   return evidence === "physically_counted" || evidence === "commissioned";
 }
@@ -582,7 +629,7 @@ class MemoryCatalog implements CatalogPort {
   listProducts(options: CatalogProductListOptions): Promise<Page<CatalogProduct>> {
     const needle = options.q?.trim().toLocaleLowerCase();
     const values = [...this.products.values()]
-      .filter((product) => (options.kind === undefined || product.kind === options.kind) && (needle === undefined || JSON.stringify(product).toLocaleLowerCase().includes(needle)))
+      .filter((product) => (options.kind === undefined || product.kind === options.kind) && (needle === undefined || catalogSearchText(product).includes(needle)))
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
     return Promise.resolve(page(values, options.limit, options.cursor));
   }
@@ -607,7 +654,11 @@ class MemoryCatalog implements CatalogPort {
     if (current === undefined) throw new ApplicationError("not_found", `Catalog product '${productId}' was not found`);
     ensureVersion(current.version, expectedVersion, "Catalog product");
     if ((input as Record<string, unknown>).kind !== undefined && (input as Record<string, unknown>).kind !== current.kind) throw new ApplicationError("validation", "Catalog product kind cannot change");
-    const next = { ...current, ...input, id: current.id, createdAt: current.createdAt, updatedAt: iso(), version: current.version + 1 } as CatalogProduct;
+    const changedRecord = input as Record<string, unknown>;
+    const mergedCandidate = { ...current, ...input, id: current.id, createdAt: current.createdAt, updatedAt: iso(), version: current.version + 1 };
+    const next = (catalogFactsChanged(current, changedRecord)
+      ? Object.fromEntries(Object.entries(mergedCandidate).filter(([key]) => key !== "provenance"))
+      : mergedCandidate) as CatalogProduct;
     this.products.set(productId, clone(next));
     return Promise.resolve(clone(next));
   }

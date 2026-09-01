@@ -736,6 +736,71 @@ describe("authenticated BenchLedger API adapter", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("requests a bounded complete-kind catalog page for guided facets", async () => {
+    const product = {
+      id: "catalog-filament-pla",
+      kind: "filament",
+      manufacturer: "Acme",
+      materialFamily: "PLA",
+      colourName: "White",
+      diameterMm: 1.75,
+      nominalNetMassG: 1000,
+      lengthBasis: "unknown",
+      createdAt: "2026-08-30T10:00:00.000Z",
+      updatedAt: "2026-08-30T10:00:00.000Z",
+      version: 1
+    } as const;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({ data: [product], limit: 100, total: 1 }));
+    const adapter = createWorkspaceAdapter();
+    await expect(adapter.searchCatalogProducts("filament", "", { limit: 100 })).resolves.toHaveLength(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/v1/catalog/products?kind=filament&limit=100");
+  });
+
+  it("retains catalog cursor metadata for bounded facet pagination", async () => {
+    const product = {
+      id: "catalog-filament-petg",
+      kind: "filament",
+      manufacturer: "Acme",
+      materialFamily: "PETG",
+      colourName: "Black",
+      diameterMm: 1.75,
+      nominalNetMassG: 1000,
+      version: 1
+    } as const;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({ data: [product], limit: 100, total: 101, nextCursor: "cursor-1" }));
+    const adapter = createWorkspaceAdapter();
+    await expect(adapter.listCatalogProductPage?.("filament", "", { limit: 100 })).resolves.toMatchObject({
+      products: [{ id: product.id, family: "PETG", colour: "Black", netMassG: 1000 }],
+      limit: 100,
+      total: 101,
+      nextCursor: "cursor-1"
+    });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/v1/catalog/products?kind=filament&limit=100");
+  });
+
+  it("retains read-only catalog provenance returned by the API mapper", async () => {
+    const product = {
+      id: "catalog-filament-sourced",
+      kind: "filament",
+      manufacturer: "Acme",
+      materialFamily: "PLA",
+      colourName: "White",
+      diameterMm: 1.75,
+      nominalNetMassG: 1000,
+      lengthBasis: "unknown",
+      provenance: {
+        sourceUrl: "https://example.com/acme/pla-white",
+        sourceLabel: "Acme official product page",
+        verifiedAt: "2026-09-01T00:00:00.000Z"
+      }
+    } as const;
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({ data: [product], limit: 100, total: 1 }));
+    const adapter = createWorkspaceAdapter();
+    await expect(adapter.searchCatalogProducts("filament", "PLA", { limit: 100 })).resolves.toMatchObject({
+      0: { provenance: product.provenance }
+    });
+  });
+
   it("uploads an artifact with a browser hash and finalizes the server candidate", async () => {
     vi.stubGlobal("document", { cookie: "forge_csrf=csrf-upload" });
     const fetchMock = vi.spyOn(globalThis, "fetch")
