@@ -86,7 +86,7 @@ export const evidenceSchema = z.object({
   note: z.string().max(1000).optional()
 }).strict();
 
-export const inventoryItemSchema = z.object({
+const inventoryItemShape = z.object({
   id: idSchema,
   name: z.string().min(1).max(240),
   kind: itemKindSchema,
@@ -98,6 +98,8 @@ export const inventoryItemSchema = z.object({
   sku: z.string().max(200).optional(),
   quantity: z.number().finite().nonnegative(),
   availableQuantity: z.number().finite().nonnegative(),
+  /** On-hand quantity currently reserved for projects; not depleted stock. */
+  allocatedQuantity: z.number().finite().nonnegative().optional(),
   unit: quantityUnitSchema,
   location: z.string().max(240).optional(),
   condition: inventoryConditionSchema.optional(),
@@ -111,11 +113,38 @@ export const inventoryItemSchema = z.object({
   version: z.number().int().positive()
 }).strict();
 
+function validateInventoryItemQuantityInvariant(
+  value: { readonly quantity: number; readonly availableQuantity: number; readonly allocatedQuantity?: number | undefined; readonly evidence: { readonly state: string } },
+  ctx: z.RefinementCtx
+): void {
+  if (value.availableQuantity > value.quantity) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["availableQuantity"],
+      message: "availableQuantity cannot exceed quantity"
+    });
+  }
+  const confirmedEvidence = value.evidence.state === "physically_counted" || value.evidence.state === "commissioned";
+  const expectedAllocatedQuantity = value.quantity - value.availableQuantity;
+  const allocationTolerance = Number.EPSILON * Math.max(1, value.quantity, value.availableQuantity);
+  if (confirmedEvidence && value.allocatedQuantity !== undefined && Math.abs(value.allocatedQuantity - expectedAllocatedQuantity) > allocationTolerance) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["allocatedQuantity"],
+      message: "allocatedQuantity must equal quantity minus availableQuantity"
+    });
+  }
+}
+
+export const inventoryItemSchema = inventoryItemShape.superRefine(validateInventoryItemQuantityInvariant);
+
 export const inventoryListQuerySchema = z.object({
   q: z.string().max(200).optional(),
   kind: itemKindSchema.optional(),
   evidence: stockEvidenceSchema.optional(),
   available: z.preprocess((value) => value === "true" ? true : value === "false" ? false : value, z.boolean()).optional(),
+  /** Summary/audit callers may include retired history explicitly. */
+  includeRetired: z.preprocess((value) => value === "true" ? true : value === "false" ? false : value, z.boolean()).optional(),
   categoryNodeId: idSchema.optional(),
   unassigned: z.preprocess((value) => value === "true" ? true : value === "false" ? false : value, z.boolean()).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
@@ -154,7 +183,7 @@ export const updateInventoryCategorySchema = z.object({
   message: "at least one category field must change"
 });
 
-const createInventoryItemShape = inventoryItemSchema.pick({
+const createInventoryItemShape = inventoryItemShape.pick({
   name: true, kind: true, categoryNodeId: true, description: true, manufacturer: true, model: true,
   sku: true, quantity: true, unit: true, location: true, condition: true,
   dimensions: true, tags: true, links: true, evidence: true
@@ -409,6 +438,7 @@ export const bomGapCandidateSchema = z.object({
 export const bomGapSchema = z.object({
   lineId: idSchema,
   name: z.string(),
+  optional: z.boolean().optional(),
   status: gapStatusSchema,
   requiredQuantity: z.number().finite().nonnegative(),
   suppliedQuantity: z.number().finite().nonnegative(),

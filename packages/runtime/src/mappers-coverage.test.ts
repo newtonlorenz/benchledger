@@ -107,9 +107,10 @@ describe("inventory and dimension mapper edges", () => {
       expect(projected.evidence.state).toBe(expected[index]);
       expect(projected.quantity).toBe(sourceStatus === "commissioned_available" || sourceStatus === "physically_confirmed" ? 3 : 7);
       expect(projected.availableQuantity).toBe(sourceStatus === "commissioned_available" || sourceStatus === "physically_confirmed" ? 2 : 0);
+      expect(projected.allocatedQuantity).toBe(sourceStatus === "commissioned_available" || sourceStatus === "physically_confirmed" ? 1 : 0);
     }
     const projected = apiInventoryFromNative({ ...nativeItem, source: { benchLedger: { kind: "filament", description: "metadata description", sku: "S", location: "L", condition: "new", tags: ["petg"], links: [], evidence: { state: "commissioned" } } } }, { onHand: 8, available: 6 }, 2);
-    expect(projected).toMatchObject({ kind: "filament", description: "metadata description", sku: "S", location: "L", condition: "new", tags: ["petg"], quantity: 8, availableQuantity: 6, unit: "metre", dimensions: { lengthMm: 200 } });
+    expect(projected).toMatchObject({ kind: "filament", description: "metadata description", sku: "S", location: "L", condition: "new", tags: ["petg"], quantity: 8, availableQuantity: 6, allocatedQuantity: 2, unit: "metre", dimensions: { lengthMm: 200 } });
   });
 });
 

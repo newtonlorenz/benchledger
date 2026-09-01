@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commissionInventoryItemSchema, createBomLineSchema, createInventoryItemSchema, inventoryBulkUpdateSchema, inventoryListQuerySchema, updateBomLineSchema, updateInventoryItemSchema } from "./schemas.js";
+import { commissionInventoryItemSchema, createBomLineSchema, createInventoryItemSchema, inventoryBulkUpdateSchema, inventoryItemSchema, inventoryListQuerySchema, updateBomLineSchema, updateInventoryItemSchema } from "./schemas.js";
 
 const constraints = {
   kind: "electronic",
@@ -41,6 +41,29 @@ describe("REST inventory pagination filters", () => {
 });
 
 describe("REST inventory quantity invariants", () => {
+  const persistedItem = {
+    id: "item-esp32",
+    name: "ESP32 board",
+    kind: "electronic" as const,
+    quantity: 2,
+    availableQuantity: 1,
+    allocatedQuantity: 1,
+    unit: "each" as const,
+    tags: [],
+    links: [],
+    evidence: { state: "physically_counted" as const },
+    createdAt: "2026-08-31T10:00:00.000Z",
+    updatedAt: "2026-08-31T10:00:00.000Z",
+    version: 1,
+  };
+
+  it("requires persisted allocated quantity to reconcile on-hand and available stock", () => {
+    expect(inventoryItemSchema.parse(persistedItem)).toMatchObject({ quantity: 2, availableQuantity: 1, allocatedQuantity: 1 });
+    expect(() => inventoryItemSchema.parse({ ...persistedItem, allocatedQuantity: 0 })).toThrow(/quantity minus availableQuantity/i);
+    expect(() => inventoryItemSchema.parse({ ...persistedItem, availableQuantity: 3, allocatedQuantity: 0 })).toThrow(/availableQuantity.*quantity/i);
+    expect(inventoryItemSchema.parse({ ...persistedItem, quantity: 2, availableQuantity: 0, allocatedQuantity: 0, evidence: { state: "delivered_uncounted" } })).toMatchObject({ quantity: 2, availableQuantity: 0, allocatedQuantity: 0 });
+  });
+
   it("rejects available confirmed stock above the total quantity", () => {
     expect(() => createInventoryItemSchema.parse({
       name: "ESP32 board",

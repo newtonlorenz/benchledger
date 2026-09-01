@@ -111,7 +111,7 @@ function backend(): BenchLedgerBackend {
     inventory: {
       summary: async () => ({
         generatedAt: "2026-08-30T10:00:00.000Z",
-        counts: { totalItems: 1, confirmedItems: 1, inspectFirstItems: 0, missingItems: 0 },
+        counts: { totalItems: 1, confirmedItems: 1, confirmedEvidenceItems: 1, availableConfirmedItems: 1, inspectFirstItems: 0, allocatedItems: 0, allocatedQuantities: [], depletedItems: 0, unverifiedItems: 0, retiredItems: 0, missingItems: 0 },
         categories: [{ category: "electronics", itemCount: 1 }],
       }),
       list: async () => page([inventoryItem]),

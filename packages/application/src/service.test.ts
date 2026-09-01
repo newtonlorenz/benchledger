@@ -274,6 +274,17 @@ describe("ApplicationService", () => {
     expect((ports.audit as { readonly events?: readonly AuditEvent[] }).events ?? []).toHaveLength(0);
   });
 
+  it("bulk-updates unverified inventory without fabricating an allocation", async () => {
+    const ports = fakePorts();
+    const delivered = item({ quantity: 2, availableQuantity: 0, allocatedQuantity: 0, evidence: { state: "delivered_uncounted" }, version: 2 });
+    ports.inventory.bulkUpdateItems = async () => ({ updated: [delivered], unchanged: [] });
+    const service = new ApplicationService(ports);
+
+    const result = await service.bulkUpdateInventoryItems({ targets: [{ itemId: delivered.id, expectedVersion: 1 }], changes: { location: "intake" } }, { ...context, idempotencyKey: "bulk-unverified" });
+
+    expect(result.data.updated).toEqual([expect.objectContaining({ id: delivered.id, quantity: 2, availableQuantity: 0, allocatedQuantity: 0, evidence: { state: "delivered_uncounted" } })]);
+  });
+
   it("covers project, work-item, revision, and BOM command/query flows", async () => {
     const ports = fakePorts();
     const service = new ApplicationService(ports);
@@ -336,6 +347,17 @@ describe("ApplicationService", () => {
       expect.objectContaining({ lineId: "bom-optional", status: "optional", suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 1 })
     ]));
     expect(result.totals).toMatchObject({ partialLines: 1, optionalLines: 1 });
+  });
+
+  it("keeps an optional supplied line out of every required total", async () => {
+    const ports = fakePorts(item({ quantity: 2, availableQuantity: 2, unit: "each", name: "Optional display" }));
+    const service = new ApplicationService(ports);
+    await service.createBomLine("rev-1", { id: "bom-optional-supplied", name: "Optional display", itemId: "item-1", requiredQuantity: 1, unit: "each", optional: true, alternatives: [], constraints: {} }, context);
+
+    const result = await service.evaluateBomGaps("rev-1");
+
+    expect(result.lines).toEqual([expect.objectContaining({ lineId: "bom-optional-supplied", optional: true, status: "supplied", suppliedQuantity: 1 })]);
+    expect(result.totals).toEqual({ requiredLines: 0, suppliedLines: 0, inspectFirstLines: 0, partialLines: 0, missingLines: 0, optionalLines: 1 });
   });
 
   it("allocates one shared confirmed item to only one BOM line in stable line-id order", async () => {
@@ -833,6 +855,17 @@ describe("ApplicationService", () => {
     const result = await service.evaluateBomGaps("rev-1");
 
     expect(result.lines[0]).toMatchObject({ status: "supplied", suppliedQuantity: 1, missingQuantity: 0 });
+  });
+
+  it("does not describe fully allocated stock as available to an unrelated BOM line", async () => {
+    const ports = fakePorts(item({ quantity: 2, availableQuantity: 0, unit: "each" }));
+    const service = new ApplicationService(ports);
+    await service.createBomLine("rev-1", { id: "bom-blocked-by-allocation", name: "Board", itemId: "item-1", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context);
+
+    const result = await service.evaluateBomGaps("rev-1");
+
+    expect(result.lines[0]).toMatchObject({ status: "missing", suppliedQuantity: 0, candidates: [expect.objectContaining({ availableQuantity: 0 })] });
+    expect(result.lines[0]?.reasons.join(" ")).not.toContain("Physically confirmed stock covers");
   });
 
   it("validates usage input before delegating to a project adapter", async () => {

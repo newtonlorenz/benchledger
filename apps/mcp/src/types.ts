@@ -127,6 +127,8 @@ export interface InventoryItem {
   /** Optional user-managed taxonomy assignment; semantic category remains `category`. */
   categoryNodeId?: string;
   quantity: Quantity;
+  availableQuantity?: Quantity;
+  allocatedQuantity?: Quantity;
   availability: Availability;
   evidence: EvidenceSummary;
   description?: string;
@@ -146,8 +148,21 @@ export interface InventorySummary {
   generatedAt: string;
   counts: {
     totalItems: number;
+    /** Confirmed records with no current allocation; mutually exclusive summary bucket. */
     confirmedItems: number;
+    /** All physically confirmed/commissioned records, including allocated and depleted records. */
+    confirmedEvidenceItems: number;
+    /** Confirmed records that still have usable unallocated stock, including partial allocations. */
+    availableConfirmedItems: number;
     inspectFirstItems: number;
+    allocatedItems: number;
+    /** Allocated on-hand quantities grouped by their canonical unit. */
+    allocatedQuantities: readonly Quantity[];
+    depletedItems: number;
+    /** Order or delivery evidence without a current physical count. */
+    unverifiedItems: number;
+    /** Retired records are retained for history but excluded from reuse. */
+    retiredItems: number;
     missingItems: number;
   };
   categories: readonly { category: string; itemCount: number }[];
@@ -506,6 +521,7 @@ export interface BomEvaluation {
   lines: readonly BomEvaluationLine[];
   totals: {
     required: number;
+    optional: number;
     supplied: number;
     inspectFirst: number;
     partial: number;
@@ -517,6 +533,7 @@ export interface BomEvaluationLine {
   bomLineId: string;
   description: string;
   requested: Quantity;
+  requirement: "required" | "optional";
   state: "supplied" | "inspect_first" | "partial" | "missing" | "optional";
   supplied: Quantity;
   matches: readonly BomMatch[];

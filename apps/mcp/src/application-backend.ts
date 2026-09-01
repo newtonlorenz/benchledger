@@ -248,7 +248,7 @@ export function createApplicationBackend(service: ApplicationService, options: P
         const visitedCursors = new Set<string>(cursor === undefined ? [] : [cursor]);
 
         for (let pageNumber = 0; pageNumber < MAX_INVENTORY_SUMMARY_PAGES; pageNumber += 1) {
-          const page = await service.listInventory({ limit, ...(cursor === undefined ? {} : { cursor }) });
+          const page = await service.listInventory({ limit, includeRetired: true, ...(cursor === undefined ? {} : { cursor }) });
           items = [...items, ...page.data.map(toMcpInventoryItem)];
           if (page.nextCursor === undefined) return inventorySummary(items);
           if (visitedCursors.has(page.nextCursor)) {
@@ -262,20 +262,29 @@ export function createApplicationBackend(service: ApplicationService, options: P
       },
       list: async (input, context) => {
         const localLocationFilter = input.location !== undefined;
-        if (localLocationFilter) {
+        // Availability is derived from evidence, retirement, on-hand, and
+        // allocated quantities. Filtering by raw evidence would miss
+        // commissioned stock, fully allocated physical stock, and retired
+        // records whose historical evidence is still present.
+        const localAvailabilityFilter = input.availability !== undefined;
+        if (localLocationFilter || localAvailabilityFilter) {
           return filteredPage({
             cursor: input.cursor,
             limit: input.limit ?? 25,
             loadPage: async (cursor) => service.listInventory({
               limit: FILTERED_SOURCE_PAGE_LIMIT,
               ...(cursor === undefined ? {} : { cursor }),
+              ...(input.availability === "retired" ? { includeRetired: true } : {}),
               ...(input.query === undefined ? {} : { q: input.query }),
               ...(input.category === undefined ? {} : { kind: toApiKind(input.category) }),
               ...(input.categoryNodeId === undefined ? {} : { categoryNodeId: input.categoryNodeId }),
               ...(input.unassigned === undefined ? {} : { unassigned: input.unassigned }),
-              ...(input.availability === undefined ? {} : { evidence: toApiEvidence(input.availability) }),
             }),
-            matches: (item) => toMcpInventoryItem(item).location === input.location,
+            matches: (item) => {
+              const mapped = toMcpInventoryItem(item);
+              return (input.location === undefined || mapped.location === input.location)
+                && (input.availability === undefined || mapped.availability === input.availability);
+            },
             map: toMcpInventoryItem,
             id: (item) => item.id,
             label: "inventory",
@@ -824,12 +833,32 @@ function slicePage<T>(items: readonly T[], limit: number, cursor: string | undef
 function inventorySummary(items: readonly InventoryItem[]) {
   const categories = new Map<string, number>();
   for (const item of items) categories.set(item.category, (categories.get(item.category) ?? 0) + 1);
+  const hasAllocation = (item: InventoryItem): boolean => item.availability !== "retired"
+    && (item.availability === "allocated" || (item.allocatedQuantity?.value ?? 0) > 0);
+  const confirmedEvidence = (item: InventoryItem): boolean => item.evidence.state === "physical_count" || item.evidence.state === "commissioned";
+  const allocatedQuantities = new Map<Quantity["unit"], number>();
+  for (const item of items) {
+    if (item.availability === "retired") continue;
+    const allocated = item.allocatedQuantity;
+    if (allocated === undefined || allocated.value <= 0) continue;
+    allocatedQuantities.set(allocated.unit, (allocatedQuantities.get(allocated.unit) ?? 0) + allocated.value);
+  }
   return {
     generatedAt: new Date().toISOString(),
     counts: {
       totalItems: items.length,
-      confirmedItems: items.filter((item) => item.availability === "confirmed").length,
+      // Keep the primary buckets mutually exclusive so they sum to
+      // totalItems; confirmedEvidenceItems preserves the physical evidence
+      // count when an item moves into the allocated bucket.
+      confirmedItems: items.filter((item) => item.availability === "confirmed" && !hasAllocation(item)).length,
+      confirmedEvidenceItems: items.filter(confirmedEvidence).length,
+      availableConfirmedItems: items.filter((item) => item.availability !== "retired" && confirmedEvidence(item) && (item.availableQuantity?.value ?? 0) > 0).length,
       inspectFirstItems: items.filter((item) => item.availability === "inspect_first").length,
+      allocatedItems: items.filter(hasAllocation).length,
+      allocatedQuantities: [...allocatedQuantities.entries()].map(([unit, value]) => ({ unit, value })),
+      depletedItems: items.filter((item) => item.availability === "depleted").length,
+      unverifiedItems: items.filter((item) => item.availability === "ordered_unverified" || item.availability === "delivered_uncounted").length,
+      retiredItems: items.filter((item) => item.availability === "retired").length,
       missingItems: 0,
     },
     categories: [...categories.entries()].map(([category, itemCount]) => ({ category, itemCount })),
@@ -877,9 +906,10 @@ function toApiUnit(unit: Quantity["unit"]): ApiInventoryItem["unit"] {
 }
 
 function toMcpAvailability(item: ApiInventoryItem): Availability {
+  if (item.retiredAt !== undefined) return "retired";
   switch (item.evidence.state) {
     case "physically_counted":
-    case "commissioned": return item.availableQuantity > 0 ? "confirmed" : "depleted";
+    case "commissioned": return item.quantity <= 0 ? "depleted" : (item.allocatedQuantity ?? Math.max(0, item.quantity - item.availableQuantity)) > 0 ? "allocated" : "confirmed";
     case "delivered_uncounted": return "delivered_uncounted";
     case "ordered_unverified": return "ordered_unverified";
     case "allocated": return "allocated";
@@ -900,11 +930,17 @@ function toMcpDimensions(value: Dimension | undefined): Dimensions | undefined {
 }
 
 function toMcpInventoryItem(item: ApiInventoryItem): InventoryItem {
+  const allocatedQuantity = item.allocatedQuantity
+    ?? (item.evidence.state === "physically_counted" || item.evidence.state === "commissioned"
+      ? Math.max(0, Math.min(item.quantity, item.quantity - item.availableQuantity))
+      : 0);
   return {
     id: item.id,
     name: item.name,
     category: item.kind,
     quantity: toQuantity(item.quantity, item.unit),
+    availableQuantity: toQuantity(item.availableQuantity, item.unit),
+    allocatedQuantity: toQuantity(allocatedQuantity, item.unit),
     availability: toMcpAvailability(item),
     evidence: toMcpEvidence(item),
     ...(item.categoryNodeId === undefined ? {} : { categoryNodeId: item.categoryNodeId }),
@@ -1136,8 +1172,8 @@ function toApiBomUpdate(input: Omit<BomLineUpdateInput, "bomLineId" | "expectedV
   return { ...(input.description === undefined ? {} : { name: input.description }), ...(input.quantity === undefined ? {} : { requiredQuantity: input.quantity }), ...(input.unit === undefined ? {} : { unit: toApiUnit(input.unit) }), ...(input.requirement === undefined ? {} : { optional: input.requirement === "optional" }), ...(input.itemId === undefined ? {} : { itemId: input.itemId }), ...((input.alternatives !== undefined || input.compatibleItemIds !== undefined) ? { alternatives: toApiBomAlternatives(input) } : {}), ...(input.constraints === undefined ? {} : { constraints: toApiBomConstraints(input.constraints) }), ...(input.notes === undefined ? {} : { notes: input.notes }) };
 }
 
-function toMcpBomEvaluation(value: { revisionId: string; lines: readonly BomGap[]; totals: { suppliedLines: number; inspectFirstLines: number; partialLines: number; missingLines: number; optionalLines: number } }, input: BomEvaluationInput): BomEvaluation {
-  return { projectRevisionId: value.revisionId, generatedAt: new Date().toISOString(), lines: value.lines.map((line) => ({ bomLineId: line.lineId, description: line.name, requested: { value: line.requiredQuantity, unit: fromApiUnit(line.unit) }, state: line.status === "partially_supplied" ? "partial" : line.status === "inspect_first" ? "inspect_first" : line.status, supplied: { value: line.suppliedQuantity, unit: fromApiUnit(line.unit) }, matches: line.matchedItemIds.map((itemId) => toMcpBomMatch(line, itemId)), recommendedAction: line.status === "supplied" ? "reuse" : line.status === "inspect_first" ? "inspect" : line.status === "optional" ? "none" : "buy", explanation: line.reasons.join(" ") })), totals: { required: value.totals.suppliedLines + value.totals.inspectFirstLines + value.totals.partialLines + value.totals.missingLines, supplied: value.totals.suppliedLines, inspectFirst: value.totals.inspectFirstLines, partial: value.totals.partialLines, missing: value.totals.missingLines } };
+function toMcpBomEvaluation(value: { revisionId: string; lines: readonly BomGap[]; totals: { requiredLines: number; suppliedLines: number; inspectFirstLines: number; partialLines: number; missingLines: number; optionalLines: number } }, input: BomEvaluationInput): BomEvaluation {
+  return { projectRevisionId: value.revisionId, generatedAt: new Date().toISOString(), lines: value.lines.map((line) => ({ bomLineId: line.lineId, description: line.name, requested: { value: line.requiredQuantity, unit: fromApiUnit(line.unit) }, requirement: line.optional === true ? "optional" : "required", state: line.status === "partially_supplied" ? "partial" : line.status === "inspect_first" ? "inspect_first" : line.status, supplied: { value: line.suppliedQuantity, unit: fromApiUnit(line.unit) }, matches: line.matchedItemIds.map((itemId) => toMcpBomMatch(line, itemId)), recommendedAction: line.status === "supplied" ? "reuse" : line.status === "inspect_first" ? "inspect" : line.status === "optional" ? "none" : "buy", explanation: line.reasons.join(" ") })), totals: { required: value.totals.requiredLines, optional: value.totals.optionalLines, supplied: value.totals.suppliedLines, inspectFirst: value.totals.inspectFirstLines, partial: value.totals.partialLines, missing: value.totals.missingLines } };
 }
 
 function toApiReservation(input: ReservationInput): CreateReservation {

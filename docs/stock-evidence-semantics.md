@@ -21,6 +21,15 @@ The domain may expose additional source-specific evidence labels, but the MCP
 adapter maps them to the plain-language states above. It never upgrades an
 uncertain state simply because a BOM line mentions the same name.
 
+Every MCP inventory row keeps three quantities distinct: total on-hand,
+currently available, and currently allocated. When allocation is present it
+reconciles exactly as `allocated = on-hand - available`. A fully allocated row
+is not depleted, and a partially allocated row exposes both remaining and held
+stock. Summary availability buckets are mutually exclusive, while the separate
+confirmed-evidence, available-confirmed, and allocated-quantity figures remain
+derivable from the same returned rows. Retired rows do not contribute available
+or allocated quantities.
+
 ## Evidence hierarchy
 
 Prefer, in order:
@@ -67,6 +76,10 @@ stock state. The response must include:
 - whether the candidate is confirmed or inspect-first;
 - shortfall and recommended action (`reuse`, `inspect`, `buy`, or `none`);
 - the evidence that caused the classification.
+
+Required readiness totals exclude optional lines in every outcome state.
+Optionality remains a separate flag and total, so a supplied optional line does
+not inflate the required supplied count.
 
 Confirmed stock is consumed by allocation arithmetic, so two projects cannot
 silently reserve the same available quantity. If no confirmed candidate covers a

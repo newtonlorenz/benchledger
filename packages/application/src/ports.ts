@@ -445,6 +445,7 @@ export interface GapEvaluation {
   readonly revisionId: string;
   readonly lines: readonly BomGap[];
   readonly totals: {
+    readonly requiredLines: number;
     readonly suppliedLines: number;
     readonly inspectFirstLines: number;
     readonly partialLines: number;

@@ -15,7 +15,7 @@ resource byte budget.
 | --- | --- | --- |
 | `benchledger://capabilities` | Tool, resource, evidence, transfer, and safety contract | `context:read` |
 | `benchledger://catalog/products/{productId}` | One exact printer or filament catalog identity, with read-only manufacturer provenance when present | `catalog:read` |
-| `benchledger://inventory/summary` | Current counts and categories | `inventory:read` |
+| `benchledger://inventory/summary` | Reconciled availability buckets, confirmed-evidence counts, allocated quantities by unit, and categories | `inventory:read` |
 | `benchledger://inventory/categories` | Bounded user-managed category taxonomy; archived nodes are opt-in | `inventory:read` |
 | `benchledger://inventory/items/{itemId}` | One item with quantity, dimensions, links, and evidence | `inventory:read` |
 | `benchledger://inventory/categories/{categoryId}` | One user-managed category or subcategory | `inventory:read` |

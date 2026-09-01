@@ -58,6 +58,15 @@ Then read `benchledger://inventory/summary` and use `list_inventory` with a
 small page (normally `limit: 25`). Use the exact item resource when a candidate
 needs dimensions, compatibility, provenance, or stock history.
 
+Inventory rows expose on-hand, available, and allocated quantities separately.
+A fully reserved counted item is `allocated`, not `depleted`; a partial
+reservation remains visible with both available and allocated quantities.
+Summary allocation counts include partial allocations, while the physically
+confirmed evidence and available-confirmed counts remain independent. Retired
+history is counted separately and never becomes reusable stock. Availability
+filters use these derived states rather than treating evidence labels as stock
+balances.
+
 For a printer or filament decision, keep the exact catalog product, owned
 physical item, product-profile link state, and project build configuration
 separate. Search/read catalog products, then read the physical item's profile;
@@ -111,6 +120,10 @@ The agent should call `calculate_bom_gaps` and explain every result as one of:
 - **Partial:** confirmed stock covers only part of the requirement.
 - **Missing:** no compatible stock is recorded.
 - **Optional:** useful but not required to complete the stated build.
+
+Each returned line also carries its required/optional flag. Readiness outcome
+totals cover required lines only; `optional` is a separate total even when an
+optional line happens to be supplied or needs inspection.
 
 Never turn an order, delivery message, or old price into a present stock count.
 When a delivery or order has been physically checked, use

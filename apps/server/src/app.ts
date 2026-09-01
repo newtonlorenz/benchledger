@@ -642,6 +642,7 @@ function jsonOpenApi(version: string): Record<string, unknown> {
     { name: "kind", in: "query", required: false, schema: { type: "string", enum: ["printer", "tool", "accessory", "consumable", "electronic", "fastener", "filament", "wire", "adhesive", "other"] } },
     { name: "evidence", in: "query", required: false, schema: { type: "string", enum: ["physically_counted", "commissioned", "delivered_uncounted", "ordered_unverified", "allocated", "consumed", "unknown"] } },
     { name: "available", in: "query", required: false, schema: { type: "boolean" } },
+    { name: "includeRetired", in: "query", required: false, description: "Include retired inventory history; active rows are returned by default.", schema: { type: "boolean", default: false } },
     { name: "categoryNodeId", in: "query", required: false, description: "Exact managed category or subcategory ID. Mutually exclusive with unassigned=true.", schema: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" } },
     { name: "unassigned", in: "query", required: false, description: "Return inventory without a managed category assignment. Mutually exclusive with categoryNodeId.", schema: { type: "boolean" } },
     { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } },

@@ -34,11 +34,12 @@ purchasing, credential changes, destructive cleanup, or merging.
 - [ ] `BL-AW-002` → `REQ-002`: compact, cacheable capability discovery and
   bounded named-schema lookup. **Proposed.**
 - [ ] `BL-AW-003` → `REQ-004`: truthful inventory/BOM summaries that reconcile
-  confirmed, allocated, inspect-first, optional, and gap totals. **Proposed;
-  coordinate with inventory availability and reconciliation work below. The
-  durable BOM-retirement prerequisite is implemented on the current feature
-  branch: active reads and gap evaluation exclude retired requirements, while
-  explicit history reads and optimistic restoration preserve their content.**
+  confirmed, allocated, inspect-first, optional, and gap totals. **Partially
+  implemented on the current feature branch:** durable BOM retirement excludes
+  inactive requirements; inventory reads distinguish on-hand, available,
+  allocated, depleted, unverified, and retired states; summary allocation
+  quantities are grouped by unit; and optional lines no longer inflate required
+  outcome totals. The broader Ready/Check/Decide/Source contract remains.**
 - [ ] `BL-AW-004` → `REQ-005`: bounded graph list/read-back tools and resources
   for every created project entity. **Proposed; audit existing list operations
   before adding new ones.**

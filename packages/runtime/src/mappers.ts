@@ -290,6 +290,7 @@ export function apiInventoryFromNative(item: InventoryItem, balance: { readonly 
   const state = metadata.evidence?.state ?? fallbackEvidence(item);
   const quantity = isConfirmedEvidence(state) ? balance.onHand : (item.reportedQuantity ?? item.purchasedQuantity);
   const availableQuantity = isConfirmedEvidence(state) ? Math.max(0, balance.available) : 0;
+  const allocatedQuantity = isConfirmedEvidence(state) ? Math.max(0, Math.min(quantity, quantity - availableQuantity)) : 0;
   const evidence = metadata.evidence ?? { state };
   return {
     id: item.id,
@@ -302,6 +303,7 @@ export function apiInventoryFromNative(item: InventoryItem, balance: { readonly 
     ...(metadata.sku === undefined ? {} : { sku: metadata.sku }),
     quantity,
     availableQuantity,
+    allocatedQuantity,
     unit: mapNativeUnitToApi(item.unit),
     ...(metadata.location === undefined ? {} : { location: metadata.location }),
     ...(metadata.condition === undefined ? {} : { condition: metadata.condition }),

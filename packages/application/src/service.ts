@@ -1236,7 +1236,7 @@ export class ApplicationService {
           return fact;
         });
         const reasons = [
-          ...(confirmed.length > 0 ? ["Physically confirmed stock is available."] : []),
+          ...(suppliedQuantity > 0 ? ["Physically confirmed stock covers part or all of this requirement."] : []),
           ...(uncertain.some((candidate) => !canSupplyBomCandidate(candidate)) ? ["Some matching stock needs an explicit compatibility decision before use."] : []),
           ...(uncertain.some((candidate) => canSupplyBomCandidate(candidate) && !CONFIRMED_EVIDENCE.has(candidate.item.evidence.state)) ? ["Some matching stock is recorded but needs a physical count before use."] : []),
           ...(missingQuantity > 0 ? ["No confirmed stock covers the remaining quantity."] : []),
@@ -1246,6 +1246,7 @@ export class ApplicationService {
         const result = {
           lineId: line.id,
           name: line.name,
+          optional: line.optional,
           status,
           requiredQuantity: line.requiredQuantity,
           suppliedQuantity,
@@ -1263,11 +1264,12 @@ export class ApplicationService {
         revisionId: id,
         lines: gaps,
         totals: {
-          suppliedLines: gaps.filter((gap) => gap.status === "supplied").length,
-          inspectFirstLines: gaps.filter((gap) => gap.status === "inspect_first").length,
-          partialLines: gaps.filter((gap) => gap.status === "partially_supplied").length,
-          missingLines: gaps.filter((gap) => gap.status === "missing").length,
-          optionalLines: gaps.filter((gap) => gap.status === "optional").length
+          requiredLines: gaps.filter((gap) => gap.optional !== true).length,
+          suppliedLines: gaps.filter((gap) => gap.optional !== true && gap.status === "supplied").length,
+          inspectFirstLines: gaps.filter((gap) => gap.optional !== true && gap.status === "inspect_first").length,
+          partialLines: gaps.filter((gap) => gap.optional !== true && gap.status === "partially_supplied").length,
+          missingLines: gaps.filter((gap) => gap.optional !== true && gap.status === "missing").length,
+          optionalLines: gaps.filter((gap) => gap.optional === true).length
         }
       }
     });

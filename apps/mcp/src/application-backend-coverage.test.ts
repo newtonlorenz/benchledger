@@ -90,7 +90,7 @@ function serviceFixture(): ApplicationService & Record<string, any> {
     updateBomLine: vi.fn(async (id: string, input: unknown) => mutation(apiLine({ ...(input as object), id, version: 2 }), id, 2)),
     retireBomLine: vi.fn(async (id: string) => mutation(apiLine({ id, version: 2 }), id, 2)),
     restoreBomLine: vi.fn(async (id: string) => mutation(apiLine({ id, version: 3 }), id, 3)),
-    evaluateBomGaps: vi.fn(async () => ({ revisionId: "revision-1", lines: [{ lineId: "bom-1", name: "M3 screw", status: "supplied", requiredQuantity: 4, suppliedQuantity: 4, inspectQuantity: 0, missingQuantity: 0, unit: "each", matchedItemIds: ["screw-m3"], reasons: ["confirmed"], alternatives: [], candidates: [{ itemId: "screw-m3", relationship: "exact", compatibility: "confirmed", availableQuantity: 4, suppliedQuantity: 4, inspectQuantity: 0, reason: "confirmed" }] }], totals: { suppliedLines: 1, inspectFirstLines: 0, partialLines: 0, missingLines: 0, optionalLines: 0 } })),
+    evaluateBomGaps: vi.fn(async () => ({ revisionId: "revision-1", lines: [{ lineId: "bom-1", name: "M3 screw", optional: false, status: "supplied", requiredQuantity: 4, suppliedQuantity: 4, inspectQuantity: 0, missingQuantity: 0, unit: "each", matchedItemIds: ["screw-m3"], reasons: ["confirmed"], alternatives: [], candidates: [{ itemId: "screw-m3", relationship: "exact", compatibility: "confirmed", availableQuantity: 4, suppliedQuantity: 4, inspectQuantity: 0, reason: "confirmed" }] }], totals: { requiredLines: 1, suppliedLines: 1, inspectFirstLines: 0, partialLines: 0, missingLines: 0, optionalLines: 0 } })),
     createReservation: vi.fn(async (_revisionId: string, input: unknown) => mutation(apiReservation({ ...(input as object) }), "reservation-1", 1)),
     releaseReservation: vi.fn(async (id: string) => mutation(apiReservation({ id, status: "released", version: 2 }), id, 2)),
     listReservations: vi.fn(async () => [apiReservation()]),
@@ -118,7 +118,7 @@ const transferProvider = {
 describe("createApplicationBackend translation coverage", () => {
   it("maps inventory filters, evidence states, dimensions, links, and stock history", async () => {
     const service = serviceFixture();
-    service.listInventory.mockResolvedValueOnce({ data: [
+    service.listInventory.mockResolvedValue({ data: [
       apiItem(),
       apiItem({ id: "commissioned-printer", kind: "printer", evidence: { state: "commissioned", source: "setup", observedAt: date }, availableQuantity: 1, condition: "new" }),
       apiItem({ id: "delivered", evidence: { state: "delivered_uncounted", source: "email", observedAt: date }, condition: "worn" }),
@@ -129,9 +129,9 @@ describe("createApplicationBackend translation coverage", () => {
     ], limit: 200 });
     const backend = createApplicationBackend(service);
     const filtered = await backend.inventory.list({ limit: 2, query: "petg", category: "electronics", availability: "ordered_unverified", location: "filament cabinet" }, context);
-    expect(service.listInventory).toHaveBeenCalledWith(expect.objectContaining({ q: "petg", kind: "electronic", evidence: "ordered_unverified", limit: 200 }));
-    expect(filtered.items).toHaveLength(2);
-    expect(filtered.nextCursor).toBe("2");
+    expect(service.listInventory).toHaveBeenCalledWith(expect.objectContaining({ q: "petg", kind: "electronic", limit: 200 }));
+    expect(filtered.items).toEqual([expect.objectContaining({ id: "ordered", availability: "ordered_unverified" })]);
+    expect(filtered.nextCursor).toBeNull();
     service.listInventory.mockResolvedValueOnce({ data: [
       apiItem(),
       apiItem({ id: "commissioned-printer", kind: "printer", evidence: { state: "commissioned", source: "setup", observedAt: date }, availableQuantity: 1, condition: "new" }),
@@ -142,7 +142,7 @@ describe("createApplicationBackend translation coverage", () => {
       apiItem({ id: "unknown", evidence: { state: "unknown", source: "legacy", observedAt: undefined }, availableQuantity: 2, dimensions: undefined, links: [] }),
     ], limit: 200 });
     const summary = await backend.inventory.summary({ limit: 50 }, context);
-    expect(summary.counts).toMatchObject({ totalItems: 7, confirmedItems: 2, inspectFirstItems: 1, missingItems: 0 });
+    expect(summary.counts).toEqual({ totalItems: 7, confirmedItems: 0, confirmedEvidenceItems: 2, availableConfirmedItems: 2, inspectFirstItems: 1, allocatedItems: 3, allocatedQuantities: [{ unit: "gram", value: 1099 }], depletedItems: 1, unverifiedItems: 2, retiredItems: 0, missingItems: 0 });
     const created = await backend.inventory.create({ name: "wire", category: "electronics", quantity: { value: 2, unit: "piece" }, evidence: { state: "delivery", source: "email", recordedAt: date }, dimensions: { length: 1, unit: "metre", source: "manufacturer", uncertainty: 0.01 }, condition: "opened", links: [{ label: "Shop", url: "https://shop.example/wire" }] }, context);
     expect(service.createInventoryItem).toHaveBeenCalledWith(expect.objectContaining({ kind: "electronic", unit: "each", evidence: expect.objectContaining({ state: "delivered_uncounted" }), dimensions: expect.objectContaining({ lengthMm: 1000, measured: false, uncertaintyMm: 10 }), condition: "worn" }), expect.objectContaining({ actor: context.actorId, source: "mcp", correlationId: context.correlationId, idempotencyKey: context.idempotencyKey, fingerprint: context.fingerprint }));
     expect(created.item).toMatchObject({ category: "electronic" });
@@ -150,6 +150,54 @@ describe("createApplicationBackend translation coverage", () => {
     expect(service.updateInventoryItem).toHaveBeenCalledWith("filament-petg", expect.objectContaining({ kind: "accessory", dimensions: { diameterMm: 0.4, measured: true } }), 2, expect.anything());
     const events = await backend.inventory.listStockEvents({ itemId: "filament-petg", limit: 20 }, context);
     expect(events.items.map((event) => event.kind)).toEqual(["receipt", "count_correction", "count_correction", "allocation", "use", "disposal", "loss", "return"]);
+  });
+
+  it("distinguishes fully allocated confirmed stock from genuinely depleted stock", async () => {
+    const service = serviceFixture();
+    service.listInventory.mockResolvedValueOnce({ data: [
+      apiItem({ id: "fully-allocated", quantity: 5, availableQuantity: 0, allocatedQuantity: 5, evidence: { state: "physically_counted", source: "count", observedAt: date } }),
+      apiItem({ id: "partially-allocated", quantity: 5, availableQuantity: 2, allocatedQuantity: 3, evidence: { state: "physically_counted", source: "count", observedAt: date } }),
+      apiItem({ id: "depleted", quantity: 0, availableQuantity: 0, allocatedQuantity: 0, evidence: { state: "physically_counted", source: "count", observedAt: date } }),
+    ], limit: 25 });
+    const backend = createApplicationBackend(service);
+
+    const result = await backend.inventory.list({ limit: 25 }, context);
+
+    expect(result.items).toEqual([
+      expect.objectContaining({ id: "fully-allocated", availability: "allocated", quantity: { value: 5, unit: "gram" }, availableQuantity: { value: 0, unit: "gram" }, allocatedQuantity: { value: 5, unit: "gram" } }),
+      expect.objectContaining({ id: "partially-allocated", availability: "allocated", availableQuantity: { value: 2, unit: "gram" }, allocatedQuantity: { value: 3, unit: "gram" } }),
+      expect.objectContaining({ id: "depleted", availability: "depleted", quantity: { value: 0, unit: "gram" }, allocatedQuantity: { value: 0, unit: "gram" } }),
+    ]);
+
+    service.listInventory.mockResolvedValueOnce({ data: [
+      apiItem({ id: "fully-allocated", quantity: 5, availableQuantity: 0, allocatedQuantity: 5, evidence: { state: "physically_counted", source: "count", observedAt: date } }),
+      apiItem({ id: "partially-allocated", quantity: 5, availableQuantity: 2, allocatedQuantity: 3, evidence: { state: "physically_counted", source: "count", observedAt: date } }),
+      apiItem({ id: "depleted", quantity: 0, availableQuantity: 0, allocatedQuantity: 0, evidence: { state: "physically_counted", source: "count", observedAt: date } }),
+      apiItem({ id: "commissioned", kind: "printer", quantity: 1, availableQuantity: 1, allocatedQuantity: 0, evidence: { state: "commissioned", source: "setup", observedAt: date } }),
+    ], limit: 200 });
+    await expect(backend.inventory.list({ availability: "allocated", limit: 25 }, context)).resolves.toMatchObject({
+      items: [
+        expect.objectContaining({ id: "fully-allocated", availability: "allocated" }),
+        expect.objectContaining({ id: "partially-allocated", availability: "allocated", availableQuantity: { value: 2, unit: "gram" } }),
+      ],
+    });
+    expect(service.listInventory).toHaveBeenLastCalledWith({ limit: 200 });
+  });
+
+  it("keeps retired inventory distinct from current stock states", async () => {
+    const service = serviceFixture();
+    service.listInventory.mockResolvedValue({ data: [
+      apiItem({ id: "retired-item", retiredAt: "2026-08-31T09:00:00.000Z", quantity: 4, availableQuantity: 0, allocatedQuantity: 4 }),
+    ], limit: 25 });
+    const backend = createApplicationBackend(service);
+
+    await expect(backend.inventory.list({ availability: "retired", limit: 25 }, context)).resolves.toMatchObject({
+      items: [expect.objectContaining({ id: "retired-item", availability: "retired" })],
+    });
+    expect(service.listInventory).toHaveBeenLastCalledWith({ limit: 200, includeRetired: true });
+    await expect(backend.inventory.summary({ limit: 25 }, context)).resolves.toMatchObject({
+      counts: { totalItems: 1, confirmedItems: 0, confirmedEvidenceItems: 1, availableConfirmedItems: 0, inspectFirstItems: 0, allocatedItems: 0, allocatedQuantities: [], depletedItems: 0, unverifiedItems: 0, retiredItems: 1, missingItems: 0 },
+    });
   });
 
   it("exhausts inventory pages before calculating summary totals", async () => {
@@ -170,13 +218,13 @@ describe("createApplicationBackend translation coverage", () => {
     const backend = createApplicationBackend(service);
     const summary = await backend.inventory.summary({ limit: 50 }, context);
 
-    expect(summary.counts).toEqual({ totalItems: 53, confirmedItems: 40, inspectFirstItems: 13, missingItems: 0 });
+    expect(summary.counts).toEqual({ totalItems: 53, confirmedItems: 0, confirmedEvidenceItems: 40, availableConfirmedItems: 40, inspectFirstItems: 13, allocatedItems: 40, allocatedQuantities: [{ unit: "gram", value: 39960 }], depletedItems: 0, unverifiedItems: 0, retiredItems: 0, missingItems: 0 });
     expect(summary.categories).toEqual([
       { category: "filament", itemCount: 27 },
       { category: "electronic", itemCount: 26 },
     ]);
-    expect(service.listInventory).toHaveBeenNthCalledWith(1, { limit: 50 });
-    expect(service.listInventory).toHaveBeenNthCalledWith(2, { limit: 50, cursor: "50" });
+    expect(service.listInventory).toHaveBeenNthCalledWith(1, { limit: 50, includeRetired: true });
+    expect(service.listInventory).toHaveBeenNthCalledWith(2, { limit: 50, includeRetired: true, cursor: "50" });
   });
 
   it("fails closed when an inventory summary cursor repeats", async () => {
@@ -281,7 +329,7 @@ describe("createApplicationBackend translation coverage", () => {
           { itemId: "board-unknown", relationship: "uncertain_alternative", compatibility: "unknown", availableQuantity: 0, suppliedQuantity: 0, inspectQuantity: 0, reason: "needs review" },
         ],
       }],
-      totals: { suppliedLines: 0, inspectFirstLines: 0, partialLines: 1, missingLines: 0, optionalLines: 0 },
+      totals: { requiredLines: 1, suppliedLines: 0, inspectFirstLines: 0, partialLines: 1, missingLines: 0, optionalLines: 0 },
     });
 
     const backend = createApplicationBackend(service);
@@ -319,7 +367,7 @@ describe("createApplicationBackend translation coverage", () => {
           { itemId: "board-b", relationship: "constraint_match", compatibility: "unknown", availableQuantity: 0, suppliedQuantity: 0, inspectQuantity: 0, reason: "No explicit compatibility decision." },
         ],
       }],
-      totals: { suppliedLines: 1, inspectFirstLines: 0, partialLines: 0, missingLines: 0, optionalLines: 0 },
+      totals: { requiredLines: 1, suppliedLines: 1, inspectFirstLines: 0, partialLines: 0, missingLines: 0, optionalLines: 0 },
     });
 
     const backend = createApplicationBackend(service);

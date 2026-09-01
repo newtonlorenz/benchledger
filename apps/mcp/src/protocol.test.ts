@@ -15,7 +15,7 @@ function backend(): BenchLedgerBackend {
   const emptyPage = { items: [], nextCursor: null, hasMore: false };
   return {
     inventory: {
-      summary: async () => ({ generatedAt: "2026-08-30T10:00:00.000Z", counts: { totalItems: 0, confirmedItems: 0, inspectFirstItems: 0, missingItems: 0 }, categories: [] }),
+      summary: async () => ({ generatedAt: "2026-08-30T10:00:00.000Z", counts: { totalItems: 0, confirmedItems: 0, confirmedEvidenceItems: 0, availableConfirmedItems: 0, inspectFirstItems: 0, allocatedItems: 0, allocatedQuantities: [], depletedItems: 0, unverifiedItems: 0, retiredItems: 0, missingItems: 0 }, categories: [] }),
       list: async () => emptyPage,
       get: async () => { throw new Error("not used"); },
       create: async () => { throw new Error("not used"); },
