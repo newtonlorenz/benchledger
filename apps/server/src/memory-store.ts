@@ -228,16 +228,22 @@ class MemoryInventory implements InventoryPort {
     const changes = normalizeInventoryBulkChanges(input.changes);
     const targets = [...input.targets].sort((left, right) => left.itemId.localeCompare(right.itemId));
     const seen = new Set<string>();
+    const staleTargets: Array<{ readonly itemId: string; readonly expectedVersion: number; readonly actualVersion: number }> = [];
     const prepared = targets.map((target) => {
       if (seen.has(target.itemId)) throw new ApplicationError("validation", "Bulk targets must contain unique item ids");
       seen.add(target.itemId);
       if (!Number.isSafeInteger(target.expectedVersion) || target.expectedVersion <= 0) throw new ApplicationError("validation", "Bulk targets require a positive expected version");
       const current = this.items.get(target.itemId);
       if (current === undefined || current.retiredAt !== undefined) throw new ApplicationError("not_found", `Inventory item '${target.itemId}' was not found`);
-      if (current.version !== target.expectedVersion) throw new ApplicationError("conflict", "One or more inventory items changed since they were read", { staleTargets: [{ itemId: target.itemId, expectedVersion: target.expectedVersion, actualVersion: current.version }] });
+      if (current.version !== target.expectedVersion) {
+        staleTargets.push({ itemId: target.itemId, expectedVersion: target.expectedVersion, actualVersion: current.version });
+      }
       const applied = applyInventoryBulkChanges(current, changes);
       return { target, current, applied };
     });
+    if (staleTargets.length > 0) {
+      throw new ApplicationError("conflict", "One or more inventory items changed since they were read", { staleTargets });
+    }
     const updated: InventoryItem[] = [];
     const unchanged: InventoryItem[] = [];
     for (const entry of prepared) {
