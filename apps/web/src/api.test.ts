@@ -247,6 +247,16 @@ describe("authenticated BenchLedger API adapter", () => {
     expect(new URL(String(url), "http://localhost").search).toBe("?q=ESP32&kind=electronic&evidence=physically_counted&available=true&limit=10&cursor=20");
   });
 
+  it("bounds an overlong inventory search before sending it to the server", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({ data: [], limit: 25, total: 0 }));
+    const adapter = createWorkspaceAdapter();
+
+    await adapter.listInventory({ q: `${"x".repeat(201)}  `, limit: 25 });
+
+    const [url] = fetchMock.mock.calls[0]!;
+    expect(new URL(String(url), "http://localhost").searchParams.get("q")).toBe("x".repeat(200));
+  });
+
   it("surfaces an authentication boundary instead of silently showing synthetic data", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "0.1.0", demo: false, now: "2026-08-30T10:00:00.000Z" }))
       .mockResolvedValueOnce(jsonResponse({ error: { code: "unauthenticated", message: "Authentication is required" } }, 401));
