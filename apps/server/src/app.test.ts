@@ -445,6 +445,16 @@ describe("BenchLedger HTTP API", () => {
       });
       expect(inventoryGet.description).toMatch(/categoryNodeId and unassigned=true are mutually exclusive/i);
       expect(document).toMatchObject({ security: [{ bearerAuth: [] }, { cookieAuth: [] }] });
+      expect(document.paths["/inventory/bulk"]).toMatchObject({
+        patch: {
+          parameters: [expect.objectContaining({
+            name: "Idempotency-Key",
+            in: "header",
+            required: true,
+            schema: { type: "string", minLength: 8, maxLength: 200 }
+          })]
+        }
+      });
       const payload = {
         project: { id: "atomic-project", name: "Atomic project", description: "One command", status: "planning" },
         revision: { id: "atomic-revision", name: "Initial", notes: "Starting point", status: "concept" }
