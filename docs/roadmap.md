@@ -7,6 +7,23 @@ The consolidated product outcome and simplified beginner-to-expert experience ar
 defined in [`maker-project-management-prd.md`](maker-project-management-prd.md).
 The detailed `REQ-*` engineering contracts below remain the implementation annex.
 
+### Maker project management delivery status
+
+- [x] `MPM-A` / `MPM-001`: active BOM rows, optional requirements, confirmed,
+  allocated and inspect-first inventory, and Ready/Check/Decide/Source totals now
+  reconcile across the shared application, HTTP, MCP and web projections.
+- [x] `MPM-002`: project lifecycle is now the single canonical
+  `idea → planned → ready → building → validating → complete → archived`
+  vocabulary across domain, database, HTTP/OpenAPI, MCP and web. `blocked`
+  remains derived from reasons, while the revision-scoped manufacturing evidence
+  ladder remains independent. The migration maps only known legacy values,
+  retains each original value in audit history and fails closed on unknown data.
+  Project context also returns the canonical lifecycle and structured derived
+  blocker reasons without persisting `blocked` as a status.
+
+These checks describe the current roadmap branch. They do not imply that its
+commits have been pushed, reviewed on GitHub, merged or deployed.
+
 ## Agent-first maker workflow backlog
 
 The client-agent feedback and its complete sanitized contract live in
@@ -38,8 +55,10 @@ purchasing, credential changes, destructive cleanup, or merging.
   implemented on the current feature branch:** durable BOM retirement excludes
   inactive requirements; inventory reads distinguish on-hand, available,
   allocated, depleted, unverified, and retired states; summary allocation
-  quantities are grouped by unit; and optional lines no longer inflate required
-  outcome totals. The broader Ready/Check/Decide/Source contract remains.**
+  quantities are grouped by unit; optional lines no longer inflate required
+  outcome totals; and Ready/Check/Decide/Source outcomes now preserve exact
+  missing specification decisions. Remaining work is the broader `REQ-004`
+  graph/read-back contract, not a second readiness vocabulary.**
 - [ ] `BL-AW-004` → `REQ-005`: bounded graph list/read-back tools and resources
   for every created project entity. **Proposed; audit existing list operations
   before adding new ones.**

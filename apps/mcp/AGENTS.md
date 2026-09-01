@@ -104,6 +104,14 @@ benchledger://projects/{projectId}/bom
 benchledger://projects/{projectId}/artifacts
 ```
 
+Every project list, detail, context and mutation uses the same lifecycle:
+`idea`, `planned`, `ready`, `building`, `validating`, `complete`, `archived`.
+Use `retire_project` to archive a project. Never send legacy values such as
+`active`, `planning`, `paused`, `validation` or `retired`; the public boundary
+rejects them. `blocked` is derived from actionable reasons and is not a lifecycle
+value. Project lifecycle changes do not advance or reset the separate revision
+evidence ladder from `concept` through `production approved`.
+
 ## 3. Ask the simple question first (minute 2–4)
 
 For a beginner, use plain language and explain one next action:

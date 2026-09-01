@@ -134,10 +134,11 @@ describe("stock/project/procurement mapper edges", () => {
   });
 
   it("projects project graph values, constraints, reservations, and offers", () => {
-    expect(["idea", "planning", "in_progress", "validation", "complete", "retired"].map((status) => nativeProjectStatus(status as never))).toEqual(["active", "active", "active", "active", "complete", "retired"]);
-    const project: Project = { id: "project", name: "Project", slug: "project", status: "active", visibility: "private", description: "desc", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" };
-    expect(apiProjectFromNative(project, 2, {}, undefined)).toMatchObject({ id: "project", status: "in_progress", version: 2 });
-    expect(apiProjectFromNative(project, 2, { status: "idea" }, "revision")).toMatchObject({ status: "idea", currentRevisionId: "revision" });
+    expect(["idea", "planned", "ready", "building", "validating", "complete", "archived"].map((status) => nativeProjectStatus(status))).toEqual(["idea", "planned", "ready", "building", "validating", "complete", "archived"]);
+    expect(() => nativeProjectStatus("planning")).toThrow(/canonical/i);
+    const project: Project = { id: "project", name: "Project", slug: "project", status: "idea", visibility: "private", description: "desc", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" };
+    expect(apiProjectFromNative(project, 2, {}, undefined)).toMatchObject({ id: "project", status: "idea", version: 2 });
+    expect(apiProjectFromNative({ ...project, status: "building" }, 2, { status: "idea" }, "revision")).toMatchObject({ status: "building", currentRevisionId: "revision" });
     expect(apiProjectFromNative({ ...project, status: "complete" }, 2, { status: "invalid" }, undefined).status).toBe("complete");
     const work: WorkItem = { id: "work", projectId: "project", name: "Work", kind: "part", createdAt: project.createdAt, updatedAt: project.updatedAt };
     expect(apiWorkItemFromNative(work, 1, undefined)).not.toHaveProperty("currentRevisionId");

@@ -14,7 +14,7 @@ const item = (overrides: Partial<InventoryItem> = {}): InventoryItem => ({
 function fakePorts(seed = item()): ApplicationPorts {
   const events: EventBusEvent[] = [];
   let inventory = seed;
-  let project: Project = { id: "project-1", name: "Lamp", status: "planning", createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1 };
+  let project: Project = { id: "project-1", name: "Lamp", status: "planned", createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1 };
   let auditCount = 0;
   const bom: BomLine[] = [];
   const reservations: Reservation[] = [];
@@ -288,14 +288,14 @@ describe("ApplicationService", () => {
   it("covers project, work-item, revision, and BOM command/query flows", async () => {
     const ports = fakePorts();
     const service = new ApplicationService(ports);
-    await expect(service.listProjects({ q: "lamp", status: "planning", limit: 10, cursor: "project-cursor" })).resolves.toMatchObject({ data: [{ id: "project-1" }] });
+    await expect(service.listProjects({ q: "lamp", status: "planned", limit: 10, cursor: "project-cursor" })).resolves.toMatchObject({ data: [{ id: "project-1" }] });
     await expect(service.getProject("project-1")).resolves.toMatchObject({ name: "Lamp" });
     await expect(service.getProject("missing-project")).rejects.toMatchObject({ code: "not_found" });
 
     const project = await service.createProject({ id: "project-new", name: "Enclosure", description: "A printed enclosure", status: "idea" }, context);
     expect(project).toMatchObject({ data: { id: "project-new", status: "idea" }, audit: { action: "project.create" } });
-    const projectUpdate = await service.updateProject("project-1", { status: "in_progress", description: "Updated plan" }, 1, context);
-    expect(projectUpdate).toMatchObject({ data: { status: "in_progress" }, audit: { action: "project.update", version: 2 } });
+    const projectUpdate = await service.updateProject("project-1", { status: "building", description: "Updated plan" }, 1, context);
+    expect(projectUpdate).toMatchObject({ data: { status: "building" }, audit: { action: "project.update", version: 2 } });
 
     await expect(service.listWorkItems("project-1")).resolves.toEqual([]);
     await expect(service.getWorkItem("work-1")).resolves.toMatchObject({ id: "work-1" });
@@ -1151,7 +1151,7 @@ describe("ApplicationService", () => {
     const service = new ApplicationService(ports);
 
     const result = await service.createProjectWithInitialRevision({
-      project: { id: "project-atomic", name: "Atomic lamp", status: "planning" },
+      project: { id: "project-atomic", name: "Atomic lamp", status: "planned" },
       revision: { id: "revision-atomic", name: "Initial", status: "concept" }
     }, { ...context, idempotencyKey: "atomic-service-1" });
 
@@ -1174,13 +1174,13 @@ describe("ApplicationService", () => {
     };
     ports.events.publish = () => { publishCalls += 1; };
     const idempotentContext = { ...context, idempotencyKey: "project-idempotency", fingerprint: "payload-a" };
-    const first = await service.createProject({ id: "idempotent-project", name: "Idempotent project", status: "planning" }, idempotentContext);
-    const replay = await service.createProject({ id: "idempotent-project", name: "Idempotent project", status: "planning" }, idempotentContext);
+    const first = await service.createProject({ id: "idempotent-project", name: "Idempotent project", status: "planned" }, idempotentContext);
+    const replay = await service.createProject({ id: "idempotent-project", name: "Idempotent project", status: "planned" }, idempotentContext);
     expect(createCalls).toBe(1);
     expect(publishCalls).toBe(1);
     expect(first.replayed).toBe(false);
     expect(replay).toMatchObject({ replayed: true, data: first.data, audit: first.audit });
-    await expect(service.createProject({ id: "idempotent-project", name: "Different project", status: "planning" }, { ...idempotentContext, fingerprint: "payload-b" })).rejects.toMatchObject({ code: "idempotency_conflict" });
+    await expect(service.createProject({ id: "idempotent-project", name: "Different project", status: "planned" }, { ...idempotentContext, fingerprint: "payload-b" })).rejects.toMatchObject({ code: "idempotency_conflict" });
 
     const legacyKey = "legacy-idempotency";
     records.set(legacyKey, first);

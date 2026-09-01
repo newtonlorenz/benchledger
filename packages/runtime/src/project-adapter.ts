@@ -137,7 +137,6 @@ export class ProductionProjectAdapter implements ProjectPort {
       return this.database.transaction(() => {
         const created = this.projects.create(native);
         this.state.setInitialVersion(PROJECT, created.id);
-        this.state.setMetadata(PROJECT, created.id, { status: input.status });
         return this.toApiProject(created);
       });
     });
@@ -168,12 +167,11 @@ export class ProductionProjectAdapter implements ProjectPort {
       return this.database.transaction(() => {
         const createdProject = this.projects.create(nativeProject);
         this.state.setInitialVersion(PROJECT, createdProject.id);
-        this.state.setMetadata(PROJECT, createdProject.id, { status: input.project.status });
         const createdRevision = this.projects.createRevision(nativeRevision);
         this.state.setInitialVersion(PROJECT_REVISION, createdRevision.id);
-        this.state.setMetadata(PROJECT, createdProject.id, { status: input.project.status, currentRevisionId: createdRevision.id });
+        this.state.setMetadata(PROJECT, createdProject.id, { currentRevisionId: createdRevision.id });
         return {
-          project: apiProjectFromNative(createdProject, 1, this.state.getMetadata(PROJECT, createdProject.id), createdRevision.id),
+          project: apiProjectFromNative(createdProject, 1, {}, createdRevision.id),
           revision: apiProjectRevisionFromNative(createdRevision, 1)
         };
       });
@@ -189,11 +187,12 @@ export class ProductionProjectAdapter implements ProjectPort {
         const current = this.toApiProject(native);
         const status = input.status ?? current.status;
         const updatedAt = nowIso();
-        this.database.run("UPDATE projects SET name = ?, description = ?, status = ?, updated_at = ?, retired_at = ? WHERE id = ?", [input.name ?? native.name, input.description ?? native.description ?? null, nativeProjectStatus(status), updatedAt, status === "retired" ? updatedAt : native.retiredAt ?? null, id]);
-        const updated: Project = { ...native, name: input.name ?? native.name, ...(input.description === undefined && native.description === undefined ? {} : { description: input.description ?? native.description }), status: nativeProjectStatus(status), updatedAt, ...(status === "retired" ? { retiredAt: updatedAt } : native.retiredAt === undefined ? {} : { retiredAt: native.retiredAt }) };
+        const canonicalStatus = nativeProjectStatus(status);
+        this.database.run("UPDATE projects SET name = ?, description = ?, status = ?, updated_at = ?, retired_at = ? WHERE id = ?", [input.name ?? native.name, input.description ?? native.description ?? null, canonicalStatus, updatedAt, canonicalStatus === "archived" ? updatedAt : null, id]);
+        const { retiredAt: _retiredAt, ...nativeWithoutRetirement } = native;
+        const updated: Project = { ...nativeWithoutRetirement, name: input.name ?? native.name, ...(input.description === undefined && native.description === undefined ? {} : { description: input.description ?? native.description }), status: canonicalStatus, updatedAt, ...(canonicalStatus === "archived" ? { retiredAt: updatedAt } : {}) };
         const version = this.state.bumpVersion(PROJECT, id);
-        this.state.setMetadata(PROJECT, id, { ...this.state.getMetadata(PROJECT, id), status });
-        return apiProjectFromNative(updated, version, this.state.getMetadata(PROJECT, id), this.latestProjectRevisionId(id));
+        return apiProjectFromNative(updated, version, {}, this.latestProjectRevisionId(id));
       });
     });
   }
@@ -457,7 +456,7 @@ export class ProductionProjectAdapter implements ProjectPort {
 
   private toApiProject(project: Project): ApiProject {
     const revisions = this.projects.listRevisions(project.id);
-    return apiProjectFromNative(project, this.state.getVersion(PROJECT, project.id), this.state.getMetadata(PROJECT, project.id), currentRevisionId(revisions));
+    return apiProjectFromNative(project, this.state.getVersion(PROJECT, project.id), {}, currentRevisionId(revisions));
   }
 
   private toApiBom(line: BomLine, version = this.state.getVersion(BOM, line.id)): ApiBomLine {

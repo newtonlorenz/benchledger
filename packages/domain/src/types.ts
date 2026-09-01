@@ -202,7 +202,9 @@ export type RevisionStatus =
   | "fit/function verified"
   | "production approved";
 
-export type ProjectStatus = "active" | "on_hold" | "complete" | "retired";
+/** Canonical project lifecycle. Legacy values are accepted only by migration
+ * adapters and are never represented by a domain Project. */
+export type ProjectStatus = "idea" | "planned" | "ready" | "building" | "validating" | "complete" | "archived";
 
 export interface Project {
   id: string;

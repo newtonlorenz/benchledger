@@ -32,7 +32,7 @@ function apiItem(overrides: Record<string, unknown> = {}) {
 }
 
 function apiProject(overrides: Record<string, unknown> = {}) {
-  return { id: "project-1", name: "Lamp", description: "A maker project", status: "in_progress", currentRevisionId: "revision-1", createdAt: date, updatedAt: date, version: 2, ...overrides };
+  return { id: "project-1", name: "Lamp", description: "A maker project", status: "building", currentRevisionId: "revision-1", createdAt: date, updatedAt: date, version: 2, ...overrides };
 }
 
 function apiRevision(overrides: Record<string, unknown> = {}) {
@@ -412,9 +412,9 @@ describe("createApplicationBackend translation coverage", () => {
   it("maps project, revision, BOM, reservations, usage, and context branches", async () => {
     const service = serviceFixture();
     const backend = createApplicationBackend(service);
-    const normalPage = await backend.projects.list({ query: "lamp", status: "paused", limit: 5 }, context);
-    expect(service.listProjects).toHaveBeenCalledWith(expect.objectContaining({ q: "lamp", status: "validation", limit: 5 }));
-    expect(normalPage.items[0]).toMatchObject({ id: "project-1", status: "active", visibility: "private" });
+    const normalPage = await backend.projects.list({ query: "lamp", status: "validating", limit: 5 }, context);
+    expect(service.listProjects).toHaveBeenCalledWith(expect.objectContaining({ q: "lamp", status: "validating", limit: 5 }));
+    expect(normalPage.items[0]).toMatchObject({ id: "project-1", status: "building", visibility: "private" });
     const scopedPage = await backend.projects.list({ limit: 1 }, { ...context, projectIds: ["project-1", "missing"] });
     expect(scopedPage.items).toHaveLength(1);
     service.getProject.mockResolvedValueOnce(apiProject({ status: "complete" }));
@@ -422,7 +422,7 @@ describe("createApplicationBackend translation coverage", () => {
     expect(await backend.projects.create({ name: "Lamp", description: "x" }, context)).toMatchObject({ id: "created-project", project: { visibility: "private" } });
     expect(await backend.projects.createWithInitialRevision({ name: "Lamp", projectId: "fixed", revisionId: "fixed-r", revisionSummary: "Plan" }, context)).toMatchObject({ id: "fixed", revision: { status: "concept" } });
     expect(service.createProjectWithInitialRevision).toHaveBeenCalledWith(expect.objectContaining({ project: expect.objectContaining({ id: "fixed", status: "idea" }), revision: expect.objectContaining({ id: "fixed-r", name: "Plan", notes: "Plan" }) }), expect.anything());
-    await backend.projects.update({ projectId: "project-1", expectedVersion: 2, status: "paused", name: "Paused lamp" }, context);
+    await backend.projects.update({ projectId: "project-1", expectedVersion: 2, status: "ready", name: "Ready lamp" }, context);
     await backend.projects.retire({ projectId: "project-1", expectedVersion: 3 }, context);
     await backend.projects.createWorkItem({ projectId: "project-1", name: "Base", kind: "part", description: "base" }, context);
     await backend.projects.getWorkItem({ workItemId: "work-1" }, context);
@@ -435,8 +435,24 @@ describe("createApplicationBackend translation coverage", () => {
     }
     const contextResult = await backend.projects.context({ projectId: "project-1" }, context);
     expect(contextResult.text).toContain("Work items: Base (part)");
+    expect(contextResult).toMatchObject({ status: "building", blocked: { blocked: false, reasons: [] } });
+    service.evaluateBomGaps.mockResolvedValueOnce({
+      revisionId: "revision-1",
+      lines: [
+        { lineId: "bom-blocked", name: "M3 inserts", optional: false, status: "missing", decision: "source", requiredQuantity: 4, suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 4, unit: "each", matchedItemIds: [], reasons: ["No confirmed stock covers the remaining quantity."], alternatives: [], candidates: [] },
+        { lineId: "bom-decide", name: "Power supply", optional: false, status: "specify_first", decision: "decide", missingDecisions: ["current_or_load", "connector"], requiredQuantity: 1, suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 1, unit: "each", matchedItemIds: [], reasons: [], alternatives: [], candidates: [] },
+      ],
+      totals: { requiredLines: 2, suppliedLines: 0, inspectFirstLines: 0, partialLines: 0, missingLines: 1, optionalLines: 0, readyLines: 0, checkLines: 0, decideLines: 1, sourceLines: 1 },
+    });
+    const blockedContext = await backend.projects.context({ projectId: "project-1" }, context);
+    expect(blockedContext.blocked).toEqual({ blocked: true, reasons: [
+      { source: "bom", projectRevisionId: "revision-1", bomLineId: "bom-blocked", decision: "source", reason: "No confirmed stock covers the remaining quantity." },
+      { source: "bom", projectRevisionId: "revision-1", bomLineId: "bom-decide", decision: "decide", reason: "Resolve: current_or_load, connector." },
+    ] });
     service.getProject.mockResolvedValueOnce(apiProject({ currentRevisionId: undefined }));
-    expect((await backend.projects.context({ projectId: "project-1" }, context)).text).toContain("Current revision: not selected");
+    const noRevisionContext = await backend.projects.context({ projectId: "project-1" }, context);
+    expect(noRevisionContext.text).toContain("Current revision: not selected");
+    expect(noRevisionContext).toMatchObject({ status: "building", blocked: { blocked: false, reasons: [] } });
     const line = await backend.bom.createLine({ projectRevisionId: "revision-1", description: "M3", quantity: 4, unit: "piece", requirement: "optional", compatibleItemIds: ["alt"], constraints: { model: "M3" }, notes: "note" }, context);
     expect(line.line).toMatchObject({ requirement: "optional", description: "M3", compatibleItemIds: ["alt"] });
     const structuredLine = await backend.bom.createLine({ projectRevisionId: "revision-1", description: "Controller", quantity: 1, unit: "piece", alternatives: [{ itemId: "board-alt", compatible: "confirmed", reason: "same pinout" }] }, context);

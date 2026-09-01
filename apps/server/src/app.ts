@@ -14,7 +14,7 @@ import {
   createCatalogProductSchema, updateCatalogProductSchema,
   createInventoryProductProfileSchema, createInventoryWithProductProfileSchema, updateInventoryProductProfileSchema,
   createBuildConfigurationSnapshotSchema, saveReconciliationDraftSchema, commitReconciliationSchema,
-  workspaceSecurityMutationSchema
+  workspaceSecurityMutationSchema, projectStatusSchema
 } from "@benchledger/api-contract";
 import { ApplicationError, ApplicationService } from "@benchledger/application";
 import type { ApplicationPorts, BeginUploadInput, BuildConfigurationListOptions, CatalogProductListOptions, GapEvaluation, Mutation, Page, ProjectListOptions, RequestContext } from "@benchledger/application";
@@ -648,6 +648,7 @@ function jsonOpenApi(version: string): Record<string, unknown> {
     { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } },
     { name: "cursor", in: "query", required: false, schema: { type: "string", maxLength: 200 } }
   ];
+  const projectLifecycleValues = ["idea", "planned", "ready", "building", "validating", "complete", "archived"];
   return {
     openapi: "3.1.0",
     info: { title: "BenchLedger API", version, description: "Evidence-based maker inventory and project workspace API." },
@@ -667,7 +668,8 @@ function jsonOpenApi(version: string): Record<string, unknown> {
         CreateInventoryWithProductProfile: inventoryWithProductProfileSchema,
         InventoryCategory: inventoryCategorySchema,
         CreateInventoryCategory: createInventoryCategorySchema,
-        UpdateInventoryCategory: updateInventoryCategorySchema
+        UpdateInventoryCategory: updateInventoryCategorySchema,
+        ProjectLifecycle: { type: "string", enum: projectLifecycleValues, description: "Canonical project lifecycle. Blocked is derived from reasons and is not a lifecycle value." }
       }
     },
     paths: {
@@ -771,7 +773,7 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       "/inventory/{id}/product-profile": { get: { responses: { "200": { description: "Physical inventory product profile" }, "404": { description: "Profile not found" } } }, put: { responses: { "200": { description: "Updated physical inventory product profile" } } } },
       "/inventory/{id}/count": { post: { responses: { "201": { description: "Recorded physical count" } } } },
       "/inventory/{id}/stock-events": { get: { responses: { "200": { description: "Stock event page" } } }, post: { responses: { "201": { description: "Stock mutation" } } } },
-      "/projects": { get: { responses: { "200": { description: "Project page" } } }, post: { responses: { "201": { description: "Project" } } } },
+      "/projects": { get: { description: "Returns a bounded project page. Status uses the canonical project lifecycle.", parameters: [{ name: "status", in: "query", required: false, schema: { $ref: "#/components/schemas/ProjectLifecycle" } }], responses: { "200": { description: "Project page" } } }, post: { responses: { "201": { description: "Project" } } } },
       "/projects/with-initial-revision": { post: { responses: { "201": { description: "Project and initial revision mutation" } } } },
       "/projects/{id}/revisions": { post: { responses: { "201": { description: "Project revision" } } } },
       "/catalog/products": { get: { responses: { "200": { description: "Bounded exact catalog product page" } } }, post: { responses: { "201": { description: "Catalog product mutation" } } } },
@@ -1367,7 +1369,9 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   app.get(route("/projects"), async (request) => {
     requireScope(request, "read", auth);
     const query = request.query as { q?: string; status?: ProjectListOptions["status"]; limit?: string; cursor?: string };
-    const parsed = { ...(query.q === undefined ? {} : { q: query.q }), ...(query.status === undefined ? {} : { status: query.status }), limit: Math.min(Math.max(Number(query.limit ?? 50), 1), 200), ...(query.cursor === undefined ? {} : { cursor: query.cursor }) } satisfies ProjectListOptions;
+    const parsedStatus = query.status === undefined ? undefined : projectStatusSchema.safeParse(query.status);
+    if (parsedStatus !== undefined && !parsedStatus.success) throw new ApplicationError("validation", "Project status must be one of the canonical lifecycle values");
+    const parsed = { ...(query.q === undefined ? {} : { q: query.q }), ...(parsedStatus === undefined ? {} : { status: parsedStatus.data }), limit: Math.min(Math.max(Number(query.limit ?? 50), 1), 200), ...(query.cursor === undefined ? {} : { cursor: query.cursor }) } satisfies ProjectListOptions;
     return request.principal?.projectIds === undefined ? service.listProjects(parsed) : scopedProjectPage(service, parsed, request.principal.projectIds);
   });
   app.post(route("/projects"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const mutation = await service.createProject(parseBody(createProjectSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });

@@ -315,7 +315,29 @@ export const usageInputSchema = z.object({
   note: z.string().max(2000).optional()
 }).strict();
 
-export const projectStatusSchema = z.enum(["idea", "planning", "in_progress", "validation", "complete", "retired"]);
+/**
+ * The only project lifecycle exposed by the public contract.  `blocked` is a
+ * derived readiness condition and deliberately cannot be persisted as a
+ * project status.  Legacy values are handled by the runtime migration/read
+ * projection, never accepted as new public writes.
+ */
+export const projectLifecycleSchema = z.enum(["idea", "planned", "ready", "building", "validating", "complete", "archived"]);
+export const projectStatusSchema = projectLifecycleSchema;
+export type ProjectLifecycleValue = z.infer<typeof projectLifecycleSchema>;
+
+/** Read/migration helper for records written before MPM-002. */
+export function canonicalProjectLifecycle(value: unknown): ProjectLifecycleValue | undefined {
+  if (projectLifecycleSchema.safeParse(value).success) return value as ProjectLifecycleValue;
+  switch (value) {
+    case "active":
+    case "on_hold": return "idea";
+    case "planning": return "planned";
+    case "in_progress": return "building";
+    case "validation": return "validating";
+    case "retired": return "archived";
+    default: return undefined;
+  }
+}
 export const workItemKindSchema = z.enum(["part", "assembly", "electronics", "firmware", "document", "other"]);
 export const revisionStatusSchema = z.enum([
   "concept", "CAD complete", "DFAM reviewed", "mesh validated", "slicer validated",

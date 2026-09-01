@@ -10,7 +10,7 @@ email IDs, credentials, or real supplier history.
 project:
   id: project-desk-sensor
   name: Desk sensor enclosure
-  status: active
+  status: planned
   visibility: private
 work_items:
   - id: work-enclosure
@@ -77,9 +77,11 @@ base64.
 
 1. Ask “Can I build this with what I have?”
 2. Refresh context and read the inventory summary.
-3. Evaluate the BOM and explain `wire-dupont` as inspect-first.
-4. Show one next action: count the wires or compare insert offers.
-5. Produce a short list with one required purchase and no optional upsell.
+3. Read project context: the lifecycle is `planned` and the derived blocker list
+   identifies the wire inspection and missing inserts without changing project status.
+4. Evaluate the BOM and explain `wire-dupont` as inspect-first.
+5. Show one next action: count the wires or compare insert offers.
+6. Produce a short list with one required purchase and no optional upsell.
 
 ## Expert walkthrough
 

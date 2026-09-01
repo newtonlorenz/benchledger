@@ -471,26 +471,28 @@ describe("production audit adapter", () => {
 describe("production project adapter", () => {
   it("supports project/work-item history, BOM revisioning, and status filtering", async () => {
     const runtime = await makeRuntime();
-    const allStatuses = ["idea", "planning", "in_progress", "validation", "complete", "retired"] as const;
+    const allStatuses = ["idea", "planned", "ready", "building", "validating", "complete", "archived"] as const;
     for (const status of allStatuses) {
       await runtime.ports.projects.createProject({ id: `status-${status}`, name: `Status ${status}`, status }, context());
     }
     await runtime.ports.inventory.createItem({ id: "board-adapter", name: "ESP32 board", kind: "electronic", quantity: 2, unit: "each", tags: ["board"], links: [], evidence: { state: "physically_counted" } }, context());
     await runtime.ports.inventory.createItem({ id: "alternative-adapter", name: "Compatible board", kind: "electronic", quantity: 2, unit: "each", tags: ["board"], links: [], evidence: { state: "physically_counted" } }, context());
-    const project = await runtime.ports.projects.createProject({ id: "project-adapter", name: "Lamp controller", description: "A project description", status: "planning" }, context());
-    expect(project).toMatchObject({ id: project.id, status: "planning", version: 1 });
+    const project = await runtime.ports.projects.createProject({ id: "project-adapter", name: "Lamp controller", description: "A project description", status: "planned" }, context());
+    expect(project).toMatchObject({ id: project.id, status: "planned", version: 1 });
     const freshProject = await runtime.ports.projects.getProject(project.id);
     expect(freshProject).not.toHaveProperty("currentRevisionId");
+    expect(runtime.database.get("SELECT payload_json FROM forge_runtime_metadata WHERE entity_type = ? AND entity_id = ?", ["project", project.id])).toBeUndefined();
     await expect(runtime.ports.projects.getProject("missing-project")).resolves.toBeNull();
     await expect(runtime.ports.projects.listProjects({ limit: 100, q: "lamp" })).resolves.toMatchObject({ data: [{ id: project.id }], total: 1 });
     await expect(runtime.ports.projects.listProjects({ limit: 2, status: "idea" })).resolves.toMatchObject({ data: [{ id: "status-idea" }], total: 1 });
-    await expect(runtime.ports.projects.listProjects({ limit: 2, cursor: "bad" })).resolves.toMatchObject({ data: expect.any(Array), limit: 2, total: 7, nextCursor: "2" });
+    await expect(runtime.ports.projects.listProjects({ limit: 2, cursor: "bad" })).resolves.toMatchObject({ data: expect.any(Array), limit: 2, total: 8, nextCursor: "2" });
 
-    const updatedProject = await runtime.ports.projects.updateProject(project.id, { name: "Lamp controller v2", description: "Updated description", status: "in_progress" }, project.version, context());
-    expect(updatedProject).toMatchObject({ name: "Lamp controller v2", description: "Updated description", status: "in_progress", version: 2 });
+    const updatedProject = await runtime.ports.projects.updateProject(project.id, { name: "Lamp controller v2", description: "Updated description", status: "building" }, project.version, context());
+    expect(updatedProject).toMatchObject({ name: "Lamp controller v2", description: "Updated description", status: "building", version: 2 });
+    expect(runtime.database.get("SELECT payload_json FROM forge_runtime_metadata WHERE entity_type = ? AND entity_id = ?", ["project", project.id])).toBeUndefined();
     await expect(runtime.ports.projects.updateProject(project.id, { name: "stale" }, project.version, context())).rejects.toMatchObject({ code: "conflict" });
-    const retired = await runtime.ports.projects.updateProject(project.id, { status: "retired" }, updatedProject.version, context());
-    expect(retired).toMatchObject({ status: "retired", version: 3 });
+    const retired = await runtime.ports.projects.updateProject(project.id, { status: "archived" }, updatedProject.version, context());
+    expect(retired).toMatchObject({ status: "archived", version: 3 });
 
     const work = await runtime.ports.projects.createWorkItem(project.id, { id: "work-adapter", name: "Main enclosure", kind: "assembly", description: "Printed assembly" }, context());
     expect(work).toMatchObject({ projectId: project.id });
@@ -535,13 +537,14 @@ describe("production project adapter", () => {
 
     const initial = await runtime.ports.projects.createProjectWithInitialRevision?.({ project: { id: "atomic-project", name: "Atomic project", status: "idea" }, revision: { id: "atomic-revision", name: "Baseline", status: "concept", notes: "baseline" } }, context());
     expect(initial).toMatchObject({ project: { id: "atomic-project", currentRevisionId: "atomic-revision" }, revision: { id: "atomic-revision", number: 1, notes: "baseline" } });
+    expect(JSON.parse(runtime.database.get<{ readonly payload_json: string }>("SELECT payload_json FROM forge_runtime_metadata WHERE entity_type = ? AND entity_id = ?", ["project", "atomic-project"])!.payload_json)).toEqual({ currentRevisionId: "atomic-revision" });
   });
 
   it("validates reservations and records unreserved usage through the stock adapter", async () => {
     const runtime = await makeRuntime();
     const item = await runtime.ports.inventory.createItem({ id: "reservation-board", name: "ESP32 board", kind: "electronic", manufacturer: "Maker", model: "ESP32", quantity: 3, unit: "each", tags: ["board"], links: [], evidence: { state: "physically_counted" } }, context());
     const alternative = await runtime.ports.inventory.createItem({ id: "reservation-alt", name: "Compatible board", kind: "electronic", manufacturer: "Maker", model: "ESP32-alt", quantity: 2, unit: "each", tags: ["board"], links: [], evidence: { state: "physically_counted" } }, context());
-    const project = await runtime.ports.projects.createProject({ id: "reservation-project-adapter", name: "Reservation project", status: "planning" }, context());
+    const project = await runtime.ports.projects.createProject({ id: "reservation-project-adapter", name: "Reservation project", status: "planned" }, context());
     const revision = await runtime.ports.projects.createProjectRevision(project.id, { id: "reservation-revision-adapter", name: "Initial", status: "concept" }, context());
     const line = await runtime.ports.projects.createBomLine(revision.id, { id: "reservation-line-adapter", name: item.name, itemId: item.id, requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
     const reservation = await runtime.ports.projects.createReservation(revision.id, { id: "reservation-adapter", lineId: line.id, itemId: item.id, quantity: 1 }, context());

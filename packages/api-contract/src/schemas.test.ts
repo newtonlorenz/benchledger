@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bomSpecificationSchema, commissionInventoryItemSchema, createBomLineSchema, createInventoryItemSchema, inventoryBulkUpdateSchema, inventoryItemSchema, inventoryListQuerySchema, updateBomLineSchema, updateInventoryItemSchema } from "./schemas.js";
+import { bomSpecificationSchema, commissionInventoryItemSchema, createBomLineSchema, createInventoryItemSchema, createProjectSchema, inventoryBulkUpdateSchema, inventoryItemSchema, inventoryListQuerySchema, projectSchema, projectStatusSchema, updateBomLineSchema, updateInventoryItemSchema, updateProjectSchema } from "./schemas.js";
 
 const constraints = {
   kind: "electronic",
@@ -47,6 +47,29 @@ describe("REST BOM constraint schema", () => {
     expect(() => bomSpecificationSchema.parse({ status: "insufficient", missingDecisions: ["unknown_decision"] })).toThrow();
     expect(() => bomSpecificationSchema.parse({ status: "sufficient", missingDecisions: ["connector"] })).toThrow();
     expect(() => bomSpecificationSchema.parse({ status: "sufficient" })).toThrow();
+  });
+});
+
+describe("REST project lifecycle schema", () => {
+  const canonical = ["idea", "planned", "ready", "building", "validating", "complete", "archived"] as const;
+
+  it("accepts exactly the canonical lifecycle and rejects derived/legacy values", () => {
+    for (const status of canonical) {
+      expect(projectStatusSchema.parse(status)).toBe(status);
+      expect(projectSchema.parse({
+        id: `project-${status}`,
+        name: "Lifecycle test",
+        status,
+        createdAt: "2026-09-01T10:00:00.000Z",
+        updatedAt: "2026-09-01T10:00:00.000Z",
+        version: 1
+      }).status).toBe(status);
+    }
+    for (const status of ["active", "on_hold", "planning", "in_progress", "validation", "retired", "blocked"]) {
+      expect(() => projectStatusSchema.parse(status)).toThrow();
+      expect(() => createProjectSchema.parse({ name: "Legacy status", status })).toThrow();
+      expect(() => updateProjectSchema.parse({ status })).toThrow();
+    }
   });
 });
 

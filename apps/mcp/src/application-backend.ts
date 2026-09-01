@@ -31,7 +31,9 @@ import type {
   CatalogProduct as ApiCatalogProduct,
   InventoryProductProfile as ApiInventoryProductProfile,
 } from "@benchledger/api-contract";
+import { canonicalProjectLifecycle } from "@benchledger/api-contract";
 import { bomSpecificationSchema } from "@benchledger/api-contract";
+import { deriveProjectBlocked } from "@benchledger/domain";
 import { McpAdapterError } from "./errors.js";
 import { McpAdapter } from "./adapter.js";
 import { McpProtocol } from "./protocol.js";
@@ -73,6 +75,7 @@ import type {
   OfferListInput,
   Page,
   Project,
+  ProjectBlocked,
   ProjectCreateInput,
   ProjectWithInitialRevisionCreateInput,
   ProjectListInput,
@@ -426,7 +429,7 @@ export function createApplicationBackend(service: ApplicationService, options: P
         const { projectId, expectedVersion, ...changes } = input;
         return mutationResult(await service.updateProject(projectId, toApiProjectUpdate(changes), expectedVersion, appContext(context)), "project", toMcpProject);
       },
-      retire: async (input, context) => mutationResult(await service.updateProject(input.projectId, { status: "retired" }, input.expectedVersion, appContext(context)), "project", toMcpProject),
+      retire: async (input, context) => mutationResult(await service.updateProject(input.projectId, { status: "archived" }, input.expectedVersion, appContext(context)), "project", toMcpProject),
       createWorkItem: async (input, context) => mutationResult(await service.createWorkItem(input.projectId, toApiWorkItemCreate(input), appContext(context)), "workItem", toMcpWorkItem),
       getWorkItem: async (input) => toMcpWorkItem(await service.getWorkItem(input.workItemId)),
       createProjectRevision: async (input, context) => mutationResult(await service.createProjectRevision(input.projectId, toApiProjectRevisionCreate(input), appContext(context)), "revision", toMcpRevision),
@@ -436,14 +439,19 @@ export function createApplicationBackend(service: ApplicationService, options: P
       context: async (input) => {
         const project = await service.getProject(input.projectId);
         const workItems = await service.listWorkItems(input.projectId);
+        const blocked = project.currentRevisionId === undefined
+          ? { blocked: false, reasons: [] }
+          : projectBlockedFromBom(project.currentRevisionId, await service.evaluateBomGaps(project.currentRevisionId));
         const text = [
           `Project: ${project.name}`,
           `Status: ${project.status}`,
+          `Blocked: ${blocked.blocked ? "yes" : "no"}`,
+          ...(blocked.reasons.length === 0 ? [] : [`Blockers: ${blocked.reasons.length}`]),
           project.description === undefined ? undefined : `Description: ${project.description}`,
           `Work items: ${workItems.map((item) => `${item.name} (${item.kind})`).join(", ") || "none recorded"}`,
           project.currentRevisionId === undefined ? "Current revision: not selected" : `Current revision: ${project.currentRevisionId}`,
         ].filter((line): line is string => line !== undefined).join("\n");
-        return { projectId: project.id, generatedAt: new Date().toISOString(), text, ...(project.currentRevisionId === undefined ? {} : { currentRevisionId: project.currentRevisionId }) };
+        return { projectId: project.id, generatedAt: new Date().toISOString(), text, status: project.status, blocked, ...(project.currentRevisionId === undefined ? {} : { currentRevisionId: project.currentRevisionId }) };
       },
     },
     bom: {
@@ -1020,12 +1028,12 @@ function toApiStockEvent(input: RecordStockEventInput): StockEventInput {
 }
 
 function toMcpProject(project: ApiProject): Project {
-  const status: Project["status"] = project.status === "retired" ? "retired" : project.status === "complete" ? "complete" : "active";
+  const status = canonicalProjectLifecycle(project.status) ?? "idea";
   return { id: project.id, name: project.name, status, visibility: "private", ...(project.description === undefined ? {} : { description: project.description }), version: project.version, ...(project.updatedAt === undefined ? {} : { updatedAt: project.updatedAt }) };
 }
 
 function toApiProjectStatus(value: Project["status"]): ApiProject["status"] {
-  return value === "retired" ? "retired" : value === "complete" ? "complete" : value === "paused" ? "validation" : "in_progress";
+  return value;
 }
 
 function toApiProjectCreate(input: ProjectCreateInput): CreateProject {
@@ -1230,6 +1238,25 @@ function toMcpBomEvaluation(value: { revisionId: string; lines: readonly BomGap[
       source: value.totals.sourceLines ?? value.lines.filter((line) => line.optional !== true && decisionFor(line) === "source").length,
     },
   };
+}
+
+function projectBlockedFromBom(projectRevisionId: string, evaluation: { readonly lines: readonly BomGap[] }): ProjectBlocked {
+  const reasons = evaluation.lines.flatMap((line) => {
+    if (line.optional === true) return [];
+    const decision = line.decision ?? (
+      line.status === "supplied" ? "ready" :
+      line.status === "inspect_first" ? "check" :
+      line.status === "specify_first" ? "decide" :
+      line.status === "partially_supplied" && line.inspectQuantity > 0 ? "check" :
+      "source"
+    );
+    if (decision === "ready") return [];
+    const fallback = decision === "decide" && (line.missingDecisions?.length ?? 0) > 0
+      ? `Resolve: ${line.missingDecisions!.join(", ")}.`
+      : `${line.name} is not ready (${decision}).`;
+    return (line.reasons.length > 0 ? line.reasons : [fallback]).map((reason) => ({ source: "bom" as const, projectRevisionId, bomLineId: line.lineId, decision, reason }));
+  });
+  return { blocked: deriveProjectBlocked(reasons.map((reason) => reason.reason)).blocked, reasons };
 }
 
 function toApiReservation(input: ReservationInput): CreateReservation {

@@ -90,6 +90,15 @@ and invalid hashes. Mutating tools use optimistic versions where applicable.
 | Offers | `record_offer_snapshot` | `offers:write` | Yes |
 | Context | `refresh_context`, `get_capabilities` | `context:read` | No |
 
+Project reads, filters and writes use one lifecycle value everywhere:
+`idea`, `planned`, `ready`, `building`, `validating`, `complete`, or `archived`.
+`retire_project` is the dedicated convenience command for `archived`. `blocked`
+is a derived readiness condition and is never accepted as a project status.
+Project context returns the canonical lifecycle plus structured BOM blocker
+reasons containing the revision, line, decision and explanation. The separate
+revision evidence ladder (`concept` through `production
+approved`) does not move when the project lifecycle changes.
+
 The server's `tools/list` response contains only MCP's public fields (`name`,
 `description`, and `inputSchema`). Scope and mutation metadata are intentionally
 kept in the checked-in capability contract and enforced server-side.

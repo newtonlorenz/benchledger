@@ -17,7 +17,7 @@ import type {
   InventoryCategoryListOptions, InventoryCategoryPort, InventoryListOptions, InventoryPort, OfferPort, Page, ProjectListOptions, ProjectPort, RequestContext,
   InventoryBulkUpdate, InventoryBulkUpdateResult, ReservationDetails, StockMutation, UnitOfWorkOperation, UnitOfWorkPort, UpdateInventoryInput, UploadSessionDetails, UsageInput
 } from "@benchledger/application";
-import { BUILTIN_INVENTORY_CATEGORIES, compareInventoryCategoryKeys, normalizeInventoryCategoryKey, normalizeInventoryCategoryName } from "@benchledger/domain";
+import { BUILTIN_INVENTORY_CATEGORIES, canonicalProjectStatus, compareInventoryCategoryKeys, normalizeInventoryCategoryKey, normalizeInventoryCategoryName } from "@benchledger/domain";
 
 const clone = <T>(value: T): T => structuredClone(value);
 
@@ -522,7 +522,7 @@ class MemoryProjects implements ProjectPort {
     const projectId = input.id ?? id("project", ++this.sequence);
     if (this.projects.has(projectId)) throw new ApplicationError("conflict", `Project '${projectId}' already exists`);
     const createdAt = iso();
-    const project: Project = { id: projectId, name: input.name.trim(), ...(input.description === undefined ? {} : { description: input.description }), status: input.status, createdAt, updatedAt: createdAt, version: 1 };
+    const project: Project = { id: projectId, name: input.name.trim(), ...(input.description === undefined ? {} : { description: input.description }), status: canonicalProjectStatus(input.status), createdAt, updatedAt: createdAt, version: 1 };
     this.projects.set(projectId, project); return Promise.resolve(clone(project));
   }
   async createProjectWithInitialRevision(input: CreateProjectWithInitialRevision): Promise<ProjectWithInitialRevision> {
@@ -544,7 +544,7 @@ class MemoryProjects implements ProjectPort {
   }
   updateProject(projectId: string, input: Partial<CreateProject>, expectedVersion: number | undefined): Promise<Project> {
     const current = this.projects.get(projectId); if (!current) throw new ApplicationError("not_found", `Project '${projectId}' was not found`); ensureVersion(current.version, expectedVersion, "Project");
-    const next = { ...current, ...input, updatedAt: iso(), version: current.version + 1 } as Project; this.projects.set(projectId, next); return Promise.resolve(clone(next));
+    const next: Project = { ...current, ...(input.name === undefined ? {} : { name: input.name }), ...(input.description === undefined ? {} : { description: input.description }), ...(input.status === undefined ? {} : { status: canonicalProjectStatus(input.status) }), updatedAt: iso(), version: current.version + 1 }; this.projects.set(projectId, next); return Promise.resolve(clone(next));
   }
   createWorkItem(projectId: string, input: CreateWorkItem): Promise<WorkItem> {
     if (!this.projects.has(projectId)) throw new ApplicationError("not_found", `Project '${projectId}' was not found`);
@@ -850,7 +850,7 @@ function seedSyntheticProject(runtime: MemoryRuntime): void {
     id: revision.projectId,
     name: "Synthetic H2D desk lamp",
     description: "Synthetic reference project covering reuse, inspect-first stock, and a missing requirement.",
-    status: "planning",
+    status: "planned",
     currentRevisionId: revision.id,
     createdAt: timestamp,
     updatedAt: timestamp,

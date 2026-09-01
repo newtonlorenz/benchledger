@@ -153,10 +153,10 @@ function backend(): BenchLedgerBackend {
     },
     projects: {
       list: async () => page([]),
-      get: async () => ({ id: "project-1", name: "Reference project", status: "active", visibility: "private", version: 1 }),
-      create: async () => ({ id: "project-1", version: 1, project: { id: "project-1", name: "Reference project", status: "active", visibility: "private", version: 1 } }),
-      createWithInitialRevision: async () => ({ id: "project-1", version: 1, project: { id: "project-1", name: "Reference project", status: "active", visibility: "private", version: 1 }, revision: { id: "project-revision-1", projectId: "project-1", number: 1, status: "concept" } }),
-      update: async () => ({ id: "project-1", version: 2, project: { id: "project-1", name: "Reference project", status: "active", visibility: "private", version: 2 } }),
+      get: async () => ({ id: "project-1", name: "Reference project", status: "planned", visibility: "private", version: 1 }),
+      create: async () => ({ id: "project-1", version: 1, project: { id: "project-1", name: "Reference project", status: "idea", visibility: "private", version: 1 } }),
+      createWithInitialRevision: async () => ({ id: "project-1", version: 1, project: { id: "project-1", name: "Reference project", status: "idea", visibility: "private", version: 1 }, revision: { id: "project-revision-1", projectId: "project-1", number: 1, status: "concept" } }),
+      update: async () => ({ id: "project-1", version: 2, project: { id: "project-1", name: "Reference project", status: "ready", visibility: "private", version: 2 } }),
       retire: async () => ({ id: "project-1", version: 3, retired: true }),
       createWorkItem: async () => ({ id: "work-1", version: 1, workItem: { id: "work-1", projectId: "project-1", name: "Enclosure", kind: "part" } }),
       getWorkItem: async () => ({ id: "work-1", projectId: "project-1", name: "Enclosure", kind: "part" }),
@@ -442,8 +442,8 @@ describe("McpAdapter", () => {
   it("authorizes project-scoped indirect identifiers before dispatch", async () => {
     const scopedBackend = backend();
     scopedBackend.projects.list = async () => page([
-      { id: "project-1", name: "Allowed", status: "active", visibility: "private", version: 1 },
-      { id: "project-2", name: "Denied", status: "active", visibility: "private", version: 1 },
+      { id: "project-1", name: "Allowed", status: "planned", visibility: "private", version: 1 },
+      { id: "project-2", name: "Denied", status: "planned", visibility: "private", version: 1 },
     ]);
     scopedBackend.projectScope = {
       projectForProjectRevision: async (revisionId) => revisionId === "project-revision-1" ? "project-1" : "project-2",
@@ -578,11 +578,11 @@ describe("McpAdapter", () => {
       ["update_catalog_product", { productId: "catalog-filament-1", colourName: "Graphite" }],
       ["read_inventory_product_profile", { itemId: "item-esp32" }],
       ["link_inventory_product_profile", { itemId: "item-esp32", catalogProductId: "catalog-filament-1", profileType: "filament_spool", linkState: "reported", details: { openedState: "sealed" } }],
-      ["list_projects", { query: "reference", status: "active", limit: 5 }],
+      ["list_projects", { query: "reference", status: "building", limit: 5 }],
       ["read_project", { projectId: "project-1" }],
       ["create_project", { name: "New project" }],
       ["create_project_with_initial_revision", { name: "New project", revisionSummary: "plan" }],
-      ["update_project", { projectId: "project-1", status: "paused" }],
+      ["update_project", { projectId: "project-1", status: "ready" }],
       ["retire_project", { projectId: "project-1" }],
       ["create_work_item", { projectId: "project-1", name: "Part", kind: "part" }],
       ["read_work_item", { workItemId: "work-1" }],

@@ -584,7 +584,7 @@ export function projectList(value: unknown): ProjectListInput {
   return {
     ...parsePageInput({ limit: input.limit, cursor: input.cursor }),
     query: optionalString(input.query, "arguments.query", 256),
-    status: optionalEnum(input.status, "arguments.status", ["active", "paused", "complete", "retired"] as const),
+    status: optionalEnum(input.status, "arguments.status", ["idea", "planned", "ready", "building", "validating", "complete", "archived"] as const),
   };
 }
 
@@ -617,7 +617,7 @@ export function projectUpdate(value: unknown): ProjectUpdateInput {
   result.expectedVersion = optionalInteger(input.expectedVersion, "arguments.expectedVersion");
   result.name = optionalString(input.name, "arguments.name", 256);
   result.description = optionalString(input.description, "arguments.description");
-  result.status = optionalEnum(input.status, "arguments.status", ["active", "paused", "complete", "retired"] as const);
+  result.status = optionalEnum(input.status, "arguments.status", ["idea", "planned", "ready", "building", "validating", "complete", "archived"] as const);
   return result;
 }
 

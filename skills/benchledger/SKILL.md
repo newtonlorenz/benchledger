@@ -38,6 +38,14 @@ and perform only the work needed for the user's request.
 7. Build evidence and validation observations.
 8. Review-only close-out preview and explicit atomic reconciliation.
 
+Project lifecycle is one canonical value on every surface:
+`idea`, `planned`, `ready`, `building`, `validating`, `complete`, `archived`.
+Treat `blocked` as a derived condition with structured reasons, never as a
+project status. Keep project lifecycle independent from revision-scoped
+manufacturing evidence (`concept` through `production approved`); changing one
+does not prove, advance, or reset the other. Legacy lifecycle names are read-
+migration inputs only and must not be sent in new commands.
+
 For the tool choices, outputs, and stopping conditions at each stage, read
 [references/lifecycle.md](references/lifecycle.md). For ChatGPT, Claude, Codex,
 or another MCP host, read [references/client-setup.md](references/client-setup.md)

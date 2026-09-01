@@ -23,6 +23,7 @@ import type {
   InventoryCategory as ApiInventoryCategory,
   CreateInventoryCategory as ApiCreateInventoryCategory,
   UpdateInventoryCategory as ApiUpdateInventoryCategory,
+  ProjectLifecycle as ApiProjectLifecycle,
 } from "@benchledger/api-contract";
 
 export type JsonPrimitive = null | boolean | number | string;
@@ -354,7 +355,8 @@ export interface StockEventsInput extends PageInput {
 export interface Project {
   id: string;
   name: string;
-  status: "active" | "paused" | "complete" | "retired";
+  /** The project lifecycle is intentionally distinct from revision evidence. */
+  status: ApiProjectLifecycle;
   visibility: "private" | "public";
   description?: string;
   version: number;
@@ -444,8 +446,25 @@ export interface ProjectContext {
   projectId: string;
   generatedAt: string;
   text: string;
+  /** Same canonical lifecycle value returned by the project record. */
+  status: Project["status"];
+  /** Readiness is derived from the current BOM; it is never a lifecycle value. */
+  blocked: ProjectBlocked;
   currentRevisionId?: string;
   nextActions?: readonly string[];
+}
+
+export interface ProjectBlockedReason {
+  source: "bom";
+  projectRevisionId: string;
+  bomLineId: string;
+  decision: "check" | "decide" | "source";
+  reason: string;
+}
+
+export interface ProjectBlocked {
+  blocked: boolean;
+  reasons: readonly ProjectBlockedReason[];
 }
 
 export interface BomLine {

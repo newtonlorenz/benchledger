@@ -1,4 +1,5 @@
 import { bomSpecificationSchema } from "@benchledger/api-contract";
+import { canonicalProjectStatus } from "@benchledger/domain";
 import type {
   CreateInventoryItem, InventoryItem as ApiInventoryItem, StockEvent as ApiStockEvent,
   StockEventInput, Project as ApiProject, WorkItem as ApiWorkItem, ProjectRevision as ApiProjectRevision,
@@ -9,7 +10,7 @@ import { createStockEvent } from "@benchledger/domain";
 import type {
   AuditActor, BomConstraints, BomLine, Dimensions, InventoryItem, InventoryProvenance,
   OfferSnapshot, Project, ProjectRevision, Reservation, StockEvent, StockConfidence,
-  Supplier, WorkItem, WorkItemRevision, QuantityUnit, RevisionStatus
+  Supplier, WorkItem, WorkItemRevision, QuantityUnit, RevisionStatus, ProjectStatus
 } from "@benchledger/domain";
 import type { ArtifactRevision, UploadSession as StoreUploadSession } from "@benchledger/artifacts";
 import type { RequestContext } from "@benchledger/application";
@@ -394,29 +395,20 @@ export function apiStockEventFromNative(event: StockEvent, fallbackVersion: numb
   };
 }
 
-function apiProjectStatus(status: Project["status"], metadata: Readonly<Record<string, unknown>>): ApiProject["status"] {
-  const stored = stringValue(metadata.status);
-  if (stored === "idea" || stored === "planning" || stored === "in_progress" || stored === "validation" || stored === "complete" || stored === "retired") return stored;
-  return status === "complete" ? "complete" : status === "retired" ? "retired" : "in_progress";
+function apiProjectStatus(status: Project["status"]): ApiProject["status"] {
+  return canonicalProjectStatus(status);
 }
 
-export function nativeProjectStatus(status: ApiProject["status"]): Project["status"] {
-  switch (status) {
-    case "complete": return "complete";
-    case "retired": return "retired";
-    case "idea":
-    case "planning":
-    case "in_progress":
-    case "validation": return "active";
-  }
+export function nativeProjectStatus(status: unknown): ProjectStatus {
+  return canonicalProjectStatus(status);
 }
 
-export function apiProjectFromNative(project: Project, version: number, metadata: Readonly<Record<string, unknown>>, currentRevisionId: string | undefined): ApiProject {
+export function apiProjectFromNative(project: Project, version: number, _metadata: Readonly<Record<string, unknown>>, currentRevisionId: string | undefined): ApiProject {
   return {
     id: project.id,
     name: project.name,
     ...(project.description === undefined ? {} : { description: project.description }),
-    status: apiProjectStatus(project.status, metadata),
+    status: apiProjectStatus(project.status),
     ...(currentRevisionId === undefined ? {} : { currentRevisionId }),
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,

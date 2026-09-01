@@ -145,6 +145,13 @@ checks. Updates pass the returned version; a conflict means “read again,” no
 “overwrite.” Reservations reduce available confirmed stock but are not
 consumption. Corrections and usage are append-only events.
 
+Projects use one lifecycle on every surface: `idea`, `planned`, `ready`,
+`building`, `validating`, `complete`, `archived`. Treat `blocked` as a derived
+condition with reasons, not a status. Keep this lifecycle separate from the
+revision-scoped manufacturing evidence ladder (`concept`, `CAD complete`, `DFAM
+reviewed`, `mesh validated`, `slicer validated`, `test printed`, `fit/function
+verified`, `production approved`); moving one never proves or resets the other.
+
 ## Minute 8–9: files and revisions
 
 Use `begin_artifact_upload` with a logical project/work-item/revision and a safe

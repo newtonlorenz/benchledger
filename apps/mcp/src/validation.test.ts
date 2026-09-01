@@ -229,7 +229,7 @@ describe("MCP validation boundary", () => {
   });
 
   it("validates project, work-item, and revision commands", () => {
-    expect(projectList({ query: "lamp", status: "paused", limit: 2 })).toMatchObject({ query: "lamp", status: "paused", limit: 2 });
+    expect(projectList({ query: "lamp", status: "validating", limit: 2 })).toMatchObject({ query: "lamp", status: "validating", limit: 2 });
     expect(projectCreate({ name: "Autonomous lamp", description: "A servo-driven light" })).toEqual({ name: "Autonomous lamp", description: "A servo-driven light" });
     expect(projectWithInitialRevisionCreate({ name: "Lamp", projectId: "lamp", revisionId: "lamp-r1", revisionSummary: "Initial concept" })).toMatchObject({ name: "Lamp", projectId: "lamp", revisionId: "lamp-r1", revisionSummary: "Initial concept" });
     expect(projectUpdate({ projectId: "lamp", expectedVersion: 2, status: "complete" })).toEqual({ projectId: "lamp", expectedVersion: 2, name: undefined, description: undefined, status: "complete" });
@@ -241,7 +241,7 @@ describe("MCP validation boundary", () => {
     expectInvalid(() => projectCreate({ name: "" }));
     expectInvalid(() => projectWithInitialRevisionCreate({ name: "Lamp", projectId: "bad/id" }));
     expectInvalid(() => workItemCreate({ projectId: "lamp", name: "Base", kind: "printer" }));
-    expectInvalid(() => projectUpdate({ projectId: "lamp", status: "idea" }));
+    expectInvalid(() => projectUpdate({ projectId: "lamp", expectedVersion: 2, status: "paused" }));
   });
 
   it("validates BOM, alternatives, constraints, reservations, and usage", () => {

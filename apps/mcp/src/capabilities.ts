@@ -25,6 +25,7 @@ const categoryPageProperties = {
   ...pageProperties,
   cursor: string("Opaque category pagination cursor from the previous response; maximum 512 characters."),
 };
+const projectLifecycleProperty = enumString(["idea", "planned", "ready", "building", "validating", "complete", "archived"], "Canonical project lifecycle; blocked is derived from reasons and is not a status.");
 const idProperty = (description = "Stable identifier."): JsonObject => string(description);
 const nullableIdProperty = (description: string): JsonObject => ({ oneOf: [idProperty(description), { type: "null" }] });
 const categoryIdProperty = (description = "Stable managed category identifier."): JsonObject => ({ ...string(description), maxLength: 160 });
@@ -228,12 +229,12 @@ export const TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
   tool("read_inventory_product_profile", "Read the exact-product link for one physical inventory item without exposing serials or implying stock confirmation.", "catalog:read", false, { itemId: idProperty("Inventory item identifier.") }, ["itemId"]),
   tool("link_inventory_product_profile", "Link one physical printer or filament inventory item to an exact catalog product; reported and suggested links remain non-confirming.", "catalog:write", true, { itemId: idProperty("Inventory item identifier."), expectedVersion: integer(), catalogProductId: idProperty("Exact catalog product identifier."), profileType: string("filament_spool or printer_asset."), linkState: string("confirmed, reported, or suggested."), details: profileDetailsProperty }, ["itemId", "catalogProductId", "profileType", "linkState", "details"]),
 
-  tool("list_projects", "List projects with bounded pagination and status filtering.", "projects:read", false, { ...pageProperties, query: string(), status: string() }),
+  tool("list_projects", "List projects with bounded pagination and canonical lifecycle filtering.", "projects:read", false, { ...pageProperties, query: string(), status: projectLifecycleProperty }),
   tool("read_project", "Read a project identity and current lifecycle state.", "projects:read", false, { projectId: idProperty("Project identifier.") }, ["projectId"]),
   tool("create_project", "Create a project workspace for an end-to-end build.", "projects:write", true, { name: string(), description: string() }, ["name"]),
   tool("create_project_with_initial_revision", "Atomically create a project and its first planning revision; retries with the same idempotency key are safe.", "projects:write", true, { name: string(), description: string(), projectId: idProperty("Optional stable project identifier."), revisionId: idProperty("Optional stable initial revision identifier."), revisionSummary: string("Optional summary for the initial planning revision.") }, ["name"]),
-  tool("update_project", "Update project metadata with optimistic versioning.", "projects:write", true, { projectId: idProperty("Project identifier."), expectedVersion: integer(), name: string(), description: string(), status: string() }, ["projectId"]),
-  tool("retire_project", "Retire a project while retaining its revisions, artifacts, and evidence.", "projects:write", true, { projectId: idProperty("Project identifier."), expectedVersion: integer() }, ["projectId"]),
+  tool("update_project", "Update project metadata or its canonical lifecycle with optimistic versioning.", "projects:write", true, { projectId: idProperty("Project identifier."), expectedVersion: integer(), name: string(), description: string(), status: projectLifecycleProperty }, ["projectId"]),
+  tool("retire_project", "Archive a project while retaining its revisions, artifacts, and evidence.", "projects:write", true, { projectId: idProperty("Project identifier."), expectedVersion: integer() }, ["projectId"]),
   tool("create_work_item", "Create a versioned part, assembly, electronics, firmware, or document within a project.", "projects:write", true, { projectId: idProperty("Project identifier."), name: string(), kind: string(), description: string() }, ["projectId", "name", "kind"]),
   tool("read_work_item", "Read one project work item.", "projects:read", false, { workItemId: idProperty("Work-item identifier.") }, ["workItemId"]),
   tool("create_project_revision", "Create a versioned planning revision for a project.", "projects:write", true, { projectId: idProperty("Project identifier."), summary: string() }, ["projectId"]),
@@ -319,6 +320,11 @@ export const CAPABILITY_DOCUMENT: JsonObject = {
     ordered_unverified: "Order evidence only; never treated as available stock.",
     allocated: "Reserved or assigned stock; availability is reduced by the allocation.",
     depleted: "No remaining usable quantity recorded.",
+  },
+  projectLifecycle: {
+    values: ["idea", "planned", "ready", "building", "validating", "complete", "archived"],
+    blocked: "Derived from current required BOM readiness with structured reasons; blocked is never a project lifecycle value.",
+    manufacturingEvidence: "Revision-scoped concept/CAD/DFAM/mesh/slicer/test/fit/production evidence remains independent and is never advanced or reset by a project lifecycle change.",
   },
   scopeBehavior: {
     projectTokens: "A token with projectIds may address only those projects. Project list results are allow-list filtered; workspace-wide aggregate endpoints are rejected.",

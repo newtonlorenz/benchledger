@@ -9,7 +9,7 @@ import { ArtifactStore } from "@benchledger/artifacts";
 import { BenchDatabase } from "@benchledger/database";
 import { ProductionArtifactAdapter } from "./artifact-adapter.js";
 import { backupProductionRuntime, createProductionRuntime, restoreProductionBackup, type ProductionRuntime, verifyProductionBackup } from "./index.js";
-import { RuntimeState } from "./persistence.js";
+import { migrateRuntimeSchema, RuntimeState } from "./persistence.js";
 
 const runtimes: ProductionRuntime[] = [];
 const directories: string[] = [];
@@ -36,6 +36,29 @@ afterEach(async () => {
 });
 
 describe("production runtime mappings", () => {
+  it("migrates legacy project metadata once and reopens with the database lifecycle as authority", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "benchledger-lifecycle-migration-"));
+    directories.push(dataDir);
+    const databasePath = join(dataDir, "benchledger.sqlite");
+    const legacy = new BenchDatabase(databasePath);
+    migrateRuntimeSchema(legacy);
+    legacy.run("INSERT INTO projects (id, name, slug, status, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, 'private', ?, ?)", ["legacy-project", "Legacy project", "legacy-project", "active", "2026-01-01T00:00:00.000Z", "2026-01-02T00:00:00.000Z"]);
+    legacy.run("INSERT INTO project_revisions (id, project_id, revision_number, label, status, created_at) VALUES (?, ?, ?, ?, ?, ?)", ["legacy-revision", "legacy-project", 1, "r01", "concept", "2026-01-02T00:00:00.000Z"]);
+    legacy.run("INSERT INTO forge_runtime_metadata (entity_type, entity_id, payload_json, updated_at) VALUES (?, ?, ?, ?)", ["project", "legacy-project", JSON.stringify({ status: "planning", currentRevisionId: "legacy-revision" }), "2026-01-03T00:00:00.000Z"]);
+    legacy.close();
+
+    const first = await createProductionRuntime({ dataDir, maxUploadBytes: 1024 * 1024, maxStorageBytes: 4 * 1024 * 1024 });
+    expect(await first.ports.projects.getProject("legacy-project")).toMatchObject({ status: "planned", currentRevisionId: "legacy-revision" });
+    expect(JSON.parse(first.database.get<{ readonly payload_json: string }>("SELECT payload_json FROM forge_runtime_metadata WHERE entity_type = ? AND entity_id = ?", ["project", "legacy-project"])!.payload_json)).toEqual({ currentRevisionId: "legacy-revision" });
+    expect(first.database.all("SELECT id FROM audit_log WHERE action = 'project.lifecycle.migrated' AND entity_id = ?", ["legacy-project"])).toHaveLength(1);
+    await first.close();
+
+    const reopened = await createProductionRuntime({ dataDir, maxUploadBytes: 1024 * 1024, maxStorageBytes: 4 * 1024 * 1024 });
+    runtimes.push(reopened);
+    expect(await reopened.ports.projects.getProject("legacy-project")).toMatchObject({ status: "planned", currentRevisionId: "legacy-revision" });
+    expect(reopened.database.all("SELECT id FROM audit_log WHERE action = 'project.lifecycle.migrated' AND entity_id = ?", ["legacy-project"])).toHaveLength(1);
+  });
+
   it("applies bounded metadata batches atomically with deterministic no-op and audit behavior", async () => {
     const runtime = await makeRuntime();
     const service = new ApplicationService(runtime.ports);
@@ -132,7 +155,7 @@ describe("production runtime mappings", () => {
       links: [],
       evidence: { state: "physically_counted" }
     }, context());
-    const project = await runtime.ports.projects.createProject({ id: "historical-project", name: "Historical project", status: "planning" }, context());
+    const project = await runtime.ports.projects.createProject({ id: "historical-project", name: "Historical project", status: "planned" }, context());
     const historicalRevision = await runtime.ports.projects.createProjectRevision(project.id, { id: "historical-revision", name: "Historical", status: "concept" }, context());
     const line = await runtime.ports.projects.createBomLine(historicalRevision.id, { id: "historical-bom", name: "Historical board", itemId: "historical-board", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
     const reservation = await runtime.ports.projects.createReservation(historicalRevision.id, { id: "historical-reservation", lineId: line.id, itemId: "historical-board", quantity: 1 }, context());
@@ -164,7 +187,7 @@ describe("production runtime mappings", () => {
       links: [],
       evidence: { state: "physically_counted" }
     }, context());
-    const project = await first.ports.projects.createProject({ id: "retirement-project", name: "Retirement project", status: "planning" }, context());
+    const project = await first.ports.projects.createProject({ id: "retirement-project", name: "Retirement project", status: "planned" }, context());
     const revision = await first.ports.projects.createProjectRevision(project.id, { id: "retirement-revision", name: "Initial", status: "concept" }, context());
     const line = await first.ports.projects.createBomLine(revision.id, {
       id: "retirement-line",
@@ -217,7 +240,7 @@ describe("production runtime mappings", () => {
     directories.push(dataDir);
     const first = await createProductionRuntime({ dataDir, maxUploadBytes: 1024 * 1024, maxStorageBytes: 4 * 1024 * 1024 });
     runtimes.push(first);
-    const project = await first.ports.projects.createProject({ id: "specification-project", name: "Specification project", status: "planning" }, context());
+    const project = await first.ports.projects.createProject({ id: "specification-project", name: "Specification project", status: "planned" }, context());
     const revision = await first.ports.projects.createProjectRevision(project.id, { id: "specification-revision", name: "Initial", status: "concept" }, context());
     const line = await first.ports.projects.createBomLine(revision.id, {
       id: "specification-line",
@@ -424,7 +447,7 @@ describe("production runtime mappings", () => {
     await runtime.ports.inventory.createItem({
       id: "bolt-1", name: "M3 bolt", kind: "fastener", quantity: 2, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" }
     }, context());
-    const project = await runtime.ports.projects.createProject({ id: "project-1", name: "Lamp", status: "planning" }, context());
+    const project = await runtime.ports.projects.createProject({ id: "project-1", name: "Lamp", status: "planned" }, context());
     const revision = await runtime.ports.projects.createProjectRevision(project.id, { id: "revision-1", name: "Initial", status: "concept" }, context());
     const line = await runtime.ports.projects.createBomLine(revision.id, { id: "bom-1", name: "M3 bolt", itemId: "bolt-1", requiredQuantity: 2, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
 
@@ -443,7 +466,7 @@ describe("production runtime mappings", () => {
     ]) {
       await runtime.ports.inventory.createItem({ id: input.id, name: input.name, kind: input.kind, quantity: 2, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
     }
-    const project = await runtime.ports.projects.createProject({ id: "project-reference", name: "Reference checks", status: "planning" }, context());
+    const project = await runtime.ports.projects.createProject({ id: "project-reference", name: "Reference checks", status: "planned" }, context());
     const revision = await runtime.ports.projects.createProjectRevision(project.id, { id: "revision-reference", name: "Initial", status: "concept" }, context());
     const line = await runtime.ports.projects.createBomLine(revision.id, { id: "bom-reference", name: "M3 bolt", itemId: "bolt-1", requiredQuantity: 1, unit: "each", optional: false, alternatives: [{ itemId: "board-1", compatible: "conditional" }], constraints: {} }, context());
 
@@ -457,7 +480,7 @@ describe("production runtime mappings", () => {
   it("keeps a reserved BOM supplied, consumes it atomically, and rejects cross-revision or reused usage", async () => {
     const runtime = await makeRuntime();
     await runtime.ports.inventory.createItem({ id: "board-reserved", name: "ESP32 board", kind: "electronic", quantity: 1, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
-    const project = await runtime.ports.projects.createProject({ id: "project-reserved", name: "Reserved project", status: "planning" }, context());
+    const project = await runtime.ports.projects.createProject({ id: "project-reserved", name: "Reserved project", status: "planned" }, context());
     const revision = await runtime.ports.projects.createProjectRevision(project.id, { id: "revision-reserved", name: "Initial", status: "concept" }, context());
     const line = await runtime.ports.projects.createBomLine(revision.id, { id: "bom-reserved", name: "ESP32 board", itemId: "board-reserved", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
     const reservation = await runtime.ports.projects.createReservation(revision.id, { id: "reservation-reserved", lineId: line.id, itemId: "board-reserved", quantity: 1 }, context());
@@ -473,14 +496,14 @@ describe("production runtime mappings", () => {
     await expect(runtime.ports.inventory.getItem("board-reserved")).resolves.toMatchObject({ quantity: 0, availableQuantity: 0 });
 
     await expect(runtime.ports.projects.recordUsage({ reservationId: reservation.id, projectId: project.id, itemId: "board-reserved", quantity: 1, unit: "each" }, context())).rejects.toMatchObject({ code: "conflict" });
-    await runtime.ports.projects.createProject({ id: "other-project", name: "Other project", status: "planning" }, context());
+    await runtime.ports.projects.createProject({ id: "other-project", name: "Other project", status: "planned" }, context());
     await expect(runtime.ports.projects.recordUsage({ reservationId: reservation.id, projectId: "other-project", itemId: "board-reserved", quantity: 1, unit: "each" }, context())).rejects.toMatchObject({ code: "conflict" });
   });
 
   it("does not partially consume or reuse a released reservation", async () => {
     const runtime = await makeRuntime();
     await runtime.ports.inventory.createItem({ id: "board-partial", name: "ESP32 board", kind: "electronic", quantity: 2, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
-    const project = await runtime.ports.projects.createProject({ id: "project-partial", name: "Partial usage", status: "planning" }, context());
+    const project = await runtime.ports.projects.createProject({ id: "project-partial", name: "Partial usage", status: "planned" }, context());
     const revision = await runtime.ports.projects.createProjectRevision(project.id, { id: "revision-partial", name: "Initial", status: "concept" }, context());
     const line = await runtime.ports.projects.createBomLine(revision.id, { id: "bom-partial", name: "ESP32 board", itemId: "board-partial", requiredQuantity: 2, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
     const reservation = await runtime.ports.projects.createReservation(revision.id, { id: "reservation-partial", lineId: line.id, itemId: "board-partial", quantity: 2 }, context());
@@ -495,11 +518,11 @@ describe("production runtime mappings", () => {
 
   it("rolls back the project when initial revision creation fails", async () => {
     const runtime = await makeRuntime();
-    const existing = await runtime.ports.projects.createProject({ id: "existing-project", name: "Existing", status: "planning" }, context());
+    const existing = await runtime.ports.projects.createProject({ id: "existing-project", name: "Existing", status: "planned" }, context());
     await runtime.ports.projects.createProjectRevision(existing.id, { id: "revision-collision", name: "Existing revision", status: "concept" }, context());
 
     await expect(runtime.ports.projects.createProjectWithInitialRevision?.({
-      project: { id: "orphan-project", name: "Should roll back", status: "planning" },
+      project: { id: "orphan-project", name: "Should roll back", status: "planned" },
       revision: { id: "revision-collision", name: "Initial", status: "concept" }
     }, context())).rejects.toMatchObject({ code: "conflict" });
 
@@ -534,7 +557,7 @@ describe("production runtime mappings", () => {
   it("binds finalized artifacts to the same-revision snapshot and rolls back failed bindings", async () => {
     const runtime = await makeRuntime();
     const service = new ApplicationService(runtime.ports);
-    const project = await service.createProject({ id: "binding-project", name: "Binding project", status: "planning" }, context());
+    const project = await service.createProject({ id: "binding-project", name: "Binding project", status: "planned" }, context());
     const revision = await service.createProjectRevision(project.data.id, { id: "binding-revision", name: "Initial", status: "concept" }, context());
     const laterRevision = await service.createProjectRevision(project.data.id, { id: "binding-revision-later", name: "Later", status: "concept" }, context());
     const printerProduct = await service.createCatalogProduct({ kind: "printer", manufacturer: "Bambu Lab", exactModel: "H2D", technology: "fff", buildVolumeMm: { x: 325, y: 320, z: 325 } }, context());
@@ -595,7 +618,7 @@ describe("production runtime mappings", () => {
 
   it("removes filesystem artifacts when the audited finalization rolls back", async () => {
     const runtime = await makeRuntime();
-    const project = await runtime.ports.projects.createProject({ id: "artifact-rollback-project", name: "Artifact rollback", status: "planning" }, context());
+    const project = await runtime.ports.projects.createProject({ id: "artifact-rollback-project", name: "Artifact rollback", status: "planned" }, context());
     const revision = await runtime.ports.projects.createProjectRevision(project.id, { id: "artifact-rollback-revision", name: "Initial", status: "concept" }, context());
     const service = new ApplicationService(runtime.ports);
     const body = Buffer.from("artifact audit rollback\n");
@@ -622,7 +645,7 @@ describe("production runtime mappings", () => {
   it("removes a filesystem upload session when the audited begin mutation rolls back", async () => {
     const runtime = await makeRuntime();
     const service = new ApplicationService(runtime.ports);
-    await runtime.ports.projects.createProject({ id: "begin-rollback-project", name: "Begin rollback", status: "planning" }, context());
+    await runtime.ports.projects.createProject({ id: "begin-rollback-project", name: "Begin rollback", status: "planned" }, context());
     const artifactPort = runtime.ports.artifacts;
     const originalBegin = artifactPort.beginUpload.bind(artifactPort);
     let sessionId: string | undefined;

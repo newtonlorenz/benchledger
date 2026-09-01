@@ -1072,18 +1072,39 @@ function mapArtifact(artifact: ServerArtifact, revision?: ServerRevision): Artif
   };
 }
 
-function railStepFor(status: string | undefined, projectStatus: string): number {
-  if (status === "concept" || projectStatus === "idea") return 0;
+function railStepFor(status: string | undefined): number {
+  if (status === undefined || status === "concept") return 0;
   if (status === "CAD complete") return 1;
   if (status === "DFAM reviewed") return 2;
   if (status === "mesh validated") return 3;
   if (status === "slicer validated") return 4;
-  if (status === "test printed" || status === "fit/function verified" || status === "production approved" || projectStatus === "complete") return 5;
-  return projectStatus === "planning" ? 2 : 3;
+  if (status === "test printed" || status === "fit/function verified" || status === "production approved") return 5;
+  return 0;
+}
+
+function canonicalProjectLifecycle(status: string): Project["status"] {
+  switch (status) {
+    case "idea":
+    case "planned":
+    case "ready":
+    case "building":
+    case "validating":
+    case "complete":
+    case "archived": return status;
+    // Read compatibility for snapshots produced before MPM-002. New writes
+    // are rejected by the shared API/MCP schemas.
+    case "planning": return "planned";
+    case "in_progress": return "building";
+    case "validation": return "validating";
+    case "retired": return "archived";
+    case "active":
+    case "on_hold":
+    default: return "idea";
+  }
 }
 
 function mapProject(project: ServerProject): Project {
-  const status: Project["status"] = project.status === "complete" ? "Complete" : project.status === "idea" ? "Idea" : "In progress";
+  const status = canonicalProjectLifecycle(project.status);
   const revision = project.currentRevision;
   const workItem = project.workItems?.[0];
   const bom = revision?.bom ?? project.bom ?? [];
@@ -1104,11 +1125,11 @@ function mapProject(project: ServerProject): Project {
     updated: project.updatedAt.slice(0, 10),
     currentRevision,
     workItem: workItem?.name ?? "Project setup",
-    railStep: railStepFor(revision?.status, project.status),
+    railStep: railStepFor(revision?.status),
     bom: mappedBom,
     artifacts: artifacts.map((artifact) => mapArtifact(artifact, revision)),
     notes: revision?.notes ? [revision.notes] : [],
-    accent: status === "Complete" ? "blue" : "orange",
+    accent: status === "complete" ? "blue" : "orange",
     ...(revision?.id ?? project.currentRevisionId ? { serverRevisionId: revision?.id ?? project.currentRevisionId } : {}),
     ...(gapEvaluation === undefined ? {} : { gapEvaluation }),
     ...(buildConfigSnapshot ? { buildConfigSnapshot } : {})
@@ -1847,7 +1868,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
   const nextRevision = (project: Project, input: RevisionInput): Project => ({
     ...project,
     currentRevision: input.name,
-    railStep: railStepFor(input.status ?? "concept", project.status === "Idea" ? "idea" : "planning"),
+    railStep: railStepFor(input.status ?? "concept"),
     bom: [],
     artifacts: [],
     notes: input.notes ? [input.notes] : [],
@@ -2045,7 +2066,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
       return { ...item, ...(item.productProfile ? { productProfile: { ...item.productProfile } } : {}) };
     },
     async createProject(input) {
-      const project: Project = { id: `sample-project-${Date.now()}`, name: input.name, description: input.description, subtitle: "A new maker project", status: "Idea", updated: "Just now", currentRevision: "r01", workItem: "First work item", railStep: 0, bom: [], artifacts: [], notes: [], accent: "orange", serverRevisionId: `sample-revision-${Date.now()}` };
+      const project: Project = { id: `sample-project-${Date.now()}`, name: input.name, description: input.description, subtitle: "A new maker project", status: "idea", updated: "Just now", currentRevision: "r01", workItem: "First work item", railStep: 0, bom: [], artifacts: [], notes: [], accent: "orange", serverRevisionId: `sample-revision-${Date.now()}` };
       state.projects = [project, ...state.projects];
       return project;
     },
@@ -2499,7 +2520,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         const payload = await request<{ data: ServerRevision }>(`/projects/${encodeURIComponent(projectId)}/revisions`, { method: "POST", headers: { "Idempotency-Key": command.key }, body: JSON.stringify(command.body) }, token);
         const revision = mutationData(payload);
         const { gapEvaluation: _staleGapEvaluation, ...currentWithoutGaps } = current;
-        const project = { ...currentWithoutGaps, currentRevision: `r${String(revision.number).padStart(2, "0")}`, serverRevisionId: revision.id, railStep: railStepFor(revision.status, current.status === "Idea" ? "idea" : "planning"), bom: [], artifacts: [], notes: revision.notes ? [revision.notes] : [] };
+        const project = { ...currentWithoutGaps, currentRevision: `r${String(revision.number).padStart(2, "0")}`, serverRevisionId: revision.id, railStep: railStepFor(revision.status), bom: [], artifacts: [], notes: revision.notes ? [revision.notes] : [] };
         projectCache.set(projectId, project);
         // A successful response resolves this logical command. The next
         // intentional revision receives a new key, even if its fields match.

@@ -1,3 +1,4 @@
+import { canonicalProjectStatus } from "@benchledger/domain";
 import type { Dimensions, InventoryItem, InventoryProvenance, StockEvent, Project, WorkItem, ProjectRevision, WorkItemRevision, BomLine, BomAlternative, Reservation, Supplier, OfferSnapshot, AuditRecord, AuditActor } from "@benchledger/domain";
 import type { SqliteRow } from "./sqlite.js";
 
@@ -86,7 +87,7 @@ export function projectFromRow(row: SqliteRow): Project {
   return {
     id: text(row, "id"), name: text(row, "name"), slug: text(row, "slug"),
     ...(optionalText(row, "description") === undefined ? {} : { description: optionalText(row, "description") as string }),
-    status: text(row, "status") as Project["status"], visibility: text(row, "visibility") as Project["visibility"],
+    status: canonicalProjectStatus(text(row, "status")), visibility: text(row, "visibility") as Project["visibility"],
     createdAt: text(row, "created_at"), updatedAt: text(row, "updated_at"),
     ...(optionalText(row, "retired_at") === undefined ? {} : { retiredAt: optionalText(row, "retired_at") as string })
   };

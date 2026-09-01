@@ -15,6 +15,7 @@ import type {
   BomSummary,
   InventoryItem,
   Project,
+  ProjectStatus,
   ProjectRevision,
   Reservation,
   RevisionStatus,
@@ -30,7 +31,7 @@ export interface NewProject {
   name: string;
   slug?: string;
   description?: string;
-  status?: Project["status"];
+  status?: ProjectStatus;
   visibility?: Project["visibility"];
   createdAt?: string;
   updatedAt?: string;
@@ -44,7 +45,7 @@ export function createProject(input: NewProject): Project {
     name: input.name.trim(),
     slug: input.slug ?? slugify(input.name),
     ...(input.description === undefined ? {} : { description: input.description }),
-    status: input.status ?? "active",
+    status: input.status ?? "idea",
     visibility: input.visibility ?? "private",
     createdAt,
     updatedAt: input.updatedAt ?? createdAt

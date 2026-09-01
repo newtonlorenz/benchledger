@@ -307,7 +307,8 @@ export interface Project {
   name: string;
   subtitle: string;
   description: string;
-  status: "In progress" | "Idea" | "Complete";
+  /** Canonical project lifecycle; manufacturing revision status is separate. */
+  status: "idea" | "planned" | "ready" | "building" | "validating" | "complete" | "archived";
   updated: string;
   currentRevision: string;
   workItem: string;
