@@ -571,7 +571,7 @@ class MemoryProjects implements ProjectPort {
     this.workItemRevisions.set(revision.id, revision); return Promise.resolve(clone(revision));
   }
   getWorkItemRevision(idValue: string): Promise<WorkItemRevision | null> { const value = this.workItemRevisions.get(idValue); return Promise.resolve(value ? clone(value) : null); }
-  listBomLines(revisionId: string): Promise<readonly BomLine[]> { return Promise.resolve(clone([...this.bomLines.values()].filter((line) => line.revisionId === revisionId))); }
+  listBomLines(revisionId: string, options?: { readonly includeRetired?: boolean }): Promise<readonly BomLine[]> { return Promise.resolve(clone([...this.bomLines.values()].filter((line) => line.revisionId === revisionId && (options?.includeRetired === true || line.retiredAt === undefined)))); }
   getBomLine(idValue: string): Promise<BomLine | null> { const value = this.bomLines.get(idValue); return Promise.resolve(value ? clone(value) : null); }
   createBomLine(revisionId: string, input: CreateBomLine): Promise<BomLine> {
     const line = { id: input.id ?? id("bom", ++this.sequence), revisionId, name: input.name, ...(input.itemId === undefined ? {} : { itemId: input.itemId }), requiredQuantity: input.requiredQuantity, unit: input.unit, optional: input.optional, constraints: input.constraints ?? {}, alternatives: input.alternatives ?? [], ...(input.notes === undefined ? {} : { notes: input.notes }), createdAt: iso(), updatedAt: iso(), version: 1 } as BomLine;
@@ -581,7 +581,17 @@ class MemoryProjects implements ProjectPort {
     const current = this.bomLines.get(lineId); if (!current) throw new ApplicationError("not_found", `BOM line '${lineId}' was not found`); ensureVersion(current.version, expectedVersion, "BOM line");
     const next = { ...current, ...input, ...(input.alternatives ? { alternatives: clone(input.alternatives) } : {}), ...(input.constraints ? { constraints: clone(input.constraints) } : {}), updatedAt: iso(), version: current.version + 1 } as BomLine; this.bomLines.set(lineId, next); return Promise.resolve(clone(next));
   }
-  retireBomLine(lineId: string, expectedVersion: number | undefined): Promise<BomLine> { return this.updateBomLine(lineId, { optional: true, notes: "Retired" }, expectedVersion); }
+  retireBomLine(lineId: string, expectedVersion: number | undefined): Promise<BomLine> {
+    const current = this.bomLines.get(lineId); if (!current) throw new ApplicationError("not_found", `BOM line '${lineId}' was not found`); ensureVersion(current.version, expectedVersion, "BOM line");
+    if ([...this.reservations.values()].some((reservation) => reservation.lineId === lineId && reservation.status === "active")) throw new ApplicationError("conflict", "Release active reservations before retiring this BOM line");
+    if (current.retiredAt !== undefined) return Promise.resolve(clone(current));
+    const retiredAt = iso(); const next = { ...current, retiredAt, updatedAt: retiredAt, version: current.version + 1 }; this.bomLines.set(lineId, next); return Promise.resolve(clone(next));
+  }
+  restoreBomLine(lineId: string, expectedVersion: number | undefined): Promise<BomLine> {
+    const current = this.bomLines.get(lineId); if (!current) throw new ApplicationError("not_found", `BOM line '${lineId}' was not found`); ensureVersion(current.version, expectedVersion, "BOM line");
+    if (current.retiredAt === undefined) return Promise.resolve(clone(current));
+    const { retiredAt: _retiredAt, ...active } = current; const next = { ...active, updatedAt: iso(), version: current.version + 1 }; this.bomLines.set(lineId, next); return Promise.resolve(clone(next));
+  }
   createReservation(revisionId: string, input: CreateReservation): Promise<Reservation> {
     const line = this.bomLines.get(input.lineId); if (!line || line.revisionId !== revisionId) throw new ApplicationError("not_found", `BOM line '${input.lineId}' was not found in this revision`);
     const item = this.inventory.items.get(input.itemId); if (!item) throw new ApplicationError("not_found", `Inventory item '${input.itemId}' was not found`); if (line.unit !== item.unit) throw new ApplicationError("validation", `Unit mismatch: BOM uses ${line.unit}, item uses ${item.unit}`); ensurePositive(input.quantity, "Reservation quantity");

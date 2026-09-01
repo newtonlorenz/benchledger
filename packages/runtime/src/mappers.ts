@@ -460,6 +460,7 @@ export function apiBomLineFromNative(line: BomLine, metadata: BomApiMetadata, ve
     constraints: metadata.constraints ?? {},
     alternatives,
     ...(line.notes === undefined ? {} : { notes: line.notes }),
+    ...(line.retiredAt === undefined ? {} : { retiredAt: line.retiredAt }),
     createdAt: metadata.createdAt ?? "1970-01-01T00:00:00.000Z",
     updatedAt: metadata.updatedAt ?? metadata.createdAt ?? "1970-01-01T00:00:00.000Z",
     version

@@ -447,6 +447,7 @@ export interface BomLine {
   compatibleItemIds?: readonly string[];
   constraints?: BomConstraints;
   notes?: string;
+  retiredAt?: string;
   version?: number;
 }
 
@@ -463,6 +464,7 @@ export interface BomAlternative {
 
 export interface BomLineListInput extends PageInput {
   projectRevisionId: string;
+  includeRetired?: boolean;
 }
 
 export interface BomLineCreateInput {
@@ -790,7 +792,8 @@ export interface BomBackend {
   listProjectLines?(input: { projectId: string } & PageInput, context: McpRequestContext): Promise<Page<BomLine>>;
   createLine(input: BomLineCreateInput, context: McpRequestContext): Promise<WriteResult<BomLine>>;
   updateLine(input: BomLineUpdateInput, context: McpRequestContext): Promise<WriteResult<BomLine>>;
-  retireLine(input: { bomLineId: string; expectedVersion?: number }, context: McpRequestContext): Promise<WriteResult>;
+  retireLine(input: { bomLineId: string; expectedVersion: number }, context: McpRequestContext): Promise<WriteResult>;
+  restoreLine(input: { bomLineId: string; expectedVersion: number }, context: McpRequestContext): Promise<WriteResult>;
   evaluate(input: BomEvaluationInput, context: McpRequestContext): Promise<BomEvaluation>;
   reserve(input: ReservationInput, context: McpRequestContext): Promise<Reservation>;
   release(input: ReleaseReservationInput, context: McpRequestContext): Promise<Reservation>;

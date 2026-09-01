@@ -79,7 +79,7 @@ export class BomRepository {
   constructor(private readonly database: BenchDatabase) {}
 
   createLine(line: BomLine): BomLine {
-    this.database.run("INSERT INTO bom_lines (id, revision_id, name, quantity, unit, required, optional, item_id, alternative_item_ids_json, constraints_json, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [line.id, line.revisionId, line.name, line.quantity, line.unit, line.required ? 1 : 0, line.optional === true ? 1 : 0, line.itemId ?? null, jsonValue(line.alternativeItemIds), jsonValue(line.constraints), line.notes ?? null]);
+    this.database.run("INSERT INTO bom_lines (id, revision_id, name, quantity, unit, required, optional, item_id, alternative_item_ids_json, constraints_json, notes, retired_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [line.id, line.revisionId, line.name, line.quantity, line.unit, line.required ? 1 : 0, line.optional === true ? 1 : 0, line.itemId ?? null, jsonValue(line.alternativeItemIds), jsonValue(line.constraints), line.notes ?? null, line.retiredAt ?? null]);
     return line;
   }
 
@@ -88,8 +88,9 @@ export class BomRepository {
     return row === undefined ? undefined : bomLineFromRow(row);
   }
 
-  listLines(revisionId: string): readonly BomLine[] {
-    return this.database.all<SqliteRow>("SELECT * FROM bom_lines WHERE revision_id = ? ORDER BY id", [revisionId]).map(bomLineFromRow);
+  listLines(revisionId: string, includeRetired = false): readonly BomLine[] {
+    const retired = includeRetired ? "" : " AND retired_at IS NULL";
+    return this.database.all<SqliteRow>(`SELECT * FROM bom_lines WHERE revision_id = ?${retired} ORDER BY id`, [revisionId]).map(bomLineFromRow);
   }
 
   createAlternative(alternative: BomAlternative): BomAlternative {

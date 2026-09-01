@@ -252,6 +252,8 @@ export interface BomLine {
   alternativeItemIds?: readonly string[];
   constraints?: BomConstraints;
   notes?: string;
+  /** A retired requirement remains inspectable but is excluded from active planning. */
+  retiredAt?: string;
 }
 
 export interface BomAlternative {

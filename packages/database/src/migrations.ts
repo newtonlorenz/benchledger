@@ -5,6 +5,41 @@ import { BUILTIN_INVENTORY_CATEGORIES, normalizeInventoryCategoryKey } from "@be
 export const WORKSPACE_SECURITY_SCHEMA_VERSION = 1;
 export const WORKSPACE_SECURITY_SCHEMA_MIGRATION_SQL = WORKSPACE_SECURITY_SCHEMA_SQL;
 
+export const PROJECT_SCHEMA_VERSION = 1;
+
+/** Add durable, reversible BOM retirement without rewriting requirement data. */
+export function migrateProjectSchema(database: BenchDatabase): void {
+  database.transaction(() => {
+    const current = database.get<{ readonly value: unknown }>("SELECT value FROM forge_meta WHERE key = ?", ["project_schema_version"]);
+    const currentVersion = current === undefined ? 0 : Number(current.value);
+    if (!Number.isInteger(currentVersion) || currentVersion < 0) throw new Error("BenchLedger project schema version is invalid");
+    if (currentVersion > PROJECT_SCHEMA_VERSION) throw new Error(`BenchLedger project schema ${currentVersion} is newer than supported version ${PROJECT_SCHEMA_VERSION}`);
+    const columns = database.all<SqliteRow>("PRAGMA table_info(bom_lines)");
+    if (!columns.some((column) => column.name === "retired_at")) {
+      database.exec("ALTER TABLE bom_lines ADD COLUMN retired_at TEXT");
+    }
+    const runtimeMetadata = database.get<SqliteRow>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'forge_runtime_metadata'");
+    if (runtimeMetadata !== undefined) {
+      const legacyRows = database.all<SqliteRow>("SELECT entity_id, payload_json, updated_at FROM forge_runtime_metadata WHERE entity_type = ?", ["bom_line"]);
+      for (const row of legacyRows) {
+        if (typeof row.entity_id !== "string" || typeof row.payload_json !== "string" || typeof row.updated_at !== "string") continue;
+        try {
+          const payload = JSON.parse(row.payload_json) as unknown;
+          if (payload !== null && typeof payload === "object" && !Array.isArray(payload) && (payload as { readonly retired?: unknown }).retired === true) {
+            database.run("UPDATE bom_lines SET retired_at = COALESCE(retired_at, ?) WHERE id = ?", [row.updated_at, row.entity_id]);
+          }
+        } catch {
+          // Malformed legacy metadata was never trustworthy retirement evidence.
+        }
+      }
+    }
+    database.run(
+      "INSERT INTO forge_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      ["project_schema_version", String(PROJECT_SCHEMA_VERSION)]
+    );
+  });
+}
+
 /** Additive workspace access migration; safe to run on every startup. */
 export function migrateWorkspaceSecuritySchema(database: BenchDatabase): void {
   database.transaction(() => {

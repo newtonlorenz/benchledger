@@ -1047,8 +1047,8 @@ export class ApplicationService {
     });
   }
 
-  async listBomLines(revisionId: string): Promise<readonly BomLine[]> {
-    return this.ports.unitOfWork.exclusive(() => this.ports.projects.listBomLines(requireId(revisionId, "revision id")));
+  async listBomLines(revisionId: string, options?: { readonly includeRetired?: boolean }): Promise<readonly BomLine[]> {
+    return this.ports.unitOfWork.exclusive(() => this.ports.projects.listBomLines(requireId(revisionId, "revision id"), options));
   }
 
   async getBomLine(id: string): Promise<BomLine> {
@@ -1081,6 +1081,14 @@ export class ApplicationService {
     const lineId = requireId(id, "BOM line id");
     return this.mutate(ctx, "project.bom_line.retire", "bom_line", lineId, async () => {
       const line = await this.ports.projects.retireBomLine(lineId, expectedVersion, ctx);
+      return { value: line, entityId: line.id, version: line.version };
+    });
+  }
+
+  async restoreBomLine(id: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<BomLine>> {
+    const lineId = requireId(id, "BOM line id");
+    return this.mutate(ctx, "project.bom_line.restore", "bom_line", lineId, async () => {
+      const line = await this.ports.projects.restoreBomLine(lineId, expectedVersion, ctx);
       return { value: line, entityId: line.id, version: line.version };
     });
   }

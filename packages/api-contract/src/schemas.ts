@@ -384,6 +384,7 @@ export const bomLineSchema = z.object({
   constraints: bomConstraintsSchema.default({}),
   alternatives: z.array(bomAlternativeSchema).max(20),
   notes: z.string().max(2000).optional(),
+  retiredAt: isoDateSchema.optional(),
   createdAt: isoDateSchema,
   updatedAt: isoDateSchema,
   version: z.number().int().positive()

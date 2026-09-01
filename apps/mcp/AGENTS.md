@@ -82,6 +82,12 @@ edited or custom rows remain authoritative.
 The adapter exposes bounded pages. Continue with the returned cursor instead of
 requesting an unbounded dump. A project resource is similarly scoped:
 
+`list_bom_lines` returns active requirements by default. Pass
+`includeRetired: true` only when auditing history. Retiring a line preserves its
+requirement, optional flag, notes, and versioned evidence; `restore_bom_line`
+requires the current `expectedVersion`. Retired lines never participate in gap
+evaluation or accept new reservations.
+
 ```text
 benchledger://projects/{projectId}/context
 benchledger://projects/{projectId}/revisions/{revisionId}

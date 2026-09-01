@@ -252,8 +252,8 @@ export class ProductionProjectAdapter implements ProjectPort {
     });
   }
 
-  async listBomLines(revisionId: string): Promise<readonly ApiBomLine[]> {
-    return attempt(() => this.boms.listLines(revisionId).map((line) => this.toApiBom(line)));
+  async listBomLines(revisionId: string, options?: { readonly includeRetired?: boolean }): Promise<readonly ApiBomLine[]> {
+    return attempt(() => this.boms.listLines(revisionId, options?.includeRetired === true).map((line) => this.toApiBom(line)));
   }
 
   async getBomLine(id: string): Promise<ApiBomLine | null> {
@@ -306,9 +306,40 @@ export class ProductionProjectAdapter implements ProjectPort {
   }
 
   async retireBomLine(id: string, expectedVersion: number | undefined, _ctx: RequestContext): Promise<ApiBomLine> {
-    return this.updateBomLine(id, { optional: true, notes: "Retired" }, expectedVersion, _ctx).then((line) => {
-      this.state.setMetadata(BOM, id, { ...this.state.getMetadata(BOM, id), retired: true });
-      return line;
+    return attempt(() => {
+      const native = this.boms.getLine(id);
+      if (native === undefined) throw new DomainError("bom_line_not_found", `BOM line ${id} does not exist`);
+      if (this.reservations.list().some((reservation) => reservation.bomLineId === id && reservation.status === "active")) {
+        throw new DomainError("active_reservation_conflict", "release active reservations before retiring this BOM line");
+      }
+      return this.database.transaction(() => {
+        this.state.ensureVersion(BOM, id, expectedVersion);
+        if (native.retiredAt !== undefined) return this.toApiBom(native);
+        const retiredAt = nowIso();
+        this.database.run("UPDATE bom_lines SET retired_at = ? WHERE id = ?", [retiredAt, id]);
+        const retired = { ...native, retiredAt };
+        const version = this.state.bumpVersion(BOM, id);
+        this.state.setMetadata(BOM, id, { ...this.state.getMetadata(BOM, id), retired: true, updatedAt: retiredAt });
+        return this.toApiBom(retired, version);
+      });
+    });
+  }
+
+  async restoreBomLine(id: string, expectedVersion: number | undefined, _ctx: RequestContext): Promise<ApiBomLine> {
+    return attempt(() => {
+      const native = this.boms.getLine(id);
+      if (native === undefined) throw new DomainError("bom_line_not_found", `BOM line ${id} does not exist`);
+      return this.database.transaction(() => {
+        this.state.ensureVersion(BOM, id, expectedVersion);
+        if (native.retiredAt === undefined) return this.toApiBom(native);
+        const updatedAt = nowIso();
+        this.database.run("UPDATE bom_lines SET retired_at = NULL WHERE id = ?", [id]);
+        const { retiredAt: _retiredAt, ...restored } = native;
+        const version = this.state.bumpVersion(BOM, id);
+        const metadata = { ...this.state.getMetadata(BOM, id), retired: false, updatedAt };
+        this.state.setMetadata(BOM, id, metadata);
+        return this.toApiBom(restored, version);
+      });
     });
   }
 

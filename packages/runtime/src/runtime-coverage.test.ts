@@ -525,7 +525,9 @@ describe("production project adapter", () => {
     expect(updatedLine).toMatchObject({ name: "Updated ESP32", requiredQuantity: 1, optional: true, version: 2, notes: "optional", alternatives: [] });
     await expect(runtime.ports.projects.updateBomLine(line.id, { name: "stale" }, line.version, context())).rejects.toMatchObject({ code: "conflict" });
     const retiredLine = await runtime.ports.projects.retireBomLine(line.id, updatedLine.version, context());
-    expect(retiredLine).toMatchObject({ optional: true, notes: "Retired", version: 3 });
+    expect(retiredLine).toMatchObject({ optional: true, notes: "optional", version: 3, retiredAt: expect.any(String) });
+    await expect(runtime.ports.projects.listBomLines(firstRevision.id)).resolves.not.toContainEqual(expect.objectContaining({ id: line.id }));
+    await expect(runtime.ports.projects.listBomLines(firstRevision.id, { includeRetired: true })).resolves.toContainEqual(expect.objectContaining({ id: line.id, retiredAt: expect.any(String) }));
 
     const unassigned = await runtime.ports.projects.createBomLine(secondRevision.id, { id: "bom-unassigned", name: "Cable", requiredQuantity: 1, unit: "metre", optional: false, alternatives: [], constraints: {} }, context());
     const unassignedUpdated = await runtime.ports.projects.updateBomLine(unassigned.id, { notes: "wire" }, unassigned.version, context());

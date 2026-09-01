@@ -5,7 +5,7 @@ import { ArtifactStore } from "@benchledger/artifacts";
 import {
   AuditRepository, BomRepository, BenchDatabase, InventoryRepository, ProcurementRepository,
   ProjectRepository, ReservationRepository, CanonicalCatalogRepository,
-  ReconciliationRepository, migrateCatalogSchema, migrateWorkspaceSecuritySchema,
+  ReconciliationRepository, migrateCatalogSchema, migrateProjectSchema, migrateWorkspaceSecuritySchema,
   WorkspaceSecurityRepository
 } from "@benchledger/database";
 import type { WorkspacePasswordHasher, WorkspacePasswordVerifier } from "./workspace-security-adapter.js";
@@ -99,6 +99,7 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
   try {
     migrateRuntimeSchema(database);
     migrateCatalogSchema(database);
+    migrateProjectSchema(database);
     migrateWorkspaceSecuritySchema(database);
     seedStarterCatalog(database);
     const artifacts = new ArtifactStore({ root: artifactDir, maxUploadBytes, maxStorageBytes });

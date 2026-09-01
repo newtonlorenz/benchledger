@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createAuditRecord, createBomLine, createOfferSnapshot, createProject, createProjectRevision, createStockEvent, createSupplier, createWorkItem, createWorkItemRevision } from "@benchledger/domain";
-import { AuditRepository, BomRepository, BenchDatabase, InventoryRepository, ProcurementRepository, ProjectRepository, ReservationRepository } from "./index.js";
+import { AuditRepository, BomRepository, BenchDatabase, InventoryRepository, ProcurementRepository, ProjectRepository, ReservationRepository, migrateProjectSchema } from "./index.js";
 import type { InventoryItem } from "@benchledger/domain";
 
 const item: InventoryItem = {
@@ -61,6 +61,26 @@ describe("SQLite repositories", () => {
     expect(projects.listRevisions(project.id)).toHaveLength(1);
     expect(projects.listWorkItemRevisions(work.id)).toHaveLength(1);
     expect(boms.listLines(projectRevision.id)[0]?.itemId).toBe(item.id);
+    database.close();
+  });
+
+  it("backfills durable retirement from trustworthy legacy runtime metadata", () => {
+    const database = new BenchDatabase(":memory:");
+    const projects = new ProjectRepository(database);
+    const boms = new BomRepository(database);
+    const project = createProject({ id: "legacy-retirement-project", name: "Legacy retirement" });
+    const revision = createProjectRevision({ id: "legacy-retirement-revision", projectId: project.id, number: 1 });
+    projects.create(project);
+    projects.createRevision(revision);
+    boms.createLine(createBomLine({ id: "legacy-retirement-line", revisionId: revision.id, name: "Legacy line", quantity: 1, unit: "piece", notes: "Historical note" }));
+    database.exec("CREATE TABLE forge_runtime_metadata (entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, payload_json TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (entity_type, entity_id))");
+    database.run("INSERT INTO forge_runtime_metadata (entity_type, entity_id, payload_json, updated_at) VALUES (?, ?, ?, ?)", ["bom_line", "legacy-retirement-line", JSON.stringify({ retired: true }), "2026-01-02T00:00:00.000Z"]);
+
+    migrateProjectSchema(database);
+    migrateProjectSchema(database);
+
+    expect(boms.listLines(revision.id)).toEqual([]);
+    expect(boms.listLines(revision.id, true)).toEqual([expect.objectContaining({ id: "legacy-retirement-line", notes: "Historical note", retiredAt: "2026-01-02T00:00:00.000Z" })]);
     database.close();
   });
 

@@ -89,6 +89,7 @@ function serviceFixture(): ApplicationService & Record<string, any> {
     createBomLine: vi.fn(async (_revisionId: string, input: unknown) => mutation(apiLine({ ...(input as object), id: "bom-created" }), "bom-created", 1)),
     updateBomLine: vi.fn(async (id: string, input: unknown) => mutation(apiLine({ ...(input as object), id, version: 2 }), id, 2)),
     retireBomLine: vi.fn(async (id: string) => mutation(apiLine({ id, version: 2 }), id, 2)),
+    restoreBomLine: vi.fn(async (id: string) => mutation(apiLine({ id, version: 3 }), id, 3)),
     evaluateBomGaps: vi.fn(async () => ({ revisionId: "revision-1", lines: [{ lineId: "bom-1", name: "M3 screw", status: "supplied", requiredQuantity: 4, suppliedQuantity: 4, inspectQuantity: 0, missingQuantity: 0, unit: "each", matchedItemIds: ["screw-m3"], reasons: ["confirmed"], alternatives: [], candidates: [{ itemId: "screw-m3", relationship: "exact", compatibility: "confirmed", availableQuantity: 4, suppliedQuantity: 4, inspectQuantity: 0, reason: "confirmed" }] }], totals: { suppliedLines: 1, inspectFirstLines: 0, partialLines: 0, missingLines: 0, optionalLines: 0 } })),
     createReservation: vi.fn(async (_revisionId: string, input: unknown) => mutation(apiReservation({ ...(input as object) }), "reservation-1", 1)),
     releaseReservation: vi.fn(async (id: string) => mutation(apiReservation({ id, status: "released", version: 2 }), id, 2)),
@@ -365,6 +366,7 @@ describe("createApplicationBackend translation coverage", () => {
     expect(service.createBomLine).toHaveBeenCalledWith("revision-1", expect.objectContaining({ alternatives: [{ itemId: "board-alt", compatible: "confirmed", reason: "same pinout" }] }), expect.anything());
     await backend.bom.updateLine({ bomLineId: "bom-1", expectedVersion: 1, description: "M4", unit: "set", requirement: "optional", compatibleItemIds: ["alt"] }, context);
     await backend.bom.retireLine({ bomLineId: "bom-1", expectedVersion: 2 }, context);
+    await backend.bom.restoreLine({ bomLineId: "bom-1", expectedVersion: 3 }, context);
     const evaluation = await backend.bom.evaluate({ projectRevisionId: "revision-1" }, context);
     expect(evaluation).toMatchObject({ projectRevisionId: "revision-1", lines: [{ state: "supplied", recommendedAction: "reuse" }], totals: { required: 1, supplied: 1 } });
     const reservation = await backend.bom.reserve({ projectRevisionId: "revision-1", bomLineId: "bom-1", itemId: "screw-m3", quantity: { value: 2, unit: "piece" } }, context);

@@ -14,6 +14,7 @@ import {
   bomLineUpdate,
   boundedJsonObject,
   contextRefresh,
+  bomLineList,
   dimensions,
   evidence,
   finalizeArtifactUpload,
@@ -80,6 +81,9 @@ describe("MCP validation boundary", () => {
     expect(retireProject({ projectId: "project-1" })).toEqual({ projectId: "project-1" });
     expect(retireProject({ projectId: "project-1", expectedVersion: 4 })).toEqual({ projectId: "project-1", expectedVersion: 4 });
     expect(retireBomLine({ bomLineId: "bom-1", expectedVersion: 2 })).toEqual({ bomLineId: "bom-1", expectedVersion: 2 });
+    expectInvalid(() => retireBomLine({ bomLineId: "bom-1" }));
+    expect(bomLineList({ projectRevisionId: "revision-1", includeRetired: true })).toEqual({ projectRevisionId: "revision-1", includeRetired: true, limit: 25 });
+    expectInvalid(() => bomLineList({ projectRevisionId: "revision-1", includeRetired: "yes" }));
     expectInvalid(() => retireProject({ projectId: "project-1", expectedVersion: -1 }));
     expectInvalid(() => retireBomLine({ bomLineId: "bom-1", expectedVersion: 1.5 }));
   });

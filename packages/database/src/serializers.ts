@@ -130,7 +130,8 @@ export function bomLineFromRow(row: SqliteRow): BomLine {
     ...(optionalText(row, "item_id") === undefined ? {} : { itemId: optionalText(row, "item_id") as string }),
     ...(alternatives === undefined ? {} : { alternativeItemIds: alternatives }),
     ...(constraints === undefined ? {} : { constraints }),
-    ...(optionalText(row, "notes") === undefined ? {} : { notes: optionalText(row, "notes") as string })
+    ...(optionalText(row, "notes") === undefined ? {} : { notes: optionalText(row, "notes") as string }),
+    ...(optionalText(row, "retired_at") === undefined ? {} : { retiredAt: optionalText(row, "retired_at") as string })
   };
 }
 

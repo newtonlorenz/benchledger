@@ -323,9 +323,20 @@ describe("BenchLedger HTTP API", () => {
     const revisionId = revision.json<{ data: { id: string } }>().data.id;
     const line = await app.inject({ method: "POST", url: `/api/v1/project-revisions/${revisionId}/bom`, headers: { cookie, "x-csrf-token": csrf }, payload: { name: "ESP32", itemId: "board-esp32", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} } });
     expect(line.statusCode).toBe(201);
+    const lineData = line.json<{ data: { id: string; version: number } }>().data;
     const gaps = await app.inject({ method: "GET", url: `/api/v1/project-revisions/${revisionId}/gaps`, headers: { cookie } });
     expect(gaps.statusCode).toBe(200);
     expect(gaps.json<{ lines: Array<{ status: string }> }>().lines[0]?.status).toBe("supplied");
+    const retired = await app.inject({ method: "DELETE", url: `/api/v1/bom-lines/${lineData.id}`, headers: { cookie, "x-csrf-token": csrf, "if-match": String(lineData.version) } });
+    expect(retired.statusCode).toBe(200);
+    expect(retired.json()).toMatchObject({ data: { id: lineData.id, optional: false, version: 2 }, audit: { action: "project.bom_line.retire" } });
+    expect(retired.json<{ data: { retiredAt?: string } }>().data.retiredAt).toBeDefined();
+    expect((await app.inject({ method: "GET", url: `/api/v1/project-revisions/${revisionId}/bom`, headers: { cookie } })).json()).toEqual([]);
+    expect((await app.inject({ method: "GET", url: `/api/v1/project-revisions/${revisionId}/bom?includeRetired=true`, headers: { cookie } })).json()).toEqual([expect.objectContaining({ id: lineData.id, retiredAt: expect.any(String) })]);
+    const restored = await app.inject({ method: "POST", url: `/api/v1/bom-lines/${lineData.id}/restore`, headers: { cookie, "x-csrf-token": csrf, "if-match": "2" } });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json()).toMatchObject({ data: { id: lineData.id, optional: false, version: 3 }, audit: { action: "project.bom_line.restore" } });
+    expect(restored.json<{ data: Record<string, unknown> }>().data).not.toHaveProperty("retiredAt");
     await app.close();
   });
 
@@ -429,6 +440,8 @@ describe("BenchLedger HTTP API", () => {
       expect(document.components.schemas.UpdateInventoryCategory).toMatchObject({ minProperties: 1, additionalProperties: false });
       expect(JSON.stringify(document.paths["/inventory/categories"])).toContain('"maxLength":512');
       expect(document.paths["/inventory/categories/{id}"]).toMatchObject({ patch: { parameters: [{ name: "If-Match", in: "header", required: true }] } });
+      expect(document.paths["/bom-lines/{id}"]).toMatchObject({ delete: { parameters: [{ name: "If-Match", in: "header", required: true }], responses: { "400": expect.any(Object), "409": expect.any(Object) } } });
+      expect(document.paths["/bom-lines/{id}/restore"]).toMatchObject({ post: { parameters: [{ name: "If-Match", in: "header", required: true }], responses: { "400": expect.any(Object), "409": expect.any(Object) } } });
       const inventoryGet = (document.paths["/inventory"] as { get: { description?: string; parameters?: Array<{ name: string; in: string; required?: boolean; description?: string; schema: Record<string, unknown> }>; responses: Record<string, unknown> } }).get;
       expect(inventoryGet).toMatchObject({
         responses: { "200": { description: "Inventory page" } },

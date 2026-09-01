@@ -148,7 +148,7 @@ function parseExpectedVersion(request: FastifyRequest): number | undefined {
 
 function parseRequiredExpectedVersion(request: FastifyRequest): number {
   const version = parseExpectedVersion(request);
-  if (version === undefined) throw new ApplicationError("validation", "If-Match is required for this category mutation");
+  if (version === undefined) throw new ApplicationError("validation", "If-Match is required for this versioned mutation");
   return version;
 }
 
@@ -775,7 +775,9 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       "/projects/{id}/revisions": { post: { responses: { "201": { description: "Project revision" } } } },
       "/catalog/products": { get: { responses: { "200": { description: "Bounded exact catalog product page" } } }, post: { responses: { "201": { description: "Catalog product mutation" } } } },
       "/catalog/products/{id}": { get: { responses: { "200": { description: "Exact catalog product" } } }, patch: { responses: { "200": { description: "Updated exact catalog product" } } } },
-      "/project-revisions/{id}/bom": { get: { responses: { "200": { description: "BOM lines" } } }, post: { responses: { "201": { description: "BOM line" } } } },
+      "/project-revisions/{id}/bom": { get: { parameters: [{ name: "includeRetired", in: "query", required: false, schema: { type: "boolean", default: false } }], responses: { "200": { description: "Active BOM lines by default; retired history when explicitly requested" } } }, post: { responses: { "201": { description: "BOM line" } } } },
+      "/bom-lines/{id}": { delete: { parameters: [{ name: "If-Match", in: "header", required: true, schema: { type: "integer", minimum: 1 } }], responses: { "200": { description: "Retired BOM line" }, "400": { description: "Missing or invalid version precondition" }, "409": { description: "Version or active-reservation conflict" } } } },
+      "/bom-lines/{id}/restore": { post: { parameters: [{ name: "If-Match", in: "header", required: true, schema: { type: "integer", minimum: 1 } }], responses: { "200": { description: "Restored BOM line" }, "400": { description: "Missing or invalid version precondition" }, "409": { description: "Version conflict" } } } },
       "/project-revisions/{id}/build-configurations": { get: { responses: { "200": { description: "Immutable build configuration snapshot page" } } }, post: { responses: { "201": { description: "Immutable build configuration snapshot" } } } },
       "/build-configurations/{id}": { get: { responses: { "200": { description: "Immutable build configuration snapshot" } } } },
       "/project-revisions/{id}/gaps": { get: { responses: { "200": { description: "Evidence-backed BOM gaps" } } } },
@@ -1396,10 +1398,11 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   app.post(route("/work-items/:id/revisions"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; const mutation = await service.createWorkItemRevision(params.id, parseBody(createWorkItemRevisionSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });
   app.get(route("/work-item-revisions/:id"), async (request) => { requireScope(request, "read", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.getWorkItemRevision(params.id); });
 
-  app.get(route("/project-revisions/:id/bom"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireRevisionScope(request, service, params.id); return service.listBomLines(params.id); });
+  app.get(route("/project-revisions/:id/bom"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireRevisionScope(request, service, params.id); const query = request.query as { includeRetired?: unknown }; const includeRetired = query.includeRetired === true || query.includeRetired === "true"; return service.listBomLines(params.id, { includeRetired }); });
   app.post(route("/project-revisions/:id/bom"), async (request, reply) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireRevisionScope(request, service, params.id); const mutation = await service.createBomLine(params.id, parseBody(createBomLineSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });
   app.patch(route("/bom-lines/:id"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.updateBomLine(params.id, parseBody(updateBomLineSchema, request.body) as never, parseExpectedVersion(request), requestContext(request)); });
-  app.delete(route("/bom-lines/:id"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.retireBomLine(params.id, parseExpectedVersion(request), requestContext(request)); });
+  app.delete(route("/bom-lines/:id"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.retireBomLine(params.id, parseRequiredExpectedVersion(request), requestContext(request)); });
+  app.post(route("/bom-lines/:id/restore"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.restoreBomLine(params.id, parseRequiredExpectedVersion(request), requestContext(request)); });
   app.get(route("/project-revisions/:id/gaps"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireRevisionScope(request, service, params.id); return service.evaluateBomGaps(params.id); });
   app.get(route("/project-revisions/:id/reservations"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireRevisionScope(request, service, params.id); return service.listReservations(params.id); });
   app.post(route("/project-revisions/:id/reservations"), async (request, reply) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireRevisionScope(request, service, params.id); const mutation = await service.createReservation(params.id, parseBody(createReservationSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });

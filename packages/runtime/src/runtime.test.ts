@@ -148,6 +148,70 @@ describe("production runtime mappings", () => {
     });
   });
 
+  it("persists reversible BOM retirement without changing requirement data", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "benchledger-retired-bom-"));
+    directories.push(dataDir);
+    const first = await createProductionRuntime({ dataDir, maxUploadBytes: 1024 * 1024, maxStorageBytes: 4 * 1024 * 1024 });
+    runtimes.push(first);
+    const service = new ApplicationService(first.ports);
+    await first.ports.inventory.createItem({
+      id: "retirement-fastener",
+      name: "M3 fastener",
+      kind: "fastener",
+      quantity: 4,
+      unit: "each",
+      tags: [],
+      links: [],
+      evidence: { state: "physically_counted" }
+    }, context());
+    const project = await first.ports.projects.createProject({ id: "retirement-project", name: "Retirement project", status: "planning" }, context());
+    const revision = await first.ports.projects.createProjectRevision(project.id, { id: "retirement-revision", name: "Initial", status: "concept" }, context());
+    const line = await first.ports.projects.createBomLine(revision.id, {
+      id: "retirement-line",
+      name: "M3 fastener",
+      itemId: "retirement-fastener",
+      requiredQuantity: 2,
+      unit: "each",
+      optional: false,
+      constraints: {},
+      alternatives: [],
+      notes: "Preserve this requirement note"
+    }, context());
+
+    const reservation = await service.createReservation(revision.id, { id: "retirement-reservation", lineId: line.id, itemId: "retirement-fastener", quantity: 1 }, context());
+    await expect(service.retireBomLine(line.id, line.version, context())).rejects.toMatchObject({ code: "conflict" });
+    await service.releaseReservation(reservation.data.id, reservation.data.version, context());
+
+    const retired = await service.retireBomLine(line.id, line.version, context());
+    expect(retired).toMatchObject({
+      data: { id: line.id, optional: false, notes: "Preserve this requirement note", version: 2 },
+      audit: { action: "project.bom_line.retire" }
+    });
+    expect(retired.data.retiredAt).toBeDefined();
+    await expect(service.listBomLines(revision.id)).resolves.toEqual([]);
+    await expect(service.evaluateBomGaps(revision.id)).resolves.toMatchObject({ lines: [], totals: { suppliedLines: 0, missingLines: 0, optionalLines: 0 } });
+    await expect(service.createReservation(revision.id, { lineId: line.id, itemId: "retirement-fastener", quantity: 1 }, context())).rejects.toMatchObject({ code: "not_found" });
+
+    await first.close();
+    runtimes.splice(runtimes.indexOf(first), 1);
+    const reopened = await createProductionRuntime({ dataDir, maxUploadBytes: 1024 * 1024, maxStorageBytes: 4 * 1024 * 1024 });
+    runtimes.push(reopened);
+    const reopenedService = new ApplicationService(reopened.ports);
+    await expect(reopenedService.listBomLines(revision.id)).resolves.toEqual([]);
+    await expect(reopenedService.listBomLines(revision.id, { includeRetired: true })).resolves.toEqual([
+      expect.objectContaining({ id: line.id, optional: false, notes: "Preserve this requirement note", version: 2, retiredAt: retired.data.retiredAt })
+    ]);
+    await expect(reopenedService.getBomLine(line.id)).resolves.toMatchObject({ id: line.id, retiredAt: retired.data.retiredAt });
+
+    const restored = await reopenedService.restoreBomLine(line.id, 2, context());
+    expect(restored).toMatchObject({
+      data: { id: line.id, optional: false, notes: "Preserve this requirement note", version: 3 },
+      audit: { action: "project.bom_line.restore" }
+    });
+    expect(restored.data).not.toHaveProperty("retiredAt");
+    await expect(reopenedService.listBomLines(revision.id)).resolves.toEqual([expect.objectContaining({ id: line.id, version: 3 })]);
+  });
+
   it("resolves upload session ancestry after the session is persisted", async () => {
     const runtime = await makeRuntime();
     const session = await runtime.ports.artifacts.beginUpload({

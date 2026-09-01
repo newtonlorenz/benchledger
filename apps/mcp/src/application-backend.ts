@@ -438,7 +438,7 @@ export function createApplicationBackend(service: ApplicationService, options: P
     },
     bom: {
       listLines: async (input) => {
-        const lines = await service.listBomLines(input.projectRevisionId);
+        const lines = await service.listBomLines(input.projectRevisionId, { includeRetired: input.includeRetired === true });
         return slicePage(lines.map((line) => toMcpBomLine(line as ApiBomLine)), input.limit ?? 25, input.cursor);
       },
       listProjectLines: async (input) => {
@@ -456,6 +456,7 @@ export function createApplicationBackend(service: ApplicationService, options: P
         return mutationResult(await service.updateBomLine(bomLineId, toApiBomUpdate(changes), expectedVersion, appContext(context)), "line", (value) => toMcpBomLine(value as ApiBomLine));
       },
       retireLine: async (input, context) => mutationResult(await service.retireBomLine(input.bomLineId, input.expectedVersion, appContext(context)), "line", (value) => toMcpBomLine(value as ApiBomLine)),
+      restoreLine: async (input, context) => mutationResult(await service.restoreBomLine(input.bomLineId, input.expectedVersion, appContext(context)), "line", (value) => toMcpBomLine(value as ApiBomLine)),
       evaluate: async (input) => toMcpBomEvaluation(await service.evaluateBomGaps(input.projectRevisionId), input),
       reserve: async (input, context) => {
         const mutation = await service.createReservation(input.projectRevisionId, toApiReservation(input), appContext(context));
@@ -1122,6 +1123,7 @@ function toMcpBomLine(line: ApiBomLine): BomLine {
     ...(alternatives.length === 0 ? {} : { alternatives, compatibleItemIds: alternatives.map((alternative) => alternative.itemId) }),
     ...(Object.keys(line.constraints ?? {}).length === 0 ? {} : { constraints: toMcpBomConstraints(line.constraints) }),
     ...(line.notes === undefined ? {} : { notes: line.notes }),
+    ...(line.retiredAt === undefined ? {} : { retiredAt: line.retiredAt }),
     version: line.version,
   };
 }

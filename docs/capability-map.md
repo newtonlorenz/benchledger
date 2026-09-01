@@ -79,7 +79,7 @@ and invalid hashes. Mutating tools use optimistic versions where applicable.
 | Projects | `list_projects`, `read_project`, `read_work_item`, `read_project_revision`, `read_work_item_revision` | `projects:read` | No |
 | Projects | `create_project`, `create_project_with_initial_revision`, `update_project`, `retire_project`, `create_work_item`, `create_project_revision`, `create_work_item_revision` | `projects:write` | Yes |
 | BOM | `list_bom_lines`, `calculate_bom_gaps` | `bom:read` | No |
-| BOM | `create_bom_line`, `update_bom_line`, `retire_bom_line`, `create_reservation`, `release_reservation`, `record_usage` | `bom:write` | Yes |
+| BOM | `create_bom_line`, `update_bom_line`, `retire_bom_line`, `restore_bom_line`, `create_reservation`, `release_reservation`, `record_usage` | `bom:write` | Yes |
 | Reconciliation | `read_reconciliation` | `bom:read` | No |
 | Reconciliation | `save_reconciliation_draft`, `commit_reconciliation` | `bom:write` | Draft save / commit |
 | Build setup | `list_build_configurations`, `read_build_configuration` | `projects:read` | No |

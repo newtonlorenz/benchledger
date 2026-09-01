@@ -35,7 +35,10 @@ purchasing, credential changes, destructive cleanup, or merging.
   bounded named-schema lookup. **Proposed.**
 - [ ] `BL-AW-003` → `REQ-004`: truthful inventory/BOM summaries that reconcile
   confirmed, allocated, inspect-first, optional, and gap totals. **Proposed;
-  coordinate with inventory availability and reconciliation work below.**
+  coordinate with inventory availability and reconciliation work below. The
+  durable BOM-retirement prerequisite is implemented on the current feature
+  branch: active reads and gap evaluation exclude retired requirements, while
+  explicit history reads and optimistic restoration preserve their content.**
 - [ ] `BL-AW-004` → `REQ-005`: bounded graph list/read-back tools and resources
   for every created project entity. **Proposed; audit existing list operations
   before adding new ones.**

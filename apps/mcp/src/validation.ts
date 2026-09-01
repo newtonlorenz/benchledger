@@ -176,13 +176,10 @@ export function retireProject(value: unknown): { projectId: string; expectedVers
   return result;
 }
 
-export function retireBomLine(value: unknown): { bomLineId: string; expectedVersion?: number } {
+export function retireBomLine(value: unknown): { bomLineId: string; expectedVersion: number } {
   const input = record(value, "arguments");
   keys(input, ["bomLineId", "expectedVersion"], "arguments");
-  const result: { bomLineId: string; expectedVersion?: number } = { bomLineId: id(input.bomLineId, "arguments.bomLineId") };
-  const version = optionalInteger(input.expectedVersion, "arguments.expectedVersion");
-  if (version !== undefined) result.expectedVersion = version;
-  return result;
+  return { bomLineId: id(input.bomLineId, "arguments.bomLineId"), expectedVersion: integer(input.expectedVersion, "arguments.expectedVersion") };
 }
 
 export function optionalId(value: unknown, label: string): string | undefined {
@@ -660,8 +657,8 @@ export function revisionRead(value: unknown): { revisionId: string } {
 
 export function bomLineList(value: unknown): BomLineListInput {
   const input = record(value, "arguments");
-  keys(input, ["projectRevisionId", "limit", "cursor"], "arguments");
-  return { ...parsePageInput({ limit: input.limit, cursor: input.cursor }), projectRevisionId: id(input.projectRevisionId, "arguments.projectRevisionId") };
+  keys(input, ["projectRevisionId", "includeRetired", "limit", "cursor"], "arguments");
+  return { ...parsePageInput({ limit: input.limit, cursor: input.cursor }), projectRevisionId: id(input.projectRevisionId, "arguments.projectRevisionId"), ...(optionalBoolean(input.includeRetired, "arguments.includeRetired") === undefined ? {} : { includeRetired: optionalBoolean(input.includeRetired, "arguments.includeRetired") }) };
 }
 
 function optionalJsonObject(value: unknown, label: string): JsonObject | undefined {

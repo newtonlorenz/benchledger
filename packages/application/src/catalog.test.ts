@@ -128,6 +128,7 @@ function makePorts(): ServicePorts & {
       createBomLine: async () => { throw new Error("not implemented"); },
       updateBomLine: async () => { throw new Error("not implemented"); },
       retireBomLine: async () => { throw new Error("not implemented"); },
+      restoreBomLine: async () => { throw new Error("not implemented"); },
       createReservation: async () => { throw new Error("not implemented"); },
       releaseReservation: async () => { throw new Error("not implemented"); },
       listReservations: async () => [],

@@ -45,6 +45,7 @@ function backend(): BenchLedgerBackend {
       createLine: async () => { throw new Error("not used"); },
       updateLine: async () => { throw new Error("not used"); },
       retireLine: async () => { throw new Error("not used"); },
+      restoreLine: async () => { throw new Error("not used"); },
       evaluate: async () => { throw new Error("not used"); },
       reserve: async () => { throw new Error("not used"); },
       release: async () => { throw new Error("not used"); },
