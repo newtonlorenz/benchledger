@@ -458,6 +458,7 @@ describe("BenchLedger HTTP API", () => {
       expect(document.paths["/mcp"]).toMatchObject({ post: { security: [{ bearerAuth: [] }] } });
       expect(document.paths["/auth/access"]).toMatchObject({
         patch: {
+          security: [{ cookieAuth: [] }],
           parameters: expect.arrayContaining([expect.objectContaining({ in: "header", name: "If-Match", required: false })]),
           requestBody: {
             content: {
@@ -474,6 +475,7 @@ describe("BenchLedger HTTP API", () => {
           },
         },
       });
+      expect(document.paths["/auth/security"]).toMatchObject({ post: { security: [{ cookieAuth: [] }] } });
       const payload = {
         project: { id: "atomic-project", name: "Atomic project", description: "One command", status: "planning" },
         revision: { id: "atomic-revision", name: "Initial", notes: "Starting point", status: "concept" }

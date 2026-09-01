@@ -16,12 +16,13 @@ export interface WorkspaceAccessSectionProps {
 }
 
 type AccessAction = "enable" | "change" | "disable";
+type RetryContext = { readonly operation: WorkspaceAccessUpdateInput["operation"]; readonly expectedVersion: number };
 
 function accessError(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 401 || error.code === "invalid_credentials") return "The current password is not correct.";
     if (error.status === 409 || error.code === "version_conflict" || error.code === "stale_settings") return "Workspace security settings changed elsewhere. Reload settings and try again.";
-    if (error.kind === "offline") return "We could not confirm the change. It may have been saved; reload settings before trying again.";
+    if (error.kind === "offline" || error.status >= 500) return "We could not confirm the change. It may have been saved; reload settings before trying again.";
     if (error.kind === "csrf" || error.kind === "unauthenticated") return "Your session expired. Reload settings and sign in again before changing workspace security.";
     return error.message;
   }
@@ -47,7 +48,8 @@ export function WorkspaceAccessSection({ access, onUpdate, onChanged, onRebootst
   const [status, setStatus] = useState<string>();
   const [reloading, setReloading] = useState(false);
   const [retryAvailable, setRetryAvailable] = useState(pendingRetry !== undefined);
-  const pendingAction: AccessAction | undefined = pendingRetry?.operation === "change_password" ? "change" : pendingRetry?.operation;
+  const [retryContext, setRetryContext] = useState<RetryContext | undefined>(pendingRetry === undefined ? undefined : { operation: pendingRetry.operation, expectedVersion: pendingRetry.expectedVersion });
+  const pendingAction: AccessAction | undefined = retryContext?.operation === "change_password" ? "change" : retryContext?.operation;
 
   const clearForm = () => {
     setCurrentPassword("");
@@ -59,6 +61,7 @@ export function WorkspaceAccessSection({ access, onUpdate, onChanged, onRebootst
   const startNewChange = () => {
     onClearRetry?.();
     setRetryAvailable(false);
+    setRetryContext(undefined);
     clearForm();
     setStatus("Enter the credentials for a new security change.");
   };
@@ -68,23 +71,27 @@ export function WorkspaceAccessSection({ access, onUpdate, onChanged, onRebootst
     if (newPassword.length < 12) { setError("Use at least 12 characters for the new password."); return; }
     if (newPassword !== confirmation) { setError("The new passwords do not match."); return; }
     if (requestedAction === "change" && !currentPassword) { setError("Enter the current password to change it."); return; }
+    const input: WorkspaceAccessUpdateInput = requestedAction === "change"
+      ? { operation: "change_password", currentPassword, newPassword }
+      : { operation: "enable", newPassword };
+    const retryingThisAction = retryAvailable && pendingAction === requestedAction;
+    const expectedVersion = retryingThisAction ? retryContext?.expectedVersion : access.version;
     setAction(requestedAction);
     setError(undefined);
     setStatus(undefined);
     try {
-      const input: WorkspaceAccessUpdateInput = requestedAction === "change"
-        ? { operation: "change_password", currentPassword, newPassword }
-        : { operation: "enable", newPassword };
-      const retryingThisAction = retryAvailable && pendingAction === requestedAction;
-      const expectedVersion = retryingThisAction ? pendingRetry?.expectedVersion : access.version;
       const result = await onUpdate(input, expectedVersion, { retry: retryingThisAction });
       onChanged(result.access);
       clearForm();
       setRetryAvailable(false);
+      setRetryContext(undefined);
       setStatus(requestedAction === "enable" ? "Password protection is enabled." : "Password changed. Your current session remains active.");
     } catch (updateError) {
       setError(accessError(updateError));
-      if (updateError instanceof ApiError && updateError.kind === "offline") setRetryAvailable(true);
+      if (updateError instanceof ApiError && (updateError.kind === "offline" || updateError.status >= 500)) {
+        setRetryAvailable(true);
+        if (expectedVersion !== undefined) setRetryContext({ operation: input.operation, expectedVersion });
+      }
       if (updateError instanceof ApiError && (updateError.kind === "offline" || updateError.status === 409)) setStatus(undefined);
     } finally {
       setAction(undefined);
@@ -93,20 +100,24 @@ export function WorkspaceAccessSection({ access, onUpdate, onChanged, onRebootst
 
   const disable = async () => {
     if (!currentPassword) { setError("Enter the current password to disable protection."); return; }
+    const retryingThisAction = retryAvailable && pendingAction === "disable";
+    const expectedVersion = retryingThisAction ? retryContext?.expectedVersion : access.version;
     setAction("disable");
     setError(undefined);
     setStatus(undefined);
     try {
-      const retryingThisAction = retryAvailable && pendingAction === "disable";
-      const expectedVersion = retryingThisAction ? pendingRetry?.expectedVersion : access.version;
       const result = await onUpdate({ operation: "disable", currentPassword }, expectedVersion, { retry: retryingThisAction });
       onChanged(result.access);
       clearForm();
       setRetryAvailable(false);
+      setRetryContext(undefined);
       setStatus("Password protection is disabled. BenchLedger is LAN open.");
     } catch (updateError) {
       setError(accessError(updateError));
-      if (updateError instanceof ApiError && updateError.kind === "offline") setRetryAvailable(true);
+      if (updateError instanceof ApiError && (updateError.kind === "offline" || updateError.status >= 500)) {
+        setRetryAvailable(true);
+        if (expectedVersion !== undefined) setRetryContext({ operation: "disable", expectedVersion });
+      }
     } finally {
       setAction(undefined);
     }

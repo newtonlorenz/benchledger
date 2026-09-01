@@ -19,6 +19,8 @@ async function mockWorkspaceAccess(page: Page) {
   let itemCount = 0;
   let lanSessionCount = 0;
   let loseNextResponse = false;
+  let malformedNextResponse = false;
+  const accessRequestKeys: string[] = [];
   const idempotentResponses = new Map<string, { body: string; response: string }>();
   let currentItems = [inventoryItem("tool-1", "Digital caliper")];
 
@@ -29,6 +31,7 @@ async function mockWorkspaceAccess(page: Page) {
     }
     const body = route.request().postDataJSON() as { operation?: "enable" | "disable" | "change_password"; expectedVersion?: number; currentPassword?: string; newPassword?: string };
     const idempotencyKey = route.request().headers()["idempotency-key"] ?? "";
+    accessRequestKeys.push(idempotencyKey);
     const requestBody = JSON.stringify(body);
     const replay = idempotentResponses.get(idempotencyKey);
     if (replay) {
@@ -63,6 +66,12 @@ async function mockWorkspaceAccess(page: Page) {
     signedIn = true;
     const responseBody = JSON.stringify({ mode, passwordConfigured: mode === "password", version, authenticated: true, actor: "admin", csrfToken: `csrf-${version}`, expiresAt: "2026-09-01T18:00:00.000Z" });
     idempotentResponses.set(idempotencyKey, { body: requestBody, response: responseBody });
+    if (malformedNextResponse) {
+      malformedNextResponse = false;
+      signedIn = false;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ access: { mode, passwordConfigured: mode === "password", version }, session: { authenticated: true } }) });
+      return;
+    }
     if (loseNextResponse) {
       loseNextResponse = false;
       signedIn = false;
@@ -107,6 +116,18 @@ async function mockWorkspaceAccess(page: Page) {
     if (route.request().method() !== "GET") return route.continue();
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: currentItems, limit: 25, total: currentItems.length }) });
   });
+  await page.route("**/api/v1/inventory/categories*", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: [{ id: "category-tools", name: "Tools", sortOrder: 0, archived: false, createdAt: "2026-09-01T10:00:00.000Z", updatedAt: "2026-09-01T10:00:00.000Z", version: 1 }],
+        limit: 200,
+        total: 1
+      })
+    });
+  });
   await page.route("**/api/v1/inventory", async (route) => {
     if (route.request().method() !== "POST") return route.continue();
     if (!signedIn) {
@@ -123,7 +144,8 @@ async function mockWorkspaceAccess(page: Page) {
   return {
     setPasswordRequired: () => { signedIn = false; },
     loseNextAccessResponse: () => { loseNextResponse = true; },
-    state: () => ({ mode, version, signedIn, credential: workspaceCredential, itemCount, lanSessionCount })
+    malformedNextAccessResponse: () => { malformedNextResponse = true; },
+    state: () => ({ mode, version, signedIn, credential: workspaceCredential, itemCount, lanSessionCount, accessRequestKeys: [...accessRequestKeys] })
   };
 }
 
@@ -134,7 +156,7 @@ test("completes the LAN-open to password and back access journey without exposin
   await page.getByRole("button", { name: "Open account settings" }).click();
   await expect(page.getByRole("heading", { name: "Workspace access" })).toBeVisible();
   await expect(page.getByText("LAN open", { exact: true })).toBeVisible();
-  await expect(page.getByRole("alert")).toContainText(LAN_WARNING);
+  await expect(page.getByRole("alert").filter({ hasText: LAN_WARNING })).toContainText(LAN_WARNING);
   await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(0);
 
   await page.getByLabel("New workspace password", { exact: true }).fill("new-password-please");
@@ -170,7 +192,9 @@ test("completes the LAN-open to password and back access journey without exposin
 
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
   await page.getByRole("button", { name: "Add item", exact: true }).click();
-  await page.getByRole("button", { name: /^Tools\b/u }).click();
+  await page.getByLabel("Item type (required)").selectOption("tool");
+  await page.getByLabel("Category (required)").selectOption("category-tools");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByLabel("Name", { exact: true }).fill("LAN-open write check");
   await page.getByRole("button", { name: "Add item", exact: true }).last().click();
   await expect(page.getByText("LAN-open write check")).toBeVisible();
@@ -184,10 +208,43 @@ test("keeps the access warning and password controls usable on mobile", async ({
   await page.goto("/");
   await page.getByRole("button", { name: "Open account settings" }).click();
   await expect(page.getByRole("heading", { name: "Workspace access" })).toBeVisible();
-  await expect(page.getByRole("alert")).toHaveText(LAN_WARNING);
+  await expect(page.getByRole("alert").filter({ hasText: LAN_WARNING })).toHaveText(LAN_WARNING);
   await expect(page.getByLabel("New workspace password", { exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await expect(page.getByRole("button", { name: "Enable password" })).toBeVisible();
+});
+
+test("retries a malformed access response immediately with the same request key", async ({ page }) => {
+  const harness = await mockWorkspaceAccess(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open account settings" }).click();
+  await page.getByLabel("New workspace password", { exact: true }).fill("malformed-response-password");
+  await page.getByLabel("Confirm new workspace password", { exact: true }).fill("malformed-response-password");
+  harness.malformedNextAccessResponse();
+  await page.getByRole("button", { name: "Enable password" }).click();
+  await expect(page.getByText("We could not confirm the change. It may have been saved; reload settings before trying again.")).toBeVisible();
+  await expect(page.getByText("A previous request was not confirmed.")).toBeVisible();
+  const firstKey = harness.state().accessRequestKeys.at(-1);
+  await page.getByRole("button", { name: "Enable password" }).click();
+  await expect(page.getByText("Password protection is enabled.")).toBeVisible();
+  expect(harness.state().accessRequestKeys.at(-1)).toBe(firstKey);
+  await expect(page.locator("body")).not.toContainText("malformed-response-password");
+});
+
+test("retries a lost access response immediately with the same request key", async ({ page }) => {
+  const harness = await mockWorkspaceAccess(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open account settings" }).click();
+  await page.getByLabel("New workspace password", { exact: true }).fill("immediate-retry-password");
+  await page.getByLabel("Confirm new workspace password", { exact: true }).fill("immediate-retry-password");
+  harness.loseNextAccessResponse();
+  await page.getByRole("button", { name: "Enable password" }).click();
+  await expect(page.getByText("We could not confirm the change. It may have been saved; reload settings before trying again.")).toBeVisible();
+  const firstKey = harness.state().accessRequestKeys.at(-1);
+  await page.getByRole("button", { name: "Enable password" }).click();
+  await expect(page.getByText("Password protection is enabled.")).toBeVisible();
+  expect(harness.state().accessRequestKeys.at(-1)).toBe(firstKey);
+  await expect(page.locator("body")).not.toContainText("immediate-retry-password");
 });
 
 test("replays a lost enable response after reauthentication without retaining the password", async ({ page }) => {

@@ -171,13 +171,16 @@ function securityFingerprint(operation: WorkspaceSecurityRequest, secret: string
   // each value into the digest keeps retries deterministic without retaining a
   // serialized credential representation.
   const hash = createHmac("sha256", secret);
-  hash.update(operation.operation);
-  hash.update("\u0000");
-  hash.update(String(operation.expectedVersion));
-  hash.update("\u0000");
-  if (operation.operation !== "enable") hash.update(operation.currentPassword);
-  hash.update("\u0000");
-  if (operation.operation !== "disable") hash.update(operation.newPassword);
+  const frame = (value: string): void => {
+    const bytes = Buffer.byteLength(value, "utf8");
+    hash.update(String(bytes));
+    hash.update(":");
+    hash.update(value, "utf8");
+  };
+  frame(operation.operation);
+  frame(String(operation.expectedVersion));
+  frame(operation.operation === "enable" ? "" : operation.currentPassword);
+  frame(operation.operation === "disable" ? "" : operation.newPassword);
   return hash.digest("hex");
 }
 
@@ -673,6 +676,7 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       "/auth/access": {
         get: { security: [], responses: { "200": { description: "Workspace access mode (mode, passwordConfigured, and version only)" } } },
         patch: {
+          security: [{ cookieAuth: [] }],
           summary: "Update browser workspace access mode (operation form)",
           description: "UI-only unscoped administrator session. Requires CSRF, Idempotency-Key, and an operation-first body with expectedVersion (If-Match may also carry the same version). A successful mutation rotates the browser session and invalidates prior sessions.",
           parameters: [
@@ -690,6 +694,7 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       "/auth/lan-session": { post: { security: [], responses: { "200": { description: "Explicit LAN session" }, "403": { description: "Password mode is enabled" } } } },
       "/auth/security": {
         post: {
+          security: [{ cookieAuth: [] }],
           summary: "Update browser workspace access mode (operation form)",
           parameters: [
             { in: "header", name: "If-Match", required: false, schema: { type: "string", pattern: "^(W/)?\\\"?[1-9][0-9]*\\\"?$" }, description: "Required when expectedVersion is omitted from the body." },
@@ -1213,11 +1218,19 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
         ? await update()
         : await runCurrentPasswordMutation(request.ip, update);
       if (operation.operation !== "enable") passwordAttempts.delete(request.ip);
-      credentialRevision = mutation.data.version;
+      // Advance the local verifier immediately after the durable mutation. If
+      // the following status read fails, prior sessions must still be invalid.
+      credentialRevision = Math.max(credentialRevision, mutation.data.version);
+      // The mutation result can be an idempotency replay from an earlier
+      // durable revision. Always re-read the current status before issuing a
+      // session so replaying a historical key cannot roll back the in-memory
+      // revision and revive an invalidated browser cookie.
+      const access = await readWorkspaceSecurity();
+      credentialRevision = Math.max(credentialRevision, access.version);
       const session = auth.issueSession(reply);
       return {
-        ...mutation.data,
-        access: mutation.data,
+        ...access,
+        access,
         session: { authenticated: true, actor: "workspace-admin", csrfToken: session.csrf, expiresAt: new Date(session.expiresAt).toISOString(), credentialRevision: session.credentialRevision },
         authenticated: true,
         actor: "workspace-admin",

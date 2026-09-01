@@ -58,7 +58,7 @@ describe("workspace password access", () => {
       expect(enabled.json()).toMatchObject({ mode: "password", access: { mode: "password", passwordConfigured: true, version: 2 }, session: { actor: "workspace-admin" } });
       expect(JSON.stringify(enabled.json())).not.toContain("first-workspace-password");
       const storedEnable = await runtime.ports.idempotency.get("workspace-admin", "workspace-enable-1") as { fingerprint?: string };
-      expect(storedEnable.fingerprint).toBe(createHmac("sha256", "s".repeat(48)).update("enable\u00001\u0000\u0000first-workspace-password").digest("hex"));
+      expect(storedEnable.fingerprint).toBe(createHmac("sha256", "s".repeat(48)).update("6:enable1:10:24:first-workspace-password").digest("hex"));
       expect(JSON.stringify(storedEnable)).not.toContain("first-workspace-password");
       expect((await app.inject({ method: "GET", url: "/api/v1/auth/session", headers: { cookie: oldCookie } })).statusCode).toBe(401);
 
@@ -76,6 +76,12 @@ describe("workspace password access", () => {
       expect((await app.inject({ method: "POST", url: "/api/v1/mcp", headers: { cookie: changedSessionCookie, "x-csrf-token": csrfFromCookie(changedSessionCookie) }, payload: { jsonrpc: "2.0", id: 2, method: "initialize", params: {} } })).statusCode).toBe(401);
       const changedCookie = cookieHeader(changed.headers["set-cookie"]);
       const changedCsrf = csrfFromCookie(changedCookie);
+      const historicalEnableReplay = await app.inject({ method: "PATCH", url: "/api/v1/auth/access", headers: { cookie: changedCookie, "x-csrf-token": changedCsrf, "if-match": "1", "idempotency-key": "workspace-enable-1" }, payload: { mode: "password", newPassword: "first-workspace-password" } });
+      expect(historicalEnableReplay.statusCode).toBe(200);
+      expect(historicalEnableReplay.json()).toMatchObject({ mode: "password", access: { mode: "password", passwordConfigured: true, version: 3 }, session: { credentialRevision: 3 }, credentialRevision: 3, replayed: true });
+      expect((await app.inject({ method: "GET", url: "/api/v1/auth/session", headers: { cookie: cookieHeader(enabled.headers["set-cookie"]) } })).statusCode).toBe(401);
+      const replayCookie = cookieHeader(historicalEnableReplay.headers["set-cookie"]);
+      expect((await app.inject({ method: "GET", url: "/api/v1/auth/session", headers: { cookie: replayCookie } })).statusCode).toBe(200);
       const disabled = await app.inject({ method: "PATCH", url: "/api/v1/auth/access", headers: { cookie: changedCookie, "x-csrf-token": changedCsrf, "if-match": "3", "idempotency-key": "workspace-disable-1" }, payload: { mode: "lan_open", currentPassword: "second-workspace-password" } });
       expect(disabled.statusCode).toBe(200);
       expect(disabled.json()).toMatchObject({ access: { mode: "lan_open", passwordConfigured: false, version: 4 } });
@@ -106,6 +112,30 @@ describe("workspace password access", () => {
       expect(bearer.statusCode).toBe(403);
       expect((await app.inject({ method: "GET", url: "/api/v1/capabilities" })).json()).toMatchObject({ authentication: { bearerRequiredForMcp: true, explicitLanSession: "/api/v1/auth/lan-session" } });
       expect(hashBearerToken(bearerFixture)).toMatch(/^[a-f0-9]{64}$/u);
+    } finally {
+      await app.close();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects distinct NUL-framed password fields under one idempotency key", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "benchledger-workspace-fingerprint-"));
+    const runtime = await createProductionRuntime({ dataDir, maxUploadBytes: 1024 * 1024, maxStorageBytes: 4 * 1024 * 1024 });
+    const app = await createApp({ runtime, publicBaseUrl: "http://127.0.0.1:8792", auth: { sessionSecret: "s".repeat(48), secureCookies: false }, logger: false });
+    const initialPassword = "aaaaaaaaaaaa\u0000bbbbbbbbbbbb";
+    const replacementPassword = "cccccccccccc";
+    try {
+      const lan = await app.inject({ method: "POST", url: "/api/v1/auth/lan-session" });
+      const lanCookie = cookieHeader(lan.headers["set-cookie"]);
+      const enabled = await app.inject({ method: "PATCH", url: "/api/v1/auth/access", headers: { cookie: lanCookie, "x-csrf-token": csrfFromCookie(lanCookie), "if-match": "1", "idempotency-key": "workspace-fingerprint-enable" }, payload: { mode: "password", newPassword: initialPassword } });
+      expect(enabled.statusCode).toBe(200);
+      const enabledCookie = cookieHeader(enabled.headers["set-cookie"]);
+      const firstChange = await app.inject({ method: "POST", url: "/api/v1/auth/security", headers: { cookie: enabledCookie, "x-csrf-token": csrfFromCookie(enabledCookie), "if-match": "2", "idempotency-key": "workspace-fingerprint-change" }, payload: { operation: "change_password", currentPassword: initialPassword, newPassword: replacementPassword, expectedVersion: 2 } });
+      expect(firstChange.statusCode).toBe(200);
+      const changedCookie = cookieHeader(firstChange.headers["set-cookie"]);
+      const collidingChange = await app.inject({ method: "POST", url: "/api/v1/auth/security", headers: { cookie: changedCookie, "x-csrf-token": csrfFromCookie(changedCookie), "if-match": "2", "idempotency-key": "workspace-fingerprint-change" }, payload: { operation: "change_password", currentPassword: "aaaaaaaaaaaa", newPassword: "bbbbbbbbbbbb\u0000cccccccccccc", expectedVersion: 2 } });
+      expect(collidingChange.statusCode).toBe(409);
+      expect(collidingChange.json()).toMatchObject({ error: { code: "idempotency_conflict" } });
     } finally {
       await app.close();
       await rm(dataDir, { recursive: true, force: true });

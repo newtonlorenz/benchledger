@@ -405,11 +405,18 @@ function mapLoginResult(value: unknown): LoginResult {
 
 function mapWorkspaceAccessUpdate(value: unknown): WorkspaceAccessUpdateResult {
   const root = asRecord(value);
+  const accessRecord = workspaceAccessRecord(value);
+  const mode = accessRecord?.mode;
+  const version = accessRecord?.version;
+  if ((mode !== "lan_open" && mode !== "password") || typeof version !== "number" || !Number.isSafeInteger(version) || version < 1) {
+    throw new ApiError("The service did not provide a usable workspace access update", { kind: "server", status: 502 });
+  }
   const access = mapWorkspaceAccess(value);
   const candidate = asRecord(unwrapData(value));
   const sessionValue = candidate?.session ?? root?.session ?? (candidate?.authenticated === true && candidate?.csrfToken !== undefined ? candidate : undefined);
-  const session = sessionValue === undefined ? undefined : mapLoginResult(sessionValue);
-  return { access, ...(session === undefined ? {} : { session }) };
+  if (sessionValue === undefined) throw new ApiError("The service did not provide a replacement workspace session", { kind: "server", status: 502 });
+  const session = mapLoginResult(sessionValue);
+  return { access, session };
 }
 
 export function mapCatalogProduct(value: unknown, fallbackKind?: CatalogKind): CatalogProduct | undefined {
@@ -1214,7 +1221,7 @@ function mutationFailureIsAmbiguous(error: unknown): boolean {
   // An offline/server failure can occur after the server committed but before
   // the browser received its response. Keep the key for an explicit retry.
   // Validation/auth/CSRF failures have a known outcome and can release it.
-  return !(error instanceof ApiError && ["validation", "forbidden", "unauthenticated", "csrf"].includes(error.kind));
+  return !(error instanceof ApiError && error.status < 500 && ["validation", "forbidden", "unauthenticated", "csrf"].includes(error.kind));
 }
 
 async function sha256Hex(file: Blob): Promise<string> {
@@ -2001,8 +2008,10 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
           },
           body: JSON.stringify(body)
         }, token);
-        clearWorkspaceAccessRetryRecord();
         const result = mapWorkspaceAccessUpdate(response);
+        // Keep the opaque retry command until the response has been validated.
+        // A committed but truncated 200 must remain safely replayable.
+        clearWorkspaceAccessRetryRecord();
         if (result.session) csrfToken = result.session.csrfToken || cookieValue("forge_csrf");
         else csrfToken = cookieValue("forge_csrf") ?? csrfToken;
         return result;

@@ -62,9 +62,9 @@ function isValidScryptHash(encoded: string): boolean {
 }
 
 function isValidArgonHash(encoded: string): boolean {
-  const match = /^\$(argon2id|argon2i|argon2d)\$v=19\$m=(\d+),t=(\d+),p=(\d+)\$([^$]+)\$([^$]+)$/u.exec(encoded);
+  const match = /^\$argon2id\$v=19\$m=(\d+),t=(\d+),p=(\d+)\$([^$]+)\$([^$]+)$/u.exec(encoded);
   if (match === null) return false;
-  const [, , memoryText, timeText, parallelismText, salt, hash] = match;
+  const [, memoryText, timeText, parallelismText, salt, hash] = match;
   if (memoryText === undefined || timeText === undefined || parallelismText === undefined || salt === undefined || hash === undefined) return false;
   const memory = Number(memoryText);
   const time = Number(timeText);

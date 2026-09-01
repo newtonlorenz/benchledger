@@ -65,6 +65,9 @@ describe("workspace security adapters", () => {
     const repository = new WorkspaceSecurityRepository(database);
     const adapter = new ProductionWorkspaceSecurityAdapter(repository);
     expect(() => adapter.initialize("not-a-password-hash")).toThrow(/bootstrap password hash is invalid/);
+    for (const algorithm of ["argon2i", "argon2d"]) {
+      expect(() => adapter.initialize(`$${algorithm}$v=19$m=65536,t=3,p=1$c2FsdA$dmFsaWQtaGFzaA`)).toThrow(/bootstrap password hash is invalid/);
+    }
     expect(repository.get()).toBeNull();
     database.close();
   });

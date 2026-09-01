@@ -103,11 +103,36 @@ describe("authenticated BenchLedger API adapter", () => {
     expect(JSON.parse(String(init?.body))).toEqual({ operation: "enable", newPassword: "a-new-password-please", expectedVersion: 3 });
   });
 
+  it("keeps the workspace access retry key when a committed response is malformed", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=access-csrf" });
+    const values = new Map<string, string>();
+    vi.stubGlobal("sessionStorage", {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); },
+      removeItem: (key: string) => { values.delete(key); }
+    });
+    const adapter = createWorkspaceAdapter();
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const malformedResponses = [
+      { access: { mode: "password", demo: false, version: 4 }, session: { authenticated: true } },
+      { access: { mode: "unknown", demo: false, version: 4 }, session: { authenticated: true, actor: "admin", csrfToken: "replacement-csrf", expiresAt: "2026-08-31T12:00:00.000Z" } },
+      { access: { mode: "password", demo: false }, session: { authenticated: true, actor: "admin", csrfToken: "replacement-csrf", expiresAt: "2026-08-31T12:00:00.000Z" } }
+    ];
+    for (const response of malformedResponses) {
+      fetchMock.mockResolvedValueOnce(jsonResponse(response));
+      await expect(adapter.updateWorkspaceAccess({ operation: "enable", newPassword: "a-new-password-please" }, 3)).rejects.toMatchObject({ status: 502 });
+      const key = new Headers(fetchMock.mock.calls.at(-1)?.[1]?.headers).get("idempotency-key");
+      expect(adapter.getWorkspaceAccessRetry()).toMatchObject({ key, operation: "enable", expectedVersion: 3 });
+      expect([...values.values()].join(" ")).not.toContain("a-new-password-please");
+      adapter.clearWorkspaceAccessRetry();
+    }
+  });
+
   it("reuses the same idempotency key when a workspace access response is lost", async () => {
     vi.stubGlobal("document", { cookie: "forge_csrf=access-csrf" });
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockRejectedValueOnce(new TypeError("response lost"))
-      .mockResolvedValueOnce(jsonResponse({ mode: "lan_open", demo: false, version: 5 }));
+      .mockResolvedValueOnce(jsonResponse({ mode: "lan_open", demo: false, version: 5, authenticated: true, actor: "admin", csrfToken: "replacement-csrf", expiresAt: "2026-08-31T12:00:00.000Z" }));
     const adapter = createWorkspaceAdapter();
     const input = { operation: "disable" as const, currentPassword: "a-password" };
     await expect(adapter.updateWorkspaceAccess(input, 4)).rejects.toMatchObject({ kind: "offline" });
