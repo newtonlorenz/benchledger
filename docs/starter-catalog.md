@@ -33,6 +33,11 @@ reviewed manufacturer pages include [Bambu PLA Matte Charcoal](https://us.store.
 Collection pages may help a maintainer discover later products, but are not
 used as evidence for an exact seeded identity or variant.
 
+The PolyMide PA6-GF record uses the stable ID
+`starter-filament-polymaker-polymide-pa6-gf-grey`, matching its reviewed Grey
+colour. Stable IDs are part of catalog identity and are searchable; changing a
+seed definition leaves existing rows and their append-only history untouched.
+
 Each seeded product carries its source URL and review timestamp as
 server-owned read-only provenance. Provenance is returned by catalog reads,
 excluded from create/update schemas, and excluded from identity-field search.

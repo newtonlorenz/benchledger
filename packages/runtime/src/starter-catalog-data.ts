@@ -193,7 +193,7 @@ export const STARTER_FILAMENTS: readonly CatalogProduct[] = [
   filament("starter-filament-polymaker-polylite-petg-black", "Polymaker", "Polymaker PETG", "PETG", polymakerPolyLitePetg, { colourName: "Black", colourCode: "#070908", sku: "PB05001", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "New Formula"),
   filament("starter-filament-polymaker-polymax-petg-black", "Polymaker", "PolyMax PETG", "PETG", polymakerPolyMaxPetg, { colourName: "Black", sku: "PB02001", diameterMm: 1.75, nominalNetMassG: 750, lengthBasis: "unknown" }),
   filament("starter-filament-polymaker-polylite-asa-black", "Polymaker", "Polymaker ASA", "ASA", polymakerPolyLiteAsa, { colourName: "Black", colourCode: "#17161A", sku: "PF01001", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }, "Formerly PolyLite ASA"),
-  filament("starter-filament-polymaker-polymide-pa6-gf-black", "Polymaker", "PolyMide PA6-GF", "PA", polymakerPolyMidePa6Gf, { colourName: "Grey", sku: "PG02001", diameterMm: 1.75, nominalNetMassG: 500, lengthBasis: "unknown" }, "PA6-GF"),
+  filament("starter-filament-polymaker-polymide-pa6-gf-grey", "Polymaker", "PolyMide PA6-GF", "PA", polymakerPolyMidePa6Gf, { colourName: "Grey", sku: "PG02001", diameterMm: 1.75, nominalNetMassG: 500, lengthBasis: "unknown" }, "PA6-GF"),
 
   filament("starter-filament-esun-pla-plus-black", "eSUN", "PLA+", "PLA", esunPlaPlus, { colourName: "Black", colourCode: "#272729", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }),
   filament("starter-filament-esun-petg-black", "eSUN", "PETG", "PETG", esunPetg, { colourName: "Black", colourCode: "#272729", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }),

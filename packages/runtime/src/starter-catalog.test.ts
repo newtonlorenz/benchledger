@@ -103,7 +103,7 @@ describe("reviewed starter catalog", () => {
       nominalNetMassG: 750,
       provenance: { sourceUrl: "https://shop.polymaker.com/products/polymax-petg?variant=39574348169273" },
     });
-    expect(byId.get("starter-filament-polymaker-polymide-pa6-gf-black")).toMatchObject({
+    expect(byId.get("starter-filament-polymaker-polymide-pa6-gf-grey")).toMatchObject({
       kind: "filament",
       colourName: "Grey",
       sku: "PG02001",
@@ -111,6 +111,11 @@ describe("reviewed starter catalog", () => {
       nominalNetMassG: 500,
       provenance: { sourceUrl: "https://us-wholesale.polymaker.com/products/polymide-pa6-gf?variant=40556798083174" },
     });
+    expect(byId.get("starter-filament-polymaker-polymide-pa6-gf-black")).toBeUndefined();
+    expect((await runtime.ports.catalog!.listProducts({ limit: 200, q: "starter-filament-polymaker-polymide-pa6-gf-grey" })).data.map((product) => product.id)).toEqual([
+      "starter-filament-polymaker-polymide-pa6-gf-grey",
+    ]);
+    expect((await runtime.ports.catalog!.listProducts({ limit: 200, q: "starter-filament-polymaker-polymide-pa6-gf-black" })).data).toEqual([]);
     expect(byId.get("starter-filament-prusament-asa-jet-black")).toMatchObject({
       kind: "filament",
       colourName: "Jet Black",
