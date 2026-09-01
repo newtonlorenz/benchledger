@@ -67,6 +67,20 @@ lots, compatibility evidence, build configuration, hashes, and audit history.
 
 ![BenchLedger synthetic sample workspace showing a project build path, the next useful action, inventory status, and project summary](docs/assets/benchledger-workspace.png)
 
+### Set up inventory categories
+
+Open **Settings → Manage inventory categories** before adding stock. Add a
+top-level category such as “Workshop” or “Electronics”; you can add one level of
+subcategories such as “Workshop / Measuring tools”. Rename or change the order
+when your storage changes, or archive a category that should no longer be used.
+
+When you choose **Inventory → Add item**, select the item type first and then an
+active managed category. The item type remains the semantic kind used for
+matching (for example, `tool` or `electronic`); the managed category is the
+display label and is used by the Category filter. Existing legacy items can stay
+unassigned until you edit them. If no category is available, the add form links
+back to Settings so you can create one before continuing.
+
 ## Five-minute local demo
 
 Requirements: Node.js 24 LTS and npm 11 or later.

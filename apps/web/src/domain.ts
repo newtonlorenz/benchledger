@@ -161,6 +161,8 @@ export interface InventoryItem {
   name: string;
   /** API item kind retained for exact filtering and lossless edits. */
   kind?: string;
+  /** Optional user-managed taxonomy assignment; legacy semantic category remains separate. */
+  categoryNodeId?: string;
   category: InventoryCategory;
   variant: string;
   model?: string;
@@ -295,6 +297,8 @@ export function formatQuantity(quantity: number, unit: InventoryItem["unit"] | B
 
 export interface InventoryFilters {
   category?: InventoryCategory | "All";
+  /** Managed category node id; null explicitly selects unassigned legacy items. */
+  categoryNodeId?: string | null;
   kind?: string | "All";
   evidence?: EvidenceState | "All";
   available?: boolean;
@@ -332,6 +336,9 @@ export function filterInventory(items: InventoryItem[], query: string, filters?:
   return items.filter((item) => {
     const categoryMatch = !resolved.category || resolved.category === "All" || item.category === resolved.category;
     if (!categoryMatch) return false;
+    const managedCategoryMatch = resolved.categoryNodeId === undefined
+      || (resolved.categoryNodeId === null ? item.categoryNodeId === undefined : item.categoryNodeId === resolved.categoryNodeId);
+    if (!managedCategoryMatch) return false;
     const kindMatch = !resolved.kind || resolved.kind === "All" || inventoryKind(item) === resolved.kind;
     if (!kindMatch) return false;
     const evidenceMatch = !resolved.evidence || resolved.evidence === "All" || item.evidence === resolved.evidence;
