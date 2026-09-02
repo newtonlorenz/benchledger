@@ -423,12 +423,19 @@ kbd { display: inline-block; padding: 1px 5px; border: 1px solid var(--line); bo
 .advanced-setup-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; padding-bottom: 4px; }
 .advanced-unknowns { grid-column: 1 / -1; }
 .setup-summary { margin-top: 16px; padding: 12px; border: 1px solid oklch(61% .065 205 / .25); background: var(--slate-soft); }
+.setup-blockers { display: grid; gap: 3px; margin-top: 9px; padding: 9px 10px; border-left: 3px solid var(--amber); color: oklch(42% .07 70); background: var(--amber-soft); font-size: .7rem; }
+.setup-blockers strong { color: var(--ink); font-size: .74rem; }
+.setup-blockers p { margin-top: 2px; }
+.setup-dialog-blockers { margin-top: 16px; }
 .setup-summary-heading { display: flex; align-items: center; justify-content: space-between; gap: 9px; }
 .setup-summary-heading .eyebrow { margin-bottom: 0; color: var(--slate); }
 .setup-summary > p { margin-top: 5px; color: var(--ink-soft); font-size: .73rem; }
 .expert-badge { color: var(--slate); font-size: .64rem; font-weight: 680; }
 .setup-expert-detail { margin-top: 8px; border-top-color: oklch(61% .065 205 / .25); }
 .setup-expert-detail > summary { min-height: 35px; font-size: .68rem; }
+.catalog-option.is-ineligible { color: var(--ink-muted); background: color-mix(in oklab, var(--surface-soft) 72%, transparent); cursor: not-allowed; }
+.catalog-option.is-ineligible:hover { color: var(--ink-muted); background: color-mix(in oklab, var(--surface-soft) 72%, transparent); }
+.catalog-selection-error { margin-top: 5px; color: oklch(45% .1 30); font-size: .68rem; }
 .sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
 @keyframes drawer-in { from { transform: translateX(22px); opacity: .6; } to { transform: translateX(0); opacity: 1; } }@keyframes dialog-in { from { transform: translate(-50%, calc(-50% + 8px)); opacity: .55; } to { transform: translate(-50%, -50%); opacity: 1; } }@keyframes toast-in { from { transform: translateY(9px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 

@@ -139,4 +139,61 @@ describe("production build configuration adapter", () => {
     const recreated = await adapter.createBuildConfiguration(snapshotDraft as never, context);
     expect(recreated).toMatchObject({ projectRevisionId: revision.data.id, contentSha256: snapshot.data.contentSha256 });
   });
+
+  it("round-trips physical-only filament evidence across restart without rehydrating inventory", async () => {
+    const runtime = await makeRuntime();
+    const service = new ApplicationService(runtime.ports);
+    const project = await service.createProject({ id: "runtime-physical-project", name: "Physical snapshot", status: "planned" }, context);
+    const revision = await service.createProjectRevision(project.data.id, { id: "runtime-physical-revision", name: "Initial", status: "concept" }, context);
+    const printerItem = await service.createInventoryItem({ id: "runtime-physical-printer", name: "H2D", kind: "printer", quantity: 1, unit: "each", tags: [], links: [], evidence: { state: "commissioned" } }, context);
+    const filamentItem = await service.createInventoryItem({
+      id: "runtime-physical-filament",
+      name: "Unidentified PETG spool",
+      kind: "filament",
+      quantity: 760,
+      unit: "gram",
+      tags: [],
+      links: [],
+      evidence: { state: "physically_counted", source: "synthetic bench count", observedAt: time, note: "Synthetic physical-only filament fixture" },
+    }, context);
+    const printerProduct = await service.createCatalogProduct(printerCreate, context);
+    const printerProfile = await service.putInventoryProductProfile(printerItem.data.id, { catalogProductId: printerProduct.data.id, profileType: "printer_asset", linkState: "confirmed", details: {} }, undefined, context);
+    const counts = () => Object.fromEntries(["inventory_items", "stock_events", "catalog_products", "inventory_product_profiles", "reservations", "build_configuration_snapshots"].map((table) => [table, runtime.database.get<{ readonly count: number }>(`SELECT COUNT(*) AS count FROM ${table}`)?.count]));
+    const before = counts();
+
+    const snapshot = await service.createBuildConfiguration(revision.data.id, {
+      printerItemSnapshot: { itemId: printerItem.data.id, catalogProductId: printerProduct.data.id, profileId: printerProfile.data.id },
+      filamentSelections: [{ itemId: filamentItem.data.id, catalogIdentityState: "unknown", role: "model", quantity: 320 }],
+      activeHotend: "left", nozzle: { diameterMm: 0.4 }, plate: "Textured PEI", accessories: [], firmware: "01", slicer: "Bambu Studio", profile: "Standard", calibration: "checked", explicitUnknowns: [],
+    }, context);
+    expect(snapshot.data.filamentSelections).toEqual([{
+      itemId: filamentItem.data.id,
+      catalogIdentityState: "unknown",
+      physicalLabel: "Unidentified PETG spool",
+      physicalEvidence: filamentItem.data.evidence,
+      role: "model",
+      quantity: 320,
+    }]);
+    expect(counts()).toEqual({ ...before, build_configuration_snapshots: (before.build_configuration_snapshots ?? 0) + 1 });
+
+    // A later inventory correction must not change the immutable snapshot.
+    runtime.database.run("UPDATE inventory_items SET name = ? WHERE id = ?", ["Corrected mutable inventory label", filamentItem.data.id]);
+    const dataDir = runtime.dataDir;
+    await runtime.close();
+    const reopened = await createProductionRuntime({ dataDir, maxUploadBytes: 1024 * 1024, maxStorageBytes: 4 * 1024 * 1024 });
+    runtimes.push(reopened);
+    const adapter = reopened.ports.buildConfigurations!;
+    await expect(adapter.getBuildConfiguration(snapshot.data.id)).resolves.toEqual(snapshot.data);
+    await expect(adapter.getLatestBuildConfiguration(revision.data.id)).resolves.toEqual(snapshot.data);
+    await expect(adapter.listBuildConfigurations(revision.data.id, { limit: 10 })).resolves.toMatchObject({ data: [snapshot.data], total: 1 });
+
+    const row = reopened.database.get<{ readonly payload_json: string }>("SELECT payload_json FROM build_configuration_snapshots WHERE id = ?", [snapshot.data.id]);
+    if (row === undefined) throw new Error("expected durable physical-only snapshot");
+    const tamperedPayload = JSON.parse(row.payload_json) as Record<string, unknown>;
+    tamperedPayload.filamentSelections = [{ ...snapshot.data.filamentSelections[0], physicalLabel: "Tampered label" }];
+    reopened.database.run("UPDATE build_configuration_snapshots SET payload_json = ? WHERE id = ?", [JSON.stringify(tamperedPayload), snapshot.data.id]);
+    await expect(adapter.getBuildConfiguration(snapshot.data.id)).rejects.toMatchObject({ code: "integrity_error" });
+    await expect(adapter.getLatestBuildConfiguration(revision.data.id)).rejects.toMatchObject({ code: "integrity_error" });
+    await expect(adapter.listBuildConfigurations(revision.data.id, { limit: 10 })).rejects.toMatchObject({ code: "integrity_error" });
+  });
 });

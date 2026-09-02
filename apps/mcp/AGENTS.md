@@ -291,6 +291,17 @@ Typical roles include `source`, `cad`, `step`, `stl`, `three_mf`,
 freezing is deferred in the current application service; treat hashes and
 revision status as review evidence until a dedicated freeze operation exists.
 
+Build-configuration filament selections are a strict one-of: an exact
+selection contains both `itemId` and `catalogProductId` (with an optional
+`profileId`), while a physical-only selection must contain
+`{itemId, catalogIdentityState: "unknown"}` and may contain only `role` and
+`quantity` in addition. Item-only and profile-only inputs are invalid, and
+printers retain the exact identity contract. Physical-only snapshot reads
+return the server-copied `physicalLabel` and `physicalEvidence`; they do not
+infer catalog identity, compatibility, or availability. The discriminator and
+the snapshot's `explicitUnknowns` keep the configuration design-open, so
+production approval remains blocked until the filament is identified.
+
 ## 7. Shop without buying (minute 9–10)
 
 Use `list_offers` and `record_offer_snapshot` to compare supplier observations.

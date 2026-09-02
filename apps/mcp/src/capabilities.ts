@@ -161,10 +161,27 @@ const descriptorProperty: JsonObject = {
     diameterMm: number(), nozzleMaterial: string(), state: string(), recordedAt: string(), quantity: number(),
   })],
 };
+const exactFilamentSelectionProperty: JsonObject = object({
+  itemId: idProperty("Physical filament inventory item."),
+  catalogProductId: idProperty("Exact filament catalog product identity."),
+  profileId: idProperty("Optional exact physical-spool profile."),
+  role: string("Optional material role."),
+  quantity: number("Optional selection quantity."),
+}, ["itemId", "catalogProductId"]);
+const physicalOnlyFilamentSelectionProperty: JsonObject = object({
+  itemId: idProperty("Physical filament inventory item."),
+  catalogIdentityState: { type: "string", const: "unknown", description: "Catalog identity is intentionally unknown." },
+  role: string("Optional material role."),
+  quantity: number("Optional selection quantity."),
+}, ["itemId", "catalogIdentityState"]);
+const filamentSelectionProperty: JsonObject = {
+  oneOf: [exactFilamentSelectionProperty, physicalOnlyFilamentSelectionProperty],
+  description: "Use exactly one branch. Physical-only selections return a copied label and evidence, but infer no compatibility, availability, or catalog identity; their configuration remains design-open and production approval is blocked.",
+};
 const snapshotCreateProperties: Record<string, JsonValue> = {
   projectRevisionId: idProperty("Project revision that owns the immutable snapshot."),
   printerItemSnapshot: object({ itemId: idProperty("Inventory printer item."), catalogProductId: idProperty("Exact printer catalog product."), profileId: idProperty("Optional linked printer profile.") }, ["itemId", "catalogProductId"]),
-  filamentSelections: array(object({ itemId: idProperty("Inventory filament item."), catalogProductId: idProperty("Exact filament catalog product."), profileId: idProperty("Optional linked spool profile."), role: string(), quantity: number() }, ["itemId", "catalogProductId"])),
+  filamentSelections: array(filamentSelectionProperty),
   activeHotend: descriptorProperty, nozzle: descriptorProperty, plate: descriptorProperty, accessories: array(descriptorProperty), firmware: descriptorProperty,
   slicer: descriptorProperty, profile: descriptorProperty, calibration: descriptorProperty, explicitUnknowns: array(string()), supersedesSnapshotId: idProperty("Optional predecessor in the same revision."),
 };
@@ -298,9 +315,9 @@ export const TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
   tool("save_reconciliation_draft", "Save an evidence-bearing post-project close-out draft and server-calculated preview. Draft saves never change stock or reservations and support optimistic version checks. This save is a separate command from commit and must not share its idempotency key.", "bom:write", true, { projectRevisionId: idProperty("Project revision identifier."), draftId: idProperty("Existing draft identifier."), expectedVersion: integer("Version read before editing."), lines: array(reconciliationLineProperty) }, ["projectRevisionId", "lines"]),
   tool("commit_reconciliation", "Explicitly commit a reviewed close-out. The server applies stock, reservation, and reusable-asset changes atomically; an ambiguous retry with the commit command's original idempotency key and identical payload replays safely.", "bom:write", true, { projectRevisionId: idProperty("Project revision identifier."), draftId: idProperty("Draft to commit."), expectedVersion: integer("Draft version read before confirmation.") }, ["projectRevisionId", "draftId"]),
 
-  tool("create_build_configuration", "Create an immutable build-configuration snapshot for a project revision; the service copies exact catalog/profile facts and records unknowns.", "projects:write", true, snapshotCreateProperties, ["projectRevisionId", "printerItemSnapshot", "filamentSelections", "activeHotend", "nozzle", "plate", "accessories", "firmware", "slicer", "profile", "calibration", "explicitUnknowns"]),
+  tool("create_build_configuration", "Create an immutable build-configuration snapshot for a project revision. Exact filament identities copy catalog/profile facts; physical-only filament selections copy only the inventory label/evidence, infer no compatibility, availability, or catalog identity, and leave the snapshot design-open with production approval blocked.", "projects:write", true, snapshotCreateProperties, ["projectRevisionId", "printerItemSnapshot", "filamentSelections", "activeHotend", "nozzle", "plate", "accessories", "firmware", "slicer", "profile", "calibration", "explicitUnknowns"]),
   tool("list_build_configurations", "List immutable build-configuration snapshots for one project revision with bounded pagination.", "projects:read", false, { ...pageProperties, projectRevisionId: idProperty("Project revision identifier.") }, ["projectRevisionId"]),
-  tool("read_build_configuration", "Read one immutable build-configuration snapshot, including copied product/profile facts and server content hash.", "projects:read", false, { buildConfigurationId: idProperty("Build-configuration snapshot identifier.") }, ["buildConfigurationId"]),
+  tool("read_build_configuration", "Read one immutable build-configuration snapshot, including copied product/profile facts for exact selections and physicalLabel/physicalEvidence for physical-only selections. Physical-only identity infers no compatibility, availability, or catalog identity; explicitUnknowns keep it design-open and production approval blocked.", "projects:read", false, { buildConfigurationId: idProperty("Build-configuration snapshot identifier.") }, ["buildConfigurationId"]),
 
   tool("list_artifacts", "List versioned project files by project, work item, revision, or role.", "artifacts:read", false, { ...pageProperties, projectId: idProperty("Project identifier."), workItemId: idProperty(), revisionId: idProperty(), role: string() }, ["projectId"]),
   tool("read_artifact_metadata", "Read file metadata, hash, provenance, role, and revision without downloading bytes.", "artifacts:read", false, { artifactId: idProperty("Artifact identifier."), revisionId: idProperty() }, ["artifactId"]),
@@ -330,7 +347,7 @@ export const RESOURCE_TEMPLATES: readonly McpResourceTemplate[] = [
   { uriTemplate: "benchledger://projects/{projectId}/context", name: "Project context", description: "Bounded project context and next actions.", mimeType: "application/json" },
   { uriTemplate: "benchledger://projects/{projectId}/revisions/{revisionId}", name: "Project revision", description: "One versioned project planning revision.", mimeType: "application/json" },
   { uriTemplate: "benchledger://projects/{projectId}/revisions/{revisionId}/build-configurations", name: "Revision build configurations", description: "Immutable build-configuration snapshots owned by one project revision.", mimeType: "application/json" },
-  { uriTemplate: "benchledger://build-configurations/{buildConfigurationId}", name: "Build configuration", description: "One immutable build-configuration snapshot with copied catalog/profile facts.", mimeType: "application/json" },
+  { uriTemplate: "benchledger://build-configurations/{buildConfigurationId}", name: "Build configuration", description: "One immutable build-configuration snapshot; physical-only filament selections return copied physicalLabel/physicalEvidence and remain design-open until catalog identity is resolved.", mimeType: "application/json" },
   { uriTemplate: "benchledger://projects/{projectId}/revisions/{revisionId}/reconciliation", name: "Project reconciliation", description: "Review-only close-out draft and server preview for a project revision; reading it never changes stock.", mimeType: "application/json" },
   { uriTemplate: "benchledger://projects/{projectId}/bom", name: "Project BOM", description: "Bounded BOM lines for a project revision/workspace.", mimeType: "application/json" },
   { uriTemplate: "benchledger://projects/{projectId}/artifacts", name: "Project artifacts", description: "Bounded artifact metadata; bytes remain behind authenticated host-mediated transfer. Generic MCP exposes no live URL, header, token, or file bytes.", mimeType: "application/json" },
@@ -385,7 +402,7 @@ export const CAPABILITY_DOCUMENT: JsonObject = {
     atomicInventoryProfile: "create_inventory_with_product_profile requires both inventory:write and catalog:write on an unscoped token. Its item and profile commit as one audited, idempotent command; a failed profile, audit, idempotency, or binding step compensates the just-created records.",
     catalog: "The runtime starts with a curated, versioned starter catalog of major FFF printer and filament identities. Exact catalog products are shared workspace context; project-scoped tokens may search and read products for in-scope snapshots, but only unscoped catalog tokens may create or correct products. Curated records may expose read-only manufacturer provenance; provenance is excluded from create/update inputs and is not searched as identity.",
     profiles: "Physical product profiles are workspace-global. Profile reads and writes require catalog scope and are not available to project-scoped tokens; reported and suggested links never imply confirmed stock or compatibility.",
-    buildConfigurations: "Snapshots require projects:write/read and are authorized through durable project-revision ancestry. They are immutable; corrections create a superseding snapshot.",
+    buildConfigurations: "Snapshots require projects:write/read and are authorized through durable project-revision ancestry. They are immutable; corrections create a superseding snapshot. Filaments use a strict exact-or-physical-only oneOf: physical-only selections carry catalogIdentityState='unknown' plus copied physicalLabel/physicalEvidence, infer no compatibility, availability, or catalog identity, and remain design-open with production approval blocked via explicitUnknowns.",
     reconciliation: "Close-out drafts use bom:write and remain review-only until commit_reconciliation. Project-scoped tokens may save and commit only for an allow-listed revision; no inventory:write scope is granted.",
     commandIdempotency: "When the MCP host supplies idempotency metadata, each logical write gets its own stable key. Stable projectId and revisionId values identify records; they never imply replay. The atomic project setup command replays only an ambiguous retry with the same key and identical canonical payload (all project and revision fields); reusing that key for a changed payload returns a safe idempotency conflict. Header-less bulk_update_inventory_items calls derive a bounded actor/action/canonical-payload key; an explicit host key remains authoritative. Draft save and commit are distinct commands and must use different keys.",
     offers: "Supplier offer observations are shared workspace context. Project-scoped tokens may list offers only with an itemId, but cannot record offer snapshots.",

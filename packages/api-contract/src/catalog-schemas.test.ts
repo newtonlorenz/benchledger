@@ -300,4 +300,68 @@ describe("v2 build configuration and artifact binding schemas", () => {
     })).toThrow();
     expect(() => createBuildConfigurationSnapshotSchema.parse(snapshot)).toThrow();
   });
+
+  it("accepts an explicitly unlinked physical filament in create and response contracts", () => {
+    const physicalOnly = {
+      itemId: "physical-filament-1",
+      catalogIdentityState: "unknown" as const,
+      role: "model",
+      quantity: 320,
+    };
+    const responsePhysicalOnly = {
+      ...physicalOnly,
+      physicalLabel: "Unidentified PETG spool",
+      physicalEvidence: {
+        state: "physically_counted" as const,
+        source: "bench count",
+        observedAt: timestamps.updatedAt,
+      },
+    };
+    const createBase = {
+      projectRevisionId: snapshot.projectRevisionId,
+      printerItemSnapshot: { itemId: "legacy-printer-1", catalogProductId: printer.id },
+      filamentSelections: [physicalOnly],
+      activeHotend: snapshot.activeHotend,
+      nozzle: snapshot.nozzle,
+      plate: snapshot.plate,
+      accessories: snapshot.accessories,
+      firmware: snapshot.firmware,
+      slicer: snapshot.slicer,
+      profile: snapshot.profile,
+      calibration: snapshot.calibration,
+      explicitUnknowns: snapshot.explicitUnknowns,
+    };
+
+    expect(createBuildConfigurationSnapshotSchema.parse(createBase)).toMatchObject({ filamentSelections: [physicalOnly] });
+    expect(buildConfigurationSnapshotSchema.parse({
+      ...snapshot,
+      filamentSelections: [responsePhysicalOnly],
+    })).toMatchObject({ filamentSelections: [responsePhysicalOnly] });
+  });
+
+  it("does not treat a missing catalog product as an unlinked physical selection", () => {
+    const ambiguous = {
+      itemId: "physical-filament-1",
+      role: "model",
+      quantity: 320,
+    };
+    const createBase = {
+      projectRevisionId: snapshot.projectRevisionId,
+      printerItemSnapshot: { itemId: "legacy-printer-1", catalogProductId: printer.id },
+      filamentSelections: [],
+      activeHotend: snapshot.activeHotend,
+      nozzle: snapshot.nozzle,
+      plate: snapshot.plate,
+      accessories: snapshot.accessories,
+      firmware: snapshot.firmware,
+      slicer: snapshot.slicer,
+      profile: snapshot.profile,
+      calibration: snapshot.calibration,
+      explicitUnknowns: snapshot.explicitUnknowns,
+    };
+    expect(() => createBuildConfigurationSnapshotSchema.parse({
+      ...createBase,
+      filamentSelections: [ambiguous],
+    })).toThrow();
+  });
 });

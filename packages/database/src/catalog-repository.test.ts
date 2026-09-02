@@ -307,6 +307,57 @@ describe("immutable build configuration snapshots", () => {
     database.close();
   });
 
+  it("round-trips physical-only filament evidence and rejects tampered payloads", () => {
+    const database = new BenchDatabase(":memory:");
+    seedLegacyRows(database);
+    const snapshots = new BuildConfigurationSnapshotRepository(database);
+    const input = {
+      ...snapshotWithoutHash("revision-1", "build-config-physical"),
+      filamentSelections: [{
+        itemId: "legacy-filament-1",
+        catalogIdentityState: "unknown" as const,
+        physicalLabel: "Unidentified PETG spool",
+        physicalEvidence: {
+          state: "physically_counted" as const,
+          source: "bench-count",
+          observedAt: time,
+          note: "Label is not legible enough to establish catalog identity",
+        },
+        role: "model",
+        quantity: 320,
+      }],
+    } satisfies Omit<BuildConfigurationSnapshot, "contentSha256" | "createdAt">;
+    const before = {
+      inventory: database.get<{ readonly count: number }>("SELECT COUNT(*) AS count FROM inventory_items"),
+      products: database.get<{ readonly count: number }>("SELECT COUNT(*) AS count FROM catalog_products"),
+      profiles: database.get<{ readonly count: number }>("SELECT COUNT(*) AS count FROM inventory_product_profiles"),
+    };
+
+    const created = snapshots.create(input);
+    expect(created.filamentSelections).toEqual(input.filamentSelections);
+    expect(created.contentSha256).toBe(computeBuildConfigurationContentSha256(created));
+    expect(database.get<{ readonly count: number }>("SELECT COUNT(*) AS count FROM inventory_items")).toEqual(before.inventory);
+    expect(database.get<{ readonly count: number }>("SELECT COUNT(*) AS count FROM catalog_products")).toEqual(before.products);
+    expect(database.get<{ readonly count: number }>("SELECT COUNT(*) AS count FROM inventory_product_profiles")).toEqual(before.profiles);
+
+    const tamperedPayload = JSON.parse(database.get<{ readonly payload_json: string }>(
+      "SELECT payload_json FROM build_configuration_snapshots WHERE id = ?",
+      [created.id],
+    )!.payload_json) as Record<string, unknown>;
+    tamperedPayload.filamentSelections = [{
+      ...created.filamentSelections[0],
+      physicalLabel: "Tampered label",
+    }];
+    database.run(
+      "UPDATE build_configuration_snapshots SET payload_json = ? WHERE id = ?",
+      [JSON.stringify(tamperedPayload), created.id],
+    );
+    expect(() => snapshots.get(created.id)).toThrow(/hash|integrity/i);
+    expect(() => snapshots.latest("revision-1")).toThrow(/hash|integrity/i);
+    expect(() => snapshots.list({ projectRevisionId: "revision-1", limit: 10 })).toThrow(/hash|integrity/i);
+    database.close();
+  });
+
   it("keeps content identity stable across revisions while retaining ancestry", () => {
     const database = new BenchDatabase(":memory:");
     seedLegacyRows(database);

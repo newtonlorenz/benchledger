@@ -173,6 +173,16 @@ revision-scoped manufacturing evidence ladder (`concept`, `CAD complete`, `DFAM
 reviewed`, `mesh validated`, `slicer validated`, `test printed`, `fit/function
 verified`, `production approved`); moving one never proves or resets the other.
 
+Build configurations keep physical ownership separate from exact catalog
+identity. An active filament item with `physically_counted` or `commissioned`
+evidence may be selected without an exact product/profile only through the
+explicit `catalogIdentityState: "unknown"` branch. That immutable snapshot
+copies the physical label and evidence, creates no catalog/profile/stock or
+reservation records, and remains **Design open** with production approval
+blocked. Never infer material, colour, diameter, compatibility, or availability
+from the item name. Exact filament selections and all printer selections retain
+their existing exact catalog requirements.
+
 ## Minute 8–9: files and revisions
 
 Use `begin_artifact_upload` with a logical project/work-item/revision and a safe

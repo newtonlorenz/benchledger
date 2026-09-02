@@ -2,13 +2,14 @@ import { useEffect, useId, useMemo, useState } from "react";
 import type { FormEvent, KeyboardEvent, ReactNode } from "react";
 import type {
   BuildConfigInput,
+  BuildFilamentSelection,
   CatalogKind,
   CatalogProduct,
   InventoryItem,
   InventoryProductProfile,
   LinkState
 } from "./domain";
-import { buildSetupSummary, catalogProductLabel, exactProductLabel } from "./domain";
+import { buildSetupSummary, catalogProductLabel, exactProductLabel, isUnknownFilamentSelection } from "./domain";
 import type { CatalogProductDraft, CatalogProductPage, CatalogSearchOptions, ExactInventoryInput } from "./api";
 import { Icon } from "./icons";
 
@@ -420,7 +421,46 @@ export function CatalogProductCreateForm({ kind, onCreate, onCancel }: CatalogPr
 }
 
 function ownedItemLabel(item: InventoryItem): string {
-  return item.catalogProduct ? catalogProductDisplayName(item.catalogProduct) : `${item.name} · ${exactProductLabel(item)}`;
+  return item.catalogProduct ? catalogProductDisplayName(item.catalogProduct) : `${item.name} · Exact product unknown`;
+}
+
+export interface BuildItemEligibility {
+  eligible: boolean;
+  reason?: string;
+}
+
+function hasConfirmedPhysicalEvidence(item: InventoryItem): boolean {
+  if (item.serverEvidence !== undefined) return item.serverEvidence === "physically_counted" || item.serverEvidence === "commissioned";
+  return item.evidence === "counted" || item.evidence === "commissioned";
+}
+
+/** Return the user-facing reason a physical item cannot be used for setup. */
+export function buildItemEligibility(item: InventoryItem, category: "Printers" | "Filament"): BuildItemEligibility {
+  if (item.category !== category) return { eligible: false, reason: `Choose a ${category === "Printers" ? "printer" : "filament"} inventory item.` };
+  if (category === "Printers") {
+    return item.catalogProduct
+      ? { eligible: true }
+      : { eligible: false, reason: "An exact printer product link is required for setup." };
+  }
+  // Exact catalog-backed filament keeps the established setup path. The
+  // physical evidence and availability gate only applies when no catalog
+  // identity is available and the UI is about to emit the explicit unknown
+  // identity branch.
+  if (item.catalogProduct) return { eligible: true };
+  if (!hasConfirmedPhysicalEvidence(item)) return { eligible: false, reason: "A physical count or commissioning evidence is required before setup." };
+  return { eligible: true };
+}
+
+/** Convert the selected physical spool to the explicit create-request shape. */
+export function buildFilamentSelection(item: InventoryItem): BuildFilamentSelection {
+  if (item.catalogProduct) {
+    return {
+      itemId: item.id,
+      catalogProductId: item.catalogProduct.id,
+      ...(item.productProfile?.id ? { profileId: item.productProfile.id } : {})
+    };
+  }
+  return { itemId: item.id, catalogIdentityState: "unknown" };
 }
 
 export interface OwnedItemComboboxProps {
@@ -440,14 +480,19 @@ export function OwnedItemCombobox({ category, items, value, onSelect, label }: O
   const candidates = useMemo(() => items.filter((item) => item.category === category && (!query.trim() || `${item.name} ${item.variant} ${item.manufacturer ?? ""} ${item.catalogProduct ? catalogProductDisplayName(item.catalogProduct) : ""}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))), [category, items, query]);
   const displayValue = value ? ownedItemLabel(value) : query;
   const activeId = open && candidates.length ? `${listId}-option-${active}` : undefined;
-  const choose = (item: InventoryItem) => { onSelect(item); setQuery(""); setOpen(false); setActive(Math.max(candidates.indexOf(item), 0)); };
+  const choose = (item: InventoryItem) => {
+    if (!buildItemEligibility(item, category).eligible) return;
+    onSelect(item); setQuery(""); setOpen(false); setActive(Math.max(candidates.indexOf(item), 0));
+  };
+  const selectedEligibility = value ? buildItemEligibility(value, category) : undefined;
+  const selectedProductLabel = value?.catalogProduct ? exactProductLabel(value) : "Exact product unknown";
   return <div className="catalog-combobox owned-combobox"><label className="form-field" htmlFor={inputId}><span>{label}</span><div className="catalog-input-shell"><Icon name="search" size={16} /><input id={inputId} role="combobox" aria-expanded={open} aria-controls={listId} aria-autocomplete="list" aria-activedescendant={activeId} value={displayValue} placeholder={`Choose an owned ${category === "Printers" ? "printer" : "filament"}`} onFocus={() => setOpen(true)} onChange={(event) => { if (value) onSelect(undefined); setQuery(event.target.value); setActive(0); setOpen(true); }} onKeyDown={(event) => {
     if (!["ArrowDown", "ArrowUp", "Home", "End", "Enter", "Escape"].includes(event.key)) return;
     event.preventDefault();
     const next = reduceComboboxKey({ activeIndex: active, open: true }, event.key as ComboboxKey, candidates.length);
     setActive(next.activeIndex); setOpen(next.open);
     if (event.key === "Enter" && candidates[next.activeIndex]) choose(candidates[next.activeIndex]!);
-  }} onBlur={() => window.setTimeout(() => setOpen(false), 120)} /></div></label>{open && <div className="catalog-listbox" id={listId} role="listbox" aria-label={`${label} results`}>{candidates.length ? candidates.map((item, index) => <button id={`${listId}-option-${index}`} type="button" role="option" aria-selected={index === active} className={`catalog-option ${index === active ? "is-active" : ""}`} key={item.id} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(item)}><span className="catalog-option-copy"><strong>{ownedItemLabel(item)}</strong><small>{item.quantity.toLocaleString()} {item.unit} · {exactProductLabel(item)}</small></span><Icon name="chevron-right" size={15} /></button>) : <p className="catalog-empty">No owned {category === "Printers" ? "printers" : "filament"} match that search.</p>}</div>}{value && <div className="catalog-selected"><span className="catalog-selected-label">Owned item</span><strong>{ownedItemLabel(value)}</strong><small>{exactProductLabel(value)}</small></div>}</div>;
+  }} onBlur={() => window.setTimeout(() => setOpen(false), 120)} /></div></label>{open && <div className="catalog-listbox" id={listId} role="listbox" aria-label={`${label} results`}>{candidates.length ? candidates.map((item, index) => { const eligibility = buildItemEligibility(item, category); return <button id={`${listId}-option-${index}`} type="button" role="option" aria-selected={index === active} aria-disabled={!eligibility.eligible} disabled={!eligibility.eligible} className={`catalog-option ${index === active ? "is-active" : ""} ${eligibility.eligible ? "" : "is-ineligible"}`} key={item.id} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(item)}><span className="catalog-option-copy"><strong>{ownedItemLabel(item)}</strong><small>{item.quantity.toLocaleString()} {item.unit} · {item.catalogProduct ? exactProductLabel(item) : "Exact product unknown"}{eligibility.eligible ? " · Eligible" : ` · Not eligible: ${eligibility.reason}`}</small></span><Icon name={eligibility.eligible ? "chevron-right" : "warning"} size={15} /></button>; }) : <p className="catalog-empty">No owned {category === "Printers" ? "printers" : "filament"} match that search.</p>}</div>}{value && <div className="catalog-selected"><span className="catalog-selected-label">Owned item</span><strong>{ownedItemLabel(value)}</strong><small>{selectedProductLabel}</small>{selectedEligibility && !selectedEligibility.eligible && <p className="catalog-selection-error" role="alert">Not eligible: {selectedEligibility.reason}</p>}</div>}</div>;
 }
 
 export interface SetupSummaryProps {
@@ -461,6 +506,24 @@ function setupSnapshotField(value: unknown, key: string): string | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const field = (value as Record<string, unknown>)[key];
   return typeof field === "string" && field.trim() ? field : undefined;
+}
+
+function physicalEvidenceSummary(value: unknown): string | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const selection = value as Record<string, unknown>;
+  const physicalEvidence = selection.physicalEvidence;
+  if (physicalEvidence === null || typeof physicalEvidence !== "object" || Array.isArray(physicalEvidence)) return undefined;
+  const evidence = physicalEvidence as Record<string, unknown>;
+  const state = typeof evidence.state === "string" && evidence.state.trim() ? evidence.state.trim() : undefined;
+  if (!state) return undefined;
+  const stateLabel = state === "physically_counted" ? "Physically counted" : state === "delivered_uncounted" ? "Delivered, not counted" : state === "ordered_unverified" ? "Ordered, not verified" : state === "commissioned" ? "Commissioned" : state;
+  return [
+    `${stateLabel} (${state})`,
+    typeof evidence.source === "string" && evidence.source.trim() ? `Source: ${evidence.source.trim()}` : undefined,
+    typeof evidence.sourceId === "string" && evidence.sourceId.trim() ? `Source record: ${evidence.sourceId.trim()}` : undefined,
+    typeof evidence.observedAt === "string" && evidence.observedAt.trim() ? `Observed: ${evidence.observedAt.trim()}` : undefined,
+    typeof evidence.note === "string" && evidence.note.trim() ? `Note: ${evidence.note.trim()}` : undefined
+  ].filter((part): part is string => Boolean(part)).join(" · ");
 }
 
 export function BuildSetupSummary({ input, printer, filament, expert }: SetupSummaryProps) {
@@ -488,9 +551,10 @@ export function BuildSetupSummary({ input, printer, filament, expert }: SetupSum
   ].filter(Boolean).join(" · ");
   const evidence = [
     printer?.productProfile?.linkState ?? setupSnapshotField(printerSnapshot, "linkState") ?? "not linked",
-    filament?.productProfile?.linkState ?? setupSnapshotField(filamentSnapshot, "linkState") ?? "not linked"
+    physicalEvidenceSummary(filamentSnapshot) ?? filament?.productProfile?.linkState ?? setupSnapshotField(filamentSnapshot, "linkState") ?? "not linked"
   ].join(" · ");
-  return <section className="setup-summary" aria-label="Build setup summary"><div className="setup-summary-heading"><span className="eyebrow">Setup summary</span>{expert && <span className="expert-badge">Expert details</span>}</div><p>{buildSetupSummary(input, printer, filament)}</p>{expert && <details className="expert-detail setup-expert-detail"><summary>Show IDs, versions, evidence &amp; unknowns</summary><div className="detail-grid"><div><span>Revision ID</span><code>{persisted.projectRevisionId ?? "Not recorded"}</code></div><div><span>Printer ID</span><code>{printerId ?? "Not selected"}</code></div><div><span>Filament ID</span><code>{filamentId ?? "Not selected"}</code></div><div><span>Printer product</span><code>{printerProductId ?? "Exact product not confirmed"}</code></div><div><span>Filament product</span><code>{filamentProductId ?? "Exact product not confirmed"}</code></div><div><span>Versions</span><code>{versions || "Not recorded"}</code></div><div><span>Evidence</span><code>{evidence}</code></div><div><span>Content hash</span><code>{[persisted.contentSha256, persisted.contentHash, printer?.catalogProduct?.contentHash, filament?.catalogProduct?.contentHash].filter(Boolean).join(" · ") || "Not recorded"}</code></div><div><span>Unknowns</span><code>{input.unknowns.join(" · ") || "None recorded"}</code></div></div></details>}</section>;
+  const unknownFilament = isUnknownFilamentSelection(input, filament);
+  return <section className="setup-summary" aria-label="Build setup summary"><div className="setup-summary-heading"><span className="eyebrow">Setup summary</span>{expert && <span className="expert-badge">Expert details</span>}</div><p>{buildSetupSummary(input, printer, filament)}</p>{unknownFilament && <div className="setup-blockers" role="status"><strong>Exact product unknown</strong><span>Design open</span><p>Blocker: confirm the physical filament identity before production approval.</p></div>}{expert && <details className="expert-detail setup-expert-detail"><summary>Show IDs, versions, evidence &amp; unknowns</summary><div className="detail-grid"><div><span>Revision ID</span><code>{persisted.projectRevisionId ?? "Not recorded"}</code></div><div><span>Printer ID</span><code>{printerId ?? "Not selected"}</code></div><div><span>Filament ID</span><code>{filamentId ?? "Not selected"}</code></div><div><span>Printer product</span><code>{printerProductId ?? "Exact product not confirmed"}</code></div><div><span>Filament product</span><code>{filamentProductId ?? "Exact product unknown"}</code></div><div><span>Versions</span><code>{versions || "Not recorded"}</code></div><div><span>Evidence</span><code>{evidence}</code></div><div><span>Content hash</span><code>{[persisted.contentSha256, persisted.contentHash, printer?.catalogProduct?.contentHash, filament?.catalogProduct?.contentHash].filter(Boolean).join(" · ") || "Not recorded"}</code></div><div><span>Unknowns</span><code>{input.unknowns.join(" · ") || "None recorded"}</code></div></div></details>}</section>;
 }
 
 export interface CatalogInventoryFlowProps {

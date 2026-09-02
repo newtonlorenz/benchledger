@@ -1096,7 +1096,7 @@ const snapshotPrinterItemSchema = z.object({
   }).strict().optional()
 }).strict();
 
-const snapshotFilamentSelectionSchema = z.object({
+const snapshotCatalogFilamentSelectionSchema = z.object({
   itemId: idSchema,
   catalogProductId: idSchema,
   profileId: idSchema.optional(),
@@ -1118,6 +1118,42 @@ const snapshotFilamentSelectionSchema = z.object({
   role: z.string().min(1).max(120).optional(),
   quantity: z.number().finite().positive().optional()
 }).strict();
+
+/** Stable readiness text for a physical-only filament selection. */
+export const FILAMENT_CATALOG_IDENTITY_UNKNOWN_BLOCKER = "Filament catalog identity is unknown; production approval is blocked." as const;
+
+/**
+ * A physical filament can be selected before its catalog identity is known.
+ * This branch is intentionally closed and contains no catalog/profile-shaped
+ * fields; the application copies the physical label and evidence into the
+ * immutable response snapshot after resolving the item.
+ */
+export const createPhysicalOnlyFilamentSelectionSchema = z.object({
+  itemId: idSchema,
+  catalogIdentityState: z.literal("unknown"),
+  role: z.string().min(1).max(120).optional(),
+  quantity: z.number().finite().positive().optional()
+}).strict();
+
+export const physicalOnlyFilamentSelectionSchema = z.object({
+  itemId: idSchema,
+  catalogIdentityState: z.literal("unknown"),
+  physicalLabel: z.string().min(1).max(240),
+  physicalEvidence: evidenceSchema,
+  role: z.string().min(1).max(120).optional(),
+  quantity: z.number().finite().positive().optional()
+}).strict();
+
+/**
+ * Keep the legacy exact branch byte-for-byte compatible while making the new
+ * physical-only branch discriminated by its explicit identity-state field.
+ * A z.union is used here because adding a `known` discriminator to the legacy
+ * branch would alter existing exact snapshots and their content hashes.
+ */
+export const snapshotFilamentSelectionSchema = z.union([
+  snapshotCatalogFilamentSelectionSchema,
+  physicalOnlyFilamentSelectionSchema
+]);
 
 export const buildConfigurationSnapshotSchema = z.object({
   id: idSchema,
@@ -1163,13 +1199,18 @@ const createSnapshotFilamentSelectionSchema = z.object({
   quantity: z.number().finite().positive().optional()
 }).strict();
 
+export const createSnapshotFilamentSelectionInputSchema = z.union([
+  createSnapshotFilamentSelectionSchema,
+  createPhysicalOnlyFilamentSelectionSchema
+]);
+
 export const createBuildConfigurationSnapshotSchema = z.object({
   /* An optional id is useful to preserve a caller's idempotency key; the
    * service/repository generates one when omitted. It is not hashed. */
   id: idSchema.optional(),
   projectRevisionId: idSchema,
   printerItemSnapshot: createSnapshotPrinterSelectionSchema,
-  filamentSelections: z.array(createSnapshotFilamentSelectionSchema).max(64),
+  filamentSelections: z.array(createSnapshotFilamentSelectionInputSchema).max(64),
   activeHotend: snapshotDescriptorSchema,
   nozzle: snapshotDescriptorSchema,
   plate: snapshotDescriptorSchema,

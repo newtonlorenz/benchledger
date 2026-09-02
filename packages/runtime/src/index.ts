@@ -183,3 +183,4 @@ export * from "./starter-catalog-data.js";
 export * from "./starter-catalog.js";
 export * from "./workspace-security-adapter.js";
 export * from "./project-setup-adapter.js";
+export { computeBuildConfigurationContentSha256 } from "@benchledger/database";

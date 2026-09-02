@@ -85,6 +85,66 @@ function serviceStub(): ApplicationService {
 }
 
 describe("createApplicationBackend", () => {
+  it("round-trips physical-only filament labels and evidence without inventing identity", async () => {
+    const service = serviceStub() as ApplicationService & Record<string, any>;
+    const physicalSelection = {
+      itemId: "filament-petg",
+      catalogIdentityState: "unknown",
+      physicalLabel: "Legacy PETG spool",
+      physicalEvidence: { state: "delivery", source: "legacy-import", recordedAt: "2026-08-30T10:00:00.000Z", note: "No catalog match recorded" },
+      role: "model",
+      quantity: 1,
+    };
+    const snapshot = {
+      id: "build-config-physical-only",
+      projectRevisionId: "revision-1",
+      printerItemSnapshot: { itemId: "printer-1", catalogProductId: "printer-product-1", linkState: "confirmed", manufacturer: "Bambu Lab", exactModel: "H2D", technology: "fff", buildVolumeMm: { x: 325, y: 320, z: 325 } },
+      filamentSelections: [physicalSelection],
+      activeHotend: { side: "left" },
+      nozzle: { diameterMm: 0.4 },
+      plate: "Cool Plate",
+      accessories: [],
+      firmware: { version: "1" },
+      slicer: { name: "Bambu Studio" },
+      profile: { name: "0.20mm Standard" },
+      calibration: { state: "current" },
+      explicitUnknowns: ["Filament catalog identity is unknown; production approval is blocked."],
+      contentSha256: "a".repeat(64),
+      createdAt: "2026-08-30T10:00:00.000Z",
+    };
+    service.createBuildConfiguration = vi.fn(async () => ({ data: snapshot, audit: { id: "audit-build", entityId: snapshot.id, version: 1 }, correlationId: "bridge-test", replayed: false }));
+    service.getBuildConfiguration = vi.fn(async () => snapshot);
+    const backend = createApplicationBackend(service);
+
+    const input = {
+      projectRevisionId: "revision-1",
+      printerItemSnapshot: { itemId: "printer-1", catalogProductId: "printer-product-1" },
+      filamentSelections: [{ itemId: "filament-petg", catalogIdentityState: "unknown", role: "model", quantity: 1 }],
+      activeHotend: { side: "left" },
+      nozzle: { diameterMm: 0.4 },
+      plate: "Cool Plate",
+      accessories: [],
+      firmware: { version: "1" },
+      slicer: { name: "Bambu Studio" },
+      profile: { name: "0.20mm Standard" },
+      calibration: { state: "current" },
+      explicitUnknowns: [],
+    };
+    const created = await backend.buildConfigurations!.create(input as any, context);
+    expect(service.createBuildConfiguration).toHaveBeenCalledWith("revision-1", expect.objectContaining({ filamentSelections: input.filamentSelections }), expect.objectContaining({ source: "mcp" }));
+    expect(created).toMatchObject({ buildConfiguration: { filamentSelections: [{ itemId: "filament-petg", catalogIdentityState: "unknown", physicalLabel: "Legacy PETG spool", physicalEvidence: { state: "delivery" } }], explicitUnknowns: expect.arrayContaining([expect.stringMatching(/production approval.*blocked/i)]) } });
+
+    const read = await backend.buildConfigurations!.get({ buildConfigurationId: snapshot.id }, context);
+    const readSelection = read.filamentSelections[0] as Record<string, unknown>;
+    expect(readSelection).toMatchObject({ physicalLabel: "Legacy PETG spool", physicalEvidence: { source: "legacy-import" } });
+    expect(readSelection).not.toHaveProperty("catalogProductId");
+    expect(readSelection).not.toHaveProperty("profileId");
+    expect(readSelection).not.toHaveProperty("linkState");
+    expect(read.filamentSelections).not.toBe(snapshot.filamentSelections);
+    expect(readSelection).not.toBe(physicalSelection);
+    expect(readSelection.physicalEvidence).not.toBe(physicalSelection.physicalEvidence);
+  });
+
   it("maps application inventory into evidence-aware MCP vocabulary", async () => {
     const backend = createApplicationBackend(serviceStub(), { publicBaseUrl: "http://maker.local:8792", artifactTransfer: transferProvider });
     const result = await backend.inventory.list({ limit: 10 }, context);

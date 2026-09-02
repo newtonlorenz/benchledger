@@ -10,6 +10,7 @@ import type {
   BuildConfigurationSnapshot as ApiBuildConfigurationSnapshot,
   CatalogProduct as ApiCatalogProduct,
   CreateBuildConfigurationSnapshot as ApiCreateBuildConfigurationSnapshot,
+  CreatePhysicalOnlyFilamentSelection as ApiCreatePhysicalOnlyFilamentSelection,
   CreateCatalogProduct as ApiCreateCatalogProduct,
   CreateInventoryProductProfile as ApiCreateInventoryProductProfile,
   CreateInventoryProductProfileWithoutItem as ApiCreateInventoryProductProfileWithoutItem,
@@ -28,6 +29,7 @@ import type {
   ProjectSetupPreview as ApiProjectSetupPreview,
   CommitProjectSetup as ApiCommitProjectSetup,
   ProjectSetupCommitResult as ApiProjectSetupCommitResult,
+  PhysicalOnlyFilamentSelection as ApiPhysicalOnlyFilamentSelection,
 } from "@benchledger/api-contract";
 
 export type JsonPrimitive = null | boolean | number | string;
@@ -192,8 +194,28 @@ export type InventoryProductProfile = ApiInventoryProductProfile;
 export type InventoryProductProfileCreateInput = ApiCreateInventoryProductProfile;
 export type InventoryProductProfileCreateWithoutItemInput = ApiCreateInventoryProductProfileWithoutItem;
 export type InventoryProductProfileUpdatePatch = ApiUpdateInventoryProductProfile;
-export type BuildConfigurationSnapshot = ApiBuildConfigurationSnapshot;
-export type BuildConfigurationCreateInput = ApiCreateBuildConfigurationSnapshot;
+/**
+ * A build configuration may use an exact catalog filament or an explicitly
+ * unprofiled physical spool.  The latter is intentionally a separate
+ * discriminated branch: an item id by itself is not an exact identity.
+ */
+export type PhysicalOnlyFilamentSelectionInput = ApiCreatePhysicalOnlyFilamentSelection;
+
+export type ExactFilamentSelection = Exclude<ApiCreateBuildConfigurationSnapshot["filamentSelections"][number], PhysicalOnlyFilamentSelectionInput>;
+export type BuildConfigurationFilamentSelectionInput = ExactFilamentSelection | PhysicalOnlyFilamentSelectionInput;
+export type BuildConfigurationCreateInput = Omit<ApiCreateBuildConfigurationSnapshot, "filamentSelections"> & {
+  filamentSelections: readonly BuildConfigurationFilamentSelectionInput[];
+};
+
+/** Copied evidence is returned for a physical-only selection; it is not a
+ * catalog, compatibility, or availability assertion. */
+export type PhysicalOnlyFilamentSelection = ApiPhysicalOnlyFilamentSelection;
+export type PhysicalOnlyFilamentSelectionSnapshot = PhysicalOnlyFilamentSelection;
+
+export type BuildConfigurationFilamentSelection = ApiBuildConfigurationSnapshot["filamentSelections"][number] | PhysicalOnlyFilamentSelectionSnapshot;
+export type BuildConfigurationSnapshot = Omit<ApiBuildConfigurationSnapshot, "filamentSelections"> & {
+  filamentSelections: readonly BuildConfigurationFilamentSelection[];
+};
 export type ReconciliationDraft = ApiReconciliationDraft;
 export type ReconciliationCommit = ApiReconciliationCommit;
 export type ReconciliationDraftSaveInput = ApiSaveReconciliationDraft;
