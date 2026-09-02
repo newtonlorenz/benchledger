@@ -55,7 +55,8 @@ type ServerGapLine = { lineId: string; status: string; decision?: string; missin
 type ServerGapEvaluation = { lines: ServerGapLine[]; totals: { requiredLines: number; optionalLines: number; readyLines?: number; checkLines?: number; decideLines?: number; sourceLines?: number; partialLines: number; missingLines: number } };
 type ServerArtifact = { id: string; projectId: string; workItemId?: string; revisionId?: string; role: string; filename: string; mediaType: string; byteSize: number; sha256: string; author?: string; source?: string; machineBinding?: Record<string, string>; currentCandidate: boolean; retired: boolean; createdAt: string; version: number };
 type ServerRevision = { id: string; projectId: string; number: number; name: string; notes?: string; status: string; createdAt: string; version: number; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; gapEvaluation?: ServerGapEvaluation; buildConfigSnapshot?: unknown; buildConfiguration?: unknown };
-type ServerProject = { id: string; name: string; description?: string; status: string; currentRevisionId?: string; createdAt: string; updatedAt: string; version: number; workItems?: ServerWorkItem[]; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; currentRevision?: ServerRevision };
+type ServerProject = { id: string; name: string; description?: string; status: string; currentRevisionId?: string; createdAt: string; updatedAt: string; version: number; removedAt?: string; removedBy?: string; lastLifecycleStatus?: string; workItems?: ServerWorkItem[]; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; currentRevision?: ServerRevision };
+type ServerProjectTombstone = { id: string; name: string; removedAt: string; removedBy: string; lastLifecycleStatus: string; releasedReservationIds: string[]; version: number; auditId?: string };
 type ServerOffer = { id: string; itemId?: string; name: string; supplier: string; url: string; priceMinor: number; currency: CurrencyCode; packageQuantity?: number; observedAt: string; staleAfterDays?: number; version: number };
 type ServerWorkspace = { inventory: ServerInventoryItem[]; projects: ServerProject[]; offers: ServerOffer[]; source: "api"; fetchedAt: string };
 type ServerUploadSession = { id: string; artifactId: string; expiresAt: string; maxBytes: number; uploadUrl: string; status: "pending" | "finalized" | "expired" };
@@ -218,6 +219,7 @@ export interface WorkspaceAdapter {
   login(password: string): Promise<LoginResult>;
   logout(): Promise<void>;
   loadWorkspace(): Promise<WorkspaceSnapshot>;
+  listArchivedProjects(): Promise<Project[]>;
   refreshProjectReadiness(): Promise<Project[]>;
   listInventory(query: InventoryListQuery): Promise<InventoryPage>;
   bulkUpdateInventory(input: InventoryBulkUpdateInput): Promise<InventoryBulkUpdateResult>;
@@ -234,6 +236,9 @@ export interface WorkspaceAdapter {
   createCatalogProduct(input: CatalogProductDraft): Promise<CatalogProduct>;
   createExactInventoryItem(input: ExactInventoryInput): Promise<InventoryItem>;
   createProject(input: Pick<Project, "name" | "description">): Promise<Project>;
+  archiveProject(projectId: string, expectedVersion?: number): Promise<Project>;
+  restoreProject(projectId: string, expectedVersion?: number): Promise<Project>;
+  removeProject(projectId: string, expectedVersion?: number): Promise<Project>;
   createRevision(projectId: string, input: RevisionInput): Promise<Project>;
   createBuildConfigSnapshot(projectId: string, revisionId: string, input: BuildConfigInput): Promise<BuildConfigSnapshot>;
   createBomLine(projectId: string, input: BomInput): Promise<Project>;
@@ -1122,6 +1127,7 @@ function mapProject(project: ServerProject): Project {
     subtitle: workItem?.description ?? project.description ?? "A maker project in the workspace",
     description: project.description ?? "Add a project goal to define the next task.",
     status,
+    version: typeof project.version === "number" ? project.version : 1,
     updated: project.updatedAt.slice(0, 10),
     currentRevision,
     workItem: workItem?.name ?? "Project setup",
@@ -1132,7 +1138,10 @@ function mapProject(project: ServerProject): Project {
     accent: status === "complete" ? "blue" : "orange",
     ...(revision?.id ?? project.currentRevisionId ? { serverRevisionId: revision?.id ?? project.currentRevisionId } : {}),
     ...(gapEvaluation === undefined ? {} : { gapEvaluation }),
-    ...(buildConfigSnapshot ? { buildConfigSnapshot } : {})
+    ...(buildConfigSnapshot ? { buildConfigSnapshot } : {}),
+    ...(project.removedAt === undefined ? {} : { removedAt: project.removedAt }),
+    ...(project.removedBy === undefined ? {} : { removedBy: project.removedBy }),
+    ...(project.lastLifecycleStatus === undefined ? {} : { lastLifecycleStatus: canonicalProjectLifecycle(project.lastLifecycleStatus) })
   };
 }
 
@@ -1303,6 +1312,12 @@ type PendingProjectCommand = {
   readonly body: ProjectRequestBody;
 };
 
+type PendingProjectRemovalCommand = {
+  readonly key: string;
+  readonly body: { readonly name: string };
+  readonly expectedVersion: number;
+};
+
 type PendingRevisionCommand = {
   readonly key: string;
   readonly body: RevisionRequestBody;
@@ -1347,6 +1362,10 @@ function projectCommandId(body: ProjectRequestBody): string {
   // Keep retries tied to the exact atomic project + initial revision command,
   // while allowing a later intentional identical create to receive a fresh key.
   return JSON.stringify(body);
+}
+
+function projectRemovalCommandId(projectId: string, expectedVersion: number, name: string): string {
+  return `${projectId}\u0000${expectedVersion}\u0000${name}`;
 }
 
 function revisionCommandId(projectId: string, body: RevisionRequestBody): string {
@@ -1887,6 +1906,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     async login() { return { authenticated: true, actor: "sample", csrfToken: "sample", expiresAt: new Date(Date.now() + 3_600_000).toISOString() }; },
     async logout() {},
     async loadWorkspace() { return state; },
+    async listArchivedProjects() { return structuredClone(state.projects.filter((project) => project.status === "archived")); },
     async refreshProjectReadiness() { return structuredClone(state.projects); },
     async listInventory(query) { return sampleInventoryPage(state.inventory, query); },
     async bulkUpdateInventory(input) {
@@ -2070,6 +2090,31 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
       state.projects = [project, ...state.projects];
       return project;
     },
+    async archiveProject(projectId, expectedVersion) {
+      const current = state.projects.find((candidate) => candidate.id === projectId);
+      if (!current) throw new ApiError("Project not found", { kind: "validation", status: 404 });
+      if (expectedVersion !== undefined && current.version !== expectedVersion) throw new ApiError("Project changed; reload before archiving", { kind: "validation", status: 409 });
+      const archived = { ...current, status: "archived" as const, version: (current.version ?? 1) + 1, updated: new Date().toISOString().slice(0, 10) };
+      state.projects = state.projects.map((candidate) => candidate.id === projectId ? archived : candidate);
+      return structuredClone(archived);
+    },
+    async restoreProject(projectId, expectedVersion) {
+      const current = state.projects.find((candidate) => candidate.id === projectId);
+      if (!current) throw new ApiError("Project not found", { kind: "validation", status: 404 });
+      if (expectedVersion !== undefined && current.version !== expectedVersion) throw new ApiError("Project changed; reload before restoring", { kind: "validation", status: 409 });
+      const restored = { ...current, status: "idea" as const, version: (current.version ?? 1) + 1, updated: new Date().toISOString().slice(0, 10) };
+      state.projects = state.projects.map((candidate) => candidate.id === projectId ? restored : candidate);
+      return structuredClone(restored);
+    },
+    async removeProject(projectId, expectedVersion) {
+      const current = state.projects.find((candidate) => candidate.id === projectId);
+      if (!current) throw new ApiError("Project not found", { kind: "validation", status: 404 });
+      if (expectedVersion !== undefined && current.version !== expectedVersion) throw new ApiError("Project changed; reload before removing", { kind: "validation", status: 409 });
+      const removedAt = new Date().toISOString();
+      const removed = { ...current, removedAt, removedBy: "sample", lastLifecycleStatus: current.status, version: (current.version ?? 1) + 1 };
+      state.projects = state.projects.filter((project) => project.id !== projectId);
+      return structuredClone(removed);
+    },
     async createRevision(projectId, input) {
       const project = state.projects.find((candidate) => candidate.id === projectId);
       if (!project) throw new ApiError("Project not found", { kind: "validation", status: 404 });
@@ -2120,6 +2165,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
   const projectCache = new Map<string, Project>();
   const pendingRevisionCommands = new Map<string, PendingRevisionCommand>();
   const pendingProjectCommands = new Map<string, PendingProjectCommand>();
+  const pendingProjectRemovalCommands = new Map<string, PendingProjectRemovalCommand>();
   const pendingExactInventoryCommands = new Map<string, PendingExactInventoryCommand>();
   const pendingInventoryCommands = new Map<string, PendingInventoryCommand>();
   const pendingCategoryCommands = new Map<string, PendingCategoryCommand>();
@@ -2207,6 +2253,13 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       projectCache.clear();
       mappedProjects.forEach((project) => projectCache.set(project.id, project));
       return { inventory: mappedInventory, projects: mappedProjects, offers: workspace.offers.map(mapOffer), source: "api", fetchedAt: workspace.fetchedAt || new Date().toISOString(), health: currentHealth };
+    },
+    async listArchivedProjects() {
+      const payload = await request<unknown>("/projects?status=archived&limit=200");
+      const values = responseList(payload);
+      const archived = values.map((value) => mapProject(value as ServerProject));
+      archived.forEach((project) => projectCache.set(project.id, project));
+      return archived;
     },
     async refreshProjectReadiness() {
       const refreshed = await Promise.all([...projectCache.values()].map(async (project): Promise<Project> => {
@@ -2499,6 +2552,58 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         return project;
       } catch (error: unknown) {
         if (!mutationFailureIsAmbiguous(error) && pendingProjectCommands.get(commandId)?.key === command.key) pendingProjectCommands.delete(commandId);
+        throw error;
+      }
+    },
+    async archiveProject(projectId, expectedVersion) {
+      const token = csrfToken ?? cookieValue("forge_csrf");
+      if (!token) throw new ApiError("Sign in again before archiving a project", { kind: "csrf", status: 403 });
+      const current = projectCache.get(projectId);
+      const version = expectedVersion ?? current?.version;
+      const headers: Record<string, string> = { "Idempotency-Key": idempotencyKey("project-archive") };
+      if (version !== undefined) headers["If-Match"] = String(version);
+      const payload = await request<{ data?: ServerProject }>(`/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", headers, body: JSON.stringify({ status: "archived" }) }, token);
+      const archived = mapProject(mutationData(payload));
+      projectCache.delete(projectId);
+      return archived;
+    },
+    async restoreProject(projectId, expectedVersion) {
+      const token = csrfToken ?? cookieValue("forge_csrf");
+      if (!token) throw new ApiError("Sign in again before restoring a project", { kind: "csrf", status: 403 });
+      const version = expectedVersion;
+      const headers: Record<string, string> = { "Idempotency-Key": idempotencyKey("project-restore") };
+      if (version !== undefined) headers["If-Match"] = String(version);
+      const payload = await request<{ data?: ServerProject }>(`/projects/${encodeURIComponent(projectId)}/restore`, { method: "POST", headers }, token);
+      const restored = mapProject(mutationData(payload));
+      projectCache.set(restored.id, restored);
+      return restored;
+    },
+    async removeProject(projectId, expectedVersion) {
+      const token = csrfToken ?? cookieValue("forge_csrf");
+      if (!token) throw new ApiError("Sign in again before removing a project", { kind: "csrf", status: 403 });
+      const current = projectCache.get(projectId);
+      if (!current) throw new ApiError("The project is not available in this workspace snapshot", { kind: "validation", status: 409 });
+      const version = expectedVersion ?? current.version;
+      if (version === undefined) throw new ApiError("Reload the project before removing it", { kind: "validation", status: 400 });
+      const body = { name: current.name } as const;
+      const commandId = projectRemovalCommandId(projectId, version, body.name);
+      const pending = pendingProjectRemovalCommands.get(commandId);
+      const command = pending ?? { key: idempotencyKey("project-remove"), body, expectedVersion: version };
+      if (pending === undefined) pendingProjectRemovalCommands.set(commandId, command);
+      try {
+        const payload = await request<{ data?: ServerProjectTombstone }>(`/projects/${encodeURIComponent(projectId)}`, {
+          method: "DELETE",
+          headers: { "If-Match": String(command.expectedVersion), "Idempotency-Key": command.key },
+          body: JSON.stringify(command.body)
+        }, token);
+        const tombstone = mutationData(payload);
+        projectCache.delete(projectId);
+        if (pendingProjectRemovalCommands.get(commandId)?.key === command.key) pendingProjectRemovalCommands.delete(commandId);
+        return { ...current, removedAt: tombstone.removedAt, removedBy: tombstone.removedBy, lastLifecycleStatus: canonicalProjectLifecycle(tombstone.lastLifecycleStatus), version: tombstone.version };
+      } catch (error: unknown) {
+        // Keep an ambiguous command and its exact key/body for the next call;
+        // a server may have committed before the response was lost.
+        if (!mutationFailureIsAmbiguous(error) && pendingProjectRemovalCommands.get(commandId)?.key === command.key) pendingProjectRemovalCommands.delete(commandId);
         throw error;
       }
     },

@@ -316,6 +316,35 @@ describe("BenchLedger HTTP API", () => {
     await app.close();
   });
 
+  it("removes a project with exact confirmation, optimistic concurrency, idempotent replay, and retained history", async () => {
+    const { app, cookie, csrf } = await loggedIn();
+    const headers = { cookie, "x-csrf-token": csrf };
+    const created = await app.inject({ method: "POST", url: "/api/v1/projects", headers, payload: { id: "http-project-removal", name: "HTTP removal fixture", status: "planned" } });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ data: { id: "http-project-removal", version: 1 } });
+
+    const missingVersion = await app.inject({ method: "DELETE", url: "/api/v1/projects/http-project-removal", headers: { ...headers, "idempotency-key": "http-project-remove-no-version" }, payload: { name: "HTTP removal fixture" } });
+    expect(missingVersion.statusCode).toBe(400);
+    const wrongName = await app.inject({ method: "DELETE", url: "/api/v1/projects/http-project-removal", headers: { ...headers, "if-match": "1", "idempotency-key": "http-project-remove-wrong-name" }, payload: { name: "http removal fixture" } });
+    expect(wrongName.statusCode).toBe(409);
+
+    const removeHeaders = { ...headers, "if-match": "1", "idempotency-key": "http-project-remove" };
+    const removed = await app.inject({ method: "DELETE", url: "/api/v1/projects/http-project-removal", headers: removeHeaders, payload: { name: "HTTP removal fixture" } });
+    expect(removed.statusCode).toBe(200);
+    expect(removed.json()).toMatchObject({ replayed: false, data: { id: "http-project-removal", name: "HTTP removal fixture", lastLifecycleStatus: "planned", releasedReservationIds: [], version: 2 }, audit: { action: "project.remove" } });
+
+    const replay = await app.inject({ method: "DELETE", url: "/api/v1/projects/http-project-removal", headers: removeHeaders, payload: { name: "HTTP removal fixture" } });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toMatchObject({ replayed: true, data: { id: "http-project-removal", version: 2 }, audit: { action: "project.remove" } });
+    expect((await app.inject({ method: "GET", url: "/api/v1/projects/http-project-removal", headers })).statusCode).toBe(410);
+    expect((await app.inject({ method: "GET", url: "/api/v1/projects", headers })).json<{ data: Array<{ id: string }> }>().data.some((entry) => entry.id === "http-project-removal")).toBe(false);
+    expect((await app.inject({ method: "GET", url: "/api/v1/projects/removed?limit=10", headers })).json<{ data: Array<{ id: string; name: string }> }>().data).toEqual(expect.arrayContaining([expect.objectContaining({ id: "http-project-removal", name: "HTTP removal fixture" })]));
+    const history = await app.inject({ method: "GET", url: "/api/v1/projects/http-project-removal/removed-history", headers });
+    expect(history.statusCode).toBe(200);
+    expect(history.json<{ data: Array<{ action: string; entityId: string }> }>().data).toEqual(expect.arrayContaining([expect.objectContaining({ action: "project.remove", entityId: "http-project-removal" })]));
+    await app.close();
+  });
+
   it("evaluates confirmed and inspect-first BOM stock", async () => {
     const { app, cookie, csrf } = await loggedIn();
     const project = await app.inject({ method: "POST", url: "/api/v1/projects", headers: { cookie, "x-csrf-token": csrf }, payload: { name: "Demo build", status: "planned" } });

@@ -8,6 +8,7 @@ export type ApplicationErrorCode =
   | "quota_exceeded"
   | "unsupported_media"
   | "upload_expired"
+  | "project_removed"
   | "integrity_error";
 
 export class ApplicationError extends Error {
@@ -28,4 +29,8 @@ export function notFound(entity: string, id: string): ApplicationError {
 
 export function conflict(message: string, details?: Readonly<Record<string, unknown>>): ApplicationError {
   return new ApplicationError("conflict", message, details);
+}
+
+export function projectRemoved(projectId: string, details?: Readonly<Record<string, unknown>>): ApplicationError {
+  return new ApplicationError("project_removed", `Project '${projectId}' has been removed from the workspace`, { entity: "Project", id: projectId, ...details });
 }

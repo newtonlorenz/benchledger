@@ -4,7 +4,7 @@ import type {
   CreateWorkItemRevision, InventoryBulkUpdate as ApiInventoryBulkUpdate, InventoryBulkUpdateChanges as ApiInventoryBulkUpdateChanges,
   InventoryBulkUpdateTarget as ApiInventoryBulkUpdateTarget, InventoryItem, InventoryListQuery, Offer, Project,
   ProjectRevision, ProjectWithInitialRevision, Reservation, StockEvent, StockEventInput, UploadSession,
-  WorkItem, WorkItemRevision, CatalogProduct as ApiCatalogProduct,
+  WorkItem, WorkItemRevision, ProjectTombstone, CatalogProduct as ApiCatalogProduct,
   CreateCatalogProduct as ApiCreateCatalogProduct, UpdateCatalogProduct as ApiUpdateCatalogProduct,
   InventoryProductProfile as ApiInventoryProductProfile,
   CreateInventoryProductProfile as ApiCreateInventoryProductProfile,
@@ -235,8 +235,26 @@ export interface UsageInput {
 export interface ProjectPort {
   listProjects(options: ProjectListOptions): Promise<Page<Project>>;
   getProject(id: string): Promise<Project | null>;
+  /** List irreversible-removal tombstones; normal project lists never include them. */
+  listRemovedProjects?(): Promise<readonly ProjectTombstone[]>;
+  /** Bounded retained-history listing. Cursors are adapter-defined opaque values. */
+  listRemovedProjectsPage?(limit: number, cursor?: string): Promise<Page<ProjectTombstone>>;
+  /** Remove a project and release all active reservations atomically. */
+  removeProject?(id: string, expectedVersion: number | undefined, confirmationName: string, ctx: RequestContext): Promise<ProjectTombstone>;
+  /** Compensate an in-memory removal when the surrounding audit fails. */
+  rollbackProjectRemoval?(id: string): Promise<void>;
+  /** Close the current removal compensation receipt after audited commit. */
+  commitProjectRemoval?(id: string): Promise<void>;
   createProject(input: CreateProject, ctx: RequestContext): Promise<Project>;
   updateProject(id: string, input: Partial<CreateProject>, expectedVersion: number | undefined, ctx: RequestContext): Promise<Project>;
+  /** Archive a project and release all active reservations atomically. */
+  archiveProject?(id: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<Project>;
+  /** Restore an archived project without recreating its reservations. */
+  restoreProject?(id: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<Project>;
+  /** Compensate an in-memory archive when the surrounding audit fails. */
+  rollbackProjectArchive?(id: string): Promise<void>;
+  /** Close the current archive compensation receipt after audited commit. */
+  commitProjectArchive?(id: string): Promise<void>;
   createWorkItem(projectId: string, input: CreateWorkItem, ctx: RequestContext): Promise<WorkItem>;
   /** Resolve a work item without enumerating every project. */
   getWorkItem(id: string): Promise<WorkItem | null>;
@@ -358,6 +376,8 @@ export interface AuditEvent {
 export interface AuditPort {
   append(input: AuditInput): Promise<AuditEvent>;
   list(limit: number, cursor?: string): Promise<Page<AuditEvent>>;
+  /** Efficient retained-history lookup for a removed project. */
+  listEntity?(entityType: string, entityId: string, limit: number, cursor?: string): Promise<Page<AuditEvent>>;
 }
 
 export interface EventBusEvent {

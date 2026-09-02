@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { InventoryItem, InventoryCategory, StockEvent, BomLine, Reservation, Project, Offer, Artifact, UploadSession, ProjectRevision, WorkItem, WorkItemRevision, ReconciliationLine } from "@benchledger/api-contract";
+import type { InventoryItem, InventoryCategory, StockEvent, BomLine, Reservation, Project, Offer, Artifact, UploadSession, ProjectRevision, WorkItem, WorkItemRevision, ReconciliationLine, ProjectTombstone } from "@benchledger/api-contract";
 import { ApplicationError } from "./errors.js";
 import { ApplicationService, matchesBomConstraints, unsupportedBomConstraintKeys } from "./service.js";
 import { buildReconciliationDocument, type ReconciliationSourceSnapshot } from "./reconciliation.js";
@@ -61,6 +61,39 @@ function fakePorts(seed = item()): ApplicationPorts {
 }
 
 describe("ApplicationService", () => {
+  it("removes a project only with exact-name confirmation and returns released reservation evidence", async () => {
+    const ports = fakePorts();
+    const tombstone: ProjectTombstone = {
+      id: "project-1",
+      name: "Lamp",
+      removedAt: "2026-09-02T00:00:00.000Z",
+      removedBy: "test",
+      lastLifecycleStatus: "planned",
+      releasedReservationIds: ["reservation-1"],
+      version: 2,
+    };
+    ports.projects.removeProject = async (_id, _expectedVersion, _name, _ctx) => tombstone;
+    const service = new ApplicationService(ports);
+
+    await expect(service.removeProject("project-1", 1, "Wrong", context)).rejects.toMatchObject({ code: "conflict" });
+    await expect(service.removeProject("project-1", 1, "Lamp", context)).resolves.toMatchObject({ data: { releasedReservationIds: ["reservation-1"], auditId: "audit-1" } });
+  });
+
+  it("compensates project removal when its audit cannot commit", async () => {
+    const ports = fakePorts();
+    let removed = false;
+    let rolledBack = false;
+    ports.projects.removeProject = async () => {
+      removed = true;
+      return { id: "project-1", name: "Lamp", removedAt: "2026-09-02T00:00:00.000Z", removedBy: "test", lastLifecycleStatus: "planned", releasedReservationIds: [], version: 2 };
+    };
+    ports.projects.rollbackProjectRemoval = async () => { removed = false; rolledBack = true; };
+    ports.audit.append = async () => { throw new Error("audit unavailable"); };
+
+    await expect(new ApplicationService(ports).removeProject("project-1", 1, "Lamp", context)).rejects.toThrow("audit unavailable");
+    expect({ removed, rolledBack }).toEqual({ removed: false, rolledBack: true });
+  });
+
   it("matches every supported BOM constraint and fails closed for unknown or malformed keys", () => {
     const candidate = item({
       kind: "electronic",
@@ -334,6 +367,43 @@ describe("ApplicationService", () => {
     await expect(service.listBomLines("rev-1")).resolves.toEqual([expect.objectContaining({ id: "bom-flow" })]);
     await expect(service.listBomLines("bad/id")).rejects.toMatchObject({ code: "validation" });
     await expect(service.createProject({ name: "", status: "idea" }, context)).rejects.toThrow();
+  });
+
+  it("blocks ordinary descendant reads when the owning project is removed", async () => {
+    const ports = fakePorts();
+    const removed: Project = {
+      id: "project-1", name: "Lamp", status: "planned", removedAt: "2026-09-02T00:00:00.000Z", removedBy: "test", lastLifecycleStatus: "planned",
+      createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-09-02T00:00:00.000Z", version: 2
+    };
+    const workRevision: WorkItemRevision = { id: "work-revision-removed", workItemId: "work-1", projectId: "project-1", number: 1, name: "r1", status: "concept", createdAt: removed.createdAt, version: 1 };
+    const line: BomLine = { id: "bom-removed", revisionId: "rev-1", name: "part", requiredQuantity: 1, unit: "gram", optional: false, alternatives: [], constraints: {}, createdAt: removed.createdAt, updatedAt: removed.updatedAt, version: 1 };
+    const artifact: Artifact = { id: "artifact-removed", projectId: "project-1", revisionId: "rev-1", role: "step", filename: "part.step", mediaType: "model/step", byteSize: 1, sha256: "a".repeat(64), currentCandidate: true, retired: false, createdAt: removed.createdAt, version: 1 };
+    ports.projects.getProject = async () => removed;
+    ports.projects.getWorkItemRevision = async (id) => id === workRevision.id ? workRevision : null;
+    ports.projects.getBomLine = async (id) => id === line.id ? line : null;
+    ports.projects.getReservationDetails = async () => ({ reservation: { id: "reservation-removed", lineId: line.id, itemId: "item-1", quantity: 1, status: "active", createdAt: removed.createdAt, updatedAt: removed.updatedAt, version: 1 }, projectId: "project-1", projectRevisionId: "rev-1", bomLine: line });
+    ports.artifacts.getArtifact = async (id) => id === artifact.id ? artifact : null;
+    const service = new ApplicationService(ports);
+
+    await expect(service.listWorkItems("project-1")).rejects.toMatchObject({ code: "project_removed" });
+    await expect(service.getWorkItem("work-1")).rejects.toMatchObject({ code: "project_removed" });
+    await expect(service.getProjectRevision("rev-1")).rejects.toMatchObject({ code: "project_removed" });
+    await expect(service.getWorkItemRevision(workRevision.id)).rejects.toMatchObject({ code: "project_removed" });
+    await expect(service.listBomLines("rev-1")).rejects.toMatchObject({ code: "project_removed" });
+    await expect(service.getBomLine(line.id)).rejects.toMatchObject({ code: "project_removed" });
+    await expect(service.listReservations("rev-1")).rejects.toMatchObject({ code: "project_removed" });
+    await expect(service.getReservationDetails("reservation-removed")).rejects.toMatchObject({ code: "project_removed" });
+    await expect(service.listArtifacts("project-1")).rejects.toMatchObject({ code: "project_removed" });
+    await expect(service.getArtifact(artifact.id)).rejects.toMatchObject({ code: "project_removed" });
+    await expect(service.readArtifact(artifact.id)).rejects.toMatchObject({ code: "project_removed" });
+    await expect(service.getReconciliation("rev-1")).rejects.toMatchObject({ code: "project_removed" });
+    await expect(service.evaluateBomGaps("rev-1")).rejects.toMatchObject({ code: "project_removed" });
+  });
+
+  it("fails closed when atomic project archiving is unavailable", async () => {
+    const ports = fakePorts();
+    const service = new ApplicationService(ports);
+    await expect(service.archiveProject("project-1", 1, context)).rejects.toMatchObject({ code: "integrity_error" });
   });
 
   it("reports optional and partially supplied BOM lines with useful quantities", async () => {

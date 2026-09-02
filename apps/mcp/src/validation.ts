@@ -60,6 +60,8 @@ import type {
   RecordStockEventInput,
   ReleaseReservationInput,
   ReservationInput,
+  ReservationListInput,
+  ReservationReadInput,
   RetireArtifactInput,
   Scope,
   StockEventKind,
@@ -175,6 +177,37 @@ export function retireProject(value: unknown): { projectId: string; expectedVers
   const version = optionalInteger(input.expectedVersion, "arguments.expectedVersion");
   if (version !== undefined) result.expectedVersion = version;
   return result;
+}
+
+/** Irreversible removal requires both optimistic concurrency and exact name confirmation. */
+export function removeProject(value: unknown): { projectId: string; expectedVersion: number; projectName: string } {
+  const input = record(value, "arguments");
+  keys(input, ["projectId", "expectedVersion", "projectName", "name"], "arguments");
+  const projectName = input.projectName ?? input.name;
+  return {
+    projectId: id(input.projectId, "arguments.projectId"),
+    expectedVersion: integer(input.expectedVersion, "arguments.expectedVersion", 1),
+    projectName: stringValue(projectName, "arguments.projectName", { max: 240 })
+  };
+}
+
+export function removedProjectList(value: unknown): PageInput {
+  return parsePageInput(value ?? {});
+}
+
+export function removedProjectHistory(value: unknown): { projectId: string; limit?: number; cursor?: string } {
+  const input = record(value, "arguments");
+  keys(input, ["projectId", "limit", "cursor"], "arguments");
+  const page = parsePageInput({ limit: input.limit, cursor: input.cursor });
+  return { projectId: id(input.projectId, "arguments.projectId"), ...(page.limit === undefined ? {} : { limit: page.limit }), ...(page.cursor === undefined ? {} : { cursor: page.cursor }) };
+}
+
+export function archiveProject(value: unknown): { projectId: string; expectedVersion?: number } {
+  return retireProject(value);
+}
+
+export function restoreProject(value: unknown): { projectId: string; expectedVersion?: number } {
+  return retireProject(value);
 }
 
 export function retireBomLine(value: unknown): { bomLineId: string; expectedVersion: number } {
@@ -775,6 +808,19 @@ export function reservation(value: unknown): ReservationInput {
     itemId: id(input.itemId, "arguments.itemId"),
     quantity: quantity(input.quantity, "arguments.quantity"),
   };
+}
+
+export function reservationList(value: unknown): ReservationListInput {
+  const input = record(value, "arguments");
+  keys(input, ["projectRevisionId", "limit", "cursor"], "arguments");
+  return {
+    ...parsePageInput({ limit: input.limit, cursor: input.cursor }),
+    projectRevisionId: id(input.projectRevisionId, "arguments.projectRevisionId"),
+  };
+}
+
+export function reservationRead(value: unknown): ReservationReadInput {
+  return { reservationId: singleId(value, "reservationId") };
 }
 
 export function releaseReservation(value: unknown): ReleaseReservationInput {

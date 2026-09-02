@@ -3,6 +3,7 @@ import { McpAdapterError, mapBackendError } from "./errors.js";
 import {
   artifactList,
   artifactMetadata,
+  archiveProject,
   assertProjectAccess,
   assertScope,
   beginArtifactUpload,
@@ -42,8 +43,14 @@ import {
   projectCreate,
   projectWithInitialRevisionCreate,
   projectList,
+  removeProject,
+  removedProjectList,
+  removedProjectHistory,
   projectRevisionCreate,
   projectUpdate,
+  reservationList,
+  reservationRead,
+  restoreProject,
   recordOffer,
   retireBomLine,
   retireProject,
@@ -248,6 +255,13 @@ function requireCommissioningIdempotency(context: McpRequestContext): void {
   }
 }
 
+function requireProjectRemovalIdempotency(context: McpRequestContext): void {
+  const key = context.idempotencyKey;
+  if (key === undefined || key.length < 8 || key.length > 200) {
+    throw new McpAdapterError("INVALID_ARGUMENT", "Project removal requires an idempotency key in the request context.");
+  }
+}
+
 function requireBuildConfigurationsBackend(adapter: McpAdapter): NonNullable<BenchLedgerBackend["buildConfigurations"]> {
   if (adapter.backend.buildConfigurations === undefined) throw new McpAdapterError("BACKEND_ERROR", "The build configuration backend is not configured for this MCP host.");
   return adapter.backend.buildConfigurations;
@@ -328,6 +342,10 @@ async function assertAnyRevisionAccess(adapter: McpAdapter, context: McpRequestC
  */
 async function authorizeProjectScope(adapter: McpAdapter, name: string, input: unknown, context: McpRequestContext): Promise<void> {
   if (!isProjectScoped(context)) return;
+
+  if (name === "list_removed_projects") {
+    rejectScopedGlobalAccess(context, "Removed-project history is workspace-global and requires an unscoped token.");
+  }
 
   const directProjectId = projectIdFromInput(input);
   if (directProjectId !== undefined) assertProjectAccess(context, directProjectId);
@@ -467,11 +485,38 @@ export class McpAdapter {
       ["commit_reconciliation", (input, context) => requireReconciliationBackend(this).commit(reconciliationCommit(input), context)],
 
       ["list_projects", (input, context) => this.backend.projects.list(projectList(input), context)],
+      ["list_removed_projects", (input, context) => {
+        if (this.backend.projects.listRemoved === undefined) throw new McpAdapterError("BACKEND_ERROR", "This project backend does not support removed-project history.");
+        return this.backend.projects.listRemoved(removedProjectList(input), context);
+      }],
       ["read_project", (input, context) => this.backend.projects.get({ projectId: singleId(input, "projectId") }, context)],
       ["create_project", (input, context) => this.backend.projects.create(projectCreate(input), context)],
       ["create_project_with_initial_revision", (input, context) => this.backend.projects.createWithInitialRevision(projectWithInitialRevisionCreate(input), context)],
       ["update_project", (input, context) => this.backend.projects.update(projectUpdate(input), context)],
-      ["retire_project", (input, context) => this.backend.projects.retire(retireProject(input), context)],
+      ["archive_project", (input, context) => {
+        const parsed = archiveProject(input);
+        if (this.backend.projects.archive === undefined) throw new McpAdapterError("BACKEND_ERROR", "This project backend does not support atomic project archiving.");
+        return this.backend.projects.archive(parsed, context);
+      }],
+      ["restore_project", (input, context) => {
+        const parsed = restoreProject(input);
+        if (this.backend.projects.restore === undefined) throw new McpAdapterError("BACKEND_ERROR", "This project backend does not support restoring archived projects");
+        return this.backend.projects.restore(parsed, context);
+      }],
+      ["remove_project", (input, context) => {
+        requireProjectRemovalIdempotency(context);
+        if (this.backend.projects.remove === undefined) throw new McpAdapterError("BACKEND_ERROR", "This project backend does not support irreversible project removal.");
+        return this.backend.projects.remove(removeProject(input), context);
+      }],
+      ["read_removed_project_history", (input, context) => {
+        if (this.backend.projects.readRemovedHistory === undefined) throw new McpAdapterError("BACKEND_ERROR", "This project backend does not support removed-project history.");
+        return this.backend.projects.readRemovedHistory(removedProjectHistory(input), context);
+      }],
+      ["retire_project", (input, context) => {
+        const parsed = retireProject(input);
+        if (this.backend.projects.archive === undefined) throw new McpAdapterError("BACKEND_ERROR", "This project backend does not support atomic project archiving.");
+        return this.backend.projects.archive(parsed, context);
+      }],
       ["create_work_item", (input, context) => this.backend.projects.createWorkItem(workItemCreate(input), context)],
       ["read_work_item", (input, context) => this.backend.projects.getWorkItem({ workItemId: singleId(input, "workItemId") }, context)],
       ["create_project_revision", (input, context) => this.backend.projects.createProjectRevision(projectRevisionCreate(input), context)],
@@ -485,6 +530,16 @@ export class McpAdapter {
       ["retire_bom_line", (input, context) => this.backend.bom.retireLine(retireBomLine(input), context)],
       ["restore_bom_line", (input, context) => this.backend.bom.restoreLine(retireBomLine(input), context)],
       ["calculate_bom_gaps", (input, context) => this.backend.bom.evaluate(bomEvaluation(input), context)],
+      ["list_reservations", (input, context) => {
+        const list = this.backend.bom.listReservations;
+        if (list === undefined) throw new McpAdapterError("BACKEND_ERROR", "This BOM backend does not support listing reservations.");
+        return list(reservationList(input), context);
+      }],
+      ["read_reservation", (input, context) => {
+        const get = this.backend.bom.getReservation;
+        if (get === undefined) throw new McpAdapterError("BACKEND_ERROR", "This BOM backend does not support reading reservations.");
+        return get(reservationRead(input), context);
+      }],
       ["create_reservation", (input, context) => this.backend.bom.reserve(reservation(input), context)],
       ["release_reservation", (input, context) => this.backend.bom.release(releaseReservation(input), context)],
       ["record_usage", (input, context) => this.backend.bom.recordUsage(usage(input), context)],

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ApplicationError } from "@benchledger/application";
 import { McpAdapter } from "./adapter.js";
 import type {
@@ -157,6 +157,7 @@ function backend(): BenchLedgerBackend {
       create: async () => ({ id: "project-1", version: 1, project: { id: "project-1", name: "Reference project", status: "idea", visibility: "private", version: 1 } }),
       createWithInitialRevision: async () => ({ id: "project-1", version: 1, project: { id: "project-1", name: "Reference project", status: "idea", visibility: "private", version: 1 }, revision: { id: "project-revision-1", projectId: "project-1", number: 1, status: "concept" } }),
       update: async () => ({ id: "project-1", version: 2, project: { id: "project-1", name: "Reference project", status: "ready", visibility: "private", version: 2 } }),
+      archive: async () => ({ id: "project-1", version: 3, status: "archived" }),
       retire: async () => ({ id: "project-1", version: 3, retired: true }),
       createWorkItem: async () => ({ id: "work-1", version: 1, workItem: { id: "work-1", projectId: "project-1", name: "Enclosure", kind: "part" } }),
       getWorkItem: async () => ({ id: "work-1", projectId: "project-1", name: "Enclosure", kind: "part" }),
@@ -173,6 +174,8 @@ function backend(): BenchLedgerBackend {
       retireLine: async () => ({ id: "bom-1", version: 3, retired: true }),
       restoreLine: async () => ({ id: "bom-1", version: 4, restored: true }),
       evaluate: async () => ({ projectRevisionId: "project-revision-1", lines: [], totals: { required: 0, supplied: 0, inspectFirst: 0, missing: 0 }, generatedAt: "2026-08-30T10:00:00.000Z" }),
+      listReservations: async () => page([{ id: "reservation-1", projectRevisionId: "project-revision-1", bomLineId: "bom-1", itemId: "item-esp32", quantity: { value: 1, unit: "piece" }, status: "active", version: 1 }]),
+      getReservation: async () => ({ id: "reservation-1", projectRevisionId: "project-revision-1", bomLineId: "bom-1", itemId: "item-esp32", quantity: { value: 1, unit: "piece" }, status: "active", version: 1 }),
       reserve: async (input) => ({ reservationId: "reservation-1", projectRevisionId: input.projectRevisionId, itemId: input.itemId, quantity: input.quantity, status: "active", version: 1 }),
       release: async () => ({ reservationId: "reservation-1", status: "released", version: 2 }),
       recordUsage: async (input) => ({ usageEventId: "usage-1", itemId: input.itemId, quantity: input.quantity, version: 5 }),
@@ -439,6 +442,41 @@ describe("McpAdapter", () => {
     expect(resolverCalls).toEqual(["reservation:reservation-1", "upload:upload-1"]);
   });
 
+  it("dispatches bounded reservation list and durable reservation reads", async () => {
+    const reservation = { id: "reservation-1", projectRevisionId: "project-revision-1", bomLineId: "bom-1", itemId: "item-esp32", quantity: { value: 1, unit: "piece" as const }, status: "active" as const, version: 1 };
+    const scopedBackend = backend();
+    scopedBackend.bom.listReservations = async (input) => ({ items: [reservation], nextCursor: input.cursor === undefined ? "1" : null, hasMore: input.cursor === undefined });
+    scopedBackend.bom.getReservation = async () => reservation;
+    const adapter = new McpAdapter(scopedBackend);
+
+    await expect(adapter.callTool("list_reservations", { projectRevisionId: "project-revision-1", limit: 1 }, context)).resolves.toMatchObject({
+      isError: false,
+      structuredContent: { items: [{ id: "reservation-1" }], nextCursor: "1", hasMore: true },
+    });
+    await expect(adapter.callTool("read_reservation", { reservationId: "reservation-1" }, context)).resolves.toMatchObject({
+      isError: false,
+      structuredContent: { id: "reservation-1", projectRevisionId: "project-revision-1" },
+    });
+  });
+
+  it("authorizes reservation reads through durable project ancestry", async () => {
+    const reservation = { id: "reservation-1", projectRevisionId: "project-revision-1", bomLineId: "bom-1", itemId: "item-esp32", quantity: { value: 1, unit: "piece" as const }, status: "active" as const, version: 1 };
+    const scopedBackend = backend();
+    scopedBackend.bom.listReservations = async () => ({ items: [reservation], nextCursor: null, hasMore: false });
+    scopedBackend.bom.getReservation = async () => reservation;
+    scopedBackend.projectScope = {
+      projectForProjectRevision: async (revisionId) => revisionId === "project-revision-1" ? "project-1" : "project-2",
+      projectForReservation: async (reservationId) => reservationId === "reservation-1" ? "project-1" : "project-2",
+    };
+    const adapter = new McpAdapter(scopedBackend);
+    const scoped: McpRequestContext = { ...context, projectIds: ["project-1"] };
+
+    await expect(adapter.callTool("list_reservations", { projectRevisionId: "project-revision-1" }, scoped)).resolves.toMatchObject({ isError: false });
+    await expect(adapter.callTool("list_reservations", { projectRevisionId: "other-revision" }, scoped)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "FORBIDDEN" } } });
+    await expect(adapter.callTool("read_reservation", { reservationId: "reservation-1" }, scoped)).resolves.toMatchObject({ isError: false });
+    await expect(adapter.callTool("read_reservation", { reservationId: "other-reservation" }, scoped)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "FORBIDDEN" } } });
+  });
+
   it("authorizes project-scoped indirect identifiers before dispatch", async () => {
     const scopedBackend = backend();
     scopedBackend.projects.list = async () => page([
@@ -509,6 +547,26 @@ describe("McpAdapter", () => {
     await expect(adapter.callTool("list_offers", {}, scoped)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "FORBIDDEN" } } });
     const created = await adapter.callTool("create_project_with_initial_revision", { name: "Atomic reference", revisionSummary: "Initial plan" }, context);
     expect(created).toMatchObject({ isError: false, structuredContent: { project: { id: "project-1" }, revision: { id: "project-revision-1" } } });
+  });
+
+  it("rejects workspace-global removed history for project-scoped tokens", async () => {
+    const scopedBackend = backend();
+    const listRemoved = vi.fn(async () => page([{ id: "removed-project", name: "Removed", removedAt: "2026-08-30T10:00:00.000Z", removedBy: "admin", lastLifecycleStatus: "planned", releasedReservationIds: [], version: 2 }]));
+    scopedBackend.projects.listRemoved = listRemoved;
+    const result = await new McpAdapter(scopedBackend).callTool("list_removed_projects", {}, { ...context, projectIds: ["project-1"] });
+    expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: "FORBIDDEN" } } });
+    expect(listRemoved).not.toHaveBeenCalled();
+  });
+
+  it("requires a stable idempotency key for irreversible project removal", async () => {
+    const removal = vi.fn(async () => ({ id: "project-1", version: 2, auditId: "audit-1", correlationId: "corr-1", replayed: false, tombstone: { id: "project-1" } }));
+    const removalBackend = backend();
+    removalBackend.projects.remove = removal;
+    const adapter = new McpAdapter(removalBackend);
+    await expect(adapter.callTool("remove_project", { projectId: "project-1", expectedVersion: 1, projectName: "Reference project" }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
+    expect(removal).not.toHaveBeenCalled();
+    await expect(adapter.callTool("remove_project", { projectId: "project-1", expectedVersion: 1, projectName: "Reference project" }, { ...context, idempotencyKey: "stable-remove-1" })).resolves.toMatchObject({ isError: false });
+    expect(removal).toHaveBeenCalledWith(expect.objectContaining({ projectId: "project-1" }), expect.objectContaining({ idempotencyKey: "stable-remove-1" }));
   });
 
   it("dispatches the atomic inventory/profile command and requires both global write scopes", async () => {
@@ -596,6 +654,8 @@ describe("McpAdapter", () => {
       ["retire_bom_line", { bomLineId: "bom-1", expectedVersion: 2 }],
       ["restore_bom_line", { bomLineId: "bom-1", expectedVersion: 3 }],
       ["calculate_bom_gaps", { projectRevisionId: "project-revision-1" }],
+      ["list_reservations", { projectRevisionId: "project-revision-1", limit: 5 }],
+      ["read_reservation", { reservationId: "reservation-1" }],
       ["create_reservation", { projectRevisionId: "project-revision-1", bomLineId: "bom-1", itemId: "item-esp32", quantity: { value: 1, unit: "piece" } }],
       ["release_reservation", { reservationId: "reservation-1" }],
       ["record_usage", { projectRevisionId: "project-revision-1", itemId: "item-esp32", quantity: { value: 1, unit: "piece" } }],

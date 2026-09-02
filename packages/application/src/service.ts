@@ -21,9 +21,9 @@ import type {
   InventoryBulkUpdate, StockEventInput, CommissionInventoryItem, UploadSession, WorkItem, WorkItemRevision, CatalogProduct, CreateCatalogProduct,
   UpdateCatalogProduct, InventoryProductProfile, CreateInventoryProductProfile,
   UpdateInventoryProductProfile, BuildConfigurationSnapshot, CreateBuildConfigurationSnapshot,
-  ReconciliationDraft, ReconciliationCommit, CommitReconciliation, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory, WorkspaceSecurityMutation
+  ReconciliationDraft, ReconciliationCommit, CommitReconciliation, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory, WorkspaceSecurityMutation, ProjectTombstone
 } from "@benchledger/api-contract";
-import { ApplicationError, conflict, notFound } from "./errors.js";
+import { ApplicationError, conflict, notFound, projectRemoved } from "./errors.js";
 import { parseInventoryCursor } from "./inventory-pagination.js";
 import type {
   ApplicationPorts, ArtifactDownload, AuditEvent, AuditInput, BeginUploadInput, BulkMutation, EventBusEvent,
@@ -589,6 +589,7 @@ export class ApplicationService {
   private async reconciliationSource(revisionId: string): Promise<ReconciliationSourceSnapshot> {
     const revision = await this.ports.projects.getProjectRevision(revisionId);
     if (revision === null) throw notFound("Project revision", revisionId);
+    await this.assertProjectReadable(revision.projectId);
     const lines = await this.ports.projects.listBomLines(revisionId);
     const rawReservations = await this.ports.projects.listReservations(revisionId);
     const itemIds = [...new Set(rawReservations.map((reservation) => reservation.itemId))].sort((left, right) => left.localeCompare(right));
@@ -717,6 +718,7 @@ export class ApplicationService {
     return this.ports.unitOfWork.exclusive(async () => {
       const configuration = await buildConfigurationPort(this.ports).getBuildConfiguration(configurationId);
       if (configuration === null) throw notFound("Build configuration", configurationId);
+      await this.assertProjectReadableFromRevision(configuration.projectRevisionId);
       return buildConfigurationSnapshotSchema.parse(configuration);
     });
   }
@@ -724,6 +726,12 @@ export class ApplicationService {
   async createBuildConfiguration(revisionId: string, input: unknown, ctx: RequestContext): Promise<Mutation<BuildConfigurationSnapshot>> {
     const parsedRevisionId = requireId(revisionId, "project revision id");
     const revision = await this.getProjectRevision(parsedRevisionId);
+    // Keep legacy revision-only adapters readable while still closing the
+    // mutation boundary for archived projects in authoritative runtimes.
+    const revisionProject = await this.ports.projects.getProject(revision.projectId);
+    if (revisionProject?.status === "archived") {
+      throw conflict(`Project '${revisionProject.id}' is archived; restore it before creating or committing work`);
+    }
     if (input === null || typeof input !== "object") throw new ApplicationError("validation", "Build configuration body must be an object");
     const raw = input as Record<string, unknown>;
     if (raw.projectRevisionId !== undefined && raw.projectRevisionId !== parsedRevisionId) {
@@ -1027,8 +1035,86 @@ export class ApplicationService {
     return this.ports.unitOfWork.exclusive(async () => {
       const project = await this.ports.projects.getProject(requireId(id, "project id"));
       if (!project) throw notFound("Project", id);
+      if (project.removedAt !== undefined) {
+        throw projectRemoved(project.id, { removedAt: project.removedAt, removedBy: project.removedBy, lastLifecycleStatus: project.lastLifecycleStatus });
+      }
       return project;
     });
+  }
+
+  /** Return retained tombstones without making them ordinary project records. */
+  async listRemovedProjects(): Promise<readonly ProjectTombstone[]> {
+    return this.ports.unitOfWork.exclusive(async () => {
+      const list = this.ports.projects.listRemovedProjects;
+      if (list === undefined) throw new ApplicationError("integrity_error", "This runtime does not support removed-project history");
+      return list.call(this.ports.projects);
+    });
+  }
+
+  /** Return a bounded page of retained tombstones. Normal project scope is
+   * rejected by the transport boundary before this workspace-global command
+   * is dispatched. */
+  async listRemovedProjectPage(limit = 50, cursor?: string): Promise<Page<ProjectTombstone>> {
+    const bounded = boundedLimit(limit, 50, "limit");
+    const boundedPageCursor = boundedCursor(cursor);
+    return this.ports.unitOfWork.exclusive(async () => {
+      const listPage = this.ports.projects.listRemovedProjectsPage;
+      if (listPage !== undefined) return listPage.call(this.ports.projects, bounded, boundedPageCursor);
+      const list = this.ports.projects.listRemovedProjects;
+      if (list === undefined) throw new ApplicationError("integrity_error", "This runtime does not support removed-project history");
+      const data = (await list.call(this.ports.projects)).slice(0, bounded);
+      return { data, limit: bounded };
+    });
+  }
+
+  /** Read append-only project history after verifying the project is removed. */
+  async readRemovedProjectHistory(id: string, limit = 50, cursor?: string): Promise<Page<AuditEvent>> {
+    const projectId = requireId(id, "project id");
+    const bounded = boundedLimit(limit, 50, "limit");
+    const boundedPageCursor = boundedCursor(cursor);
+    return this.ports.unitOfWork.exclusive(async () => {
+      const project = await this.ports.projects.getProject(projectId);
+      if (project === null) throw notFound("Project", projectId);
+      if (project.removedAt === undefined) throw conflict(`Project '${projectId}' has not been removed`);
+      if (this.ports.audit.listEntity !== undefined) {
+        return this.ports.audit.listEntity("project", projectId, bounded, boundedPageCursor);
+      }
+      const all = await this.ports.audit.list(200, boundedPageCursor);
+      const data = all.data.filter((event) => event.entityType === "project" && event.entityId === projectId).slice(0, bounded);
+      return { data, limit: bounded };
+    });
+  }
+
+  /** Irreversible removal. The runtime port owns the atomic tombstone/release transaction. */
+  async removeProject(id: string, expectedVersion: number | undefined, confirmationName: string, ctx: RequestContext): Promise<Mutation<ProjectTombstone>> {
+    const projectId = requireId(id, "project id");
+    if (typeof confirmationName !== "string" || confirmationName.length === 0) throw new ApplicationError("validation", "Exact project-name confirmation is required");
+    const commandCtx = commandContext(ctx, "project.remove", { projectId, expectedVersion, confirmationName });
+    const mutation = await this.mutate(commandCtx, "project.remove", "project", projectId, async () => {
+      const current = await this.ports.projects.getProject(projectId);
+      if (current === null) throw notFound("Project", projectId);
+      if (current.removedAt !== undefined) {
+        throw projectRemoved(projectId, { removedAt: current.removedAt, removedBy: current.removedBy, lastLifecycleStatus: current.lastLifecycleStatus });
+      }
+      if (current.name !== confirmationName) {
+        throw conflict("Project removal requires an exact, case-sensitive project-name confirmation", { expectedName: current.name });
+      }
+      const remove = this.ports.projects.removeProject;
+      if (remove === undefined) throw new ApplicationError("integrity_error", "This runtime does not support irreversible project removal");
+      const tombstone = await remove.call(this.ports.projects, projectId, expectedVersion, confirmationName, commandCtx);
+      const rollback = this.ports.projects.rollbackProjectRemoval;
+      return {
+        value: tombstone,
+        entityId: projectId,
+        version: tombstone.version,
+        eventMetadata: { releasedReservationCount: tombstone.releasedReservationIds.length },
+        ...(rollback === undefined ? {} : { compensate: () => rollback.call(this.ports.projects, projectId) })
+      };
+    });
+    // The audit is created by mutate after the atomic runtime operation. Add
+    // its identity to the response while preserving replay determinism.
+    await this.ports.projects.commitProjectRemoval?.(projectId);
+    return { ...mutation, data: { ...mutation.data, ...(mutation.data.auditId === undefined ? { auditId: mutation.audit.id } : {}) } };
   }
 
   async createProject(input: CreateProject, ctx: RequestContext): Promise<Mutation<Project>> {
@@ -1042,20 +1128,62 @@ export class ApplicationService {
   async updateProject(id: string, input: unknown, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<Project>> {
     const projectId = requireId(id, "project id");
     const parsed = updateProjectSchema.parse(input) as Partial<CreateProject>;
+    if (parsed.status === "archived") return this.archiveProject(projectId, expectedVersion, ctx);
+    if (parsed.status === "idea") {
+      const current = await this.getProject(projectId);
+      if (current.status === "archived") return this.restoreProject(projectId, expectedVersion, ctx);
+    }
     return this.mutate(ctx, "project.update", "project", projectId, async () => {
       const project = await this.ports.projects.updateProject(projectId, parsed, expectedVersion, ctx);
       return { value: project, entityId: project.id, version: project.version };
     });
   }
 
+  async archiveProject(id: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<Project>> {
+    const projectId = requireId(id, "project id");
+    const commandCtx = commandContext(ctx, "project.archive", { projectId, expectedVersion });
+    const mutation = await this.mutate(commandCtx, "project.archive", "project", projectId, async () => {
+      const archive = this.ports.projects.archiveProject;
+      if (archive === undefined) throw new ApplicationError("integrity_error", "This runtime does not support atomic project archiving");
+      const project = await archive.call(this.ports.projects, projectId, expectedVersion, commandCtx);
+      const rollback = this.ports.projects.rollbackProjectArchive;
+      return {
+        value: project,
+        entityId: project.id,
+        version: project.version,
+        ...(rollback === undefined ? {} : { compensate: () => rollback.call(this.ports.projects, projectId) })
+      };
+    });
+    // The memory adapter keeps a process-local compensation receipt until the
+    // surrounding audit transaction commits. Closing it here ensures a later
+    // no-op/audit failure cannot roll back this already committed archive.
+    await this.ports.projects.commitProjectArchive?.(projectId);
+    return mutation;
+  }
+
+  async restoreProject(id: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<Project>> {
+    const projectId = requireId(id, "project id");
+    const commandCtx = commandContext(ctx, "project.restore", { projectId, expectedVersion });
+    return this.mutate(commandCtx, "project.restore", "project", projectId, async () => {
+      const restore = this.ports.projects.restoreProject;
+      const project = restore === undefined
+        ? await this.ports.projects.updateProject(projectId, { status: "idea" }, expectedVersion, commandCtx)
+        : await restore.call(this.ports.projects, projectId, expectedVersion, commandCtx);
+      return { value: project, entityId: project.id, version: project.version };
+    });
+  }
+
   async listWorkItems(projectId: string): Promise<readonly WorkItem[]> {
-    return this.ports.unitOfWork.exclusive(() => this.ports.projects.listWorkItems(requireId(projectId, "project id")));
+    const parsedProjectId = requireId(projectId, "project id");
+    await this.assertProjectReadable(parsedProjectId);
+    return this.ports.unitOfWork.exclusive(() => this.ports.projects.listWorkItems(parsedProjectId));
   }
 
   async getWorkItem(id: string): Promise<WorkItem> {
     return this.ports.unitOfWork.exclusive(async () => {
       const workItem = await this.ports.projects.getWorkItem(requireId(id, "work item id"));
       if (!workItem) throw notFound("Work item", id);
+      await this.assertProjectReadable(workItem.projectId);
       return workItem;
     });
   }
@@ -1064,6 +1192,7 @@ export class ApplicationService {
     const parsed = createWorkItemSchema.parse(input);
     const parentId = requireId(projectId, "project id");
     return this.mutate(ctx, "project.work_item.create", "work_item", parsed.id ?? "pending", async () => {
+      await this.assertProjectActive(parentId);
       const item = await this.ports.projects.createWorkItem(parentId, parsed, ctx);
       return { value: item, entityId: item.id, version: item.version };
     });
@@ -1073,6 +1202,7 @@ export class ApplicationService {
     const parsed = createProjectRevisionSchema.parse(input);
     const parentId = requireId(projectId, "project id");
     return this.mutate(ctx, "project.revision.create", "project_revision", parsed.id ?? "pending", async () => {
+      await this.assertProjectActive(parentId);
       const revision = await this.ports.projects.createProjectRevision(parentId, parsed, ctx);
       return { value: revision, entityId: revision.id, version: revision.version };
     });
@@ -1092,6 +1222,7 @@ export class ApplicationService {
     return this.ports.unitOfWork.exclusive(async () => {
       const revision = await this.ports.projects.getProjectRevision(requireId(id, "revision id"));
       if (!revision) throw notFound("Project revision", id);
+      await this.assertProjectReadable(revision.projectId);
       return revision;
     });
   }
@@ -1100,6 +1231,9 @@ export class ApplicationService {
     const parsed = createWorkItemRevisionSchema.parse(input);
     const parentId = requireId(workItemId, "work item id");
     return this.mutate(ctx, "project.work_item_revision.create", "work_item_revision", parsed.id ?? "pending", async () => {
+      const workItem = await this.ports.projects.getWorkItem(parentId);
+      if (workItem === null) throw notFound("Work item", parentId);
+      await this.assertProjectActive(workItem.projectId);
       const revision = await this.ports.projects.createWorkItemRevision(parentId, parsed, ctx);
       return { value: revision, entityId: revision.id, version: revision.version };
     });
@@ -1109,18 +1243,22 @@ export class ApplicationService {
     return this.ports.unitOfWork.exclusive(async () => {
       const revision = await this.ports.projects.getWorkItemRevision(requireId(id, "work item revision id"));
       if (!revision) throw notFound("Work item revision", id);
+      await this.assertProjectReadable(revision.projectId);
       return revision;
     });
   }
 
   async listBomLines(revisionId: string, options?: { readonly includeRetired?: boolean }): Promise<readonly BomLine[]> {
-    return this.ports.unitOfWork.exclusive(() => this.ports.projects.listBomLines(requireId(revisionId, "revision id"), options));
+    const parsedRevisionId = requireId(revisionId, "revision id");
+    await this.assertProjectReadableFromRevision(parsedRevisionId);
+    return this.ports.unitOfWork.exclusive(() => this.ports.projects.listBomLines(parsedRevisionId, options));
   }
 
   async getBomLine(id: string): Promise<BomLine> {
     return this.ports.unitOfWork.exclusive(async () => {
       const line = await this.ports.projects.getBomLine(requireId(id, "BOM line id"));
       if (!line) throw notFound("BOM line", id);
+      await this.assertProjectReadableFromRevision(line.revisionId);
       return line;
     });
   }
@@ -1129,6 +1267,7 @@ export class ApplicationService {
     const parsed = legacyCreateBomLineSchema.parse(input) as CreateBomLine;
     const parentId = requireId(revisionId, "revision id");
     return this.mutate(ctx, "project.bom_line.create", "bom_line", parsed.id ?? "pending", async () => {
+      await this.assertProjectActiveFromRevision(parentId);
       const line = await this.ports.projects.createBomLine(parentId, parsed, ctx);
       return { value: line, entityId: line.id, version: line.version };
     });
@@ -1138,6 +1277,9 @@ export class ApplicationService {
     const lineId = requireId(id, "BOM line id");
     const parsed = legacyUpdateBomLineSchema.parse(input) as Partial<CreateBomLine>;
     return this.mutate(ctx, "project.bom_line.update", "bom_line", lineId, async () => {
+      const existing = await this.ports.projects.getBomLine(lineId);
+      if (existing === null) throw notFound("BOM line", lineId);
+      await this.assertProjectActiveFromRevision(existing.revisionId);
       const line = await this.ports.projects.updateBomLine(lineId, parsed, expectedVersion, ctx);
       return { value: line, entityId: line.id, version: line.version };
     });
@@ -1146,6 +1288,9 @@ export class ApplicationService {
   async retireBomLine(id: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<BomLine>> {
     const lineId = requireId(id, "BOM line id");
     return this.mutate(ctx, "project.bom_line.retire", "bom_line", lineId, async () => {
+      const existing = await this.ports.projects.getBomLine(lineId);
+      if (existing === null) throw notFound("BOM line", lineId);
+      await this.assertProjectActiveFromRevision(existing.revisionId);
       const line = await this.ports.projects.retireBomLine(lineId, expectedVersion, ctx);
       return { value: line, entityId: line.id, version: line.version };
     });
@@ -1154,6 +1299,9 @@ export class ApplicationService {
   async restoreBomLine(id: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<BomLine>> {
     const lineId = requireId(id, "BOM line id");
     return this.mutate(ctx, "project.bom_line.restore", "bom_line", lineId, async () => {
+      const existing = await this.ports.projects.getBomLine(lineId);
+      if (existing === null) throw notFound("BOM line", lineId);
+      await this.assertProjectActiveFromRevision(existing.revisionId);
       const line = await this.ports.projects.restoreBomLine(lineId, expectedVersion, ctx);
       return { value: line, entityId: line.id, version: line.version };
     });
@@ -1162,6 +1310,7 @@ export class ApplicationService {
   async evaluateBomGaps(revisionId: string): Promise<GapEvaluation> {
     return this.ports.unitOfWork.exclusive(async () => {
       const id = requireId(revisionId, "revision id");
+      await this.assertProjectReadableFromRevision(id);
       const lines = await this.ports.projects.listBomLines(id);
       const inventory = { data: await listAllInventory(this.ports.inventory) };
       const reservations = await this.ports.projects.listReservations(id);
@@ -1357,6 +1506,7 @@ export class ApplicationService {
     const parsed = createReservationSchema.parse(input);
     const parentId = requireId(revisionId, "revision id");
     return this.mutate(ctx, "project.reservation.create", "reservation", parsed.id ?? "pending", async () => {
+      await this.assertProjectActiveFromRevision(parentId);
       const lines = await this.ports.projects.listBomLines(parentId);
       const line = lines.find((candidate) => candidate.id === parsed.lineId);
       if (line === undefined) throw notFound("BOM line", parsed.lineId);
@@ -1395,19 +1545,25 @@ export class ApplicationService {
   async releaseReservation(id: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<Reservation>> {
     const reservationId = requireId(id, "reservation id");
     return this.mutate(ctx, "project.reservation.release", "reservation", reservationId, async () => {
+      const details = await this.ports.projects.getReservationDetails(reservationId);
+      if (details === null) throw notFound("Reservation", reservationId);
+      await this.assertProjectActive(details.projectId);
       const reservation = await this.ports.projects.releaseReservation(reservationId, expectedVersion, ctx);
       return { value: reservation, entityId: reservation.id, version: reservation.version };
     });
   }
 
   async listReservations(revisionId: string): Promise<readonly Reservation[]> {
-    return this.ports.unitOfWork.exclusive(() => this.ports.projects.listReservations(requireId(revisionId, "revision id")));
+    const parsedRevisionId = requireId(revisionId, "revision id");
+    await this.assertProjectReadableFromRevision(parsedRevisionId);
+    return this.ports.unitOfWork.exclusive(() => this.ports.projects.listReservations(parsedRevisionId));
   }
 
   async getReservationDetails(id: string): Promise<ReservationDetails> {
     return this.ports.unitOfWork.exclusive(async () => {
       const details = await this.ports.projects.getReservationDetails(requireId(id, "reservation id"));
       if (!details) throw notFound("Reservation", id);
+      await this.assertProjectReadable(details.projectId);
       return details;
     });
   }
@@ -1472,6 +1628,7 @@ export class ApplicationService {
     const commandCtx = commandContext(ctx, "project.reconciliation.commit", { projectRevisionId: id, ...parsed });
     const commitId = reconciliationCommitId(id);
     return this.mutate(commandCtx, "project.reconciliation.commit", "reconciliation_commit", commitId, async () => {
+      await this.assertProjectActiveFromRevision(id);
       const port = reconciliationPort(this.ports);
       const draft = await port.getDraft(id);
       if (draft === null) throw notFound("Reconciliation draft", parsed.draftId);
@@ -1508,6 +1665,7 @@ export class ApplicationService {
       throw new ApplicationError("validation", "Usage quantity must be greater than zero");
     }
     return this.mutate(ctx, "project.usage.record", "inventory_item", itemId, async () => {
+      await this.assertProjectActive(input.projectId);
       const item = await this.ports.inventory.getItem(itemId);
       if (item === null) throw notFound("Inventory item", itemId);
       if (item.unit !== input.unit) {
@@ -1532,13 +1690,16 @@ export class ApplicationService {
   }
 
   async listArtifacts(projectId: string, workItemId?: string, revisionId?: string) {
-    return this.ports.unitOfWork.exclusive(() => this.ports.artifacts.listArtifacts(requireId(projectId, "project id"), workItemId, revisionId));
+    const parsedProjectId = requireId(projectId, "project id");
+    await this.assertProjectReadable(parsedProjectId);
+    return this.ports.unitOfWork.exclusive(() => this.ports.artifacts.listArtifacts(parsedProjectId, workItemId, revisionId));
   }
 
   async getArtifact(id: string) {
     return this.ports.unitOfWork.exclusive(async () => {
       const artifact = await this.ports.artifacts.getArtifact(requireId(id, "artifact id"));
       if (!artifact) throw notFound("Artifact", id);
+      await this.assertProjectReadable(artifact.projectId);
       return artifact;
     });
   }
@@ -1547,6 +1708,7 @@ export class ApplicationService {
     return this.ports.unitOfWork.exclusive(async () => {
       const details = await this.ports.artifacts.getUploadSessionDetails(requireId(id, "upload session id"));
       if (!details) throw notFound("Upload session", id);
+      await this.assertProjectReadable(details.projectId);
       return details;
     });
   }
@@ -1587,6 +1749,7 @@ export class ApplicationService {
     const mutation = await this.mutate(ctx, "artifact.upload.finalize", "upload_session", id, async () => {
       const upload = await this.ports.artifacts.getUploadSessionDetails(id);
       if (upload === null) throw notFound("Upload session", id);
+      await this.assertProjectActive(upload.projectId);
       // A finalized session may be retried with another idempotency key after
       // its original database transaction committed. It may still have a
       // process-local filesystem receipt if post-commit cleanup failed, but a
@@ -1658,12 +1821,17 @@ export class ApplicationService {
   }
 
   async readArtifact(id: string): Promise<ArtifactDownload> {
-    return this.ports.unitOfWork.exclusive(() => this.ports.artifacts.readArtifact(requireId(id, "artifact id")));
+    const artifactId = requireId(id, "artifact id");
+    await this.getArtifact(artifactId);
+    return this.ports.unitOfWork.exclusive(() => this.ports.artifacts.readArtifact(artifactId));
   }
 
   async retireArtifact(id: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<Artifact>> {
     const artifactId = requireId(id, "artifact id");
     return this.mutate(ctx, "artifact.retire", "artifact", artifactId, async () => {
+      const existing = await this.ports.artifacts.getArtifact(artifactId);
+      if (existing === null) throw notFound("Artifact", artifactId);
+      await this.assertProjectActive(existing.projectId);
       const artifact = await this.ports.artifacts.retireArtifact(artifactId, expectedVersion, ctx);
       return { value: artifact, entityId: artifact.id, version: artifact.version };
     });
@@ -1691,8 +1859,7 @@ export class ApplicationService {
    */
   private async assertArtifactAncestry(input: BeginUploadInput): Promise<void> {
     const projectId = requireId(input.projectId, "project id");
-    const project = await this.ports.projects.getProject(projectId);
-    if (project === null) throw notFound("Project", projectId);
+    await this.assertProjectActive(projectId);
 
     if (input.workItemId !== undefined) {
       const workItemId = requireId(input.workItemId, "work item id");
@@ -1727,6 +1894,38 @@ export class ApplicationService {
     ) {
       throw notFound("Work-item revision", revisionId);
     }
+  }
+
+  private async assertProjectActive(projectId: string): Promise<Project> {
+    const project = await this.assertProjectReadable(projectId);
+    if (project.status === "archived") {
+      throw conflict(`Project '${project.id}' is archived; restore it before creating or committing work`);
+    }
+    return project;
+  }
+
+  private async assertProjectActiveFromRevision(revisionId: string): Promise<Project> {
+    const revision = await this.ports.projects.getProjectRevision(requireId(revisionId, "revision id"));
+    if (revision === null) throw notFound("Project revision", revisionId);
+    return this.assertProjectActive(revision.projectId);
+  }
+
+  /** Central ancestry guard for all ordinary descendant reads and writes. */
+  private async assertProjectReadable(projectId: string): Promise<Project> {
+    const parsedProjectId = requireId(projectId, "project id");
+    const project = await this.ports.projects.getProject(parsedProjectId);
+    if (project === null) throw notFound("Project", parsedProjectId);
+    if (project.removedAt !== undefined) {
+      throw projectRemoved(project.id, { removedAt: project.removedAt, removedBy: project.removedBy, lastLifecycleStatus: project.lastLifecycleStatus });
+    }
+    return project;
+  }
+
+  private async assertProjectReadableFromRevision(revisionId: string): Promise<Project> {
+    const parsedRevisionId = requireId(revisionId, "revision id");
+    const revision = await this.ports.projects.getProjectRevision(parsedRevisionId);
+    if (revision === null) throw notFound("Project revision", parsedRevisionId);
+    return this.assertProjectReadable(revision.projectId);
   }
 
   private async mutate<T>(

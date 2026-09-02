@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ApplicationError } from "@benchledger/application";
+import { ApplicationError, ApplicationService } from "@benchledger/application";
 import type { EventBusEvent, RequestContext } from "@benchledger/application";
 import { DomainError, normalizeInventoryCategoryKey } from "@benchledger/domain";
 import { BenchDatabase } from "@benchledger/database";
@@ -87,6 +87,51 @@ describe("runtime configuration and persistence", () => {
       if (invalidEnv === undefined) delete process.env.BENCHLEDGER_MAX_UPLOAD_BYTES;
       else process.env.BENCHLEDGER_MAX_UPLOAD_BYTES = invalidEnv;
     }
+  });
+
+  it("archives projects atomically, releases every revision reservation, and restores without reservations", async () => {
+    const runtime = await makeRuntime();
+    const service = new (await import("@benchledger/application")).ApplicationService(runtime.ports);
+    const board = await service.createInventoryItem({ id: "retirement-board", name: "Retirement board", kind: "electronic", quantity: 4, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
+    const project = await service.createProject({ id: "retirement-project", name: "Retirement project", status: "planned" }, context());
+    const revision = await service.createProjectRevision(project.data.id, { id: "retirement-revision", name: "Initial", status: "concept" }, context());
+    const line = await service.createBomLine(revision.data.id, { id: "retirement-line", name: board.data.name, itemId: board.data.id, requiredQuantity: 2, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
+    const reservation = await service.createReservation(revision.data.id, { id: "retirement-reservation", lineId: line.data.id, itemId: board.data.id, quantity: 2 }, context());
+
+    const archived = await service.archiveProject(project.data.id, project.data.version, context({ idempotencyKey: "retirement-archive-1" }));
+    expect(archived.data).toMatchObject({ id: project.data.id, status: "archived", version: 2 });
+    expect(await service.listReservations(revision.data.id)).toMatchObject([{ id: reservation.data.id, status: "released", version: 2 }]);
+    const releaseEvents = (await service.listStockEvents(board.data.id, 100)).data.filter((event) => event.type === "release");
+    expect(releaseEvents).toEqual(expect.arrayContaining([expect.objectContaining({ evidence: expect.objectContaining({ projectId: project.data.id, projectArchive: true }) })]));
+    await expect(service.createWorkItem(project.data.id, { name: "Blocked while archived", kind: "part" }, context())).rejects.toMatchObject({ code: "conflict" });
+
+    await expect(service.archiveProject(project.data.id, project.data.version, context({ idempotencyKey: "retirement-archive-1" }))).resolves.toMatchObject({ replayed: true });
+    await expect(service.archiveProject(project.data.id, project.data.version, context({ idempotencyKey: "retirement-archive-stale" }))).rejects.toMatchObject({ code: "conflict" });
+    const restored = await service.restoreProject(project.data.id, archived.data.version, context());
+    expect(restored.data).toMatchObject({ id: project.data.id, status: "idea", version: 3 });
+    expect(await service.listReservations(revision.data.id)).toMatchObject([{ id: reservation.data.id, status: "released" }]);
+  });
+
+  it("rolls an archive back when its audit append fails", async () => {
+    const runtime = await makeRuntime();
+    const service = new ApplicationService(runtime.ports);
+    const item = await service.createInventoryItem({ id: "retirement-rollback-item", name: "Rollback item", kind: "electronic", quantity: 2, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
+    const project = await service.createProject({ id: "retirement-rollback-project", name: "Rollback project", status: "planned" }, context());
+    const revision = await service.createProjectRevision(project.data.id, { id: "retirement-rollback-revision", name: "Initial", status: "concept" }, context());
+    const line = await service.createBomLine(revision.data.id, { id: "retirement-rollback-line", name: item.data.name, itemId: item.data.id, requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
+    const reservation = await service.createReservation(revision.data.id, { id: "retirement-rollback-reservation", lineId: line.data.id, itemId: item.data.id, quantity: 1 }, context());
+    const originalAppend = runtime.ports.audit.append;
+    runtime.ports.audit.append = async () => { throw new Error("forced archive audit failure"); };
+
+    await expect(service.archiveProject(project.data.id, project.data.version, context({ idempotencyKey: "retirement-rollback-archive" }))).rejects.toThrow("forced archive audit failure");
+    runtime.ports.audit.append = originalAppend;
+
+    await expect(service.getProject(project.data.id)).resolves.toMatchObject({ status: "planned", version: project.data.version });
+    await expect(service.listReservations(revision.data.id)).resolves.toMatchObject([{ id: reservation.data.id, status: "active", version: 1 }]);
+    await expect(service.getInventoryItem(item.data.id)).resolves.toMatchObject({ quantity: 2, version: 2 });
+    const stockEvents = (await service.listStockEvents(item.data.id, 100)).data;
+    expect(stockEvents.some((event) => event.type === "release" && event.evidence?.projectArchive === true)).toBe(false);
+    expect((await runtime.ports.audit.list(100)).data.some((audit) => audit.action === "project.archive" && audit.entityId === project.data.id)).toBe(false);
   });
 
   it("migrates idempotently, rejects a future schema, and preserves state semantics", () => {
@@ -485,7 +530,7 @@ describe("production project adapter", () => {
     await expect(runtime.ports.projects.getProject("missing-project")).resolves.toBeNull();
     await expect(runtime.ports.projects.listProjects({ limit: 100, q: "lamp" })).resolves.toMatchObject({ data: [{ id: project.id }], total: 1 });
     await expect(runtime.ports.projects.listProjects({ limit: 2, status: "idea" })).resolves.toMatchObject({ data: [{ id: "status-idea" }], total: 1 });
-    await expect(runtime.ports.projects.listProjects({ limit: 2, cursor: "bad" })).resolves.toMatchObject({ data: expect.any(Array), limit: 2, total: 8, nextCursor: "2" });
+    await expect(runtime.ports.projects.listProjects({ limit: 2, cursor: "bad" })).resolves.toMatchObject({ data: expect.any(Array), limit: 2, total: 7, nextCursor: "2" });
 
     const updatedProject = await runtime.ports.projects.updateProject(project.id, { name: "Lamp controller v2", description: "Updated description", status: "building" }, project.version, context());
     expect(updatedProject).toMatchObject({ name: "Lamp controller v2", description: "Updated description", status: "building", version: 2 });
@@ -493,6 +538,8 @@ describe("production project adapter", () => {
     await expect(runtime.ports.projects.updateProject(project.id, { name: "stale" }, project.version, context())).rejects.toMatchObject({ code: "conflict" });
     const retired = await runtime.ports.projects.updateProject(project.id, { status: "archived" }, updatedProject.version, context());
     expect(retired).toMatchObject({ status: "archived", version: 3 });
+    const restored = await runtime.ports.projects.restoreProject!(project.id, retired.version, context());
+    expect(restored).toMatchObject({ status: "idea", version: 4 });
 
     const work = await runtime.ports.projects.createWorkItem(project.id, { id: "work-adapter", name: "Main enclosure", kind: "assembly", description: "Printed assembly" }, context());
     expect(work).toMatchObject({ projectId: project.id });

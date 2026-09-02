@@ -84,6 +84,23 @@ describe("SQLite repositories", () => {
     database.close();
   });
 
+  it("reopens a v2 project schema by adding removal tombstone columns without changing projects", () => {
+    const database = new BenchDatabase(":memory:");
+    database.exec("ALTER TABLE projects DROP COLUMN removed_at");
+    database.exec("ALTER TABLE projects DROP COLUMN removed_by_json");
+    database.exec("ALTER TABLE projects DROP COLUMN last_lifecycle_status");
+    database.exec("ALTER TABLE projects DROP COLUMN removed_reservation_ids_json");
+    database.run("INSERT INTO projects (id, name, slug, status, visibility, created_at, updated_at) VALUES (?, ?, ?, 'planned', 'private', ?, ?)", ["v2-project", "V2 project", "v2-project", "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"]);
+    database.run("INSERT INTO forge_meta (key, value) VALUES ('project_schema_version', '2') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+
+    migrateProjectSchema(database);
+
+    expect(database.all<{ readonly name: string }>("PRAGMA table_info(projects)").map((column) => column.name)).toEqual(expect.arrayContaining(["removed_at", "removed_by_json", "last_lifecycle_status", "removed_reservation_ids_json"]));
+    expect(database.get<{ readonly status: string; readonly removed_at: string | null }>("SELECT status, removed_at FROM projects WHERE id = 'v2-project'")).toEqual({ status: "planned", removed_at: null });
+    expect(database.get<{ readonly value: string }>("SELECT value FROM forge_meta WHERE key = 'project_schema_version'")).toEqual({ value: "3" });
+    database.close();
+  });
+
   it("migrates legacy project statuses to one lifecycle and keeps the source in audit history", () => {
     const database = new BenchDatabase(":memory:");
     for (const [id, status] of [["legacy-active", "active"], ["legacy-hold", "on_hold"], ["legacy-idea", "idea"], ["legacy-plan", "planning"], ["legacy-work", "in_progress"], ["legacy-validation", "validation"], ["legacy-done", "complete"], ["legacy-retired", "retired"]] as const) {

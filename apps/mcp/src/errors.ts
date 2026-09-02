@@ -37,7 +37,7 @@ export function mapBackendError(error: unknown): McpAdapterError {
     // adapters commonly expose an upper-case/status-code variant. Normalize
     // both at the MCP boundary so conflicts and validation failures are not
     // obscured as an opaque backend error.
-    if (candidate.code === "NOT_FOUND" || candidate.code === "not_found" || candidate.statusCode === 404) {
+    if (candidate.code === "NOT_FOUND" || candidate.code === "not_found" || candidate.code === "project_removed" || candidate.statusCode === 404 || candidate.statusCode === 410) {
       return new McpAdapterError("NOT_FOUND", "The requested record was not found.");
     }
     if (candidate.code === "CONFLICT" || candidate.code === "conflict" || candidate.code === "idempotency_conflict" || candidate.statusCode === 409) {

@@ -82,6 +82,8 @@ import type {
   ProjectRevisionCreateInput,
   ProjectUpdateInput,
   ProjectWithInitialRevisionResult,
+  ProjectTombstone,
+  ProjectRemovalHistoryEntry,
   Quantity,
   RecordOfferSnapshotInput,
   RecordStockEventInput,
@@ -199,6 +201,12 @@ export function createApplicationBackend(service: ApplicationService, options: P
       throw error;
     }
   });
+  const archiveProjectCommand = (service as unknown as { archiveProject?: ApplicationService["archiveProject"] }).archiveProject;
+  const restoreProjectCommand = (service as unknown as { restoreProject?: ApplicationService["restoreProject"] }).restoreProject;
+  const removeProjectCommand = (service as unknown as { removeProject?: ApplicationService["removeProject"] }).removeProject;
+  const listRemovedProjectsCommand = (service as unknown as { listRemovedProjects?: ApplicationService["listRemovedProjects"] }).listRemovedProjects;
+  const listRemovedProjectsPageCommand = (service as unknown as { listRemovedProjectPage?: ApplicationService["listRemovedProjectPage"] }).listRemovedProjectPage;
+  const readRemovedProjectHistoryCommand = (service as unknown as { readRemovedProjectHistory?: ApplicationService["readRemovedProjectHistory"] }).readRemovedProjectHistory;
   return {
     catalog: {
       search: async (input: CatalogProductSearchInput) => {
@@ -406,11 +414,21 @@ export function createApplicationBackend(service: ApplicationService, options: P
             }
           }));
           const query = input.query?.toLocaleLowerCase();
-          const filtered = projects.filter((project): project is NonNullable<typeof project> => project !== null && (input.status === undefined || toMcpProject(project).status === input.status) && (query === undefined || project.name.toLocaleLowerCase().includes(query) || project.description?.toLocaleLowerCase().includes(query) === true));
+          const filtered = projects.filter((project): project is NonNullable<typeof project> => project !== null && (input.status === undefined ? toMcpProject(project).status !== "archived" : toMcpProject(project).status === input.status) && (query === undefined || project.name.toLocaleLowerCase().includes(query) || project.description?.toLocaleLowerCase().includes(query) === true));
           return slicePage(filtered.map(toMcpProject), input.limit ?? 25, input.cursor);
         }
         const page = await service.listProjects({ limit: input.limit ?? 25, ...(input.cursor === undefined ? {} : { cursor: input.cursor }), ...(input.query === undefined ? {} : { q: input.query }), ...(input.status === undefined ? {} : { status: toApiProjectStatus(input.status) }) });
         return appPage(page.data.map(toMcpProject), page);
+      },
+      listRemoved: async (input) => {
+        if (listRemovedProjectsPageCommand !== undefined) {
+          const page = await listRemovedProjectsPageCommand.call(service, input.limit ?? 25, input.cursor);
+          return appPage(page.data.map(toMcpProjectTombstone), page);
+        }
+        if (listRemovedProjectsCommand === undefined) throw new ApplicationError("integrity_error", "This project backend does not support removed-project history");
+        const values = await listRemovedProjectsCommand.call(service);
+        const selected = slicePage(values, input.limit ?? 25, input.cursor);
+        return { ...selected, items: selected.items.map(toMcpProjectTombstone) };
       },
       get: async (input) => toMcpProject(await service.getProject(input.projectId)),
       create: async (input, context) => mutationResult(await service.createProject(toApiProjectCreate(input), appContext(context)), "project", toMcpProject),
@@ -431,7 +449,28 @@ export function createApplicationBackend(service: ApplicationService, options: P
         const { projectId, expectedVersion, ...changes } = input;
         return mutationResult(await service.updateProject(projectId, toApiProjectUpdate(changes), expectedVersion, appContext(context)), "project", toMcpProject);
       },
-      retire: async (input, context) => mutationResult(await service.updateProject(input.projectId, { status: "archived" }, input.expectedVersion, appContext(context)), "project", toMcpProject),
+      archive: async (input, context) => {
+        if (archiveProjectCommand === undefined) throw new ApplicationError("integrity_error", "This project backend does not support atomic project archiving");
+        return mutationResult(await archiveProjectCommand.call(service, input.projectId, input.expectedVersion, appContext(context)), "project", toMcpProject);
+      },
+      restore: async (input, context) => {
+        if (restoreProjectCommand === undefined) throw new ApplicationError("integrity_error", "This project backend does not support restoring archived projects");
+        return mutationResult(await restoreProjectCommand.call(service, input.projectId, input.expectedVersion, appContext(context)), "project", toMcpProject);
+      },
+      remove: async (input, context) => {
+        if (removeProjectCommand === undefined) throw new ApplicationError("integrity_error", "This project backend does not support irreversible project removal");
+        const mutation = await removeProjectCommand.call(service, input.projectId, input.expectedVersion, input.projectName, appContext(context));
+        return { id: mutation.data.id, version: mutation.data.version, auditId: mutation.audit.id, correlationId: mutation.correlationId, replayed: mutation.replayed, tombstone: toMcpProjectTombstone(mutation.data) };
+      },
+      readRemovedHistory: async (input, context) => {
+        if (readRemovedProjectHistoryCommand === undefined) throw new ApplicationError("integrity_error", "This project backend does not support removed-project history");
+        const history = await readRemovedProjectHistoryCommand.call(service, input.projectId, input.limit ?? 25, input.cursor);
+        return appPage(history.data.map(toMcpProjectHistory), history);
+      },
+      retire: async (input, context) => {
+        if (archiveProjectCommand === undefined) throw new ApplicationError("integrity_error", "This project backend does not support atomic project archiving");
+        return mutationResult(await archiveProjectCommand.call(service, input.projectId, input.expectedVersion, appContext(context)), "project", toMcpProject);
+      },
       createWorkItem: async (input, context) => mutationResult(await service.createWorkItem(input.projectId, toApiWorkItemCreate(input), appContext(context)), "workItem", toMcpWorkItem),
       getWorkItem: async (input) => toMcpWorkItem(await service.getWorkItem(input.workItemId)),
       createProjectRevision: async (input, context) => mutationResult(await service.createProjectRevision(input.projectId, toApiProjectRevisionCreate(input), appContext(context)), "revision", toMcpRevision),
@@ -478,6 +517,26 @@ export function createApplicationBackend(service: ApplicationService, options: P
       retireLine: async (input, context) => mutationResult(await service.retireBomLine(input.bomLineId, input.expectedVersion, appContext(context)), "line", (value) => toMcpBomLine(value as ApiBomLine)),
       restoreLine: async (input, context) => mutationResult(await service.restoreBomLine(input.bomLineId, input.expectedVersion, appContext(context)), "line", (value) => toMcpBomLine(value as ApiBomLine)),
       evaluate: async (input) => toMcpBomEvaluation(await service.evaluateBomGaps(input.projectRevisionId), input),
+      listReservations: async (input) => {
+        const reservations = await service.listReservations(input.projectRevisionId);
+        const page = slicePage(reservations, input.limit ?? 25, input.cursor);
+        const items = await Promise.all(page.items.map(async (reservation) => {
+          const identity = await reservationDetails(reservation.id);
+          return mapReservationRecord(reservation, identity);
+        }));
+        return { ...page, items };
+      },
+      getReservation: async (input) => {
+        const details = await service.getReservationDetails(input.reservationId);
+        const identity: ReservationDetails = {
+          projectId: details.projectId,
+          projectRevisionId: details.projectRevisionId,
+          bomLineId: details.reservation.lineId,
+          itemId: details.reservation.itemId,
+          unit: fromApiUnit(details.bomLine.unit),
+        };
+        return mapReservationRecord(details.reservation, identity);
+      },
       reserve: async (input, context) => {
         const mutation = await service.createReservation(input.projectRevisionId, toApiReservation(input), appContext(context));
         return mapReservation(mutation, reservationDetails, { projectRevisionId: input.projectRevisionId, unit: input.quantity.unit });
@@ -1032,6 +1091,14 @@ function toMcpProject(project: ApiProject): Project {
   return { id: project.id, name: project.name, status, visibility: "private", ...(project.description === undefined ? {} : { description: project.description }), version: project.version, ...(project.updatedAt === undefined ? {} : { updatedAt: project.updatedAt }) };
 }
 
+function toMcpProjectTombstone(value: ProjectTombstone): ProjectTombstone {
+  return { ...value, releasedReservationIds: [...value.releasedReservationIds] };
+}
+
+function toMcpProjectHistory(value: { readonly id: string; readonly action: string; readonly actor: string; readonly source: "ui" | "api" | "mcp" | "import" | "system"; readonly correlationId: string; readonly idempotencyKey?: string; readonly entityType: string; readonly entityId: string; readonly version?: number; readonly createdAt: string }): ProjectRemovalHistoryEntry {
+  return { ...value };
+}
+
 function toApiProjectStatus(value: Project["status"]): ApiProject["status"] {
   return value;
 }
@@ -1263,6 +1330,21 @@ function toApiReservation(input: ReservationInput): CreateReservation {
   return { lineId: input.bomLineId, itemId: input.itemId, quantity: input.quantity.value };
 }
 
+function mapReservationRecord(value: ApiReservation, identity: Pick<ReservationDetails, "projectRevisionId" | "unit"> | null): Reservation {
+  if (identity === null) {
+    throw new McpAdapterError("BACKEND_ERROR", "The reservation exists but its durable project revision could not be resolved.");
+  }
+  return {
+    id: value.id,
+    projectRevisionId: identity.projectRevisionId,
+    bomLineId: value.lineId,
+    itemId: value.itemId,
+    quantity: { value: value.quantity, unit: identity.unit },
+    status: value.status,
+    version: value.version,
+  };
+}
+
 async function mapReservation(
   value: Mutation<ApiReservation>,
   detailsResolver: (reservationId: string) => Promise<ReservationDetails | null>,
@@ -1276,15 +1358,7 @@ async function mapReservation(
   if (resolved === null) {
     throw new McpAdapterError("BACKEND_ERROR", "The reservation was committed but its durable project revision could not be resolved.");
   }
-  return {
-    id: reservation.id,
-    projectRevisionId: resolved.projectRevisionId,
-    bomLineId: reservation.lineId,
-    itemId: reservation.itemId,
-    quantity: { value: reservation.quantity, unit: resolved.unit },
-    status: reservation.status,
-    version: reservation.version,
-  };
+  return mapReservationRecord(reservation, resolved);
 }
 
 function toMcpArtifact(value: ApiArtifact): Artifact {

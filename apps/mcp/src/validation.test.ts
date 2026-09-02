@@ -33,6 +33,9 @@ import {
   parsePageInput,
   projectCreate,
   projectList,
+  removeProject,
+  removedProjectHistory,
+  removedProjectList,
   projectRevisionCreate,
   projectUpdate,
   projectWithInitialRevisionCreate,
@@ -40,6 +43,8 @@ import {
   recordOffer,
   releaseReservation,
   reservation,
+  reservationList,
+  reservationRead,
   retireArtifact,
   retireBomLine,
   retireProject,
@@ -82,6 +87,10 @@ describe("MCP validation boundary", () => {
     expect(retireProject({ projectId: "project-1", expectedVersion: 4 })).toEqual({ projectId: "project-1", expectedVersion: 4 });
     expect(retireBomLine({ bomLineId: "bom-1", expectedVersion: 2 })).toEqual({ bomLineId: "bom-1", expectedVersion: 2 });
     expectInvalid(() => retireBomLine({ bomLineId: "bom-1" }));
+    expect(reservationList({ projectRevisionId: "revision-1", limit: 10, cursor: "25" })).toEqual({ projectRevisionId: "revision-1", limit: 10, cursor: "25" });
+    expect(reservationRead({ reservationId: "reservation-1" })).toEqual({ reservationId: "reservation-1" });
+    expectInvalid(() => reservationList({ projectRevisionId: "revision-1", extra: true }));
+    expectInvalid(() => reservationRead({ reservationId: "reservation-1", extra: true }));
     expect(bomLineList({ projectRevisionId: "revision-1", includeRetired: true })).toEqual({ projectRevisionId: "revision-1", includeRetired: true, limit: 25 });
     expectInvalid(() => bomLineList({ projectRevisionId: "revision-1", includeRetired: "yes" }));
     expectInvalid(() => retireProject({ projectId: "project-1", expectedVersion: -1 }));
@@ -242,6 +251,12 @@ describe("MCP validation boundary", () => {
     expectInvalid(() => projectWithInitialRevisionCreate({ name: "Lamp", projectId: "bad/id" }));
     expectInvalid(() => workItemCreate({ projectId: "lamp", name: "Base", kind: "printer" }));
     expectInvalid(() => projectUpdate({ projectId: "lamp", expectedVersion: 2, status: "paused" }));
+    expect(removeProject({ projectId: "lamp", expectedVersion: 2, projectName: "Lamp" })).toEqual({ projectId: "lamp", expectedVersion: 2, projectName: "Lamp" });
+    expect(removeProject({ projectId: "lamp", expectedVersion: 2, name: "Lamp" })).toEqual({ projectId: "lamp", expectedVersion: 2, projectName: "Lamp" });
+    expect(removedProjectList({ limit: 10 })).toEqual({ limit: 10 });
+    expect(removedProjectHistory({ projectId: "lamp", limit: 10 })).toEqual({ projectId: "lamp", limit: 10 });
+    expectInvalid(() => removeProject({ projectId: "lamp", expectedVersion: 2, projectName: "" }));
+    expectInvalid(() => removeProject({ projectId: "lamp", expectedVersion: 0, projectName: "Lamp" }));
   });
 
   it("validates BOM, alternatives, constraints, reservations, and usage", () => {

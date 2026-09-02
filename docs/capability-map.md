@@ -37,6 +37,13 @@ items, historical revisions and BOM lines/reservations, artifact records, and
 upload sessions; a host may supply a resolver when its storage has additional
 ancestry. The adapter does not keep request-local ID maps.
 
+Reservation reads are revision-scoped and read-only: `list_reservations` accepts
+one project revision plus the standard bounded `limit`/opaque `cursor`, while
+`read_reservation` accepts one reservation ID. Both return the normalized
+reservation identity, including its durable project revision, BOM line, item,
+quantity/unit, status, and version. Project-scoped tokens must prove the
+revision or reservation ancestry before dispatch.
+
 ## Browser session authentication
 
 Browser session access is configured separately from MCP authorization. An
@@ -76,9 +83,9 @@ and invalid hashes. Mutating tools use optimistic versions where applicable.
 | Exact inventory | `create_inventory_with_product_profile` | `inventory:write` + `catalog:write` | Yes |
 | Catalog | `search_catalog_products`, `read_catalog_product`, `read_inventory_product_profile` | `catalog:read` | No |
 | Catalog | `create_catalog_product`, `update_catalog_product`, `link_inventory_product_profile` | `catalog:write` | Yes |
-| Projects | `list_projects`, `read_project`, `read_work_item`, `read_project_revision`, `read_work_item_revision` | `projects:read` | No |
-| Projects | `create_project`, `create_project_with_initial_revision`, `update_project`, `retire_project`, `create_work_item`, `create_project_revision`, `create_work_item_revision` | `projects:write` | Yes |
-| BOM | `list_bom_lines`, `calculate_bom_gaps` (Ready/Check/Decide/Source plus exact missing specification decisions) | `bom:read` | No |
+| Projects | `list_projects`, `list_removed_projects`, `read_removed_project_history`, `read_project`, `read_work_item`, `read_project_revision`, `read_work_item_revision` | `projects:read` | No |
+| Projects | `create_project`, `create_project_with_initial_revision`, `update_project`, `archive_project`, `restore_project`, `remove_project`, `retire_project` (compatibility alias), `create_work_item`, `create_project_revision`, `create_work_item_revision` | `projects:write` | Yes |
+| BOM | `list_bom_lines`, `list_reservations`, `read_reservation`, `calculate_bom_gaps` (Ready/Check/Decide/Source plus exact missing specification decisions) | `bom:read` | No |
 | BOM | `create_bom_line`, `update_bom_line`, `retire_bom_line`, `restore_bom_line`, `create_reservation`, `release_reservation`, `record_usage` | `bom:write` | Yes |
 | Reconciliation | `read_reconciliation` | `bom:read` | No |
 | Reconciliation | `save_reconciliation_draft`, `commit_reconciliation` | `bom:write` | Draft save / commit |
@@ -92,8 +99,22 @@ and invalid hashes. Mutating tools use optimistic versions where applicable.
 
 Project reads, filters and writes use one lifecycle value everywhere:
 `idea`, `planned`, `ready`, `building`, `validating`, `complete`, or `archived`.
-`retire_project` is the dedicated convenience command for `archived`. `blocked`
-is a derived readiness condition and is never accepted as a project status.
+`archive_project` is the canonical reversible project-retirement command;
+`retire_project` remains a compatibility alias. Default project lists and the
+workspace omit archived projects, while `status=archived` is the explicit
+Archived view. Archiving releases every active reservation across all project
+revisions and appends stock-release evidence; revisions, BOM, artifacts, stock
+events, and audits are retained. `restore_project` returns the project to
+`idea` and never recreates released reservations. `blocked` is a derived
+readiness condition and is never accepted as a project status.
+`remove_project` is a separate irreversible, approval-required command. It
+requires `expectedVersion`, exact case-sensitive `projectName` confirmation,
+and a stable 8–200 character idempotency key in the MCP request context so an
+ambiguous response can be replayed safely. It releases active reservations,
+hides the project and descendants from ordinary reads, and retains only
+explicit tombstone/history access. Use bounded `list_removed_projects` and
+`read_removed_project_history` pages with their opaque continuation cursors;
+project-scoped tokens cannot enumerate the workspace-global tombstone list.
 Project context returns the canonical lifecycle plus structured BOM blocker
 reasons containing the revision, line, decision and explanation. The separate
 revision evidence ladder (`concept` through `production
@@ -136,8 +157,9 @@ profiles when present.
 | Commission delivered or ordered stock | Item commissioning action with observed quantity and provenance | `read_inventory_item` → `commission_inventory_item` |
 | Add an exact printer or spool | Exact-product guided add; reported printers remain inspect-first until explicitly commissioned | catalog search/read → `create_inventory_with_product_profile` |
 | Start a project | Guided project setup | `create_project_with_initial_revision` → `create_work_item`; use `create_project_revision` for later planning baselines |
+| Archive or restore a project | Project Archive action and explicit Archived view | `archive_project` / `restore_project`; archive hides default lists, releases active reservations with evidence, retains history, and restore never recreates reservations |
 | Understand a build gap | BOM editor and gap panel | `list_bom_lines` → `calculate_bom_gaps`; Decide before supplier lookup, Check recorded candidates, and shop only Source lines |
-| Hold confirmed parts | Reservation panel | `create_reservation` → read BOM/gaps again |
+| Hold confirmed parts | Reservation panel | `create_reservation` → `list_reservations` / `read_reservation` → read BOM/gaps again |
 | Add a CAD revision | Artifact upload flow | Authenticated browser/HTTP upload → `finalize_artifact_upload`; generic MCP remains unavailable until a transactional trusted-host bridge exists |
 | Record exact build setup | Project build-configuration form | catalog/profile reads → `create_build_configuration` |
 | Compare buying options | Offers and shopping-list view | `list_offers` → `record_offer_snapshot` (observation only) |

@@ -36,6 +36,32 @@ afterEach(async () => {
 });
 
 describe("production runtime mappings", () => {
+  it("atomically tombstones a project and releases reservations across revisions", async () => {
+    const runtime = await makeRuntime();
+    const service = new ApplicationService(runtime.ports);
+    await runtime.ports.inventory.createItem({ id: "removal-item", name: "Removal item", kind: "electronic", quantity: 4, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
+    const project = await runtime.ports.projects.createProject({ id: "removal-project", name: "Removal project", status: "planned" }, context());
+    const firstRevision = await runtime.ports.projects.createProjectRevision(project.id, { id: "removal-revision-1", name: "First", status: "concept" }, context());
+    const firstLine = await runtime.ports.projects.createBomLine(firstRevision.id, { id: "removal-line-1", name: "Removal item", itemId: "removal-item", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
+    const firstReservation = await runtime.ports.projects.createReservation(firstRevision.id, { id: "removal-reservation-1", lineId: firstLine.id, itemId: "removal-item", quantity: 1 }, context());
+    const secondRevision = await runtime.ports.projects.createProjectRevision(project.id, { id: "removal-revision-2", name: "Second", status: "concept" }, context());
+    const secondLine = await runtime.ports.projects.createBomLine(secondRevision.id, { id: "removal-line-2", name: "Removal item", itemId: "removal-item", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
+    const secondReservation = await runtime.ports.projects.createReservation(secondRevision.id, { id: "removal-reservation-2", lineId: secondLine.id, itemId: "removal-item", quantity: 1 }, context());
+    const removeContext = context({ actor: "remover", idempotencyKey: "remove-project-1", correlationId: "remove-correlation" });
+
+    const removed = await service.removeProject(project.id, 1, project.name, removeContext);
+    expect(removed.data).toMatchObject({ id: project.id, name: project.name, lastLifecycleStatus: "planned", removedBy: "remover", releasedReservationIds: [firstReservation.id, secondReservation.id], auditId: removed.audit.id });
+    await expect(runtime.ports.projects.listProjects({ limit: 50 })).resolves.toMatchObject({ data: [] });
+    await expect(runtime.ports.projects.listRemovedProjects?.()).resolves.toMatchObject([{ id: project.id, releasedReservationIds: [firstReservation.id, secondReservation.id] }]);
+    await expect(runtime.ports.projects.getProject(project.id)).resolves.toMatchObject({ removedAt: removed.data.removedAt, lastLifecycleStatus: "planned" });
+    await expect(runtime.ports.projects.listReservations(firstRevision.id)).resolves.toMatchObject([{ id: firstReservation.id, status: "released" }]);
+    await expect(runtime.ports.projects.listReservations(secondRevision.id)).resolves.toMatchObject([{ id: secondReservation.id, status: "released" }]);
+    await expect(service.getProject(project.id)).rejects.toMatchObject({ code: "project_removed" });
+    await expect(service.readRemovedProjectHistory(project.id)).resolves.toMatchObject({ data: [expect.objectContaining({ action: "project.remove", entityId: project.id })] });
+    await expect(service.removeProject(project.id, 1, project.name, removeContext)).resolves.toMatchObject({ replayed: true, data: removed.data });
+    await expect(service.removeProject(project.id, 2, project.name, context({ actor: "other", idempotencyKey: "remove-project-2" }))).rejects.toMatchObject({ code: "project_removed" });
+  });
+
   it("migrates legacy project metadata once and reopens with the database lifecycle as authority", async () => {
     const dataDir = await mkdtemp(join(tmpdir(), "benchledger-lifecycle-migration-"));
     directories.push(dataDir);

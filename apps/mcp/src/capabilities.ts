@@ -9,8 +9,8 @@ const boolean = (description?: string): JsonObject => ({ type: "boolean", ...(de
 const object = (properties: Record<string, JsonValue>, required: readonly string[] = []): JsonObject => ({ type: "object", properties, ...(required.length === 0 ? {} : { required }), additionalProperties: false });
 const array = (items: JsonObject): JsonObject => ({ type: "array", items });
 
-function tool(name: string, description: string, requiredScope: McpToolDefinition["requiredScope"], mutating: boolean, properties: Record<string, JsonValue>, required: readonly string[] = []): McpToolDefinition {
-  return { name, description, requiredScope, mutating, inputSchema: object(properties, required) };
+function tool(name: string, description: string, requiredScope: McpToolDefinition["requiredScope"], mutating: boolean, properties: Record<string, JsonValue>, required: readonly string[] = [], approvalRequired = false): McpToolDefinition {
+  return { name, description, requiredScope, mutating, inputSchema: object(properties, required), ...(approvalRequired ? { approvalRequired: true } : {}) };
 }
 
 const pageProperties = {
@@ -230,11 +230,16 @@ export const TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
   tool("link_inventory_product_profile", "Link one physical printer or filament inventory item to an exact catalog product; reported and suggested links remain non-confirming.", "catalog:write", true, { itemId: idProperty("Inventory item identifier."), expectedVersion: integer(), catalogProductId: idProperty("Exact catalog product identifier."), profileType: string("filament_spool or printer_asset."), linkState: string("confirmed, reported, or suggested."), details: profileDetailsProperty }, ["itemId", "catalogProductId", "profileType", "linkState", "details"]),
 
   tool("list_projects", "List projects with bounded pagination and canonical lifecycle filtering.", "projects:read", false, { ...pageProperties, query: string(), status: projectLifecycleProperty }),
+  tool("list_removed_projects", "List retained project-removal tombstones. Removed projects are excluded from ordinary lists and cannot be restored or purged.", "projects:read", false, pageProperties),
   tool("read_project", "Read a project identity and current lifecycle state.", "projects:read", false, { projectId: idProperty("Project identifier.") }, ["projectId"]),
   tool("create_project", "Create a project workspace for an end-to-end build.", "projects:write", true, { name: string(), description: string() }, ["name"]),
   tool("create_project_with_initial_revision", "Atomically create a project and its first planning revision; retries with the same idempotency key are safe.", "projects:write", true, { name: string(), description: string(), projectId: idProperty("Optional stable project identifier."), revisionId: idProperty("Optional stable initial revision identifier."), revisionSummary: string("Optional summary for the initial planning revision.") }, ["name"]),
   tool("update_project", "Update project metadata or its canonical lifecycle with optimistic versioning.", "projects:write", true, { projectId: idProperty("Project identifier."), expectedVersion: integer(), name: string(), description: string(), status: projectLifecycleProperty }, ["projectId"]),
-  tool("retire_project", "Archive a project while retaining its revisions, artifacts, and evidence.", "projects:write", true, { projectId: idProperty("Project identifier."), expectedVersion: integer() }, ["projectId"]),
+  tool("archive_project", "Reversibly archive a project: hide it from default lists, release active reservations, and retain all revisions, artifacts, stock evidence, and audit history.", "projects:write", true, { projectId: idProperty("Project identifier."), expectedVersion: integer() }, ["projectId"]),
+  tool("restore_project", "Restore an archived project to idea; history remains intact and released reservations are never recreated.", "projects:write", true, { projectId: idProperty("Project identifier."), expectedVersion: integer() }, ["projectId"]),
+  tool("remove_project", "Irreversibly remove a project from the workspace. Requires explicit human approval, the current expectedVersion, and exact case-sensitive project-name confirmation; releases every active reservation across every revision with evidence, keeps a tombstone/history, and never restores or purges.", "projects:write", true, { projectId: idProperty("Project identifier."), expectedVersion: { ...integer("Current project version required for removal."), minimum: 1 }, projectName: string("Exact case-sensitive project name confirmation.") }, ["projectId", "expectedVersion", "projectName"], true),
+  tool("read_removed_project_history", "Read retained append-only audit history for a removed project.", "projects:read", false, { ...pageProperties, projectId: idProperty("Removed project identifier.") }, ["projectId"]),
+  tool("retire_project", "Compatibility alias for archive_project. Archive is reversible and retains project history.", "projects:write", true, { projectId: idProperty("Project identifier."), expectedVersion: integer() }, ["projectId"]),
   tool("create_work_item", "Create a versioned part, assembly, electronics, firmware, or document within a project.", "projects:write", true, { projectId: idProperty("Project identifier."), name: string(), kind: string(), description: string() }, ["projectId", "name", "kind"]),
   tool("read_work_item", "Read one project work item.", "projects:read", false, { workItemId: idProperty("Work-item identifier.") }, ["workItemId"]),
   tool("create_project_revision", "Create a versioned planning revision for a project.", "projects:write", true, { projectId: idProperty("Project identifier."), summary: string() }, ["projectId"]),
@@ -248,6 +253,8 @@ export const TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
   tool("retire_bom_line", "Retire a BOM requirement without erasing its history.", "bom:write", true, { bomLineId: idProperty("BOM line identifier."), expectedVersion: integer() }, ["bomLineId", "expectedVersion"]),
   tool("restore_bom_line", "Restore a retired BOM requirement with optimistic versioning.", "bom:write", true, { bomLineId: idProperty("BOM line identifier."), expectedVersion: integer() }, ["bomLineId", "expectedVersion"]),
   tool("calculate_bom_gaps", "Evaluate each BOM line as supplied, inspect-first, specify-first, partial, missing, or optional. Under-specified lines are Decide and never become buy recommendations; sufficiently specified gaps are Source.", "bom:read", false, { projectRevisionId: idProperty("Project revision identifier.") }, ["projectRevisionId"]),
+  tool("list_reservations", "List reservations for one project revision with bounded pagination, including active and historical states.", "bom:read", false, { ...pageProperties, projectRevisionId: idProperty("Project revision identifier.") }, ["projectRevisionId"]),
+  tool("read_reservation", "Read one reservation and its durable project-revision identity.", "bom:read", false, { reservationId: idProperty("Reservation identifier.") }, ["reservationId"]),
   tool("create_reservation", "Reserve confirmed stock for one BOM line; uncertain stock is never silently reserved.", "bom:write", true, { projectRevisionId: idProperty("Project revision identifier."), bomLineId: idProperty("BOM line identifier."), itemId: idProperty("Inventory item identifier."), quantity: quantityProperty }, ["projectRevisionId", "bomLineId", "itemId", "quantity"]),
   tool("release_reservation", "Release one stock reservation with optimistic version checking.", "bom:write", true, { reservationId: idProperty("Reservation identifier."), expectedVersion: integer() }, ["reservationId"]),
   tool("record_usage", "Record actual consumption against a project and optional reservation.", "bom:write", true, { projectRevisionId: idProperty("Project revision identifier."), reservationId: idProperty("Optional reservation identifier."), itemId: idProperty("Inventory item identifier."), quantity: quantityProperty, note: string() }, ["projectRevisionId", "itemId", "quantity"]),
@@ -301,7 +308,7 @@ export const CAPABILITY_DOCUMENT: JsonObject = {
   summary: "Evidence-first inventory and versioned project workspace for 3D printing and electronics.",
   resources: RESOURCES as unknown as JsonValue,
   resourceTemplates: RESOURCE_TEMPLATES as unknown as JsonValue,
-  tools: TOOL_DEFINITIONS.map(({ name, description, requiredScope, mutating }) => ({ name, description, requiredScope, mutating })) as unknown as JsonValue,
+  tools: TOOL_DEFINITIONS.map(({ name, description, requiredScope, mutating, approvalRequired }) => ({ name, description, requiredScope, mutating, ...(approvalRequired === undefined ? {} : { approvalRequired }) })) as unknown as JsonValue,
   toolDiscovery: "Call tools/list for authoritative bounded input schemas; this capability resource keeps only the compact tool index.",
   browserAccess: {
     modes: {
@@ -323,6 +330,8 @@ export const CAPABILITY_DOCUMENT: JsonObject = {
   },
   projectLifecycle: {
     values: ["idea", "planned", "ready", "building", "validating", "complete", "archived"],
+    archive: "archive_project (with retire_project as a compatibility alias) hides the project from default lists, releases active reservations with stock-release evidence, and retains revisions, BOM, artifacts, stock events, and audit history; restore_project returns it to idea without recreating reservations.",
+    removal: "remove_project is irreversible and approval-required. It requires exact project-name confirmation and expectedVersion, releases every active reservation across every revision with evidence, writes an orthogonal tombstone, excludes the project from ordinary lists, and retains audit history with no restore or purge operation.",
     blocked: "Derived from current required BOM readiness with structured reasons; blocked is never a project lifecycle value.",
     manufacturingEvidence: "Revision-scoped concept/CAD/DFAM/mesh/slicer/test/fit/production evidence remains independent and is never advanced or reset by a project lifecycle change.",
   },
@@ -369,6 +378,8 @@ export const CAPABILITY_DOCUMENT: JsonObject = {
     "list_bom_lines or create_bom_line",
     "calculate_bom_gaps",
     "create_reservation",
+    "list_reservations",
+    "read_reservation",
     "list_offers",
     "record_offer_snapshot (only for an authorized observation)",
     "create_build_configuration",

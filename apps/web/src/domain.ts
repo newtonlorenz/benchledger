@@ -309,6 +309,12 @@ export interface Project {
   description: string;
   /** Canonical project lifecycle; manufacturing revision status is separate. */
   status: "idea" | "planned" | "ready" | "building" | "validating" | "complete" | "archived";
+  /** Server-owned project version used for archive/restore optimistic writes. */
+  version?: number;
+  /** Present only on a removal result; removed projects are not ordinary rows. */
+  removedAt?: string;
+  removedBy?: string;
+  lastLifecycleStatus?: Project["status"];
   updated: string;
   currentRevision: string;
   workItem: string;

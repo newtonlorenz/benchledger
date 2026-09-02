@@ -84,6 +84,7 @@ function makePorts(): ServicePorts & {
   ]);
   const revision = { id: "revision-1", projectId: "project-1", number: 1, name: "Initial", status: "concept", createdAt: timestamp, version: 1 } as const;
   const secondRevision = { id: "revision-2", projectId: "project-1", number: 2, name: "Second", status: "concept", createdAt: timestamp, version: 1 } as const;
+  const project = { id: "project-1", name: "Catalog fixture", status: "planned", createdAt: timestamp, updatedAt: timestamp, version: 1 } as const;
   const events: EventBusEvent[] = [];
   let auditNumber = 0;
   const audit = async (input: AuditInput): Promise<AuditEvent> => ({
@@ -112,8 +113,8 @@ function makePorts(): ServicePorts & {
       listStockEvents: async () => ({ data: [], limit: 50 }),
     },
     projects: {
-      listProjects: async () => ({ data: [], limit: 50 }),
-      getProject: async () => null,
+      listProjects: async () => ({ data: [project], limit: 50 }),
+      getProject: async (id: string) => id === project.id ? project : null,
       createProject: async () => { throw new Error("not implemented"); },
       updateProject: async () => { throw new Error("not implemented"); },
       createWorkItem: async () => { throw new Error("not implemented"); },

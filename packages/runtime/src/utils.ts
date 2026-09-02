@@ -22,13 +22,14 @@ export function mapPersistenceError(error: unknown): never {
   if (error instanceof ApplicationError) throw error;
   if (error instanceof RuntimeConflict) throw new ApplicationError("conflict", error.message, error.details);
   if (error instanceof DomainError) {
+    if (error.code === "project_removed") throw new ApplicationError("project_removed", error.message);
     if (error.code.endsWith("_not_found") || error.code === "inventory_not_found" || error.code === "project_not_found" || error.code === "work_item_not_found" || error.code === "supplier_not_found" || error.code === "reservation_not_found" || error.code === "bom_line_not_found") {
       throw new ApplicationError("not_found", error.message);
     }
     if (error.code.startsWith("reconciliation_") && !error.code.endsWith("_not_found")) {
       throw new ApplicationError("conflict", error.message);
     }
-    if (error.code.includes("duplicate") || error.code.includes("insufficient") || error.code.includes("negative") || error.code.includes("over_allocation") || error.code.includes("not_active") || error.code.includes("active_reservation") || error.code.includes("version_conflict") || error.code.includes("ancestry_conflict") || error.code.includes("category_in_use") || error.code.includes("category_has_children")) {
+    if (error.code.includes("duplicate") || error.code.includes("insufficient") || error.code.includes("negative") || error.code.includes("over_allocation") || error.code.includes("not_active") || error.code.includes("active_reservation") || error.code.includes("version_conflict") || error.code.includes("ancestry_conflict") || error.code.includes("category_in_use") || error.code.includes("category_has_children") || error.code === "project_archived" || error.code === "project_not_archived") {
       throw new ApplicationError("conflict", error.message);
     }
     if (error.code.startsWith("invalid_")) throw new ApplicationError("validation", error.message);
