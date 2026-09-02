@@ -15,7 +15,8 @@ import {
   createInventoryProductProfileSchema, createInventoryWithProductProfileSchema, updateInventoryProductProfileSchema,
   createBuildConfigurationSnapshotSchema, saveReconciliationDraftSchema, commitReconciliationSchema,
   workspaceSecurityMutationSchema, projectStatusSchema,
-  removeProjectSchema, projectSetupProposalSchema, commitProjectSetupSchema, commitProjectSetupBodySchema
+  removeProjectSchema, projectSetupProposalSchema, commitProjectSetupSchema, commitProjectSetupBodySchema,
+  inspectionObservationSchema, commitInspectionCompletionBodySchema
 } from "@benchledger/api-contract";
 import { ApplicationError, ApplicationService } from "@benchledger/application";
 import type { ApplicationPorts, BuildConfigurationListOptions, CatalogProductListOptions, GapEvaluation, Mutation, Page, ProjectListOptions, RequestContext } from "@benchledger/application";
@@ -945,6 +946,40 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       "/project-revisions/{id}/build-configurations": { get: { responses: { "200": { description: "Immutable build configuration snapshot page" } } }, post: { responses: { "201": { description: "Immutable build configuration snapshot" } } } },
       "/build-configurations/{id}": { get: { responses: { "200": { description: "Immutable build configuration snapshot" } } } },
       "/project-revisions/{id}/gaps": { get: { responses: { "200": { description: "Evidence-backed BOM gaps" } } } },
+      "/project-revisions/{revisionId}/inspections": {
+        get: {
+          summary: "List the derived inspection queue",
+          description: "Returns only current Check-gap inspection actions. The queue is recomputed from canonical BOM and inventory evidence and is never persisted.",
+          parameters: [
+            { name: "revisionId", in: "path", required: true, schema: { type: "string" } },
+            { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } },
+            { name: "cursor", in: "query", required: false, schema: { type: "string", maxLength: 512 } },
+          ],
+          responses: { "200": { description: "Deterministically sorted inspection action page" }, "403": { description: "Revision scope denied" } },
+        },
+      },
+      "/project-revisions/{revisionId}/inspections/{inspectionId}": {
+        get: {
+          summary: "Read one derived inspection action",
+          responses: { "200": { description: "Current inspection action" }, "404": { description: "Action is unavailable or has resolved" } },
+        },
+      },
+      "/project-revisions/{revisionId}/inspections/{inspectionId}/completion-preview": {
+        post: {
+          summary: "Preview an inspection completion",
+          description: "Returns an actor-bound, expiring before/after projection and basis. Preview never mutates stock, BOM, evidence, or audit state.",
+          parameters: [{ name: "revisionId", in: "path", required: true, schema: { type: "string" } }, { name: "inspectionId", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "201": { description: "Actor-bound completion preview requiring confirmation" }, "400": { description: "Invalid observation" }, "409": { description: "Current action or basis conflict" } },
+        },
+      },
+      "/project-revisions/{revisionId}/inspections/{inspectionId}/completion-commit": {
+        post: {
+          summary: "Commit a confirmed inspection completion",
+          description: "Requires confirmed=true and a separate Idempotency-Key. Rechecks preview actor, expiry, hash, action and line/item basis in one unit of work; appends evidence and applies only physical-count stock changes atomically.",
+          parameters: [{ name: "revisionId", in: "path", required: true, schema: { type: "string" } }, { name: "inspectionId", in: "path", required: true, schema: { type: "string" } }, { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 8, maxLength: 200 } }],
+          responses: { "200": { description: "Evidence, resulting item when counted, gaps, and current queue" }, "400": { description: "Invalid or unconfirmed commit" }, "409": { description: "Stale preview, basis, or idempotency conflict; recover with list_inspections" } },
+        },
+      },
       "/project-revisions/{id}/reconciliation": {
         get: { summary: "Read the current post-project reconciliation draft", responses: { "200": { description: "Reconciliation draft, or null before the first save" } } },
         put: { summary: "Save a review-only post-project reconciliation draft", responses: { "200": { description: "Saved reconciliation draft mutation" }, "409": { description: "Version or basis conflict" } } }
@@ -1616,6 +1651,38 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
 
   app.get(route("/project-revisions/:id/bom"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireRevisionScope(request, service, params.id); const query = request.query as { includeRetired?: unknown }; const includeRetired = query.includeRetired === true || query.includeRetired === "true"; return service.listBomLines(params.id, { includeRetired }); });
   app.post(route("/project-revisions/:id/bom"), async (request, reply) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireRevisionScope(request, service, params.id); const mutation = await service.createBomLine(params.id, parseBody(createBomLineSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });
+  app.get(route("/project-revisions/:revisionId/inspections"), async (request) => {
+    requireScope(request, "read", auth);
+    const params = request.params as { revisionId: string };
+    await requireRevisionScope(request, service, params.revisionId);
+    const query = request.query as { limit?: string; cursor?: string };
+    const parsedLimit = query.limit === undefined ? 50 : Number(query.limit);
+    if (!Number.isSafeInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 200) throw new ApplicationError("validation", "Inspection limit must be between 1 and 200");
+    if (query.cursor !== undefined && (typeof query.cursor !== "string" || query.cursor.length > 512)) throw new ApplicationError("validation", "Inspection cursor must be at most 512 characters");
+    return service.listInspections(params.revisionId, { limit: parsedLimit, ...(query.cursor === undefined ? {} : { cursor: query.cursor }) });
+  });
+  app.get(route("/project-revisions/:revisionId/inspections/:inspectionId"), async (request) => {
+    requireScope(request, "read", auth);
+    const params = request.params as { revisionId: string; inspectionId: string };
+    await requireRevisionScope(request, service, params.revisionId);
+    return service.getInspection(params.revisionId, params.inspectionId);
+  });
+  app.post(route("/project-revisions/:revisionId/inspections/:inspectionId/completion-preview"), async (request, reply) => {
+    requireScope(request, "write", auth);
+    const params = request.params as { revisionId: string; inspectionId: string };
+    await requireRevisionScope(request, service, params.revisionId);
+    const observation = parseBody(inspectionObservationSchema, request.body);
+    const preview = await service.previewInspectionCompletion(params.revisionId, { actionId: params.inspectionId, observation }, requestContext(request));
+    return reply.code(201).send(preview);
+  });
+  app.post(route("/project-revisions/:revisionId/inspections/:inspectionId/completion-commit"), async (request) => {
+    requireScope(request, "write", auth);
+    const params = request.params as { revisionId: string; inspectionId: string };
+    await requireRevisionScope(request, service, params.revisionId);
+    if (requestIdempotencyKey(request) === undefined) throw new ApplicationError("validation", "Idempotency-Key is required for inspection completion");
+    const body = parseBody(commitInspectionCompletionBodySchema, request.body);
+    return service.commitInspectionCompletion(params.revisionId, { ...body, actionId: params.inspectionId }, requestContext(request));
+  });
   app.patch(route("/bom-lines/:id"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.updateBomLine(params.id, parseBody(updateBomLineSchema, request.body) as never, parseExpectedVersion(request), requestContext(request)); });
   app.delete(route("/bom-lines/:id"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.retireBomLine(params.id, parseRequiredExpectedVersion(request), requestContext(request)); });
   app.post(route("/bom-lines/:id/restore"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.restoreBomLine(params.id, parseRequiredExpectedVersion(request), requestContext(request)); });

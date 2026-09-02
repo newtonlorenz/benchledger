@@ -21,7 +21,12 @@ import type {
   ProjectSetupProposal,
   ProjectSetupPreview,
   CommitProjectSetup,
-  ProjectSetupCommitResult
+  ProjectSetupCommitResult,
+  InspectionAction,
+  InspectionCompletionPreview,
+  InspectionObservation,
+  InspectionBasis,
+  InspectionEvidence
 } from "@benchledger/api-contract";
 import type {
   InventoryCategory as ApiInventoryCategory,
@@ -142,6 +147,30 @@ export interface ProjectSetupPort {
   }): Promise<ProjectSetupCommitResult>;
   /** Memory adapters may expose an explicit compensation receipt for failures
    * after graph creation but before the enclosing audit/idempotency commit. */
+  rollbackLastCommit?(): Promise<void>;
+}
+
+export interface InspectionCommitInput {
+  readonly preview: InspectionCompletionPreview;
+  readonly action: InspectionAction;
+  readonly basis: InspectionBasis;
+  readonly observation: InspectionObservation;
+  readonly projectRevisionId: string;
+  readonly committedAt: string;
+}
+
+export interface InspectionCommitReceipt {
+  readonly id: string;
+  readonly evidence: InspectionEvidence;
+  readonly item?: InventoryItem;
+}
+
+/** Narrow append-only evidence seam for compatibility and unit conversion. */
+export interface InspectionPort {
+  savePreview(preview: InspectionCompletionPreview): Promise<InspectionCompletionPreview>;
+  getPreview(id: string, actor: string): Promise<InspectionCompletionPreview | null>;
+  /** Rechecks the item/action basis and applies only the confirmed effects. */
+  commit(input: InspectionCommitInput, ctx: RequestContext): Promise<InspectionCommitReceipt>;
   rollbackLastCommit?(): Promise<void>;
 }
 
@@ -468,6 +497,7 @@ export interface ApplicationPorts {
   readonly buildConfigurations?: BuildConfigurationPort;
   readonly reconciliations?: ReconciliationPort;
   readonly projectSetups?: ProjectSetupPort;
+  readonly inspections?: InspectionPort;
   readonly workspaceSecurity?: WorkspaceSecurityPort;
   readonly audit: AuditPort;
   readonly events: EventBusPort;

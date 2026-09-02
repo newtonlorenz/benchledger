@@ -62,6 +62,12 @@ only when configuring or packaging the integration.
   connector, dimensions, material, or other relevant constraints are proven.
 - Put plausible but unconfirmed candidates in **inspect first**. Do not reserve
   or consume them to make a gap disappear.
+- Resolve a derived project check as a review-first action: list/read the
+  revision-scoped inspection, submit its observation for a server completion
+  preview, show that preview, and ask for explicit confirmation before commit.
+  Never use a quick-complete shortcut or infer evidence from a name, photo, or
+  delivery record. Keep action ID, affected line/item versions, evidence
+  source, canonical predicate/unit, and effects available for expert review.
 - Keep these identities separate: catalog product, physical inventory item,
   product profile/link state, and immutable project build configuration.
 - Prefer exact printer model/configuration, filament product and spool, nozzle,

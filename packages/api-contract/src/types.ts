@@ -33,7 +33,13 @@ import type {
   projectSetupProposalSchema, projectSetupFieldErrorSchema, projectSetupInventoryBasisSchema,
   projectSetupPlannedReservationSchema, projectSetupPreviewSchema, commitProjectSetupSchema, commitProjectSetupBodySchema,
   projectSetupCommitResultSchema, bomAlternativeSchema, quantityConversionEvidenceBasisSchema,
-  quantityConversionEvidenceSchema, quantityConversionSchema, bomAlternativeQuantityConversionSchema
+  quantityConversionEvidenceSchema, quantityConversionSchema, bomAlternativeQuantityConversionSchema,
+  inspectionActionKindSchema, inspectionActionLineSchema, inspectionActionCandidateSchema,
+  inspectionActionExpectedSchema, inspectionActionEffectSchema, inspectionActionBasisSchema,
+  inspectionActionSchema, inspectionActionPageSchema, inspectionObservationResultSchema,
+  inspectionObservationSchema, inspectionBasisSchema, inspectionAffectedLineSchema,
+  inspectionCompletionPreviewSchema, commitInspectionCompletionSchema, commitInspectionCompletionBodySchema,
+  inspectionEvidenceSchema, inspectionCompletionCommitSchema
 } from "./schemas.js";
 
 export type Dimension = z.infer<typeof dimensionSchema>;
@@ -82,6 +88,23 @@ export type CreateBomLine = z.infer<typeof createBomLineSchema>;
 export type UpdateBomLine = z.infer<typeof updateBomLineSchema>;
 export type BomGapCandidate = z.infer<typeof bomGapCandidateSchema>;
 export type BomGap = z.infer<typeof bomGapSchema>;
+export type InspectionActionKind = z.infer<typeof inspectionActionKindSchema>;
+export type InspectionActionLine = z.infer<typeof inspectionActionLineSchema>;
+export type InspectionActionCandidate = z.infer<typeof inspectionActionCandidateSchema>;
+export type InspectionActionExpected = z.infer<typeof inspectionActionExpectedSchema>;
+export type InspectionActionEffect = z.infer<typeof inspectionActionEffectSchema>;
+export type InspectionActionBasis = z.infer<typeof inspectionActionBasisSchema>;
+export type InspectionAction = z.infer<typeof inspectionActionSchema>;
+export type InspectionActionPage = z.infer<typeof inspectionActionPageSchema>;
+export type InspectionObservationResult = z.infer<typeof inspectionObservationResultSchema>;
+export type InspectionObservation = z.infer<typeof inspectionObservationSchema>;
+export type InspectionBasis = z.infer<typeof inspectionBasisSchema>;
+export type InspectionAffectedLine = z.infer<typeof inspectionAffectedLineSchema>;
+export type InspectionCompletionPreview = z.infer<typeof inspectionCompletionPreviewSchema>;
+export type CommitInspectionCompletion = z.infer<typeof commitInspectionCompletionSchema>;
+export type CommitInspectionCompletionBody = z.infer<typeof commitInspectionCompletionBodySchema>;
+export type InspectionEvidence = z.infer<typeof inspectionEvidenceSchema>;
+export type InspectionCompletionCommit = z.infer<typeof inspectionCompletionCommitSchema>;
 export type Reservation = z.infer<typeof reservationSchema>;
 export type CreateReservation = z.infer<typeof createReservationSchema>;
 export type Offer = z.infer<typeof offerSchema>;

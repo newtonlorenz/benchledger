@@ -368,10 +368,39 @@ CREATE TABLE IF NOT EXISTS reconciliation_commits (
 CREATE INDEX IF NOT EXISTS reconciliation_commits_draft_idx ON reconciliation_commits(draft_id, committed_at, id);
 `;
 
+/** Review-only inspection previews and append-only inspection evidence. The
+ * queue itself is intentionally absent: actions are derived from BOM gaps. */
+export const INSPECTION_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS inspection_previews (
+  id TEXT PRIMARY KEY NOT NULL,
+  actor TEXT NOT NULL,
+  project_revision_id TEXT NOT NULL,
+  action_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  content_sha256 TEXT NOT NULL CHECK (length(content_sha256) = 64),
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS inspection_previews_actor_idx ON inspection_previews(actor, created_at, id);
+CREATE TABLE IF NOT EXISTS inspection_evidence (
+  id TEXT PRIMARY KEY NOT NULL,
+  project_revision_id TEXT NOT NULL,
+  action_id TEXT NOT NULL,
+  item_id TEXT NOT NULL REFERENCES inventory_items(id),
+  kind TEXT NOT NULL CHECK (kind IN ('physical_quantity', 'compatibility', 'unit_conversion')),
+  result TEXT NOT NULL CHECK (result IN ('confirmed', 'inconclusive')),
+  payload_json TEXT NOT NULL,
+  recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS inspection_evidence_revision_idx ON inspection_evidence(project_revision_id, recorded_at, id);
+CREATE INDEX IF NOT EXISTS inspection_evidence_action_idx ON inspection_evidence(action_id, recorded_at, id);
+`;
+
 /**
  * The eager base schema used by BenchDatabase. Managed inventory categories
  * are intentionally installed by migrateInventoryCategorySchema during the
  * real startup sequence so legacy category tables can be upgraded and their
  * persisted normalized keys backfilled before the unique/order indexes exist.
  */
-export const SCHEMA_SQL = `${BASE_SCHEMA_SQL}\n${WORKSPACE_SECURITY_SCHEMA_SQL}\n${CATALOG_SCHEMA_SQL}\n${RECONCILIATION_SCHEMA_SQL}`;
+export const SCHEMA_SQL = `${BASE_SCHEMA_SQL}\n${WORKSPACE_SECURITY_SCHEMA_SQL}\n${CATALOG_SCHEMA_SQL}\n${RECONCILIATION_SCHEMA_SQL}\n${INSPECTION_SCHEMA_SQL}`;

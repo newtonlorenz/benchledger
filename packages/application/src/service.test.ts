@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { BeginUpload, InventoryItem, InventoryCategory, StockEvent, BomLine, Reservation, Project, Offer, Artifact, UploadSession, ProjectRevision, WorkItem, WorkItemRevision, ReconciliationLine, ProjectTombstone, ProjectSetupProposal, ProjectSetupPreview, ProjectSetupCommitResult } from "@benchledger/api-contract";
+import type { BeginUpload, InventoryItem, InventoryCategory, StockEvent, BomLine, Reservation, Project, Offer, Artifact, UploadSession, ProjectRevision, WorkItem, WorkItemRevision, ReconciliationLine, ProjectTombstone, ProjectSetupProposal, ProjectSetupPreview, ProjectSetupCommitResult, InspectionCompletionPreview, InspectionEvidence } from "@benchledger/api-contract";
 import { ApplicationError } from "./errors.js";
 import { ApplicationService, matchesBomConstraints, unsupportedBomConstraintKeys } from "./service.js";
 import { buildReconciliationDocument, type ReconciliationSourceSnapshot } from "./reconciliation.js";
-import type { ApplicationPorts, AuditEvent, AuditInput, BeginUploadInput, EventBusEvent, InventoryCategoryPort, InventoryListOptions, Page, RequestContext, StockMutation, UpdateInventoryInput } from "./ports.js";
+import type { ApplicationPorts, AuditEvent, AuditInput, BeginUploadInput, EventBusEvent, InspectionPort, InventoryCategoryPort, InventoryListOptions, Page, RequestContext, StockMutation, UpdateInventoryInput } from "./ports.js";
 
 const context: RequestContext = { actor: "test", source: "api", correlationId: "corr-1", scopes: new Set(["read", "write"]) };
 const item = (overrides: Partial<InventoryItem> = {}): InventoryItem => ({
@@ -11,7 +11,7 @@ const item = (overrides: Partial<InventoryItem> = {}): InventoryItem => ({
   tags: [], links: [], evidence: { state: "physically_counted" }, createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1, ...overrides
 });
 
-function fakePorts(seed = item()): ApplicationPorts {
+function fakePorts(seed = item(), inspections?: InspectionPort): ApplicationPorts {
   const events: EventBusEvent[] = [];
   let inventory = seed;
   let project: Project = { id: "project-1", name: "Lamp", status: "planned", createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1 };
@@ -21,6 +21,7 @@ function fakePorts(seed = item()): ApplicationPorts {
   const reservations: Reservation[] = [];
   const audit = async (input: AuditInput): Promise<AuditEvent> => ({ id: `audit-${++auditCount}`, action: input.action, actor: input.actor, source: input.source, correlationId: input.correlationId, entityType: input.entityType, entityId: input.entityId, ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }), ...(input.version === undefined ? {} : { version: input.version }), createdAt: "2026-08-30T00:00:00.000Z" });
   return {
+    ...(inspections === undefined ? {} : { inspections }),
     inventory: {
       listItems: async () => ({ data: [inventory], limit: 200 }),
       getItem: async (id) => id === inventory.id ? inventory : null,
@@ -2061,5 +2062,55 @@ describe("ApplicationService", () => {
     }, context);
 
     expect(preview.fieldErrors).toEqual(expect.arrayContaining([expect.objectContaining({ code: "unit_mismatch", message: expect.stringMatching(/mixed.*reservation.*unit/i) })]));
+  });
+
+  it("previews an actor-bound inspection without mutation and rejects a stale basis", async () => {
+    const seed = item({
+      evidence: { state: "delivered_uncounted", source: "delivery", observedAt: "2026-09-02T00:00:00.000Z" },
+      quantity: 4,
+      availableQuantity: 0,
+    });
+    const line: BomLine = {
+      id: "inspection-line", revisionId: "rev-1", name: "PETG", itemId: seed.id,
+      requiredQuantity: 2, unit: "gram", optional: false, constraints: {}, alternatives: [],
+      createdAt: seed.createdAt, updatedAt: seed.updatedAt, version: 1,
+    };
+    let savedPreview: InspectionCompletionPreview | null = null;
+    let commits = 0;
+    const inspections: InspectionPort = {
+      savePreview: async (preview) => { savedPreview = preview; return preview; },
+      getPreview: async (id, actor) => savedPreview?.id === id && savedPreview.actor === actor ? savedPreview : null,
+      commit: async (input) => {
+        commits += 1;
+        const evidence: InspectionEvidence = {
+          id: "inspection-evidence-1", projectRevisionId: input.projectRevisionId, actionId: input.action.id,
+          itemId: input.action.itemId, kind: input.action.kind, result: input.observation.result,
+          source: input.observation.source, observedAt: input.observation.observedAt, recordedAt: input.committedAt,
+          ...(input.observation.quantity === undefined ? {} : { quantity: input.observation.quantity }),
+          ...(input.observation.unit === undefined ? {} : { unit: input.observation.unit }),
+        };
+        return { id: evidence.id, evidence };
+      },
+    };
+    const ports = fakePorts(seed, inspections);
+    ports.projects.listBomLines = async () => [line];
+    const service = new ApplicationService(ports);
+    const queue = await service.listInspections("rev-1");
+    expect(queue.data).toHaveLength(1);
+    const action = queue.data[0]!;
+    expect(action).toMatchObject({ kind: "physical_quantity", requiresHumanConfirmation: true, candidate: { id: seed.id }, basis: { itemVersion: 1 } });
+    const preview = await service.previewInspectionCompletion("rev-1", {
+      actionId: action.id,
+      observation: { result: "confirmed", quantity: 3, unit: "gram", source: "human", observedAt: "2026-09-02T01:00:00.000Z" },
+    }, context);
+    expect(preview).toMatchObject({ actor: "test", actionId: action.id, before: { item: { quantity: 4 } }, after: { item: { quantity: 3, evidence: { state: "physically_counted" } } }, requiresHumanConfirmation: true });
+    expect(await ports.inventory.getItem(seed.id)).toMatchObject({ quantity: 4, version: 1, evidence: { state: "delivered_uncounted" } });
+
+    await ports.inventory.updateItem(seed.id, { name: "PETG changed" }, undefined, context);
+    await expect(service.commitInspectionCompletion("rev-1", {
+      actionId: action.id, previewId: preview.id, expectedPreviewVersion: preview.version,
+      contentSha256: preview.contentSha256, confirmed: true,
+    }, { ...context, idempotencyKey: "inspection-commit-1" })).rejects.toMatchObject({ code: "conflict", details: { recoveryAction: "list_inspections" } });
+    expect(commits).toBe(0);
   });
 });

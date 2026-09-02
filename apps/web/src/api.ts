@@ -41,6 +41,8 @@ import type {
 } from "./reconciliation-ui";
 import { DEFAULT_MANAGED_INVENTORY_CATEGORIES } from "./category-ui";
 import type { CategoryCreateInput, CategoryUpdateInput, ManagedInventoryCategory } from "./category-ui";
+import type { InspectionAction, InspectionCompletionInput, InspectionCompletionPreview, InspectionCompletionResult } from "./inspection-ui";
+import { inspectionActionSchema, inspectionCompletionCommitSchema, inspectionCompletionPreviewSchema } from "@benchledger/api-contract";
 
 type ServerHealth = { status: "ok" | "degraded"; service: string; version: string; demo: boolean; now: string };
 type ServerInventoryItem = {
@@ -77,7 +79,7 @@ type ServerGapCandidate = { itemId: string; relationship: string; compatibility:
 type ServerGapLine = { lineId: string; name?: string; optional?: boolean; status: string; decision?: string; missingDecisions?: string[]; requiredQuantity?: number; unit?: string; suppliedQuantity: number; inspectQuantity: number; missingQuantity: number; matchedItemIds: string[]; reasons: string[]; alternatives?: ServerBomAlternative[]; candidates?: ServerGapCandidate[] };
 type ServerGapEvaluation = { lines: ServerGapLine[]; totals: { requiredLines: number; optionalLines: number; readyLines?: number; checkLines?: number; decideLines?: number; sourceLines?: number; partialLines: number; missingLines: number } };
 type ServerArtifact = { id: string; projectId: string; workItemId?: string; revisionId?: string; projectRevisionId?: string; workItemRevisionId?: string; role: string; filename: string; mediaType: string; byteSize: number; sha256: string; author?: string; source?: string; machineBinding?: Record<string, string>; currentCandidate: boolean; retired: boolean; createdAt: string; version: number };
-type ServerRevision = { id: string; projectId: string; number: number; name: string; notes?: string; status: string; createdAt: string; version: number; workItemId?: string; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; gapEvaluation?: ServerGapEvaluation; buildConfigSnapshot?: unknown; buildConfiguration?: unknown };
+type ServerRevision = { id: string; projectId: string; number: number; name: string; notes?: string; status: string; createdAt: string; version: number; workItemId?: string; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; gapEvaluation?: ServerGapEvaluation; inspections?: unknown[]; buildConfigSnapshot?: unknown; buildConfiguration?: unknown };
 type ServerProject = { id: string; name: string; description?: string; status: string; currentRevisionId?: string; createdAt: string; updatedAt: string; version: number; removedAt?: string; removedBy?: string; lastLifecycleStatus?: string; workItems?: ServerWorkItem[]; projectRevisions?: ServerRevision[]; revisions?: ServerRevision[]; workItemRevisions?: ServerRevision[]; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; currentRevision?: ServerRevision };
 type ServerProjectTombstone = { id: string; name: string; removedAt: string; removedBy: string; lastLifecycleStatus: string; releasedReservationIds: string[]; version: number; auditId?: string };
 type ServerOffer = { id: string; itemId?: string; name: string; supplier: string; url: string; priceMinor: number; currency: CurrencyCode; packageQuantity?: number; observedAt: string; staleAfterDays?: number; version: number };
@@ -265,6 +267,10 @@ export interface WorkspaceAdapter {
   createProject(input: Pick<Project, "name" | "description">): Promise<Project>;
   previewProjectSetup(input: ProjectSetupProposalInput): Promise<ProjectSetupPreviewResult>;
   commitProjectSetup(input: ProjectSetupCommitInput): Promise<ProjectSetupCommitResult>;
+  listInspections(revisionId: string): Promise<InspectionAction[]>;
+  readInspection(revisionId: string, inspectionId: string): Promise<InspectionAction>;
+  previewInspectionCompletion(revisionId: string, inspectionId: string, input: InspectionCompletionInput): Promise<InspectionCompletionPreview>;
+  commitInspectionCompletion(revisionId: string, inspectionId: string, input: { previewId: string; expectedPreviewVersion: number; contentSha256: string; confirmed: true }): Promise<InspectionCompletionResult>;
   archiveProject(projectId: string, expectedVersion?: number): Promise<Project>;
   restoreProject(projectId: string, expectedVersion?: number): Promise<Project>;
   removeProject(projectId: string, expectedVersion?: number): Promise<Project>;
@@ -1286,6 +1292,61 @@ function mapProjectWorkItem(item: ServerWorkItem, workItemRevisions: readonly Se
   };
 }
 
+export function mapInspectionAction(value: unknown, fallbackRevisionId = ""): InspectionAction {
+  const record = asRecord(value);
+  if (!record) throw new ApiError("The service returned an invalid project check", { kind: "server", status: 502 });
+  const id = firstString(record, "id");
+  const projectRevisionId = firstString(record, "projectRevisionId") ?? fallbackRevisionId;
+  const candidate = asRecord(record.candidate);
+  const expected = asRecord(record.expected);
+  const basis = asRecord(record.basis);
+  const lineVersions = Array.isArray(record.lineVersions) ? record.lineVersions : [];
+  if (!id || !projectRevisionId || !candidate || !expected || !basis || !Array.isArray(record.effects)) {
+    throw new ApiError("The service returned an incomplete project check", { kind: "server", status: 502 });
+  }
+  try {
+    // Keep the browser contract identical to the canonical api-contract. This
+    // mapper only supplies the revision fallback for older envelope-only reads.
+    return inspectionActionSchema.parse({ ...record, id, projectRevisionId, candidate, expected, basis, lineVersions });
+  } catch {
+    throw new ApiError("The service returned an invalid project check", { kind: "server", status: 502 });
+  }
+}
+
+export function mapInspectionList(value: unknown, revisionId: string): InspectionAction[] {
+  const root = unwrapData(value);
+  const record = asRecord(root);
+  const nestedData = asRecord(record?.data);
+  const raw = Array.isArray(root) ? root : Array.isArray(record?.data) ? record.data : Array.isArray(record?.inspections) ? record.inspections : Array.isArray(nestedData?.data) ? nestedData.data : [];
+  return raw.map((entry) => mapInspectionAction(entry, revisionId));
+}
+
+export function mapInspectionPreview(value: unknown, fallbackInspectionId: string): InspectionCompletionPreview {
+  const root = asRecord(responseValue(value)) ?? {};
+  const previewRecord = asRecord(root.preview) ?? root;
+  if (!firstString(previewRecord, "id") && fallbackInspectionId) {
+    throw new ApiError("The service returned an incomplete project-check preview", { kind: "server", status: 502 });
+  }
+  try {
+    return inspectionCompletionPreviewSchema.parse(previewRecord);
+  } catch {
+    throw new ApiError("The service returned an invalid project-check preview", { kind: "server", status: 502 });
+  }
+}
+
+export function mapInspectionCompletionResult(value: unknown, fallbackInspectionId: string): InspectionCompletionResult {
+  const root = asRecord(responseValue(value));
+  const commit = asRecord(root?.value) ?? root;
+  if (!commit || !firstString(commit, "id") || commit.status !== "committed") {
+    throw new ApiError(`The service returned an incomplete project-check commit for ${fallbackInspectionId}`, { kind: "server", status: 502 });
+  }
+  try {
+    return inspectionCompletionCommitSchema.parse(commit);
+  } catch {
+    throw new ApiError(`The service returned an invalid project-check commit for ${fallbackInspectionId}`, { kind: "server", status: 502 });
+  }
+}
+
 function mapProject(project: ServerProject): Project {
   const status = canonicalProjectLifecycle(project.status);
   const revision = project.currentRevision;
@@ -1318,6 +1379,7 @@ function mapProject(project: ServerProject): Project {
     : undefined;
   const mappedBom = bom.map(mapBomLine);
   const gapEvaluation = mapGapEvaluation(revision?.gapEvaluation, mappedBom);
+  const inspectionActions = revision?.inspections?.map((entry) => mapInspectionAction(entry, projectRevisionId ?? "")) ?? [];
   return {
     id: project.id,
     name: project.name,
@@ -1338,6 +1400,7 @@ function mapProject(project: ServerProject): Project {
     ...(workItems.length === 0 ? {} : { workItems }),
     ...(allArtifacts.length === 0 ? {} : { allArtifacts }),
     ...(gapEvaluation === undefined ? {} : { gapEvaluation }),
+    ...(inspectionActions.length === 0 ? {} : { inspectionActions }),
     ...(buildConfigSnapshot ? { buildConfigSnapshot } : {}),
     ...(project.removedAt === undefined ? {} : { removedAt: project.removedAt }),
     ...(project.removedBy === undefined ? {} : { removedBy: project.removedBy }),
@@ -1542,6 +1605,16 @@ type PendingReconciliationCommand<TBody> = {
   readonly key: string;
   readonly body: TBody;
 };
+type InspectionCompletionRequestBody = {
+  readonly previewId: string;
+  readonly expectedPreviewVersion: number;
+  readonly contentSha256: string;
+  readonly confirmed: true;
+};
+type PendingInspectionCompletionCommand = {
+  readonly key: string;
+  readonly body: InspectionCompletionRequestBody;
+};
 
 function revisionRequestBody(input: RevisionInput): RevisionRequestBody {
   return {
@@ -1588,6 +1661,10 @@ function exactInventoryCommandId(body: ExactInventoryRequestBody): string {
 
 function reconciliationCommandId(projectId: string, revisionId: string, body: ReconciliationDraftRequestBody | ReconciliationCommitRequestBody): string {
   return `${projectId}\u0000${revisionId}\u0000${JSON.stringify(body)}`;
+}
+
+function inspectionCompletionCommandId(revisionId: string, inspectionId: string, body: InspectionCompletionRequestBody): string {
+  return `${revisionId}\u0000${inspectionId}\u0000${JSON.stringify(body)}`;
 }
 
 function mutationFailureIsAmbiguous(error: unknown): boolean {
@@ -2324,6 +2401,18 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     async commitProjectSetup() {
       throw new ApiError("Project setup commits require a connected workspace.", { kind: "validation", status: 409 });
     },
+    async listInspections() {
+      return [];
+    },
+    async readInspection() {
+      throw new ApiError("Project check not found in synthetic sample data.", { kind: "validation", status: 404 });
+    },
+    async previewInspectionCompletion() {
+      throw new ApiError("Project check previews require a connected workspace.", { kind: "validation", status: 409 });
+    },
+    async commitInspectionCompletion() {
+      throw new ApiError("Project check commits require a connected workspace.", { kind: "validation", status: 409 });
+    },
     async archiveProject(projectId, expectedVersion) {
       const current = state.projects.find((candidate) => candidate.id === projectId);
       if (!current) throw new ApiError("Project not found", { kind: "validation", status: 404 });
@@ -2424,6 +2513,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
   const pendingBulkInventoryCommands = new Map<string, PendingBulkInventoryCommand>();
   const pendingReconciliationDraftCommands = new Map<string, PendingReconciliationCommand<ReconciliationDraftRequestBody>>();
   const pendingReconciliationCommitCommands = new Map<string, PendingReconciliationCommand<ReconciliationCommitRequestBody>>();
+  const pendingInspectionCompletionCommands = new Map<string, PendingInspectionCompletionCommand>();
   const adapter: WorkspaceAdapter = {
     clearAuthenticatedState() {
       csrfToken = undefined;
@@ -2483,6 +2573,61 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       if (!token) throw new ApiError("Your session needs a fresh CSRF token before committing project setup", { kind: "csrf", status: 403 });
       const { previewId, idempotencyKey: requestedKey, ...body } = input;
       return request<ProjectSetupCommitResult>(`/project-setup/previews/${encodeURIComponent(previewId)}/commit`, { method: "POST", headers: { "Idempotency-Key": requestedKey ?? idempotencyKey("project-setup-commit") }, body: JSON.stringify(body) }, token);
+    },
+    async listInspections(revisionId) {
+      const payload = await request<unknown>(`/project-revisions/${encodeURIComponent(revisionId)}/inspections`);
+      return mapInspectionList(payload, revisionId);
+    },
+    async readInspection(revisionId, inspectionId) {
+      const payload = await request<unknown>(`/project-revisions/${encodeURIComponent(revisionId)}/inspections/${encodeURIComponent(inspectionId)}`);
+      return mapInspectionAction(responseValue(payload), revisionId);
+    },
+    async previewInspectionCompletion(revisionId, inspectionId, input) {
+      const token = csrfToken ?? cookieValue("forge_csrf");
+      if (!token) throw new ApiError("Your session needs a fresh CSRF token before previewing a project check", { kind: "csrf", status: 403 });
+      const payload = await request<unknown>(`/project-revisions/${encodeURIComponent(revisionId)}/inspections/${encodeURIComponent(inspectionId)}/completion-preview`, {
+        method: "POST",
+        body: JSON.stringify(input)
+      }, token);
+      return mapInspectionPreview(payload, inspectionId);
+    },
+    async commitInspectionCompletion(revisionId, inspectionId, input) {
+      const token = csrfToken ?? cookieValue("forge_csrf");
+      if (!token) throw new ApiError("Your session needs a fresh CSRF token before confirming a project check", { kind: "csrf", status: 403 });
+      const commandId = inspectionCompletionCommandId(revisionId, inspectionId, input);
+      const pending = pendingInspectionCompletionCommands.get(commandId);
+      const command = pending ?? { key: idempotencyKey("inspection-completion"), body: input };
+      if (pending === undefined) pendingInspectionCompletionCommands.set(commandId, command);
+      try {
+        const payload = await request<unknown>(`/project-revisions/${encodeURIComponent(revisionId)}/inspections/${encodeURIComponent(inspectionId)}/completion-commit`, {
+          method: "POST",
+          headers: { "Idempotency-Key": command.key },
+          body: JSON.stringify(command.body)
+        }, token);
+        const result = mapInspectionCompletionResult(payload, inspectionId);
+        // The commit response is the authoritative read-back for the item,
+        // gaps, and derived inspection queue. Consume it before releasing the
+        // retry key so an ambiguous-but-committed response cannot lose state.
+        if (result.item !== undefined) {
+          serverUnits.set(result.item.id, result.item.unit);
+          inventoryCache.set(result.item.id, mapInventoryItem(result.item as unknown as ServerInventoryItem));
+        }
+        const current = [...projectCache.values()].find((project) => project.serverRevisionId === revisionId);
+        if (current) {
+          const gapEvaluation = mapGapEvaluation(result.gaps as unknown as ServerGapEvaluation, current.bom);
+          const inspections = result.inspections.data.map((entry) => mapInspectionAction(entry, revisionId));
+          projectCache.set(current.id, {
+            ...current,
+            ...(gapEvaluation === undefined ? {} : { gapEvaluation }),
+            inspectionActions: inspections,
+          });
+        }
+        if (pendingInspectionCompletionCommands.get(commandId)?.key === command.key) pendingInspectionCompletionCommands.delete(commandId);
+        return result;
+      } catch (error: unknown) {
+        if (!mutationFailureIsAmbiguous(error) && pendingInspectionCompletionCommands.get(commandId)?.key === command.key) pendingInspectionCompletionCommands.delete(commandId);
+        throw error;
+      }
     },
     hasPendingWorkspaceAccessRetry() { return readWorkspaceAccessRetry() !== undefined; },
     getWorkspaceAccessRetry() { return getWorkspaceAccessRetry(); },

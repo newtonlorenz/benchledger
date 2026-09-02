@@ -13,6 +13,8 @@ import {
   bomSpecificationSchema,
   projectSetupProposalSchema,
   commitProjectSetupSchema,
+  inspectionObservationSchema,
+  commitInspectionCompletionSchema,
 } from "@benchledger/api-contract";
 import { fromApiQuantityConversion, parseMcpQuantityConversion, toApiQuantityConversion } from "./quantity-conversion.js";
 import { BOM_CONSTRAINT_KEYS } from "./types.js";
@@ -74,6 +76,11 @@ import type {
   UsageInput,
   WorkItemCreateInput,
   WorkItemRevisionCreateInput,
+  InspectionListInput,
+  InspectionReadInput,
+  InspectionPreviewInput,
+  InspectionCommitInput,
+  InspectionObservationInput,
 } from "./types.js";
 
 type UnknownRecord = Record<string, unknown>;
@@ -252,6 +259,46 @@ export function projectSetupProposal(value: unknown): import("./types.js").Proje
 
 export function projectSetupCommit(value: unknown): import("./types.js").CommitProjectSetupInput {
   return canonicalSchema(commitProjectSetupSchema, record(value, "arguments"), "arguments");
+}
+
+export function inspectionList(value: unknown): InspectionListInput {
+  const input = record(value, "arguments");
+  keys(input, ["projectRevisionId", "limit", "cursor"], "arguments");
+  const page = parsePageInput({ limit: input.limit, cursor: input.cursor });
+  return { projectRevisionId: id(input.projectRevisionId, "arguments.projectRevisionId"), ...(page.limit === undefined ? {} : { limit: page.limit }), ...(page.cursor === undefined ? {} : { cursor: page.cursor }) };
+}
+
+export function inspectionRead(value: unknown): InspectionReadInput {
+  const input = record(value, "arguments");
+  keys(input, ["projectRevisionId", "inspectionId"], "arguments");
+  return { projectRevisionId: id(input.projectRevisionId, "arguments.projectRevisionId"), inspectionId: id(input.inspectionId, "arguments.inspectionId") };
+}
+
+function inspectionObservation(value: unknown, label: string): InspectionObservationInput {
+  const input = record(value, label);
+  keys(input, ["result", "quantity", "unit", "source", "sourceId", "observedAt", "note", "conversion"], label);
+  const result = enumValue(input.result, `${label}.result`, ["confirmed", "inconclusive"] as const);
+  const quantity = input.quantity === undefined ? undefined : finiteNumber(input.quantity, `${label}.quantity`);
+  const unit = input.unit === undefined ? undefined : enumValue(input.unit, `${label}.unit`, ["piece", "gram", "millimetre", "millilitre", "metre", "roll", "set"] as const);
+  const source = stringValue(input.source, `${label}.source`, { max: 500 });
+  const sourceId = optionalString(input.sourceId, `${label}.sourceId`, 500);
+  const observedAt = stringValue(input.observedAt, `${label}.observedAt`, { max: 80 });
+  const note = optionalString(input.note, `${label}.note`, 1000);
+  const conversion = input.conversion === undefined ? undefined : parseMcpQuantityConversion(input.conversion, `${label}.conversion`);
+  return { result, ...(quantity === undefined ? {} : { quantity }), ...(unit === undefined ? {} : { unit }), source, ...(sourceId === undefined ? {} : { sourceId }), observedAt, ...(note === undefined ? {} : { note }), ...(conversion === undefined ? {} : { conversion }) };
+}
+
+export function inspectionPreview(value: unknown): InspectionPreviewInput {
+  const input = record(value, "arguments");
+  keys(input, ["projectRevisionId", "inspectionId", "observation"], "arguments");
+  return { projectRevisionId: id(input.projectRevisionId, "arguments.projectRevisionId"), inspectionId: id(input.inspectionId, "arguments.inspectionId"), observation: inspectionObservation(input.observation, "arguments.observation") };
+}
+
+export function inspectionCommit(value: unknown): InspectionCommitInput {
+  const input = record(value, "arguments");
+  keys(input, ["projectRevisionId", "inspectionId", "previewId", "expectedPreviewVersion", "contentSha256", "confirmed"], "arguments");
+  const parsed = canonicalSchema(commitInspectionCompletionSchema, { previewId: input.previewId, expectedPreviewVersion: input.expectedPreviewVersion, contentSha256: input.contentSha256, confirmed: input.confirmed }, "arguments");
+  return { projectRevisionId: id(input.projectRevisionId, "arguments.projectRevisionId"), inspectionId: id(input.inspectionId, "arguments.inspectionId"), ...parsed };
 }
 
 export function retireBomLine(value: unknown): { bomLineId: string; expectedVersion: number } {

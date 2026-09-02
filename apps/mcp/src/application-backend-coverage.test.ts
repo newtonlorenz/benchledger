@@ -561,6 +561,75 @@ describe("createApplicationBackend translation coverage", () => {
     expect(listed?.items[0]?.quantity).toEqual({ value: 1, unit: "set" });
   });
 
+  it("deep-maps inspection preview and commit units and conversion evidence at the MCP boundary", async () => {
+    const service = serviceFixture() as ApplicationService & Record<string, any>;
+    const conversion = {
+      inventory: { quantity: 1, unit: "set" as const },
+      requirement: { quantity: 10, unit: "each" as const },
+      evidence: { basis: "package_label" as const, observedAt: date, source: "package label" },
+    };
+    const item = apiItem({ id: "fastener-set", kind: "fastener", quantity: 2, availableQuantity: 1, unit: "set" });
+    const gap = {
+      lineId: "bom-1", name: "M3 screw", optional: false, status: "inspect_first", decision: "check",
+      requiredQuantity: 10, suppliedQuantity: 0, inspectQuantity: 10, missingQuantity: 0, unit: "each",
+      matchedItemIds: ["fastener-set"], reasons: ["inspect conversion"],
+      alternatives: [{ itemId: "fastener-set", compatible: "conditional", reason: "ten per set", quantityConversion: conversion }],
+      candidates: [{ itemId: "fastener-set", relationship: "uncertain_alternative", compatibility: "conditional", availableQuantity: 10, suppliedQuantity: 0, inspectQuantity: 10, reason: "inspect conversion" }],
+    };
+    const line = apiLine({ id: "bom-1", itemId: "fastener-set", requiredQuantity: 10, unit: "each", alternatives: [{ itemId: "fastener-set", compatible: "conditional", reason: "ten per set", quantityConversion: conversion }] });
+    const action = {
+      id: "inspection-conversion", projectRevisionId: "revision-1", itemId: "fastener-set", itemVersion: 2,
+      kind: "unit_conversion", normalizedPredicate: '{"expectedUnit":"each","itemUnit":"set"}',
+      question: "Confirm package conversion.", itemUnit: "set", expectedUnit: "each", compatibility: "conditional",
+      lineIds: ["bom-1"], lineVersions: [{ lineId: "bom-1", version: 1 }], version: 2,
+      candidate: { id: "fastener-set", version: 2, name: "Fastener set", unit: "set", evidence: { state: "delivered_uncounted", source: "package label" } },
+      expected: { quantity: 10, unit: "each", lineIds: ["bom-1"], lineRequirements: [{ lineId: "bom-1", quantity: 10, unit: "each" }] },
+      possibleResults: ["inconclusive"], effects: [{ kind: "unit_conversion", description: "Records conversion evidence." }],
+      basis: { itemVersion: 2, lineVersions: [{ lineId: "bom-1", version: 1 }] }, requiresHumanConfirmation: true,
+    };
+    const preview = {
+      id: "inspection-preview", version: 1, projectRevisionId: "revision-1", actionId: action.id, actor: "coverage-agent",
+      createdAt: date, expiresAt: "2026-08-30T10:30:00.000Z", contentSha256: "b".repeat(64), action,
+      observation: { result: "inconclusive", source: "package label", observedAt: date, conversion },
+      basis: { actionId: action.id, actionVersion: 2, itemVersion: 2, lineVersions: [{ lineId: "bom-1", version: 1 }], hash: "c".repeat(64) },
+      before: { item, gaps: [gap], lines: [line] }, after: { item, gaps: [gap], lines: [line] },
+      affectedLines: [{ lineId: "bom-1", version: 1, beforeDecision: "check", afterDecision: "check" }],
+      reevaluatedGaps: { revisionId: "revision-1", lines: [gap], totals: { checkLines: 1 } }, requiresHumanConfirmation: true,
+    };
+    const commit = {
+      id: "inspection-commit", status: "committed", projectRevisionId: "revision-1", actionId: action.id, previewId: preview.id,
+      evidence: { id: "inspection-evidence", projectRevisionId: "revision-1", actionId: action.id, itemId: "fastener-set", kind: "unit_conversion", result: "inconclusive", source: "package label", observedAt: date, recordedAt: date, conversion },
+      item, gaps: { revisionId: "revision-1", lines: [gap], totals: { checkLines: 1 } },
+      inspections: { revisionId: "revision-1", data: [action], limit: 200, total: 1 }, committedAt: date,
+    };
+    service.listInspections = vi.fn(async () => ({ data: [action], limit: 25 }));
+    service.getInspection = vi.fn(async () => action);
+    service.previewInspectionCompletion = vi.fn(async (_revisionId: string, input: any) => {
+      expect(input.observation.conversion).toEqual({ ...conversion, requirement: { quantity: 10, unit: "each" } });
+      return preview;
+    });
+    service.commitInspectionCompletion = vi.fn(async () => mutation(commit, "inspection-commit", 2));
+    const backend = createApplicationBackend(service);
+    const inputConversion = { ...conversion, requirement: { quantity: 10, unit: "piece" as const } };
+    const mappedPreview = await backend.inspections!.preview({ projectRevisionId: "revision-1", inspectionId: action.id, observation: { result: "inconclusive", source: "package label", observedAt: date, conversion: inputConversion } }, context);
+    expect(mappedPreview.observation.conversion?.requirement).toEqual({ quantity: 10, unit: "piece" });
+    expect(mappedPreview.before.item.quantity).toEqual({ value: 2, unit: "set" });
+    expect(mappedPreview.before.lines[0]?.unit).toBe("piece");
+    expect(mappedPreview.after.lines[0]?.alternatives[0]?.quantityConversion?.requirement.unit).toBe("piece");
+    expect(mappedPreview.before.gaps[0]?.unit).toBe("piece");
+    expect(mappedPreview.before.gaps[0]?.candidates[0]?.availableQuantity).toEqual({ value: 10, unit: "piece" });
+    expect(mappedPreview.before.gaps[0]?.alternatives[0]?.quantityConversion?.requirement.unit).toBe("piece");
+    expect(mappedPreview.reevaluatedGaps.lines[0]?.alternatives[0]?.quantityConversion?.requirement.unit).toBe("piece");
+
+    const mappedCommit = await backend.inspections!.commit({ projectRevisionId: "revision-1", inspectionId: action.id, previewId: preview.id, expectedPreviewVersion: 1, contentSha256: preview.contentSha256, confirmed: true }, context);
+    expect(mappedCommit.commit.evidence.unit).toBeUndefined();
+    expect(mappedCommit.commit.evidence.conversion?.requirement.unit).toBe("piece");
+    expect(mappedCommit.commit.item?.quantity).toEqual({ value: 2, unit: "set" });
+    expect(mappedCommit.commit.gaps.lines[0]?.unit).toBe("piece");
+    expect(mappedCommit.commit.inspections.data[0]?.expected.unit).toBe("piece");
+    expect(mappedCommit.commit.inspections.data[0]?.candidate.unit).toBe("set");
+  });
+
   it("maps artifact roles, transfer unavailability, offers, and empty current revisions", async () => {
     const service = serviceFixture();
     const backend = createApplicationBackend(service, { publicBaseUrl: "https://maker.example", artifactTransfer: transferProvider });

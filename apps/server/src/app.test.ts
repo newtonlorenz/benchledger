@@ -45,6 +45,87 @@ describe("BenchLedger HTTP API", () => {
     await app.close();
   });
 
+  it("serves the inspection queue through list/read/preview/commit routes with scoped access and safe retries", async () => {
+    const runtime = createSyntheticRuntime();
+    const app = await createApp({
+      demo: true,
+      runtime,
+      auth: {
+        sessionSecret: "s".repeat(48),
+        secureCookies: false,
+        bearerTokens: [bearerRecord("wrong-inspection-project-token", ["read", "write"], ["other-project"])],
+      },
+      logger: false,
+    });
+    try {
+      const login = await app.inject({ method: "POST", url: "/api/v1/auth/login", payload: { password: demoPassword } });
+      expect(login.statusCode).toBe(200);
+      const cookie = cookieHeader(login.headers["set-cookie"]);
+      const csrf = login.json<{ csrfToken: string }>().csrfToken;
+      const headers = { cookie, "x-csrf-token": csrf };
+      const base = "/api/v1/project-revisions/synthetic-revision-lamp-r01/inspections";
+
+      const listed = await app.inject({ method: "GET", url: `${base}?limit=1`, headers: { cookie } });
+      expect(listed.statusCode).toBe(200);
+      const action = listed.json<{ data: Array<{ id: string; kind: string; candidate: { id: string } }>; revisionId: string }>().data[0];
+      expect(action).toMatchObject({ kind: "physical_quantity", candidate: { id: "wire-dupont" } });
+      expect(listed.json()).toMatchObject({ revisionId: "synthetic-revision-lamp-r01", limit: 1, total: 1 });
+
+      const read = await app.inject({ method: "GET", url: `${base}/${action?.id}`, headers: { cookie } });
+      expect(read.statusCode).toBe(200);
+      expect(read.json()).toMatchObject({ id: action?.id, projectRevisionId: "synthetic-revision-lamp-r01" });
+      expect((await app.inject({ method: "GET", url: `${base}/missing-inspection`, headers: { cookie } })).statusCode).toBe(404);
+      expect((await app.inject({ method: "GET", url: `${base}?limit=0`, headers: { cookie } })).statusCode).toBe(400);
+      expect((await app.inject({ method: "GET", url: `${base}?cursor=${"c".repeat(513)}`, headers: { cookie } })).statusCode).toBe(400);
+
+      const wrongProject = await app.inject({ method: "GET", url: base, headers: { authorization: "Bearer wrong-inspection-project-token" } });
+      expect(wrongProject.statusCode).toBe(403);
+
+      const actionId = action?.id;
+      if (actionId === undefined) throw new Error("expected a synthetic inspection action");
+      const stalePreviewResponse = await app.inject({
+        method: "POST",
+        url: `${base}/${actionId}/completion-preview`,
+        headers,
+        payload: { result: "confirmed", quantity: 2, unit: "set", source: "physical count", observedAt: "2026-09-02T01:00:00.000Z" },
+      });
+      expect(stalePreviewResponse.statusCode).toBe(201);
+      const stalePreview = stalePreviewResponse.json<{ id: string; version: number; contentSha256: string }>();
+      await runtime.inventory.updateItem("wire-dupont", { name: "Wire assortment (updated)" }, 1);
+      const staleCommit = await app.inject({
+        method: "POST",
+        url: `${base}/${actionId}/completion-commit`,
+        headers: { ...headers, "idempotency-key": "inspection-stale-commit" },
+        payload: { previewId: stalePreview.id, expectedPreviewVersion: stalePreview.version, contentSha256: stalePreview.contentSha256, confirmed: true },
+      });
+      expect(staleCommit.statusCode).toBe(409);
+      expect(staleCommit.json()).toMatchObject({ error: { code: "conflict", details: { reason: "stale_basis" } } });
+
+      const previewResponse = await app.inject({
+        method: "POST",
+        url: `${base}/${actionId}/completion-preview`,
+        headers,
+        payload: { result: "inconclusive", source: "physical inspection", observedAt: "2026-09-02T02:00:00.000Z", note: "Count was inconclusive." },
+      });
+      expect(previewResponse.statusCode).toBe(201);
+      const preview = previewResponse.json<{ id: string; version: number; contentSha256: string }>();
+
+      const missingKey = await app.inject({ method: "POST", url: `${base}/${actionId}/completion-commit`, headers, payload: { previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmed: true } });
+      expect(missingKey.statusCode).toBe(400);
+      const unconfirmed = await app.inject({ method: "POST", url: `${base}/${actionId}/completion-commit`, headers: { ...headers, "idempotency-key": "inspection-unconfirmed" }, payload: { previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmed: false } });
+      expect(unconfirmed.statusCode).toBe(400);
+
+      const committed = await app.inject({ method: "POST", url: `${base}/${actionId}/completion-commit`, headers: { ...headers, "idempotency-key": "inspection-inconclusive" }, payload: { previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmed: true } });
+      expect(committed.statusCode).toBe(200);
+      expect(committed.json()).toMatchObject({ replayed: false, data: { status: "committed", evidence: { result: "inconclusive", actionId } } });
+      const retry = await app.inject({ method: "POST", url: `${base}/${actionId}/completion-commit`, headers: { ...headers, "idempotency-key": "inspection-inconclusive" }, payload: { previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmed: true } });
+      expect(retry.statusCode).toBe(200);
+      expect(retry.json()).toMatchObject({ replayed: true, data: { status: "committed", evidence: { result: "inconclusive", actionId } } });
+    } finally {
+      await app.close();
+    }
+  });
+
   it("seeds the synthetic runtime with a project, revision, and planning BOM", async () => {
     const runtime = createSyntheticRuntime();
     const projects = await runtime.ports.projects.listProjects({ limit: 50 });

@@ -392,6 +392,15 @@ Requirements:
 - Offers retain supplier, URL, observed time, package quantity, source currency,
   shipping when known and match reason. They never imply a purchase.
 
+Current delivery note: the application, HTTP routes, MCP tools, and web Project
+Plan Checks panel provide the derived action list/read and preview-then-confirm
+flow. Beginner mode shows the next three questions and expert mode keeps
+canonical action, line/item versions, evidence, predicate, unit, and effects
+visible. The surfaces share the same action, observation, evidence, and
+staleness contracts, and parity tests cover the exposed HTTP/MCP behavior. This
+slice is complete for MPM-006; later work may improve presentation or add
+additional inspection kinds without changing the human-confirmation boundary.
+
 Acceptance criteria:
 
 1. Four requirements that need the same ESP32 inspection produce one check.

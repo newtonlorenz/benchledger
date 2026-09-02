@@ -2,6 +2,7 @@
 // pull the domain package's Node-only ID helpers through its barrel export.
 import { resolveBomSpecification } from "@benchledger/domain/specification";
 import { resolveBomAlternativeQuantity } from "@benchledger/domain/quantity-conversion";
+import type { InspectionAction } from "./inspection-ui";
 
 export type StockState =
   | "available"
@@ -426,6 +427,8 @@ export interface Project {
   /** Connected readiness was invalidated and could not be reloaded. Source
    * recommendations remain disabled until a canonical evaluation returns. */
   readinessUnavailable?: boolean;
+  /** Revision-scoped physical checks returned by the inspection queue. */
+  inspectionActions?: readonly InspectionAction[];
   buildConfigSnapshot?: BuildConfigSnapshot;
 }
 

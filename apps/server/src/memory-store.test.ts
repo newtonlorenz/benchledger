@@ -234,6 +234,45 @@ describe("MemoryInventory", () => {
     });
   });
 
+  it("preserves inspection source, source id, and observed time on the demo count path", async () => {
+    const runtime = createMemoryRuntime();
+    const service = new ApplicationService(runtime.ports);
+    const context = {
+      actor: "memory-inspection-agent",
+      source: "api" as const,
+      correlationId: "memory-inspection-provenance",
+      scopes: new Set(["read", "write"]),
+    };
+    const item = await service.createInventoryItem({
+      id: "memory-inspection-provenance-item", name: "Uncounted ESP32", kind: "electronic", quantity: 1, unit: "each", tags: [], links: [],
+      evidence: { state: "delivered_uncounted", source: "delivery", observedAt: "2026-09-02T00:00:00.000Z" },
+    }, context);
+    const project = await service.createProject({ id: "memory-inspection-provenance-project", name: "Inspection provenance", status: "planned" }, context);
+    const revision = await service.createProjectRevision(project.data.id, { id: "memory-inspection-provenance-revision", name: "Initial", status: "concept" }, context);
+    await service.createBomLine(revision.data.id, {
+      id: "memory-inspection-provenance-line", name: "ESP32", itemId: item.data.id, requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [],
+    }, context);
+    const action = (await service.listInspections(revision.data.id)).data.find((candidate) => candidate.itemId === item.data.id);
+    if (action === undefined) throw new Error("expected physical inspection action");
+    const observation = {
+      result: "confirmed" as const,
+      quantity: 3,
+      unit: "each" as const,
+      source: "bench camera",
+      sourceId: "photo-2026-09-02-01",
+      observedAt: "2026-09-02T01:23:00.000Z",
+      note: "Three boards counted in the tray",
+    };
+    const preview = await service.previewInspectionCompletion(revision.data.id, { actionId: action.id, observation }, context);
+    const committed = await service.commitInspectionCompletion(revision.data.id, {
+      actionId: action.id, previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmed: true,
+    }, { ...context, idempotencyKey: "memory-inspection-provenance-commit" });
+
+    expect(committed.data.item).toMatchObject({ evidence: { state: "physically_counted", source: observation.source, sourceId: observation.sourceId, observedAt: observation.observedAt, note: observation.note } });
+    expect(runtime.inventory.items.get(item.data.id)?.evidence).toMatchObject({ state: "physically_counted", source: observation.source, sourceId: observation.sourceId, observedAt: observation.observedAt, note: observation.note });
+    expect(runtime.inventory.events.get(item.data.id)?.at(-1)).toMatchObject({ type: "count", note: observation.note, evidence: { state: "physically_counted", source: observation.source, sourceId: observation.sourceId, observedAt: observation.observedAt } });
+  });
+
   it("restores an in-memory project when removal is compensated", async () => {
     const runtime = createMemoryRuntime();
     const project = await runtime.projects.createProject({ id: "project-removal-rollback", name: "Rollback project", status: "planned" });

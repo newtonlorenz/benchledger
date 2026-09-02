@@ -72,6 +72,42 @@ afterEach(() => {
 });
 
 describe("authenticated BenchLedger API adapter", () => {
+  it("reuses a pending inspection completion key for an ambiguous identical retry", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=inspection-csrf" });
+    const action = {
+      id: "inspection-1", projectRevisionId: "revision-1", itemId: "item-1", itemVersion: 1,
+      kind: "physical_quantity", normalizedPredicate: '{"kind":"physical_quantity"}', question: "Count the item.",
+      itemUnit: "each", expectedUnit: "each", compatibility: "confirmed", lineIds: ["line-1"], lineVersions: [{ lineId: "line-1", version: 1 }], version: 1,
+      candidate: { id: "item-1", version: 1, name: "Maker item", unit: "each", evidence: { state: "delivered_uncounted", source: "label", observedAt: "2026-08-30T10:00:00.000Z" } },
+      expected: { quantity: 1, unit: "each", lineIds: ["line-1"], lineRequirements: [{ lineId: "line-1", quantity: 1, unit: "each" }] },
+      possibleResults: ["confirmed", "inconclusive"], effects: [{ kind: "physical_quantity", description: "May update quantity." }],
+      basis: { itemVersion: 1, lineVersions: [{ lineId: "line-1", version: 1 }] }, requiresHumanConfirmation: true
+    };
+    const gap = {
+      lineId: "line-1", name: "Maker item", optional: false, status: "supplied", decision: "ready",
+      requiredQuantity: 1, suppliedQuantity: 1, inspectQuantity: 0, missingQuantity: 0, unit: "each", matchedItemIds: ["item-1"], reasons: ["counted"], alternatives: [],
+      candidates: [{ itemId: "item-1", relationship: "exact", compatibility: "confirmed", availableQuantity: 1, suppliedQuantity: 1, inspectQuantity: 0, reason: "counted" }]
+    };
+    const committed = {
+      id: "inspection-commit", status: "committed", projectRevisionId: "revision-1", actionId: action.id, previewId: "preview-1",
+      evidence: { id: "evidence-1", projectRevisionId: "revision-1", actionId: action.id, itemId: "item-1", kind: "physical_quantity", result: "confirmed", source: "physical count", observedAt: "2026-08-30T10:00:00.000Z", recordedAt: "2026-08-30T10:00:00.000Z", quantity: 1, unit: "each" },
+      gaps: { revisionId: "revision-1", lines: [gap], totals: { requiredLines: 1, readyLines: 1 } },
+      inspections: { revisionId: "revision-1", data: [], limit: 200, total: 0 }, committedAt: "2026-08-30T10:00:00.000Z"
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ error: { message: "response lost after commit" } }, 500))
+      .mockResolvedValueOnce(jsonResponse({ data: committed }));
+    const adapter = createWorkspaceAdapter();
+    const input = { previewId: "preview-1", expectedPreviewVersion: 1, contentSha256: "a".repeat(64), confirmed: true as const };
+    await expect(adapter.commitInspectionCompletion("revision-1", "inspection-1", input)).rejects.toMatchObject({ kind: "server", status: 500 });
+    const firstKey = new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("idempotency-key");
+    await expect(adapter.commitInspectionCompletion("revision-1", "inspection-1", input)).resolves.toMatchObject({ id: "inspection-commit", inspections: { data: [] } });
+    const secondKey = new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("idempotency-key");
+    expect(firstKey).toMatch(/^web-inspection-completion-/u);
+    expect(secondKey).toBe(firstKey);
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual(input);
+  });
+
   it("keeps project setup preview and commit calls on the shared API with a caller-owned retry key", async () => {
     vi.stubGlobal("document", { cookie: "forge_csrf=setup-csrf" });
     const fetchMock = vi.spyOn(globalThis, "fetch")
@@ -1397,6 +1433,70 @@ describe("web data mappers", () => {
     const body = JSON.parse(String(fetchMock.mock.calls.at(-1)?.[1]?.body));
     expect(body.lines.map((line: { bomLineId: string }) => line.bomLineId)).toEqual(["bom-active", "bom-legacy"]);
     expect(body.lines).not.toEqual(expect.arrayContaining([expect.objectContaining({ bomLineId: "bom-unreserved" })]));
+  });
+});
+
+describe("reconciliation retry branches", () => {
+  const revisionId = "revision-retry-branches";
+  const project = serverProject({
+    id: "project-retry-branches",
+    currentRevisionId: revisionId,
+    currentRevision: serverRevision({ id: revisionId, projectId: "project-retry-branches", bom: [] })
+  });
+  const model: ReconciliationViewModel = {
+    projectId: project.id,
+    projectName: project.name,
+    projectRevisionId: revisionId,
+    status: "draft",
+    version: 1,
+    lines: [],
+    trace: { draftId: "draft-retry-branches" }
+  };
+  const prepare = async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "test", demo: false, now: "2026-08-30T10:00:00.000Z" }))
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", scopes: ["read", "write"] }))
+      .mockResolvedValueOnce(jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00.000Z", inventory: [], projects: [project], offers: [] }));
+    const adapter = createWorkspaceAdapter();
+    await adapter.loadWorkspace();
+    return { adapter, fetchMock };
+  };
+
+  it("releases known reconciliation failures and retains one key for ambiguous retries", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=reconciliation-retry" });
+
+    const saveKnown = await prepare();
+    saveKnown.fetchMock.mockResolvedValueOnce(jsonResponse({ error: { message: "draft rejected" } }, 400));
+    await expect(saveKnown.adapter.saveReconciliationDraft(project.id, revisionId, model)).rejects.toMatchObject({ kind: "validation", status: 400 });
+    const firstSaveKey = new Headers(saveKnown.fetchMock.mock.calls.at(-1)?.[1]?.headers).get("idempotency-key");
+    saveKnown.fetchMock.mockResolvedValueOnce(jsonResponse({ error: { message: "draft rejected again" } }, 400));
+    await expect(saveKnown.adapter.saveReconciliationDraft(project.id, revisionId, model)).rejects.toMatchObject({ kind: "validation", status: 400 });
+    const secondSaveKey = new Headers(saveKnown.fetchMock.mock.calls.at(-1)?.[1]?.headers).get("idempotency-key");
+    expect(secondSaveKey).not.toBe(firstSaveKey);
+
+    const saveAmbiguous = await prepare();
+    saveAmbiguous.fetchMock.mockResolvedValueOnce(jsonResponse({ error: { message: "response lost" } }, 500));
+    await expect(saveAmbiguous.adapter.saveReconciliationDraft(project.id, revisionId, model)).rejects.toMatchObject({ kind: "server", status: 500 });
+    const ambiguousSaveKey = new Headers(saveAmbiguous.fetchMock.mock.calls.at(-1)?.[1]?.headers).get("idempotency-key");
+    saveAmbiguous.fetchMock.mockResolvedValueOnce(jsonResponse({ error: { message: "response lost again" } }, 500));
+    await expect(saveAmbiguous.adapter.saveReconciliationDraft(project.id, revisionId, model)).rejects.toMatchObject({ kind: "server", status: 500 });
+    expect(new Headers(saveAmbiguous.fetchMock.mock.calls.at(-1)?.[1]?.headers).get("idempotency-key")).toBe(ambiguousSaveKey);
+
+    const commitKnown = await prepare();
+    commitKnown.fetchMock.mockResolvedValueOnce(jsonResponse({ error: { message: "commit rejected" } }, 400));
+    await expect(commitKnown.adapter.commitReconciliation(project.id, revisionId, model)).rejects.toMatchObject({ kind: "validation", status: 400 });
+    const firstCommitKey = new Headers(commitKnown.fetchMock.mock.calls.at(-1)?.[1]?.headers).get("idempotency-key");
+    commitKnown.fetchMock.mockResolvedValueOnce(jsonResponse({ error: { message: "commit rejected again" } }, 400));
+    await expect(commitKnown.adapter.commitReconciliation(project.id, revisionId, model)).rejects.toMatchObject({ kind: "validation", status: 400 });
+    expect(new Headers(commitKnown.fetchMock.mock.calls.at(-1)?.[1]?.headers).get("idempotency-key")).not.toBe(firstCommitKey);
+
+    const commitAmbiguous = await prepare();
+    commitAmbiguous.fetchMock.mockResolvedValueOnce(jsonResponse({ error: { message: "commit response lost" } }, 500));
+    await expect(commitAmbiguous.adapter.commitReconciliation(project.id, revisionId, model)).rejects.toMatchObject({ kind: "server", status: 500 });
+    const ambiguousCommitKey = new Headers(commitAmbiguous.fetchMock.mock.calls.at(-1)?.[1]?.headers).get("idempotency-key");
+    commitAmbiguous.fetchMock.mockResolvedValueOnce(jsonResponse({ error: { message: "commit response lost again" } }, 500));
+    await expect(commitAmbiguous.adapter.commitReconciliation(project.id, revisionId, model)).rejects.toMatchObject({ kind: "server", status: 500 });
+    expect(new Headers(commitAmbiguous.fetchMock.mock.calls.at(-1)?.[1]?.headers).get("idempotency-key")).toBe(ambiguousCommitKey);
   });
 });
 

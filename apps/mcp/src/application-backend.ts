@@ -35,6 +35,11 @@ import type {
   ProjectSetupPreview as ApiProjectSetupPreview,
   ProjectSetupCommitResult as ApiProjectSetupCommitResult,
   CommitProjectSetup as ApiCommitProjectSetup,
+  InspectionAction as ApiInspectionAction,
+  InspectionCompletionPreview as ApiInspectionCompletionPreview,
+  InspectionCompletionCommit as ApiInspectionCompletionCommit,
+  InspectionObservation as ApiInspectionObservation,
+  BomGap as ApiBomGap,
 } from "@benchledger/api-contract";
 import { canonicalProjectLifecycle } from "@benchledger/api-contract";
 import { bomSpecificationSchema } from "@benchledger/api-contract";
@@ -129,6 +134,18 @@ import type {
   ReconciliationReadInput,
   ReconciliationDraftSaveInput,
   ReconciliationCommitInput,
+  InspectionsBackend,
+  InspectionAction,
+  InspectionPreview,
+  InspectionCommit,
+  InspectionGap,
+  InspectionGapEvaluation,
+  InspectionObservation,
+  InspectionListInput,
+  InspectionReadInput,
+  InspectionPreviewInput,
+  InspectionCommitInput,
+  InspectionObservationInput,
   ProjectSetupProposal,
   CommitProjectSetupInput,
   ProjectSetupPreview,
@@ -270,6 +287,39 @@ export function createApplicationBackend(service: ApplicationService, options: P
         );
       },
     } satisfies ReconciliationBackend,
+    inspections: {
+      list: async (input: InspectionListInput, _context) => {
+        const result = await service.listInspections(input.projectRevisionId, {
+          limit: input.limit ?? 25,
+          ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        });
+        return appPage(result.data.map(toMcpInspectionAction), result);
+      },
+      get: async (input: InspectionReadInput, _context) => toMcpInspectionAction(
+        await service.getInspection(input.projectRevisionId, input.inspectionId),
+      ),
+      preview: async (input: InspectionPreviewInput, context) => toMcpInspectionPreview(
+        await service.previewInspectionCompletion(
+          input.projectRevisionId,
+          { actionId: input.inspectionId, observation: toApiInspectionObservation(input.observation) },
+          appContext(context),
+        ),
+      ),
+      commit: async (input: InspectionCommitInput, context) => {
+        const mutation = await service.commitInspectionCompletion(
+          input.projectRevisionId,
+          {
+            actionId: input.inspectionId,
+            previewId: input.previewId,
+            expectedPreviewVersion: input.expectedPreviewVersion,
+            contentSha256: input.contentSha256,
+            confirmed: input.confirmed,
+          },
+          appContext(context),
+        );
+        return mutationResult(mutation, "commit", toMcpInspectionCommit);
+      },
+    } satisfies InspectionsBackend,
     inventory: {
       summary: async (input, context) => {
         const limit = Math.min(input.limit ?? 50, 100);
@@ -1006,6 +1056,104 @@ function toMcpBuildConfiguration(snapshot: ApiBuildConfigurationSnapshot): Build
     });
   }
   return copied as unknown as BuildConfigurationSnapshot;
+}
+
+function toMcpInspectionAction(action: ApiInspectionAction): InspectionAction {
+  return {
+    ...action,
+    itemUnit: fromApiUnit(action.itemUnit),
+    expectedUnit: fromApiUnit(action.expectedUnit),
+    candidate: { ...action.candidate, unit: fromApiUnit(action.candidate.unit) },
+    expected: {
+      ...action.expected,
+      unit: fromApiUnit(action.expected.unit),
+      lineRequirements: action.expected.lineRequirements.map((requirement) => ({
+        ...requirement,
+        unit: fromApiUnit(requirement.unit),
+      })),
+    },
+  };
+}
+
+function toApiInspectionObservation(observation: InspectionObservationInput): ApiInspectionObservation {
+  if (observation.observedAt === undefined) {
+    throw new McpAdapterError("INVALID_ARGUMENT", "inspection observation observedAt is required.");
+  }
+  const { unit, observedAt, conversion, ...rest } = observation;
+  return {
+    ...rest,
+    observedAt,
+    ...(unit === undefined ? {} : { unit: toApiUnit(unit) }),
+    ...(conversion === undefined ? {} : { conversion: toApiQuantityConversion(conversion, "inspection conversion") }),
+  };
+}
+
+function toMcpInspectionObservation(observation: ApiInspectionObservation): InspectionObservation {
+  return {
+    ...observation,
+    ...(observation.unit === undefined ? {} : { unit: fromApiUnit(observation.unit) }),
+    ...(observation.conversion === undefined ? {} : { conversion: fromApiQuantityConversion(observation.conversion, "inspection conversion") }),
+  } as unknown as InspectionObservation;
+}
+
+function toMcpInspectionGap(gap: ApiBomGap): InspectionGap {
+  return {
+    ...gap,
+    unit: fromApiUnit(gap.unit),
+    alternatives: gap.alternatives.map(toMcpBomAlternative),
+    candidates: gap.candidates.map((candidate) => ({
+      ...candidate,
+      availableQuantity: { value: candidate.availableQuantity, unit: fromApiUnit(gap.unit) },
+      suppliedQuantity: { value: candidate.suppliedQuantity, unit: fromApiUnit(gap.unit) },
+      inspectQuantity: { value: candidate.inspectQuantity, unit: fromApiUnit(gap.unit) },
+    })),
+  };
+}
+
+function toMcpInspectionGapEvaluation(value: { revisionId: string; lines: readonly ApiBomGap[]; totals: Readonly<Record<string, number>> }): InspectionGapEvaluation {
+  return {
+    revisionId: value.revisionId,
+    lines: value.lines.map(toMcpInspectionGap),
+    totals: { ...value.totals },
+  };
+}
+
+function toMcpInspectionPreview(preview: ApiInspectionCompletionPreview): InspectionPreview {
+  return {
+    ...preview,
+    action: toMcpInspectionAction(preview.action),
+    observation: toMcpInspectionObservation(preview.observation),
+    before: {
+      item: toMcpInventoryItem(preview.before.item),
+      gaps: preview.before.gaps.map(toMcpInspectionGap),
+      lines: preview.before.lines.map(toMcpBomLine),
+    },
+    after: {
+      item: toMcpInventoryItem(preview.after.item),
+      gaps: preview.after.gaps.map(toMcpInspectionGap),
+      lines: preview.after.lines.map(toMcpBomLine),
+    },
+    reevaluatedGaps: toMcpInspectionGapEvaluation(preview.reevaluatedGaps),
+  };
+}
+
+function toMcpInspectionCommit(commit: ApiInspectionCompletionCommit): InspectionCommit {
+  const { unit, conversion, ...evidence } = commit.evidence;
+  const { evidence: _rawEvidence, item, gaps, inspections, ...rest } = commit;
+  return {
+    ...rest,
+    evidence: {
+      ...evidence,
+      ...(unit === undefined ? {} : { unit: fromApiUnit(unit) }),
+      ...(conversion === undefined ? {} : { conversion: fromApiQuantityConversion(conversion, "inspection evidence conversion") }),
+    },
+    ...(item === undefined ? {} : { item: toMcpInventoryItem(item) }),
+    gaps: toMcpInspectionGapEvaluation(gaps),
+    inspections: {
+      ...inspections,
+      data: inspections.data.map(toMcpInspectionAction),
+    },
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -13,6 +13,10 @@ import {
   reconciliationCommit,
   reconciliationDraftSave,
   reconciliationRead,
+  inspectionList,
+  inspectionRead,
+  inspectionPreview,
+  inspectionCommit,
   bomEvaluation,
   bomLineCreate,
   bomLineList,
@@ -274,6 +278,11 @@ function requireReconciliationBackend(adapter: McpAdapter): NonNullable<BenchLed
   return adapter.backend.reconciliation;
 }
 
+function requireInspectionsBackend(adapter: McpAdapter): NonNullable<BenchLedgerBackend["inspections"]> {
+  if (adapter.backend.inspections === undefined) throw new McpAdapterError("BACKEND_ERROR", "The inspection backend is not configured for this MCP host.");
+  return adapter.backend.inspections;
+}
+
 /** Remove serial-like fields at the MCP boundary without mutating backend data. */
 function redactSerials(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redactSerials);
@@ -485,6 +494,15 @@ export class McpAdapter {
       ["read_reconciliation", (input, context) => requireReconciliationBackend(this).read(reconciliationRead(input), context).then((draft) => ({ draft }))],
       ["save_reconciliation_draft", (input, context) => requireReconciliationBackend(this).save(reconciliationDraftSave(input), context)],
       ["commit_reconciliation", (input, context) => requireReconciliationBackend(this).commit(reconciliationCommit(input), context)],
+      ["list_inspections", (input, context) => requireInspectionsBackend(this).list(inspectionList(input), context)],
+      ["read_inspection", (input, context) => requireInspectionsBackend(this).get(inspectionRead(input), context)],
+      ["preview_inspection_completion", (input, context) => requireInspectionsBackend(this).preview(inspectionPreview(input), context)],
+      ["commit_inspection_completion", (input, context) => {
+        assertScope(context.scopes, "inventory:write");
+        const parsed = inspectionCommit(input);
+        if (context.idempotencyKey === undefined || context.idempotencyKey.length < 8 || context.idempotencyKey.length > 200) throw new McpAdapterError("INVALID_ARGUMENT", "An 8-200 character idempotency key is required for inspection completion.");
+        return requireInspectionsBackend(this).commit(parsed, context);
+      }],
 
       ["list_projects", (input, context) => this.backend.projects.list(projectList(input), context)],
       ["list_removed_projects", (input, context) => {
