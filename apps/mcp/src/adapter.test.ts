@@ -405,6 +405,20 @@ describe("McpAdapter", () => {
       scopeBehavior: { inventory: expect.stringContaining("shared"), offers: expect.stringContaining("itemId") },
     });
 
+    const bomCreate = adapter.listTools().find((tool) => tool.name === "create_bom_line");
+    expect(bomCreate?.inputSchema.properties.constraints).toMatchObject({
+      properties: {
+        specification: {
+          properties: {
+            decisions: { properties: { resistance: {}, power_rating: {} } },
+            missingDecisions: { items: { enum: expect.arrayContaining(["resistance", "power_rating"]) } },
+          },
+        },
+      },
+    });
+    expect(JSON.stringify(adapter.capabilityDocument())).toContain("resistance");
+    expect(JSON.stringify(adapter.capabilityDocument())).toContain("power_rating");
+
     const reconciliation = adapter.listTools().find((tool) => tool.name === "save_reconciliation_draft");
     expect(reconciliation?.inputSchema).toMatchObject({
       properties: {

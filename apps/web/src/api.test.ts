@@ -390,6 +390,32 @@ describe("authenticated BenchLedger API adapter", () => {
     await expect(createWorkspaceAdapter().loadWorkspace()).rejects.toMatchObject({ kind: "server", status: 502, code: "invalid_gap_evaluation" });
   });
 
+  it("preserves LED resistor decisions from canonical connected gaps", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "0.1.0", demo: false, now: "2026-08-30T10:00:00.000Z" }))
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", source: "ui", scopes: ["read", "write"] }))
+      .mockResolvedValueOnce(jsonResponse({
+        source: "api",
+        fetchedAt: "2026-08-30T10:00:00.000Z",
+        inventory: [],
+        projects: [serverProject({ currentRevision: serverRevision({
+          bom: [{ id: "bom-resistor", revisionId: "revision-1", name: "LED resistor", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 }],
+          gapEvaluation: {
+            lines: [{ lineId: "bom-resistor", status: "specify_first", decision: "decide", missingDecisions: ["resistance", "power_rating"], suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 1, matchedItemIds: [], reasons: ["Specify resistance and power rating before sourcing."] }],
+            totals: { requiredLines: 1, optionalLines: 0, readyLines: 0, checkLines: 0, decideLines: 1, sourceLines: 0, partialLines: 0, missingLines: 0 },
+          },
+        }) })],
+        offers: [],
+      }));
+
+    const snapshot = await createWorkspaceAdapter().loadWorkspace();
+
+    expect(snapshot.projects[0]?.gapEvaluation).toMatchObject({
+      lines: [{ decision: "decide", missingDecisions: ["resistance", "power_rating"] }],
+      totals: { decideLines: 1, sourceLines: 0 },
+    });
+  });
+
   it("rehydrates exact product IDs and persisted setup for a fresh workspace load", async () => {
     vi.stubGlobal("document", { cookie: "forge_csrf=csrf-reload" });
     vi.spyOn(globalThis, "fetch")

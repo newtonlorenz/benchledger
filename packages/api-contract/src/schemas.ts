@@ -471,6 +471,8 @@ export const bomSpecificationDecisionSchema = z.enum([
   "connector",
   "compatibility",
   "dimensions",
+  "resistance",
+  "power_rating",
 ]);
 const bomSpecificationDecisionValueSchema = z.string().trim().min(1).max(240);
 const bomSpecificationDecisionsSchema = z.object({
@@ -481,12 +483,14 @@ const bomSpecificationDecisionsSchema = z.object({
   connector: bomSpecificationDecisionValueSchema.optional(),
   compatibility: bomSpecificationDecisionValueSchema.optional(),
   dimensions: bomSpecificationDecisionValueSchema.optional(),
+  resistance: bomSpecificationDecisionValueSchema.optional(),
+  power_rating: bomSpecificationDecisionValueSchema.optional(),
 }).strict();
 
 export const bomSpecificationSchema = z.object({
   status: z.enum(["sufficient", "insufficient"]),
   decisions: bomSpecificationDecisionsSchema.optional(),
-  missingDecisions: z.array(bomSpecificationDecisionSchema).min(1).max(7).optional(),
+  missingDecisions: z.array(bomSpecificationDecisionSchema).min(1).max(9).optional(),
 }).strict().superRefine((value, ctx) => {
   const missing = value.missingDecisions ?? [];
   if (value.status === "insufficient" && missing.length === 0) {
@@ -513,7 +517,7 @@ export const bomConstraintsSchema = z.object({
   specification: bomSpecificationSchema.optional(),
 }).strict();
 
-export const bomLineSchema = z.object({
+const bomLineShape = z.object({
   id: idSchema,
   revisionId: idSchema,
   name: z.string().min(1).max(240),
@@ -530,11 +534,14 @@ export const bomLineSchema = z.object({
   version: z.number().int().positive()
 }).strict();
 
-export const createBomLineSchema = bomLineSchema.pick({
+export const bomLineSchema = bomLineShape;
+
+const createBomLineShape = bomLineShape.pick({
   name: true, itemId: true, requiredQuantity: true, unit: true, optional: true,
   constraints: true, alternatives: true, notes: true
 }).extend({ id: idSchema.optional() }).strict();
-export const updateBomLineSchema = createBomLineSchema.omit({ id: true }).partial().strict();
+export const createBomLineSchema = createBomLineShape;
+export const updateBomLineSchema = createBomLineShape.omit({ id: true }).partial().strict();
 
 /**
  * Bounded, review-first project graph setup. The local references are
@@ -669,7 +676,7 @@ export const projectSetupPreviewSchema = z.object({
   contentSha256: z.string().length(64).regex(/^[a-f0-9]+$/),
   proposal: projectSetupProposalSchema,
   fieldErrors: z.array(projectSetupFieldErrorSchema).max(100),
-  unresolvedSpecifications: z.array(z.object({ bomLineLocalRef: idSchema, missingDecisions: z.array(bomSpecificationDecisionSchema).max(7) }).strict()).max(24),
+  unresolvedSpecifications: z.array(z.object({ bomLineLocalRef: idSchema, missingDecisions: z.array(bomSpecificationDecisionSchema).max(9) }).strict()).max(24),
   gaps: z.object({ revisionId: idSchema, lines: z.array(z.lazy(() => bomGapSchema)).max(24), totals: z.record(z.string(), z.number().int().nonnegative()) }).strict(),
   plannedReservations: z.array(projectSetupPlannedReservationSchema).max(48),
   // Candidate matching may legitimately involve more rows than the bounded
@@ -726,7 +733,7 @@ export const bomGapSchema = z.object({
   status: gapStatusSchema,
   /** Beginner-facing grouping derived from the structured gap state. */
   decision: bomDecisionSchema.optional(),
-  missingDecisions: z.array(bomSpecificationDecisionSchema).max(7).optional(),
+  missingDecisions: z.array(bomSpecificationDecisionSchema).max(9).optional(),
   requiredQuantity: z.number().finite().nonnegative(),
   suppliedQuantity: z.number().finite().nonnegative(),
   inspectQuantity: z.number().finite().nonnegative(),

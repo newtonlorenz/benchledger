@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  bomGapSchema, bomLineSchema, bomSpecificationDecisionSchema, bomSpecificationSchema, createBomLineSchema, createInventoryCategorySchema, createInventoryItemSchema, createOfferSchema,
+  bomAlternativeSchema, bomGapSchema, bomLineSchema, bomSpecificationDecisionSchema, bomSpecificationSchema, createInventoryCategorySchema, createInventoryItemSchema, createOfferSchema,
   createProjectRevisionSchema, createProjectSchema, createReservationSchema,
   createProjectWithInitialRevisionSchema, createWorkItemRevisionSchema, createWorkItemSchema, idSchema, inventoryListQuerySchema,
-  commissionInventoryItemSchema, stockEventInputSchema, updateBomLineSchema, updateInventoryCategorySchema, updateInventoryItemSchema,
+  commissionInventoryItemSchema, quantityUnitSchema, stockEventInputSchema, updateInventoryCategorySchema, updateInventoryItemSchema,
   inventoryBulkUpdateSchema,
   updateProjectSchema, catalogProductSchema, createCatalogProductSchema,
   updateCatalogProductSchema, inventoryProductProfileSchema,
@@ -26,6 +26,7 @@ import type {
   ProjectSetupProposal, ProjectSetupPreview, CommitProjectSetup, ProjectSetupCommitResult, ProjectSetupFieldError
 } from "@benchledger/api-contract";
 import { ApplicationError, conflict, notFound, projectRemoved } from "./errors.js";
+import { isLedResistorRequirement, resolveBomSpecification } from "@benchledger/domain";
 import { parseInventoryCursor } from "./inventory-pagination.js";
 import type {
   ApplicationPorts, ArtifactDownload, AuditEvent, AuditInput, BeginUploadInput, BulkMutation, EventBusEvent,
@@ -57,8 +58,27 @@ const WORKSPACE_SECURITY_ENTITY_ID = "workspace";
  */
 const legacyBomConstraintValueSchema = z.union([z.string(), bomSpecificationSchema]);
 const legacyBomConstraintsSchema = z.record(z.string(), legacyBomConstraintValueSchema).default({});
-const legacyCreateBomLineSchema = createBomLineSchema.extend({ constraints: legacyBomConstraintsSchema }).strict();
-const legacyUpdateBomLineSchema = updateBomLineSchema.extend({ constraints: legacyBomConstraintsSchema.optional() }).strict();
+const legacyCreateBomLineSchema = z.object({
+  id: idSchema.optional(),
+  name: z.string().min(1).max(240),
+  itemId: idSchema.optional(),
+  requiredQuantity: z.number().finite().positive(),
+  unit: quantityUnitSchema,
+  optional: z.boolean(),
+  constraints: legacyBomConstraintsSchema,
+  alternatives: z.array(bomAlternativeSchema).max(20),
+  notes: z.string().max(2000).optional(),
+}).strict();
+const legacyUpdateBomLineSchema = z.object({
+  name: z.string().min(1).max(240).optional(),
+  itemId: idSchema.optional(),
+  requiredQuantity: z.number().finite().positive().optional(),
+  unit: quantityUnitSchema.optional(),
+  optional: z.boolean().optional(),
+  constraints: legacyBomConstraintsSchema.optional(),
+  alternatives: z.array(bomAlternativeSchema).max(20).optional(),
+  notes: z.string().max(2000).optional(),
+}).strict();
 
 /**
  * Constraint keys are deliberately allow-listed at the API boundary. BOM
@@ -165,46 +185,55 @@ function canReserveBomItem(line: BomLine, item: InventoryItem): boolean {
 }
 
 type BomSpecificationDecision = z.infer<typeof bomSpecificationDecisionSchema>;
-type BomSpecification = z.infer<typeof bomSpecificationSchema>;
-
-const POWER_SUPPLY_NAME = /\b(?:power\s+supply|power\s+adapter|dc\s+adapter|ac\s+adapter|wall\s+adapter|mains\s+adapter)\b/i;
-const LEGACY_POWER_SUPPLY_DECISIONS: readonly BomSpecificationDecision[] = ["current_or_load", "connector"];
 
 export function bomSpecification(line: Pick<BomLine, "name" | "constraints"> & { readonly id?: string | undefined; readonly itemId?: string | undefined }): { readonly sufficient: boolean; readonly missingDecisions: readonly BomSpecificationDecision[] } {
   const raw = line.constraints?.[SPECIFICATION_CONSTRAINT_KEY];
-  if (raw !== undefined) {
-    const explicit = bomSpecificationSchema.safeParse(raw);
-    if (!explicit.success) throw new ApplicationError("integrity_error", `BOM line ${line.id ?? "unknown"} contains a malformed specification decision.`);
-    const decisions = explicit.data.decisions ?? {};
-    const mandatoryMissing = POWER_SUPPLY_NAME.test(line.name)
-      ? LEGACY_POWER_SUPPLY_DECISIONS.filter((decision) => {
-        const value = decisions[decision];
-        return typeof value !== "string" || value.trim().length === 0;
-      })
-      : [];
-    const missingDecisions = [...new Set([...(explicit.data.missingDecisions ?? []), ...mandatoryMissing])];
+  if (raw !== undefined && !bomSpecificationSchema.safeParse(raw).success) {
+    throw new ApplicationError("integrity_error", `BOM line ${line.id ?? "unknown"} contains a malformed specification decision.`);
+  }
+  return resolveBomSpecification(line);
+}
+
+function canonicalizeBomLineWrite<T extends { readonly name: string; readonly constraints?: unknown }>(input: T): T {
+  if (!isLedResistorRequirement(input.name)) return input;
+  const constraints = isRecord(input.constraints) ? input.constraints : undefined;
+  const specification = constraints?.[SPECIFICATION_CONSTRAINT_KEY];
+  const resolved = resolveBomSpecification(input);
+  if (isSpecificationSufficientClaim(specification) && !resolved.sufficient) {
+    throw new ApplicationError("validation", "A sufficient LED resistor requirement must resolve resistance and power_rating.");
+  }
+  if (specification !== undefined) {
+    if (!isRecord(specification) || specification.status !== "insufficient") return input;
     return {
-      sufficient: explicit.data.status === "sufficient" && missingDecisions.length === 0,
-      missingDecisions,
-    };
+      ...input,
+      constraints: {
+        ...(constraints ?? {}),
+        specification: { ...specification, status: "insufficient", missingDecisions: [...resolved.missingDecisions] },
+      },
+    } as T;
   }
+  return {
+    ...input,
+    constraints: {
+      ...(constraints ?? {}),
+      specification: { status: "insufficient", missingDecisions: [...resolved.missingDecisions] },
+    },
+  } as T;
+}
 
-  // Older records have no specification marker. Keep the compatibility
-  // fallback narrow: a clearly power-supply-like requirement cannot be
-  // sourced safely until load/current and connector are stated.
-  if (POWER_SUPPLY_NAME.test(line.name)) {
-    return { sufficient: false, missingDecisions: LEGACY_POWER_SUPPLY_DECISIONS };
-  }
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 
-  // Exact identities are sufficient for a source proposal even when the
-  // physical row is absent. This is deliberately limited to fields that
-  // identify one product, not free-text names or alternatives.
-  const hasExactIdentity = line.itemId !== undefined
-    || (typeof line.constraints?.sku === "string" && line.constraints.sku.trim().length > 0)
-    || (typeof line.constraints?.model === "string" && line.constraints.model.trim().length > 0);
-  if (hasExactIdentity) return { sufficient: true, missingDecisions: [] };
+function isSpecificationSufficientClaim(value: unknown): value is Readonly<Record<string, unknown>> & { readonly status: "sufficient" } {
+  return isRecord(value) && value.status === "sufficient";
+}
 
-  return { sufficient: true, missingDecisions: [] };
+function canonicalizeSetupProposal(proposal: ProjectSetupProposal): ProjectSetupProposal {
+  return {
+    ...proposal,
+    bomLines: proposal.bomLines.map((line) => canonicalizeBomLineWrite(line) as typeof line),
+  };
 }
 
 function bomDecision(line: BomLine, status: BomGap["status"], sufficient: boolean, inspectQuantity: number): BomGap["decision"] {
@@ -541,21 +570,21 @@ function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], active: 
 }
 
 function setupBomLines(proposal: ProjectSetupProposal, now: string): readonly BomLine[] {
-  return proposal.bomLines.map((line) => bomLineSchema.parse({
-    id: line.id,
-    revisionId: proposal.revision.id,
-    name: line.name,
-    requiredQuantity: line.requiredQuantity,
-    unit: line.unit,
-    optional: line.optional,
-    ...(line.itemId === undefined ? {} : { itemId: line.itemId }),
-    constraints: line.constraints,
-    alternatives: line.alternatives,
-    ...(line.notes === undefined ? {} : { notes: line.notes }),
-    createdAt: now,
-    updatedAt: now,
-    version: 1,
-  }));
+  return proposal.bomLines.map((line) => canonicalizeBomLineWrite(bomLineSchema.parse({
+      id: line.id,
+      revisionId: proposal.revision.id,
+      name: line.name,
+      requiredQuantity: line.requiredQuantity,
+      unit: line.unit,
+      optional: line.optional,
+      ...(line.itemId === undefined ? {} : { itemId: line.itemId }),
+      constraints: line.constraints,
+      alternatives: line.alternatives,
+      ...(line.notes === undefined ? {} : { notes: line.notes }),
+      createdAt: now,
+      updatedAt: now,
+      version: 1,
+    })));
 }
 
 function setupReservationRecords(proposal: ProjectSetupProposal, lines: readonly BomLine[], now: string): readonly Reservation[] {
@@ -1530,7 +1559,7 @@ export class ApplicationService {
     const setup = this.ports.projectSetups;
     if (setup === undefined) throw new ApplicationError("integrity_error", "This runtime does not support project setup previews");
     const previewId = setupDerivedId(randomUUID(), "preview", "setup-preview");
-    const proposal = setupNormalize(previewId, parsed);
+    const proposal = canonicalizeSetupProposal(setupNormalize(previewId, parsed));
     const inventory = await this.ports.unitOfWork.exclusive(() => listAllInventory(this.ports.inventory));
     const now = nowIso();
     const setupLines = setupBomLines(proposal, now);
@@ -1718,7 +1747,7 @@ export class ApplicationService {
   }
 
   async createBomLine(revisionId: string, input: CreateBomLine | LegacyBomLineInput, ctx: RequestContext): Promise<Mutation<BomLine>> {
-    const parsed = legacyCreateBomLineSchema.parse(input) as CreateBomLine;
+    const parsed = canonicalizeBomLineWrite(legacyCreateBomLineSchema.parse(input) as CreateBomLine);
     const parentId = requireId(revisionId, "revision id");
     return this.mutate(ctx, "project.bom_line.create", "bom_line", parsed.id ?? "pending", async () => {
       await this.assertProjectActiveFromRevision(parentId);
@@ -1734,7 +1763,13 @@ export class ApplicationService {
       const existing = await this.ports.projects.getBomLine(lineId);
       if (existing === null) throw notFound("BOM line", lineId);
       await this.assertProjectActiveFromRevision(existing.revisionId);
-      const line = await this.ports.projects.updateBomLine(lineId, parsed, expectedVersion, ctx);
+      const merged = canonicalizeBomLineWrite({
+        ...existing,
+        ...parsed,
+        ...(parsed.constraints === undefined ? { constraints: existing.constraints } : {}),
+      });
+      const canonicalConstraints = isRecord(merged.constraints) ? { constraints: merged.constraints } : {};
+      const line = await this.ports.projects.updateBomLine(lineId, { ...parsed, ...canonicalConstraints }, expectedVersion, ctx);
       return { value: line, entityId: line.id, version: line.version };
     });
   }

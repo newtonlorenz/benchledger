@@ -410,6 +410,36 @@ describe("createApplicationBackend translation coverage", () => {
     expect(evaluation.totals).toMatchObject({ decide: 1, source: 0 });
   });
 
+  it("preserves the resistor decision vocabulary through MCP evaluation", async () => {
+    const service = serviceFixture();
+    service.evaluateBomGaps.mockResolvedValueOnce({
+      revisionId: "revision-1",
+      lines: [{
+        lineId: "bom-led-resistor",
+        name: "LED resistor",
+        optional: false,
+        status: "specify_first",
+        decision: "decide",
+        missingDecisions: ["resistance", "power_rating"],
+        requiredQuantity: 1,
+        suppliedQuantity: 0,
+        inspectQuantity: 0,
+        missingQuantity: 1,
+        unit: "each",
+        matchedItemIds: [],
+        reasons: ["Specify resistance and power rating before sourcing."],
+        alternatives: [],
+        candidates: [],
+      }],
+      totals: { requiredLines: 1, suppliedLines: 0, inspectFirstLines: 0, partialLines: 0, missingLines: 0, optionalLines: 0, decideLines: 1, sourceLines: 0 },
+    });
+
+    const evaluation = await createApplicationBackend(service).bom.evaluate({ projectRevisionId: "revision-1" }, context);
+
+    expect(evaluation.lines[0]).toMatchObject({ state: "specify_first", decision: "decide", recommendedAction: "specify", missingDecisions: ["resistance", "power_rating"] });
+    expect(evaluation.totals).toMatchObject({ decide: 1, source: 0 });
+  });
+
   it("maps project, revision, BOM, reservations, usage, and context branches", async () => {
     const service = serviceFixture();
     const backend = createApplicationBackend(service);

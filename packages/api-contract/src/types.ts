@@ -8,7 +8,7 @@ import type {
   readinessSchema, reservationSchema, stockEventInputSchema, stockEventSchema,
   updateBomLineSchema, updateInventoryItemSchema, updateProjectSchema, usageInputSchema,
   uploadSessionSchema, workItemRevisionSchema, workItemSchema,
-  artifactBuildConfigurationBindingSchema, buildConfigurationSnapshotSchema, catalogProductSchema,
+  artifactBuildConfigurationBindingSchema, bomSpecificationDecisionSchema, bomSpecificationSchema, buildConfigurationSnapshotSchema, catalogProductSchema,
   catalogProductFilamentSchema, catalogProductPrinterSchema, createArtifactBuildConfigurationBindingSchema,
   buildConfigurationSnapshotStorageInputSchema, createBuildConfigurationSnapshotSchema, createCatalogProductSchema, createInventoryProductProfileSchema,
   filamentSpoolProfileDetailsSchema, inventoryProductProfileFilamentSchema, inventoryProductProfilePrinterSchema,
@@ -68,6 +68,8 @@ export type ProjectWithInitialRevision = z.infer<typeof projectWithInitialRevisi
 export type WorkItemRevision = z.infer<typeof workItemRevisionSchema>;
 export type CreateWorkItemRevision = z.infer<typeof createWorkItemRevisionSchema>;
 export type BomLine = z.infer<typeof bomLineSchema>;
+export type BomSpecificationDecision = z.infer<typeof bomSpecificationDecisionSchema>;
+export type BomSpecification = z.infer<typeof bomSpecificationSchema>;
 export type CreateBomLine = z.infer<typeof createBomLineSchema>;
 export type UpdateBomLine = z.infer<typeof updateBomLineSchema>;
 export type BomGapCandidate = z.infer<typeof bomGapCandidateSchema>;

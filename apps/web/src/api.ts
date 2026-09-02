@@ -929,7 +929,7 @@ function managedCategoryPage(value: unknown): InventoryCategoryPage {
   return { data: categories, limit: typeof limit === "number" ? limit : categories.length, ...(typeof nextCursor === "string" ? { nextCursor } : {}), ...(typeof total === "number" ? { total } : {}) };
 }
 
-const BOM_SPECIFICATION_DECISIONS = ["identity", "purpose", "voltage", "current_or_load", "connector", "compatibility", "dimensions"] as const;
+const BOM_SPECIFICATION_DECISIONS = ["identity", "purpose", "voltage", "current_or_load", "connector", "compatibility", "dimensions", "resistance", "power_rating"] as const;
 
 function mapBomSpecification(value: unknown): BomSpecification | undefined {
   const record = asRecord(value);

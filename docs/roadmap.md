@@ -95,8 +95,12 @@ preview/commit patterns; do not create a parallel MCP or web implementation.
   persist explicit sufficient/insufficient specification decisions; gap reads
   expose Ready/Check/Decide/Source outcomes and exact missing decisions; and
   under-specified, inspect-first, and optional requirements are excluded from
-  Source/shopping. Broader structured search and guided specification editing
-  remain separate slices.**
+  Source/shopping. Surface parity now carries the expanded LED-resistor
+  `resistance`/`power_rating` decisions through MCP validation, capability
+  discovery, evaluation, connected web gaps, and the shared-resolver offline
+  fallback; shopping rows, counts, and copied drafts remain required Source
+  only. Broader structured search and guided specification editing remain
+  separate slices.**
 - [ ] `BL-AW-008` → `REQ-008`: maker-specific profiles, package/unit
   conversions, and explicit quantity semantics. **Partial foundation only:**
   exact printer/filament product and physical-profile records exist, but the

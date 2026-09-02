@@ -299,6 +299,7 @@ export const projects: Project[] = [
       { id: "bom-petg", label: "PETG HF · Black", itemId: "mat-petg-black", required: 400, unit: "g", note: "Estimated from r03 plate" },
       { id: "bom-inserts", label: "M3 heat-set inserts", itemId: "fast-m3-inserts", required: 8, unit: "each", note: "Physical count needed before allocation" },
       { id: "bom-servo", label: "STS3215 smart servo", required: 1, unit: "each", note: "Requires 6 V supply and serial control" },
+      { id: "bom-led-resistor", label: "LED resistor", required: 1, unit: "each", note: "Resolve resistance and power rating before sourcing" },
       { id: "bom-bearing", label: "608-2RS bearing", required: 2, unit: "each", note: "8 × 22 × 7 mm" }
     ],
     artifacts: lampArtifacts,

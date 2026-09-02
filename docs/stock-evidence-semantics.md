@@ -84,8 +84,11 @@ not inflate the required supplied count.
 
 An insufficient requirement is `specify_first` / Decide, not missing stock. Its
 `missingDecisions` identify the unanswered identity, purpose, electrical,
-connector, compatibility, or dimensional choices. Power-supply requirements
-must at least resolve current/load and connector before Source is permitted.
+connector, compatibility, dimensional, resistance, or power-rating choices.
+Power-supply requirements must at least resolve current/load and connector
+before Source is permitted. LED resistor requirements must resolve both
+resistance and power rating before Source is permitted. A sufficient marker with
+only one of those resistor decisions is still incomplete.
 If a plausible recorded item still needs a count or compatibility decision,
 Check takes precedence so the existing item can be inspected before shopping.
 A known shortfall after confirmed partial coverage is Source for the remaining
@@ -101,9 +104,12 @@ must not reserve uncertain stock merely to make the gap disappear.
 Shopping output is a proposal composed from BOM gaps and offer observations:
 
 Only required Source lines are eligible for shopping. Ready, Check,
-`specify_first`/Decide, and optional lines are excluded. This avoids proposing
-a purchase before required characteristics have been decided or while plausible
-stock still needs inspection.
+`specify_first`/Decide, and optional lines are excluded from shopping rows,
+counts, totals, and copied draft lists. This avoids proposing a purchase before
+required characteristics have been decided or while plausible stock still needs
+inspection. If no required Source line exists but Decide or Check work remains,
+the UI says “Nothing is ready to source” and explains the blockers instead of
+claiming that inventory covers everything.
 
 Show package rounding, observed price, currency, shipping when known, link, and
 price age. Never claim that the offer is current without a fresh observation.

@@ -41,7 +41,9 @@ export type BomSpecificationDecision =
   | "current_or_load"
   | "connector"
   | "compatibility"
-  | "dimensions";
+  | "dimensions"
+  | "resistance"
+  | "power_rating";
 
 export type BomSpecificationDecisions = Readonly<Partial<Record<BomSpecificationDecision, string>>>;
 

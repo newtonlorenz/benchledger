@@ -157,6 +157,15 @@ The server's `tools/list` response contains only MCP's public fields (`name`,
 `description`, and `inputSchema`). Scope and mutation metadata are intentionally
 kept in the checked-in capability contract and enforced server-side.
 
+The BOM specification decision vocabulary is closed and shared across the
+application, HTTP, MCP, and web surfaces: `identity`, `purpose`, `voltage`,
+`current_or_load`, `connector`, `compatibility`, `dimensions`, `resistance`,
+and `power_rating`. LED resistor requirements remain Decide until both
+`resistance` and `power_rating` are resolved. MCP evaluation preserves those
+exact `missingDecisions` and returns `recommendedAction: specify`; web shopping
+rows, counts, and copied drafts include only required Source lines. Guided
+specification editing remains deferred.
+
 The production runtime seeds a curated, versioned starter catalog on startup:
 at least 24 FFF printer identities spanning Bambu Lab, Prusa Research,
 Creality, ELEGOO, and Anycubic, plus at least 24 exact 1.75 mm filament

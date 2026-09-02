@@ -8,10 +8,12 @@ import {
   getLineLabel,
   getStockLabel,
   inventoryKindOptions,
+  shoppingEligibleLines,
+  shoppingEmptyState,
   sumMoneyByCurrency
 } from "./domain";
 import { inventory, projects } from "./mock-data";
-import type { BomLine, InventoryItem, Project } from "./domain";
+import type { BomLine, BomLineStatus, InventoryItem, Project } from "./domain";
 
 describe("BenchLedger beginner-friendly domain language", () => {
   it("translates evidence states into language a first-time maker can understand", () => {
@@ -33,7 +35,8 @@ describe("BenchLedger beginner-friendly domain language", () => {
     expect(summary.readyLines).toBe(2);
     expect(summary.inspectLines).toBe(1);
     expect(summary.missingLines).toBe(2);
-    expect(summary.readyLines + summary.inspectLines + summary.missingLines).toBe(summary.totalLines);
+    expect(summary.decideLines).toBe(1);
+    expect(summary.readyLines + summary.inspectLines + summary.missingLines + summary.decideLines).toBe(summary.totalLines);
   });
 
   it("formats money without leaking internal minor-unit details", () => {
@@ -194,6 +197,56 @@ describe("BenchLedger beginner-friendly domain language", () => {
     expect(summary.lineStatuses[0]).toMatchObject({ missingDecisions: ["voltage", "connector"] });
     expect(summary).toMatchObject({ decideLines: 1, sourceLines: 1, checkLines: 2, optionalLines: 1 });
     expect(getLineLabel("specify-first")).toEqual({ label: "Specify first", tone: "warn" });
+  });
+
+  it("uses the shared resolver for LED resistor decisions in offline/sample fallback", () => {
+    const project: Project = {
+      ...projects[0]!,
+      id: "resistor-project",
+      bom: [
+        { id: "resistor", label: "LED resistor", itemId: "resistor-stock", required: 1, unit: "each" },
+        { id: "board", label: "LED board resistor bracket", required: 1, unit: "each" },
+        { id: "complete", label: "LED resistor", required: 1, unit: "each", constraints: { specification: { status: "sufficient", decisions: { resistance: "330 ohm", power_rating: "0.25 W" } } } },
+      ],
+    };
+
+    const summary = calculateProjectSummary(project, []);
+
+    expect(summary.lineStatuses.map((line) => [line.state, line.decision])).toEqual([
+      ["specify-first", "decide"],
+      ["missing", "source"],
+      ["missing", "source"],
+    ]);
+    expect(summary.lineStatuses[0]).toMatchObject({ missingDecisions: ["resistance", "power_rating"] });
+  });
+
+  it("keeps shopping proposals limited to required Source lines and explains blocked proposals", () => {
+    const source: BomLineStatus[] = [
+      { line: { id: "source", label: "Insert", required: 1, unit: "each" }, supplied: 0, remaining: 1, state: "missing", decision: "source" },
+      { line: { id: "decide", label: "LED resistor", required: 1, unit: "each" }, supplied: 0, remaining: 1, state: "specify-first", decision: "decide", missingDecisions: ["resistance", "power_rating"] },
+      { line: { id: "check", label: "Delivered board", required: 1, unit: "each" }, supplied: 0, remaining: 1, state: "inspect-first", decision: "check" },
+      { line: { id: "optional", label: "Optional cover", required: 1, unit: "each", optional: true }, supplied: 0, remaining: 1, state: "optional", decision: "source" },
+    ];
+    const summary: ReturnType<typeof calculateProjectSummary> = {
+      totalLines: source.length,
+      readyLines: 0,
+      inspectLines: 1,
+      missingLines: 1,
+      optionalLines: 1,
+      readyDecisionLines: 0,
+      checkLines: 1,
+      decideLines: 1,
+      sourceLines: 1,
+      partialLines: 0,
+      readinessUnavailable: false,
+      lineStatuses: source,
+    };
+
+    expect(shoppingEligibleLines(summary).map((line) => line.line.id)).toEqual(["source"]);
+    expect(shoppingEmptyState({ ...summary, sourceLines: 0, lineStatuses: source.slice(1) })).toEqual({
+      title: "Nothing is ready to source",
+      description: "1 requirement still needs a decision and 1 requirement still needs checking. Optional requirements are not included in shopping proposals.",
+    });
   });
 
   it("combines explicit candidates and excludes stocked optional lines from required totals", () => {

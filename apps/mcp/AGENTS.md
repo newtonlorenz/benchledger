@@ -156,9 +156,12 @@ one of four decisions:
 
 Optional lines remain separately identified and never authorize Source. A BOM
 line may record `constraints.specification` with a required `status`, resolved
-`decisions`, and exact `missingDecisions`. An insufficient power-supply line
-must resolve current/load and connector before it can become Source. An exact
-item ID does not override conditional compatibility, and ordered or otherwise
+`decisions`, and exact `missingDecisions`. The closed decision vocabulary
+includes `identity`, `purpose`, `voltage`, `current_or_load`, `connector`,
+`compatibility`, `dimensions`, `resistance`, and `power_rating`. An insufficient
+power-supply line must resolve current/load and connector before it can become
+Source; an LED resistor must resolve resistance and power rating. An exact item
+ID does not override conditional compatibility, and ordered or otherwise
 unverified stock remains Check rather than a purchase recommendation.
 
 Each returned line also carries its required/optional flag. Ready, Check,
@@ -282,10 +285,14 @@ revision status as review evidence until a dedicated freeze operation exists.
 
 Use `list_offers` and `record_offer_snapshot` to compare supplier observations.
 Record supplier, URL, package quantity, price in minor currency units, observed
-time, and evidence. A shopping-list answer must separate:
+time, and evidence. A shopping proposal contains only required BOM lines with a
+Source decision. Keep Ready, Check, Decide, and optional lines in separate
+readiness context; exclude them from shopping rows, counts, and copied drafts.
+If no Source line exists while Decide or Check work remains, say “Nothing is
+ready to source” and explain the blockers. A readiness answer must separate:
 
 ```text
-required / optional / substitute / inspect-first / already supplied
+Ready/reuse / Check/inspect / Decide/specify / Source/required / optional context
 ```
 
 Include the source URL and observation age, state that price and availability
