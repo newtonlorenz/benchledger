@@ -138,7 +138,7 @@ profiles when present.
 | Start a project | Guided project setup | `create_project_with_initial_revision` → `create_work_item`; use `create_project_revision` for later planning baselines |
 | Understand a build gap | BOM editor and gap panel | `list_bom_lines` → `calculate_bom_gaps`; Decide before supplier lookup, Check recorded candidates, and shop only Source lines |
 | Hold confirmed parts | Reservation panel | `create_reservation` → read BOM/gaps again |
-| Add a CAD revision | Artifact upload flow | `begin_artifact_upload` → scoped HTTP PUT → `finalize_artifact_upload` |
+| Add a CAD revision | Artifact upload flow | Authenticated browser/HTTP upload → `finalize_artifact_upload`; generic MCP remains unavailable until a transactional trusted-host bridge exists |
 | Record exact build setup | Project build-configuration form | catalog/profile reads → `create_build_configuration` |
 | Compare buying options | Offers and shopping-list view | `list_offers` → `record_offer_snapshot` (observation only) |
 | Close and learn from a build | Project **Close out** review | `read_reconciliation` → `save_reconciliation_draft` → explicit `commit_reconciliation` |
@@ -166,22 +166,20 @@ retirement, partial, undo, and import operations are outside this command.
 
 ## Artifact transfer contract
 
-`begin_artifact_upload` returns separate short-lived URLs for one upload session's
-byte write and finalize actions. Each URL has a required
-`X-Bench-Transfer-Token` header; the token is bound to the exact action, ID,
-project, expiry, byte length, and SHA-256. `read_artifact_download_metadata`
-returns the same header-bound capability pattern for one artifact revision.
-Tokens never appear in query strings. The adapter validates HTTP(S), artifact
-endpoint scope, no-query links, and expiry metadata. It rejects `data:` URLs and
-result keys that imply base64 or inline binary content. Large files are
-therefore transferred outside MCP messages without exposing arbitrary
-filesystem paths.
+Generic MCP never returns live artifact-transfer URLs, headers, tokens, or
+credentials, including through `_meta`. Artifact upload and download tools
+currently fail closed with `HOST_TRANSFER_UNAVAILABLE` before creating an upload
+session, reading artifact metadata, or minting a capability. A future
+transactional trusted-host bridge must consume private transfer credentials
+outside MCP result serialization. Direct authenticated browser and HTTP
+transfer routes retain short-lived, action-, actor-, project-, byte-length-, and
+SHA-256-bound header capabilities. Download capabilities are one-use after a
+successful read.
 
 `begin_artifact_upload` requires the caller's SHA-256 and accepts either a
 project revision or a work-item revision (not both). The typed finalize tool
-uses the durable upload declaration; the separate finalize URL accepts the
-byte length and SHA-256 payload when an agent performs the HTTP transfer flow.
-Finalization trusts the durable upload session's project ancestry, resolved by
+uses the durable upload declaration. Finalization trusts the durable upload
+session's project ancestry, resolved by
 the application service or an optional host resolver before a scoped request is
 allowed to proceed.
 

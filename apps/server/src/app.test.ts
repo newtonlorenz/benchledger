@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { createApp, bearerRecord } from "./app.js";
+import { ArtifactTransferManager, TRANSFER_TOKEN_HEADER } from "./artifact-transfer.js";
 import { createSyntheticRuntime } from "./memory-store.js";
 import { createProductionRuntime } from "@benchledger/runtime";
 import { ApplicationService } from "@benchledger/application";
@@ -549,7 +550,40 @@ describe("BenchLedger HTTP API", () => {
     await app.close();
   });
 
-  it("uses short-lived header capabilities for MCP upload, finalize, and download", async () => {
+  it("supports the authenticated browser upload, finalize, and download round trip", async () => {
+    const { app, cookie, csrf } = await loggedIn();
+    const body = Buffer.from("authenticated-browser-transfer");
+    const sha256 = createHash("sha256").update(body).digest("hex");
+    const input = {
+      projectId: "synthetic-project-lamp",
+      revisionId: "synthetic-revision-lamp-r01",
+      role: "step",
+      filename: "browser-source.step",
+      mediaType: "model/step",
+      byteSize: body.byteLength,
+      sha256,
+    } as const;
+    const begin = await app.inject({ method: "POST", url: "/api/v1/artifacts/uploads", headers: { cookie, "x-csrf-token": csrf }, payload: input });
+    expect(begin.statusCode).toBe(201);
+    const uploadId = begin.json<{ data: { id: string; status: string } }>().data.id;
+    expect(begin.json()).toMatchObject({ data: { id: uploadId, status: "pending" } });
+
+    const write = await app.inject({ method: "PUT", url: `/api/v1/artifacts/uploads/${uploadId}`, headers: { cookie, "x-csrf-token": csrf, "content-type": "application/octet-stream" }, payload: body });
+    expect(write.statusCode).toBe(200);
+    expect(write.json()).toEqual({ receivedBytes: body.byteLength });
+    const finalized = await app.inject({ method: "POST", url: `/api/v1/artifacts/uploads/${uploadId}/finalize`, headers: { cookie, "x-csrf-token": csrf } });
+    expect(finalized.statusCode).toBe(200);
+    const artifactId = finalized.json<{ data: { id: string; sha256: string } }>().data.id;
+    expect(finalized.json()).toMatchObject({ data: { id: artifactId, sha256 } });
+
+    const downloaded = await app.inject({ method: "GET", url: `/api/v1/artifacts/${artifactId}/download`, headers: { cookie } });
+    expect(downloaded.statusCode).toBe(200);
+    expect(downloaded.headers["content-type"]).toContain("model/step");
+    expect(Buffer.from(downloaded.rawPayload).equals(body)).toBe(true);
+    await app.close();
+  });
+
+  it("fails closed for generic MCP artifact transfer without exposing host capabilities", async () => {
     const app = await createApp({
       demo: true,
       publicBaseUrl: "https://configured-maker.example:8792",
@@ -559,49 +593,13 @@ describe("BenchLedger HTTP API", () => {
     const headers = { authorization: "Bearer artifact-agent-token" };
     const body = Buffer.from("step-data");
     const sha256 = createHash("sha256").update(body).digest("hex");
-    const mcp = (id: string, name: string, args: Record<string, unknown>) => app.inject({ method: "POST", url: "/api/v1/mcp", headers, payload: { jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } } });
-
-    const begin = await mcp("begin", "begin_artifact_upload", { projectId: "synthetic-project-lamp", filename: "source.step", role: "step", mediaType: "model/step", byteLength: body.byteLength, sha256 });
-    expect(begin.statusCode).toBe(200);
-    const ticket = begin.json<{ result: { structuredContent: { uploadId: string; uploadUrl: string; requiredHeaders: Record<string, string>; finalizeUrl: string; finalizeHeaders: Record<string, string> } } }>().result.structuredContent;
-    expect(ticket.uploadUrl).toBe("https://configured-maker.example:8792/api/v1/transfers/uploads/" + ticket.uploadId);
-    expect(ticket.uploadUrl).not.toContain("?");
-    expect(ticket.requiredHeaders).toHaveProperty("x-bench-transfer-token");
-    expect(ticket.finalizeUrl).toContain("/api/v1/transfers/uploads/" + ticket.uploadId + "/finalize");
-    expect(ticket.finalizeHeaders).toHaveProperty("x-bench-transfer-token");
-
-    // Transfer credentials are checked before the JSON-size guard and before
-    // Fastify can parse a potentially large request body.
-    const oversizedUnauthenticated = await app.inject({
-      method: "POST",
-      url: new URL(ticket.finalizeUrl).pathname,
-      headers: { "x-bench-transfer-token": "x".repeat(32), "content-length": String(3 * 1024 * 1024), "content-type": "application/json" },
-      payload: { sha256, byteLength: body.byteLength }
-    });
-    expect(oversizedUnauthenticated.statusCode).toBe(403);
-
-    const wrongAction = await app.inject({ method: "POST", url: new URL(ticket.finalizeUrl).pathname, headers: { ...ticket.requiredHeaders, host: "poisoned.example" }, payload: { sha256, byteLength: body.byteLength } });
-    expect(wrongAction.statusCode).toBe(403);
-    const upload = await app.inject({ method: "PUT", url: new URL(ticket.uploadUrl).pathname, headers: { ...ticket.requiredHeaders, host: "poisoned.example", "content-type": "model/step" }, payload: body });
-    expect(upload.statusCode).toBe(200);
-    const replayWrite = await app.inject({ method: "PUT", url: new URL(ticket.uploadUrl).pathname, headers: { ...ticket.requiredHeaders, "content-type": "model/step" }, payload: body });
-    expect(replayWrite.statusCode).toBe(403);
-
-    const finalize = await app.inject({ method: "POST", url: new URL(ticket.finalizeUrl).pathname, headers: { ...ticket.finalizeHeaders, host: "poisoned.example" }, payload: { sha256, byteLength: body.byteLength } });
-    expect(finalize.statusCode).toBe(200);
-    const artifactId = finalize.json<{ data: { id: string } }>().data.id;
-    const metadataResponse = await mcp("metadata", "read_artifact_download_metadata", { artifactId });
-    expect(metadataResponse.statusCode).toBe(200);
-    const metadata = metadataResponse.json<{ result: { structuredContent: { downloadUrl: string; requiredHeaders: Record<string, string> } } }>().result.structuredContent;
-    expect(metadata.downloadUrl).toBe(`https://configured-maker.example:8792/api/v1/transfers/artifacts/${artifactId}/download`);
-    expect(metadata.downloadUrl).not.toContain("?");
-    expect(metadata.requiredHeaders).toHaveProperty("x-bench-transfer-token");
-    expect((await app.inject({ method: "GET", url: `/api/v1/transfers/artifacts/other-artifact/download`, headers: metadata.requiredHeaders })).statusCode).toBe(403);
-    const download = await app.inject({ method: "GET", url: new URL(metadata.downloadUrl).pathname, headers: { ...metadata.requiredHeaders, host: "poisoned.example" } });
-    expect(download.statusCode).toBe(200);
-    expect(download.body).toBe(body.toString());
-    expect(download.headers["cache-control"]).toBe("no-store");
-    expect((await app.inject({ method: "GET", url: `/api/v1/artifacts/${artifactId}/download` })).statusCode).toBe(401);
+    const mcp = await app.inject({ method: "POST", url: "/api/v1/mcp", headers, payload: { jsonrpc: "2.0", id: "begin", method: "tools/call", params: { name: "begin_artifact_upload", arguments: { projectId: "synthetic-project-lamp", filename: "source.step", role: "step", mediaType: "model/step", byteLength: body.byteLength, sha256 } } } });
+    expect(mcp.statusCode).toBe(200);
+    expect(mcp.json()).toMatchObject({ result: { isError: true, structuredContent: { error: { code: "HOST_TRANSFER_UNAVAILABLE" } } } });
+    const metadata = await app.inject({ method: "POST", url: "/api/v1/mcp", headers, payload: { jsonrpc: "2.0", id: "metadata", method: "tools/call", params: { name: "read_artifact_download_metadata", arguments: { artifactId: "synthetic-artifact-source" } } } });
+    expect(metadata.statusCode).toBe(200);
+    expect(metadata.json()).toMatchObject({ result: { isError: true, structuredContent: { error: { code: "HOST_TRANSFER_UNAVAILABLE" } } } });
+    expect(JSON.stringify({ mcp: mcp.json(), metadata: metadata.json() })).not.toMatch(/https:\/\/configured-maker|x-bench-transfer-token|authorization|base64/i);
     await app.close();
   });
 
@@ -626,16 +624,12 @@ describe("BenchLedger HTTP API", () => {
       const sha256 = createHash("sha256").update(body).digest("hex");
       const begin = await app.inject({ method: "POST", url: "/api/v1/mcp", headers: bearerHeaders, payload: { jsonrpc: "2.0", id: "begin-actor-bound", method: "tools/call", params: { name: "begin_artifact_upload", arguments: { projectId: "synthetic-project-lamp", filename: "actor-bound.step", role: "step", mediaType: "model/step", byteLength: body.byteLength, sha256 } } } });
       expect(begin.statusCode).toBe(200);
-      const ticket = begin.json<{ result: { structuredContent: { uploadId: string; uploadUrl: string; requiredHeaders: Record<string, string>; finalizeUrl: string; finalizeHeaders: Record<string, string> } } }>().result.structuredContent;
-      const upload = await app.inject({ method: "PUT", url: new URL(ticket.uploadUrl).pathname, headers: { ...ticket.requiredHeaders, "content-type": "model/step" }, payload: body });
-      expect(upload.statusCode).toBe(200);
-      const finalize = await app.inject({ method: "POST", url: new URL(ticket.finalizeUrl).pathname, headers: { ...ticket.finalizeHeaders, "idempotency-key": "finalize-actor-1" }, payload: { sha256, byteLength: body.byteLength } });
-      expect(finalize.statusCode).toBe(200);
+      expect(begin.json()).toMatchObject({ result: { isError: true, structuredContent: { error: { code: "HOST_TRANSFER_UNAVAILABLE" } } } });
 
       const audit = await runtime.ports.audit.list(100);
-      expect(audit.data.find((event) => event.action === "artifact.upload.begin")).toMatchObject({ actor: "mcp-token:cad-agent", source: "mcp" });
-      expect(audit.data.find((event) => event.action === "artifact.upload.finalize")).toMatchObject({ actor: "mcp-token:cad-agent", source: "mcp", idempotencyKey: "finalize-actor-1" });
-      expect(idempotencyActors).toContain("mcp-token:cad-agent:finalize-actor-1");
+      expect(audit.data.find((event) => event.action === "artifact.upload.begin")).toBeUndefined();
+      expect(audit.data.find((event) => event.action === "artifact.upload.finalize")).toBeUndefined();
+      expect(idempotencyActors).not.toContain("mcp-token:cad-agent:finalize-actor-1");
 
       const login = await app.inject({ method: "POST", url: "/api/v1/auth/login", payload: { password: demoPassword } });
       const cookie = cookieHeader(login.headers["set-cookie"]);
@@ -1153,12 +1147,7 @@ describe("BenchLedger HTTP API", () => {
     const body = Buffer.from("historical-step");
     const sha256 = createHash("sha256").update(body).digest("hex");
     const begin = await call("begin-upload", "begin_artifact_upload", { projectId: "synthetic-project-lamp", projectRevisionId: historicalRevisionId, filename: "historical.step", role: "step", mediaType: "model/step", byteLength: body.byteLength, sha256 });
-    const ticket = begin.json<{ result: { structuredContent: { uploadId: string; uploadUrl: string; requiredHeaders: Record<string, string> } } }>().result.structuredContent;
-    expect(ticket.uploadId).toEqual(expect.any(String));
-    const upload = await app.inject({ method: "PUT", url: new URL(ticket.uploadUrl).pathname, headers: { ...ticket.requiredHeaders, "content-type": "model/step" }, payload: body });
-    expect(upload.statusCode).toBe(200);
-    const finalized = await call("finalize-upload", "finalize_artifact_upload", { uploadId: ticket.uploadId });
-    expect(finalized.json()).toMatchObject({ result: { isError: false, structuredContent: { projectId: "synthetic-project-lamp", projectRevisionId: historicalRevisionId, filename: "historical.step" } } });
+    expect(begin.json()).toMatchObject({ result: { isError: true, structuredContent: { error: { code: "HOST_TRANSFER_UNAVAILABLE" } } } });
     await app.close();
   });
 
@@ -1382,73 +1371,91 @@ describe("BenchLedger HTTP API", () => {
   });
 
   it("preflights transfer requests before parsing bodies and releases a failed finalize for retry", async () => {
-    const app = await createApp({
-      demo: true,
-      publicBaseUrl: "https://configured-maker.example:8792",
-      auth: { sessionSecret: "s".repeat(48), secureCookies: false, bearerTokens: [bearerRecord("transfer-route-token", ["read", "write"])] },
-      logger: false,
-    });
-    const headers = { authorization: "Bearer transfer-route-token" };
+    // Direct transfer capabilities are host-owned. Generic MCP deliberately
+    // cannot mint these credentials, so exercise the transfer state machine
+    // directly rather than extracting secrets from a model result.
+    let now = 1_000;
+    const manager = new ArtifactTransferManager("https://configured-maker.example:8792", { clock: () => now, uploadTtlMs: 1_000 });
     const body = Buffer.from("transfer-route");
     const sha256 = createHash("sha256").update(body).digest("hex");
-    const call = (id: string, name: string, args: Record<string, unknown>) => app.inject({ method: "POST", url: "/api/v1/mcp", headers, payload: { jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } } });
-    const begin = await call("begin-route", "begin_artifact_upload", { projectId: "synthetic-project-lamp", filename: "route.step", role: "step", mediaType: "model/step", byteLength: body.byteLength, sha256 });
-    const ticket = begin.json<{ result: { structuredContent: { uploadId: string; uploadUrl: string; requiredHeaders: Record<string, string>; finalizeUrl: string; finalizeHeaders: Record<string, string> } } }>().result.structuredContent;
-    const uploadPath = new URL(ticket.uploadUrl).pathname;
-    const finalizePath = new URL(ticket.finalizeUrl).pathname;
-    expect((await app.inject({ method: "POST", url: uploadPath, headers: ticket.requiredHeaders, payload: body })).statusCode).toBe(404);
-    expect((await app.inject({ method: "GET", url: finalizePath, headers: ticket.finalizeHeaders })).statusCode).toBe(404);
-    expect((await app.inject({ method: "PUT", url: uploadPath, headers: ticket.requiredHeaders })).statusCode).toBe(400);
-    expect((await app.inject({ method: "PUT", url: uploadPath, headers: { ...ticket.requiredHeaders, "content-length": String(body.byteLength + 1) }, payload: body })).statusCode).toBe(409);
-    expect((await app.inject({ method: "PUT", url: uploadPath, headers: { ...ticket.requiredHeaders, "content-length": "not-a-number" }, payload: body })).statusCode).toBe(400);
-    expect((await app.inject({ method: "PUT", url: uploadPath, headers: { ...ticket.requiredHeaders, "content-length": "9007199254740992" }, payload: body })).statusCode).toBe(400);
-    expect((await app.inject({ method: "PUT", url: "/api/v1/transfers/uploads/%E0%A4%A", headers: ticket.requiredHeaders, payload: body })).statusCode).toBe(400);
-
-    expect((await app.inject({ method: "POST", url: finalizePath, headers: { ...ticket.finalizeHeaders, "content-type": "application/json" }, payload: "null" })).statusCode).toBe(400);
-    expect((await app.inject({ method: "POST", url: finalizePath, headers: ticket.finalizeHeaders, payload: { sha256: "bad", byteLength: body.byteLength } })).statusCode).toBe(400);
-    const failedFinalize = await app.inject({ method: "POST", url: finalizePath, headers: ticket.finalizeHeaders, payload: { sha256, byteLength: body.byteLength } });
-    expect(failedFinalize.statusCode).toBe(409);
-    const retriedUpload = await app.inject({ method: "PUT", url: uploadPath, headers: { ...ticket.requiredHeaders, "content-type": "model/step" }, payload: body });
-    expect(retriedUpload).toMatchObject({ statusCode: 200 });
-    const finalized = await app.inject({ method: "POST", url: finalizePath, headers: ticket.finalizeHeaders, payload: { sha256, byteLength: body.byteLength } });
-    expect(finalized.statusCode).toBe(200);
-    expect((await app.inject({ method: "POST", url: finalizePath, headers: ticket.finalizeHeaders, payload: { sha256, byteLength: body.byteLength } })).statusCode).toBe(403);
-    await app.close();
+    const issued = manager.issueUpload({ uploadId: "upload-route", projectId: "project-1", expiresAt: new Date(now + 500).toISOString(), byteLength: body.byteLength, sha256, actor: "agent" });
+    const writeToken = issued.uploadHeaders[TRANSFER_TOKEN_HEADER];
+    const finalizeToken = issued.finalizeHeaders[TRANSFER_TOKEN_HEADER];
+    expect(manager.preflightUploadWrite(writeToken, "upload-route", body.byteLength)).toMatchObject({ action: "upload_write" });
+    expect(() => manager.preflightUploadWrite(writeToken, "upload-route", body.byteLength + 1)).toThrow();
+    expect(() => manager.validateFinalize(finalizeToken, "upload-route", { sha256: "bad", byteLength: body.byteLength })).toThrow();
+    expect(manager.claimFinalize(finalizeToken, "upload-route", { sha256, byteLength: body.byteLength })).toMatchObject({ action: "upload_finalize" });
+    manager.releaseFinalize(finalizeToken, "upload-route");
+    expect(manager.claimFinalize(finalizeToken, "upload-route", { sha256, byteLength: body.byteLength })).toMatchObject({ action: "upload_finalize" });
+    manager.commitFinalize(finalizeToken, "upload-route");
+    expect(() => manager.claimFinalize(finalizeToken, "upload-route", { sha256, byteLength: body.byteLength })).toThrow();
+    now = 1_600;
+    expect(() => manager.preflight("upload_write", writeToken, "upload-route")).toThrow();
   });
 
   it("releases a failed transfer write so the same ticket can be retried", async () => {
-    const runtime = createSyntheticRuntime();
-    const originalWrite = runtime.ports.artifacts.writeUpload.bind(runtime.ports.artifacts);
+    const manager = new ArtifactTransferManager("https://configured-maker.example:8792", { clock: () => 1_000 });
+    const body = Buffer.from("transfer-write-retry");
+    const sha256 = createHash("sha256").update(body).digest("hex");
+    const issued = manager.issueUpload({ uploadId: "upload-write-retry", projectId: "project-1", expiresAt: new Date(2_000).toISOString(), byteLength: body.byteLength, sha256, actor: "agent" });
+    const token = issued.uploadHeaders[TRANSFER_TOKEN_HEADER];
     let writeCalls = 0;
-    runtime.ports.artifacts.writeUpload = async (sessionId, body) => {
+    const write = () => {
       writeCalls += 1;
       if (writeCalls === 1) throw new Error("transient artifact storage failure");
-      return originalWrite(sessionId, body);
+    };
+    expect(() => { manager.claimUploadWrite(token, "upload-write-retry", body); write(); }).toThrow("transient artifact storage failure");
+    manager.releaseUploadWrite(token, "upload-write-retry");
+    expect(() => { manager.claimUploadWrite(token, "upload-write-retry", body); write(); }).not.toThrow();
+    manager.commitUploadWrite(token, "upload-write-retry");
+    expect(writeCalls).toBe(2);
+    expect(() => manager.claimUploadWrite(token, "upload-write-retry", body)).toThrow();
+  });
+
+  it("releases a failed route-level download read for retry, then consumes it once", async () => {
+    const runtime = createSyntheticRuntime();
+    const service = new ApplicationService(runtime.ports);
+    const manager = new ArtifactTransferManager("https://configured-maker.example:8792");
+    let readCalls = 0;
+    const readArtifact = service.readArtifact.bind(service);
+    service.readArtifact = async (artifactId) => {
+      readCalls += 1;
+      if (readCalls === 1) throw new Error("transient artifact read failure");
+      return readArtifact(artifactId);
     };
     const app = await createApp({
       demo: true,
       runtime,
-      publicBaseUrl: "https://configured-maker.example:8792",
-      auth: { sessionSecret: "s".repeat(48), secureCookies: false, bearerTokens: [bearerRecord("transfer-write-retry-token", ["read", "write"])] },
+      service,
+      artifactTransferManager: manager,
+      auth: { sessionSecret: "s".repeat(48), secureCookies: false },
       logger: false,
     });
     try {
-      const headers = { authorization: "Bearer transfer-write-retry-token" };
-      const body = Buffer.from("transfer-write-retry");
+      const login = await app.inject({ method: "POST", url: "/api/v1/auth/login", payload: { password: demoPassword } });
+      const cookie = cookieHeader(login.headers["set-cookie"]);
+      const csrf = login.json<{ csrfToken: string }>().csrfToken;
+      const body = Buffer.from("route-level-download");
       const sha256 = createHash("sha256").update(body).digest("hex");
-      const begin = await app.inject({ method: "POST", url: "/api/v1/mcp", headers, payload: { jsonrpc: "2.0", id: "begin-write-retry", method: "tools/call", params: { name: "begin_artifact_upload", arguments: { projectId: "synthetic-project-lamp", filename: "retry.step", role: "step", mediaType: "model/step", byteLength: body.byteLength, sha256 } } } });
-      expect(begin.statusCode).toBe(200);
-      const ticket = begin.json<{ result: { structuredContent: { uploadUrl: string; requiredHeaders: Record<string, string> } } }>().result.structuredContent;
-      const uploadPath = new URL(ticket.uploadUrl).pathname;
-      const transferHeaders = { ...ticket.requiredHeaders, "content-type": "model/step" };
+      const begin = await app.inject({ method: "POST", url: "/api/v1/artifacts/uploads", headers: { cookie, "x-csrf-token": csrf }, payload: { projectId: "synthetic-project-lamp", revisionId: "synthetic-revision-lamp-r01", role: "step", filename: "route-level.step", mediaType: "model/step", byteSize: body.byteLength, sha256 } });
+      expect(begin.statusCode).toBe(201);
+      const uploadId = begin.json<{ data: { id: string } }>().data.id;
+      const write = await app.inject({ method: "PUT", url: `/api/v1/artifacts/uploads/${uploadId}`, headers: { cookie, "x-csrf-token": csrf, "content-type": "application/octet-stream" }, payload: body });
+      expect(write.statusCode).toBe(200);
+      const finalized = await app.inject({ method: "POST", url: `/api/v1/artifacts/uploads/${uploadId}/finalize`, headers: { cookie, "x-csrf-token": csrf } });
+      expect(finalized.statusCode).toBe(200);
+      const artifactId = finalized.json<{ data: { id: string } }>().data.id;
+      const issued = manager.issueDownload({ artifactId, projectId: "synthetic-project-lamp", byteLength: body.byteLength, sha256, actor: "workspace-admin" });
+      const token = issued.requiredHeaders[TRANSFER_TOKEN_HEADER];
 
-      const failed = await app.inject({ method: "PUT", url: uploadPath, headers: transferHeaders, payload: body });
+      const failed = await app.inject({ method: "GET", url: `/api/v1/transfers/artifacts/${artifactId}/download`, headers: { [TRANSFER_TOKEN_HEADER]: token } });
       expect(failed.statusCode).toBe(500);
-      const retried = await app.inject({ method: "PUT", url: uploadPath, headers: transferHeaders, payload: body });
+      const retried = await app.inject({ method: "GET", url: `/api/v1/transfers/artifacts/${artifactId}/download`, headers: { [TRANSFER_TOKEN_HEADER]: token } });
       expect(retried.statusCode).toBe(200);
-      expect(writeCalls).toBe(2);
-      const reused = await app.inject({ method: "PUT", url: uploadPath, headers: transferHeaders, payload: body });
-      expect(reused.statusCode).toBe(403);
+      expect(Buffer.from(retried.rawPayload).equals(body)).toBe(true);
+      const replay = await app.inject({ method: "GET", url: `/api/v1/transfers/artifacts/${artifactId}/download`, headers: { [TRANSFER_TOKEN_HEADER]: token } });
+      expect(replay.statusCode).toBe(403);
+      expect(readCalls).toBe(2);
     } finally {
       await app.close();
     }

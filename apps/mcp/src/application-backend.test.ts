@@ -73,12 +73,12 @@ function serviceStub(): ApplicationService {
     createInventoryCategory: async (input: { name: string }) => ({ data: { ...category, id: "category-created", name: input.name }, audit: { id: "audit-category", entityId: "category-created", version: 1 }, correlationId: "bridge-test", replayed: false }),
     updateInventoryCategory: async (id: string, input: { name?: string }, _expectedVersion: number) => ({ data: { ...category, id, ...(input.name === undefined ? {} : { name: input.name }), version: 2 }, audit: { id: "audit-category-update", entityId: id, version: 2 }, correlationId: "bridge-test", replayed: false }),
     archiveInventoryCategory: async (id: string, _expectedVersion: number) => ({ data: { ...category, id, archived: true, version: 2 }, audit: { id: "audit-category-archive", entityId: id, version: 2 }, correlationId: "bridge-test", replayed: false }),
-    getArtifact: async () => artifact,
+    getArtifact: vi.fn(async () => artifact),
     getProjectRevision: async () => ({ id: "revision-1", projectId: "project-1", number: 1, name: "Initial", status: "concept", createdAt: "2026-08-30T10:00:00.000Z", version: 1 }),
     getReservationDetails: async () => ({ projectId: "project-1", projectRevisionId: "revision-1", reservation: { lineId: "bom-1", itemId: "item-1" }, bomLine: { unit: "each" } }),
     recordUsage: async (input: { itemId: string; quantity: number; unit: string; projectId: string; reservationId?: string }) => ({ data: { event: { id: "usage-event-1" }, item: { id: input.itemId, availableQuantity: 4, unit: input.unit, version: 2 } }, audit: { id: "audit-usage" }, correlationId: "bridge-test", replayed: false }),
     commissionInventoryItem: async (itemId: string, input: { quantity: number; unit: string; evidence: { state: string; source: string; sourceId?: string; observedAt: string; note?: string } }, expectedVersion: number) => ({ data: { event: { id: "commission-event-1", itemId, type: "count", quantity: input.quantity, unit: input.unit, evidence: input.evidence }, item: { ...item, id: itemId, quantity: input.quantity, availableQuantity: input.quantity, evidence: input.evidence, version: expectedVersion + 1 } }, audit: { id: "audit-commission" }, correlationId: "bridge-test", replayed: false }),
-    beginArtifactUpload: async () => ({ data: { id: "upload-1", artifactId: "artifact-1", uploadUrl: "/api/v1/artifacts/uploads/upload-1", expiresAt: "2026-08-30T10:15:00.000Z", maxBytes: 100, status: "pending" }, audit: { id: "audit-1", entityId: "upload-1" }, correlationId: "bridge-test", replayed: false }),
+    beginArtifactUpload: vi.fn(async () => ({ data: { id: "upload-1", artifactId: "artifact-1", uploadUrl: "/api/v1/artifacts/uploads/upload-1", expiresAt: "2026-08-30T10:15:00.000Z", maxBytes: 100, status: "pending" }, audit: { id: "audit-1", entityId: "upload-1" }, correlationId: "bridge-test", replayed: false })),
     createProjectWithInitialRevision: async () => ({ data: { project: { id: "project-atomic", name: "Atomic project", status: "idea", createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", currentRevisionId: "revision-atomic", version: 1 }, revision: { id: "revision-atomic", projectId: "project-atomic", number: 1, name: "Initial", status: "concept", createdAt: "2026-08-30T10:00:00.000Z", version: 1 } }, audit: { id: "audit-atomic", entityId: "project-atomic", action: "project.create_with_initial_revision", actor: "bridge-test", source: "mcp", correlationId: "bridge-test", entityType: "project", version: 1, createdAt: "2026-08-30T10:00:00.000Z" }, correlationId: "bridge-test", replayed: false }),
   } as unknown as ApplicationService;
 }
@@ -118,27 +118,22 @@ describe("createApplicationBackend", () => {
     });
   });
 
-  it("returns separate short-lived capabilities for upload and finalize", async () => {
-    const backend = createApplicationBackend(serviceStub(), { publicBaseUrl: "http://maker.local:8792", artifactTransfer: transferProvider });
-    const result = await backend.artifacts.beginUpload({ projectId: "project-1", filename: "part.step", role: "step", mediaType: "model/step", byteLength: 100, sha256: "a".repeat(64) }, context);
-    expect(result.uploadUrl).toBe("http://maker.local:8792/api/v1/transfers/uploads/upload-1");
-    expect(result.uploadUrl).not.toContain("?");
-    expect(result.requiredHeaders).toEqual({ "x-bench-transfer-token": "upload-token" });
-    expect(result.finalizeUrl).toBe("http://maker.local:8792/api/v1/transfers/uploads/upload-1/finalize");
-    expect(result.finalizeHeaders).toEqual({ "x-bench-transfer-token": "finalize-token" });
-    expect(result.method).toBe("PUT");
+  it("fails closed for artifact upload before the legacy URL issuer or service are called", async () => {
+    const service = serviceStub();
+    const backend = createApplicationBackend(service, { publicBaseUrl: "http://maker.local:8792", artifactTransfer: transferProvider });
+    await expect(backend.artifacts.beginUpload({ projectId: "project-1", filename: "part.step", role: "step", mediaType: "model/step", byteLength: 100, sha256: "a".repeat(64) }, context)).rejects.toMatchObject({ code: "HOST_TRANSFER_UNAVAILABLE" });
+    expect(service.beginArtifactUpload).not.toHaveBeenCalled();
   });
 
-  it("returns a header-bound scoped download capability", async () => {
-    const backend = createApplicationBackend(serviceStub(), { publicBaseUrl: "http://maker.local:8792", artifactTransfer: transferProvider });
-    const result = await backend.artifacts.downloadMetadata({ artifactId: "artifact-1" }, context);
-    expect(result.downloadUrl).toBe("http://maker.local:8792/api/v1/transfers/artifacts/artifact-1/download");
-    expect(result.downloadUrl).not.toContain("?");
-    expect(result.requiredHeaders).toEqual({ "x-bench-transfer-token": "download-token" });
+  it("fails closed for artifact download before the legacy URL issuer or service are called", async () => {
+    const service = serviceStub();
+    const backend = createApplicationBackend(service, { publicBaseUrl: "http://maker.local:8792", artifactTransfer: transferProvider });
+    await expect(backend.artifacts.downloadMetadata({ artifactId: "artifact-1" }, context)).rejects.toMatchObject({ code: "HOST_TRANSFER_UNAVAILABLE" });
+    expect(service.getArtifact).not.toHaveBeenCalled();
   });
 
   it("forwards an optional reservation id when recording usage", async () => {
-    const backend = createApplicationBackend(serviceStub(), { publicBaseUrl: "http://maker.local:8792", artifactTransfer: transferProvider });
+    const backend = createApplicationBackend(serviceStub(), { artifactTransfer: transferProvider });
     const result = await backend.bom.recordUsage({ projectRevisionId: "revision-1", reservationId: "reservation-1", itemId: "item-1", quantity: { value: 1, unit: "piece" } }, context);
     expect(result).toMatchObject({ usageEventId: "usage-event-1", itemId: "item-1" });
   });
@@ -176,7 +171,7 @@ describe("createApplicationBackend", () => {
   });
 
   it("maps the atomic project-and-revision application command", async () => {
-    const backend = createApplicationBackend(serviceStub(), { publicBaseUrl: "http://maker.local:8792", artifactTransfer: transferProvider });
+    const backend = createApplicationBackend(serviceStub());
     const result = await backend.projects.createWithInitialRevision({ name: "Atomic project", revisionSummary: "Initial plan" }, context);
     expect(result).toMatchObject({ id: "project-atomic", project: { id: "project-atomic" }, revision: { id: "revision-atomic", projectId: "project-atomic" }, auditId: "audit-atomic", replayed: false });
   });
@@ -215,16 +210,8 @@ describe("createApplicationBackend", () => {
     expect(result).toMatchObject({ id: "created-item", item: { id: "created-item" }, profile: { id: "created-profile", itemId: "created-item" }, auditId: "audit-compound" });
   });
 
-  it("forwards a work-item revision and renders released reservations from durable identity", async () => {
-    const service = serviceStub() as ApplicationService & {
-      beginArtifactUpload: ApplicationService["beginArtifactUpload"];
-      releaseReservation: ApplicationService["releaseReservation"];
-    };
-    let uploadInput: Record<string, unknown> | undefined;
-    service.beginArtifactUpload = async (input) => {
-      uploadInput = input as unknown as Record<string, unknown>;
-      return { data: { id: "upload-1", artifactId: "artifact-1", uploadUrl: "/uploads/upload-1", expiresAt: "2026-08-30T10:15:00.000Z", maxBytes: 100, status: "pending" }, audit: { id: "audit-upload", entityId: "upload-1" }, correlationId: "bridge-test", replayed: false } as never;
-    };
+  it("renders released reservations from durable identity", async () => {
+    const service = serviceStub() as ApplicationService & { releaseReservation: ApplicationService["releaseReservation"] };
     service.releaseReservation = async () => ({ data: { id: "reservation-1", lineId: "bom-older", itemId: "filament-petg", quantity: 42, status: "released", version: 2 }, audit: { id: "audit-reservation", entityId: "reservation-1" }, correlationId: "bridge-test", replayed: false }) as never;
     const backend = createApplicationBackend(service, {
       publicBaseUrl: "http://maker.local:8792",
@@ -233,9 +220,6 @@ describe("createApplicationBackend", () => {
         reservationDetails: async () => ({ projectId: "project-1", projectRevisionId: "revision-older", bomLineId: "bom-older", itemId: "filament-petg", unit: "gram" }),
       },
     });
-
-    await backend.artifacts.beginUpload({ projectId: "project-1", workItemId: "work-1", workItemRevisionId: "work-revision-1", filename: "part.step", role: "step", mediaType: "model/step", byteLength: 100, sha256: "a".repeat(64) }, context);
-    expect(uploadInput).toMatchObject({ projectId: "project-1", workItemId: "work-1", revisionId: "work-revision-1" });
 
     const released = await backend.bom.release({ reservationId: "reservation-1" }, context);
     expect(released).toMatchObject({ id: "reservation-1", projectRevisionId: "revision-older", bomLineId: "bom-older", itemId: "filament-petg", quantity: { value: 42, unit: "gram" }, status: "released", version: 2 });
@@ -260,12 +244,8 @@ describe("createApplicationBackend", () => {
   it("round-trips every advertised artifact role without alias coercion", async () => {
     const roles = ["source", "cad", "cad_source", "step", "stl", "three_mf", "slicer_project", "gcode", "drawing", "validation", "document", "brief", "design_record", "firmware", "photo", "text", "other"] as const;
     const service = serviceStub() as ApplicationService & Record<string, any>;
-    const backend = createApplicationBackend(service, { publicBaseUrl: "http://maker.local:8792", artifactTransfer: transferProvider });
-
-    service.beginArtifactUpload = vi.fn(async () => ({ data: { id: "upload-1", artifactId: "artifact-1", uploadUrl: "/uploads/upload-1", expiresAt: "2026-08-30T10:15:00.000Z", maxBytes: 100, status: "pending" }, audit: { id: "audit-upload", entityId: "upload-1" }, correlationId: "bridge-test", replayed: false }));
+    const backend = createApplicationBackend(service, { artifactTransfer: transferProvider });
     for (const role of roles) {
-      await backend.artifacts.beginUpload({ projectId: "project-1", filename: "part.bin", role, mediaType: "application/octet-stream", byteLength: 1, sha256: "a".repeat(64) }, context);
-      expect(service.beginArtifactUpload).toHaveBeenLastCalledWith(expect.objectContaining({ role }), expect.anything());
       service.getArtifact = async () => ({ ...serviceStubArtifact(), role });
       await expect(backend.artifacts.getMetadata({ artifactId: "artifact-1" }, context)).resolves.toMatchObject({ role });
     }

@@ -124,9 +124,12 @@ import type {
 } from "./types.js";
 
 export interface ApplicationBackendOptions {
-  /** Absolute origin used by the transport capability provider. */
+  /** Absolute origin used by the direct HTTP host, never entered into MCP output. */
   publicBaseUrl?: string;
-  /** Host-owned short-lived capability issuer for artifact transfers. */
+  /**
+   * Legacy URL/token issuer for authenticated HTTP routes. It is intentionally
+   * ignored by generic MCP, which fails closed for artifact transfer.
+   */
   artifactTransfer?: ArtifactTransferProvider;
   /** Durable ancestry lookups supplied by the host's repository/runtime. */
   projectScope?: ProjectScopeResolvers;
@@ -174,7 +177,6 @@ export function createApplicationMcpProtocol(service: ApplicationService, option
  * validation remain in the MCP adapter and the application service.
  */
 export function createApplicationBackend(service: ApplicationService, options: Partial<ApplicationBackendOptions> = {}): BenchLedgerBackend {
-  const artifactTransfer = options.artifactTransfer;
   // Indirect IDs must be resolved from durable host-owned state. A previous
   // implementation cached newly-created IDs in request-local maps, which
   // failed as soon as the next HTTP request built a fresh backend instance.
@@ -506,21 +508,19 @@ export function createApplicationBackend(service: ApplicationService, options: P
         return toMcpArtifact(artifact);
       },
       beginUpload: async (input, context) => {
-        if (input.sha256 === undefined) throw new McpAdapterError("INVALID_ARGUMENT", "begin_artifact_upload requires sha256 so the application can verify the upload.");
-        if (artifactTransfer === undefined) throw new McpAdapterError("BACKEND_ERROR", "Artifact transfer capabilities are not configured for this MCP host.");
-        const revisionId = input.projectRevisionId ?? input.workItemRevisionId;
-        const mutation = await service.beginArtifactUpload({ projectId: input.projectId, ...(revisionId === undefined ? {} : { revisionId }), ...(input.buildConfigurationSnapshotId === undefined ? {} : { buildConfigurationSnapshotId: input.buildConfigurationSnapshotId }), ...(input.workItemId === undefined ? {} : { workItemId: input.workItemId }), role: toApiArtifactRole(input.role), filename: input.filename, mediaType: input.mediaType, byteSize: input.byteLength, sha256: input.sha256 }, appContext(context));
-        const session = mutation.data;
-        const links = await artifactTransfer.issueUpload({ uploadId: session.id, projectId: input.projectId, expiresAt: session.expiresAt, byteLength: input.byteLength, sha256: input.sha256, actor: context.actorId });
-        return { uploadId: session.id, uploadUrl: links.uploadUrl, expiresAt: links.expiresAt, maxBytes: session.maxBytes, method: "PUT", requiredHeaders: links.uploadHeaders, finalizeUrl: links.finalizeUrl, finalizeHeaders: links.finalizeHeaders } satisfies ArtifactUploadTicket;
+        // Generic MCP cannot safely carry the authenticated URL/header
+        // capability used by the direct HTTP host. Fail before application
+        // service dispatch so no upload session, audit row, or capability is
+        // created. A future transactional trusted-host bridge may replace
+        // this boundary explicitly.
+        throw new McpAdapterError("HOST_TRANSFER_UNAVAILABLE", "Artifact transfer is unavailable through generic MCP until a trusted host bridge exists.");
       },
       finalizeUpload: async (input, context) => toMcpArtifact((await service.finalizeArtifactUpload(input.uploadId, appContext(context))).data as ApiArtifact),
       downloadMetadata: async (input, context) => {
-        if (artifactTransfer === undefined) throw new McpAdapterError("BACKEND_ERROR", "Artifact transfer capabilities are not configured for this MCP host.");
-        const artifact = await service.getArtifact(input.artifactId);
-        assertArtifactRevision(artifact, input.revisionId);
-        const link = await artifactTransfer.issueDownload({ artifactId: artifact.id, projectId: artifact.projectId, byteLength: artifact.byteSize, sha256: artifact.sha256, actor: context.actorId });
-        return { artifactId: artifact.id, revisionId: artifact.revisionId ?? artifact.id, filename: artifact.filename, byteLength: artifact.byteSize, sha256: artifact.sha256, downloadUrl: link.downloadUrl, requiredHeaders: link.requiredHeaders, expiresAt: link.expiresAt } satisfies ArtifactDownloadMetadata;
+        // Keep this before getArtifact for the same fail-closed guarantee as
+        // upload: generic MCP must not turn a model request into a capability
+        // lookup or reveal whether a private artifact exists.
+        throw new McpAdapterError("HOST_TRANSFER_UNAVAILABLE", "Artifact transfer is unavailable through generic MCP until a trusted host bridge exists.");
       },
       retire: async (input, context) => mutationResult(await service.retireArtifact(input.artifactId, input.expectedVersion, appContext(context)), "artifact", (value) => toMcpArtifact(value as ApiArtifact)),
     },

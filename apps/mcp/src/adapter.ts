@@ -51,7 +51,6 @@ import {
   releaseReservation,
   retireArtifact,
   revisionRead,
-  safeHttpLink,
   singleId,
   stockEvent,
   stockEvents,
@@ -122,20 +121,57 @@ function failedResult(error: unknown): McpToolResult {
   };
 }
 
+const TRANSFER_ERROR_MESSAGES: Readonly<Record<string, string>> = {
+  INVALID_ARGUMENT: "The artifact transfer request is invalid.",
+  FORBIDDEN: "The current token is not allowed to perform this artifact transfer.",
+  NOT_FOUND: "The requested artifact transfer record was not found.",
+  CONFLICT: "The artifact transfer could not be completed because the record changed.",
+  UNSAFE_LINK: "Artifact transfer metadata failed safety validation.",
+  RESOURCE_TOO_LARGE: "The artifact transfer result is too large.",
+  HOST_TRANSFER_UNAVAILABLE: "Artifact transfer is unavailable through generic MCP until a trusted host bridge exists.",
+  BACKEND_ERROR: "The artifact transfer could not be completed.",
+};
+
+function failedTransferResult(error: unknown): McpToolResult {
+  const mapped = mapBackendError(error);
+  const message = TRANSFER_ERROR_MESSAGES[mapped.code];
+  if (message === undefined) return failedResult(new McpAdapterError("BACKEND_ERROR", TRANSFER_ERROR_MESSAGES.BACKEND_ERROR ?? "The artifact transfer could not be completed."));
+  return failedResult(new McpAdapterError(mapped.code, message));
+}
+
 function objectValue(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new McpAdapterError("BACKEND_ERROR", `${label} must be an object.`);
   return value as Record<string, unknown>;
 }
 
-function validateArtifactLinks(value: unknown): void {
+const TRANSFER_SECRET_KEY = /(?:uploadUrl|downloadUrl|finalizeUrl|uploadHeaders|finalizeHeaders|requiredHeaders|headers?$|authorization|accessToken|transfer[-_]?token|credential|password|secret|^token$)/iu;
+const TRANSFER_SECRET_VALUE = /(?:data:|base64|(?:^|[?&])(token|secret|credential|authorization|access_token)=|x-bench-transfer-token)/iu;
+const HTTP_URL_VALUE = /https?:\/\//iu;
+const TOKEN_SHAPED_VALUE = /^[A-Za-z0-9_-]{32,128}$/u;
+const LEGACY_TRANSFER_TOKEN = /^[A-Za-z0-9_-]{43}$/u;
+
+/**
+ * Transfer results are model-visible. Recursively reject any URL, credential,
+ * header map, or encoded byte payload before the result reaches text or
+ * structuredContent. The error intentionally does not include the offending
+ * value, so even a malicious backend cannot reflect its secret.
+ */
+function validateTransferResult(value: unknown, depth = 0, key?: string): void {
+  if (depth > 12) throw new McpAdapterError("UNSAFE_LINK", "Artifact transfer metadata is too deeply nested.");
+  if (typeof value === "string") {
+    if (HTTP_URL_VALUE.test(value) || LEGACY_TRANSFER_TOKEN.test(value) || TRANSFER_SECRET_VALUE.test(value) || (key !== undefined && TRANSFER_SECRET_KEY.test(key) && TOKEN_SHAPED_VALUE.test(value))) {
+      throw new McpAdapterError("UNSAFE_LINK", "Artifact transfer metadata contains a credential or unsafe link.");
+    }
+    return;
+  }
   if (Array.isArray(value)) {
-    for (const entry of value) validateArtifactLinks(entry);
+    for (const entry of value) validateTransferResult(entry, depth + 1, key);
     return;
   }
   if (typeof value !== "object" || value === null) return;
   for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    if (key === "uploadUrl" || key === "downloadUrl") safeHttpLink(entry, key);
-    validateArtifactLinks(entry);
+    if (TRANSFER_SECRET_KEY.test(key) || key === "_meta") throw new McpAdapterError("UNSAFE_LINK", "Artifact transfer metadata contains a credential or unsafe link.");
+    validateTransferResult(entry, depth + 1, key);
   }
 }
 
@@ -228,11 +264,13 @@ function redactSerials(value: unknown): unknown {
   if (value === null || typeof value !== "object") return value;
   const result: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    if (/^(?:serial|serialNumber|serialNo)$/iu.test(key)) continue;
+    if (/^(?:serial|serialNumber|serialNo|_meta)$/iu.test(key)) continue;
     result[key] = redactSerials(entry);
   }
   return result;
 }
+
+const TRANSFER_TOOL_NAMES = new Set(["begin_artifact_upload", "read_artifact_download_metadata", "download_artifact", "finalize_artifact_upload"]);
 
 async function assertResolvedProjectAccess(
   context: McpRequestContext,
@@ -506,10 +544,13 @@ export class McpAdapter {
         }) : [];
         value = { ...page, items: filteredItems, nextCursor: null, hasMore: false };
       }
-      if (name === "begin_artifact_upload" || name === "read_artifact_download_metadata" || name === "download_artifact" || name === "finalize_artifact_upload") validateArtifactLinks(value);
-      return okResult(redactSerials(value), this.maxToolResultBytes, name === "get_capabilities" ? CAPABILITY_DOCUMENT_MAX_DEPTH : undefined);
+      const isTransferTool = TRANSFER_TOOL_NAMES.has(name);
+      if (isTransferTool) validateTransferResult(value);
+      const safeValue = redactSerials(value);
+      if (isTransferTool) validateTransferResult(safeValue);
+      return okResult(safeValue, this.maxToolResultBytes, name === "get_capabilities" ? CAPABILITY_DOCUMENT_MAX_DEPTH : undefined);
     } catch (error) {
-      return failedResult(error);
+      return TRANSFER_TOOL_NAMES.has(name) ? failedTransferResult(error) : failedResult(error);
     }
   }
 
