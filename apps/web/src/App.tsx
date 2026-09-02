@@ -90,6 +90,8 @@ function App() {
   const [adapter, setAdapter] = useState<WorkspaceAdapter>(() => createWorkspaceAdapter());
   const [page, setPage] = useState<Page>("overview");
   const [projects, setProjects] = useState<Project[]>([]);
+  const [archivedProjects, setArchivedProjects] = useState<Project[]>([]);
+  const [projectView, setProjectView] = useState<"active" | "archived">("active");
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [offers, setOffers] = useState(fixtureOffers);
   const [selectedProjectId, setSelectedProjectId] = useState("project-lamp");
@@ -142,12 +144,15 @@ function App() {
     let active = true;
     setLoading(true);
     setConnection("loading");
-    bootstrapWorkspace().then((snapshot) => {
+    bootstrapWorkspace().then(async (snapshot) => {
       if (!active) return;
+      const archived = await adapter.listArchivedProjects().catch((error: unknown) => error instanceof ApiError && error.status === 404 ? [] : Promise.reject(error));
       setItems(snapshot.inventory);
       setProjects(snapshot.projects);
+      setArchivedProjects(archived);
+      setProjectView(snapshot.projects.length > 0 || archived.length === 0 ? "active" : "archived");
       setOffers(snapshot.offers);
-      setSelectedProjectId(snapshot.projects[0]?.id ?? "");
+      setSelectedProjectId((snapshot.projects[0] ?? archived[0])?.id ?? "");
       setSampleMode(snapshot.source === "synthetic");
       setWorkspaceAccess((current) => current ? { ...current, demo: current.demo || Boolean(snapshot.health?.demo) } : current);
       setDemoAvailable(Boolean(snapshot.health?.demo));
@@ -201,7 +206,8 @@ function App() {
     return () => window.removeEventListener("keydown", focusSearch);
   }, []);
 
-  const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? projects[0];
+  const visibleProjects = projectView === "archived" ? archivedProjects : projects;
+  const selectedProject = visibleProjects.find((project) => project.id === selectedProjectId) ?? visibleProjects[0];
   const selectedItem = items.find((item) => item.id === selectedItemId);
   const overlayOpen = Boolean(selectedItem || showNewProject || showNewRevision || showAddBom || showNewItem || bulkInventorySelection);
 
@@ -242,8 +248,12 @@ function App() {
   const refreshWorkspace = async (): Promise<boolean> => {
     try {
       const snapshot = await adapter.loadWorkspace();
+      const archived = await adapter.listArchivedProjects().catch((error: unknown) => error instanceof ApiError && error.status === 404 ? [] : Promise.reject(error));
       setItems(snapshot.inventory);
       setProjects(snapshot.projects);
+      setArchivedProjects(archived);
+      setProjectView((current) => snapshot.projects.length > 0 || archived.length === 0 ? current : "archived");
+      setSelectedProjectId((current) => snapshot.projects.some((project) => project.id === current) || archived.some((project) => project.id === current) ? current : (snapshot.projects[0] ?? archived[0])?.id ?? "");
       setOffers(snapshot.offers);
       setSampleMode(snapshot.source === "synthetic");
       setWorkspaceAccess((current) => current ? { ...current, demo: current.demo || Boolean(snapshot.health?.demo) } : current);
@@ -258,6 +268,51 @@ function App() {
       // report refresh trouble separately from the successful commit.
       setConnectionError(normalizeApiError(error));
       return false;
+    }
+  };
+
+  const archiveProject = async (project: Project) => {
+    try {
+      const archived = await adapter.archiveProject(project.id, project.version);
+      const remaining = projects.filter((candidate) => candidate.id !== project.id);
+      setProjects(remaining);
+      setArchivedProjects((current) => [archived, ...current.filter((candidate) => candidate.id !== archived.id)]);
+      setProjectView(remaining.length > 0 ? "active" : "archived");
+      setSelectedProjectId((current) => current === project.id ? remaining[0]?.id ?? archived.id : current);
+      setToast("Project archived. It is hidden from active lists; reservations were released, history was retained, and the archive is reversible.");
+    } catch (error: unknown) {
+      handleMutationError(error, "archiving that project");
+      throw error;
+    }
+  };
+
+  const restoreProject = async (project: Project) => {
+    try {
+      const restored = await adapter.restoreProject(project.id, project.version);
+      setArchivedProjects((current) => current.filter((candidate) => candidate.id !== project.id));
+      setProjects((current) => [restored, ...current.filter((candidate) => candidate.id !== restored.id)]);
+      setProjectView("active");
+      setSelectedProjectId(restored.id);
+      setToast("Project restored to idea. Its history remains intact; released reservations were not recreated.");
+    } catch (error: unknown) {
+      handleMutationError(error, "restoring that project");
+      throw error;
+    }
+  };
+
+  const removeProject = async (project: Project) => {
+    try {
+      await adapter.removeProject(project.id, project.version);
+      const remainingProjects = projects.filter((candidate) => candidate.id !== project.id);
+      const remainingArchived = archivedProjects.filter((candidate) => candidate.id !== project.id);
+      setProjects(remainingProjects);
+      setArchivedProjects(remainingArchived);
+      setProjectView(remainingProjects.length > 0 ? "active" : remainingArchived.length > 0 ? "archived" : "active");
+      setSelectedProjectId((current) => current === project.id ? (remainingProjects[0] ?? remainingArchived[0])?.id ?? "" : current);
+      setToast("Project permanently removed from the workspace. Its reservation releases and audit history remain retained; it cannot be restored.");
+    } catch (error: unknown) {
+      handleMutationError(error, "removing that project");
+      throw error;
     }
   };
 
@@ -295,6 +350,7 @@ function App() {
       await adapter.logout();
       setItems([]);
       setProjects([]);
+      setArchivedProjects([]);
       setOffers([]);
       setPendingRevisionSetup(undefined);
       setSampleMode(false);
@@ -309,6 +365,7 @@ function App() {
     adapter.clearAuthenticatedState();
     setItems([]);
     setProjects([]);
+    setArchivedProjects([]);
     setOffers([]);
     setPendingRevisionSetup(undefined);
     setSelectedItemId(undefined);
@@ -655,8 +712,8 @@ function App() {
           <main className="content" id="main-content">
             {page === "overview" && <OverviewPage items={items} projects={projects} expert={expert} sampleMode={sampleMode} onNavigate={navigate} onOpenProject={openProject} onSelectItem={setSelectedItemId} onNewProject={openNewProject} />}
             {page === "inventory" && <InventoryPage adapter={adapter} categories={categories} search={search} refreshKey={inventoryRefreshNonce} bulkSelectionResetKey={bulkSelectionResetNonce} onSearch={(value) => setSearch(value.slice(0, MAX_INVENTORY_SEARCH_LENGTH))} onSessionExpired={handleSessionExpiry} onPageItems={(pageItems) => setItems((current) => { const byId = new Map(current.map((item) => [item.id, item] as const)); pageItems.forEach((item) => byId.set(item.id, item)); return [...byId.values()]; })} onSelectItem={setSelectedItemId} onNewItem={() => setShowNewItem(true)} onBulkSelectionChange={(selection, onResult) => setBulkInventorySelection(selection.length ? { items: [...selection], onResult } : undefined)} />}
-            {page === "projects" && selectedProject && <ProjectPage project={selectedProject} projects={projects} items={items} offers={offers} tab={projectTab} expert={expert} sampleMode={sampleMode} onTabChange={setProjectTab} onSelectProject={setSelectedProjectId} onOpenItem={setSelectedItemId} onNavigate={navigate} onToast={setToast} onNewProject={openNewProject} onNewRevision={() => setShowNewRevision(true)} onRetrySetup={pendingRevisionSetup?.projectId === selectedProject.id && pendingRevisionSetup.revisionId === selectedProject.serverRevisionId ? retryRevisionSetup : undefined} onAddBom={() => setShowAddBom(true)} onUpload={uploadArtifact} onReadReconciliation={adapter.readReconciliation} onSaveReconciliation={adapter.saveReconciliationDraft} onCommitReconciliation={adapter.commitReconciliation} onRefreshWorkspace={refreshWorkspace} />}
-            {page === "projects" && !selectedProject && <EmptyState icon="folder" title="No projects yet" description="Start with a name and project goal. You can add parts and files after that." action="Create first project" onAction={() => setShowNewProject(true)} />}
+            {page === "projects" && selectedProject && <ProjectPage project={selectedProject} projects={visibleProjects} projectView={projectView} archivedProjectCount={archivedProjects.length} items={items} offers={offers} tab={projectTab} expert={expert} sampleMode={sampleMode} onTabChange={setProjectTab} onSelectProject={setSelectedProjectId} onProjectViewChange={(view) => { setProjectView(view); setSelectedProjectId((view === "archived" ? archivedProjects : projects)[0]?.id ?? ""); }} onOpenItem={setSelectedItemId} onNavigate={navigate} onToast={setToast} onNewProject={openNewProject} onArchive={archiveProject} onRestore={restoreProject} onRemove={removeProject} onNewRevision={() => setShowNewRevision(true)} onRetrySetup={pendingRevisionSetup?.projectId === selectedProject.id && pendingRevisionSetup.revisionId === selectedProject.serverRevisionId ? retryRevisionSetup : undefined} onAddBom={() => setShowAddBom(true)} onUpload={uploadArtifact} onReadReconciliation={adapter.readReconciliation} onSaveReconciliation={adapter.saveReconciliationDraft} onCommitReconciliation={adapter.commitReconciliation} onRefreshWorkspace={refreshWorkspace} />}
+            {page === "projects" && !selectedProject && <section><div className="project-view-switch" role="group" aria-label="Project view"><button type="button" className={projectView === "active" ? "is-active" : ""} onClick={() => { setProjectView("active"); setSelectedProjectId(projects[0]?.id ?? ""); }}>Active projects</button><button type="button" className={projectView === "archived" ? "is-active" : ""} onClick={() => { setProjectView("archived"); setSelectedProjectId(archivedProjects[0]?.id ?? ""); }}>Archived ({archivedProjects.length})</button></div><EmptyState icon="folder" title={projectView === "archived" ? "No archived projects" : "No projects yet"} description={projectView === "archived" ? "Archived projects will appear here with their retained history." : "Start with a name and project goal. You can add parts and files after that."} {...(projectView === "active" ? { action: "Create first project", onAction: () => setShowNewProject(true) } : {})} /></section>}
             {page === "capabilities" && <CapabilitiesPage expert={expert} onCopy={setToast} />}
             {page === "settings" && <><div className={workspaceAccess?.mode === "lan_open" ? "settings-page-lan-open" : undefined}><SettingsPage expert={expert} sampleMode={sampleMode} connection={connection} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} onRetryCategories={() => setCategoryReloadNonce((current) => current + 1)} onCreateCategory={createInventoryCategory} onUpdateCategory={updateInventoryCategory} onArchiveCategory={archiveInventoryCategory} hideLogout={workspaceAccess?.mode === "lan_open"} onExpert={() => setExpert((current) => !current)} onLogout={sampleMode ? returnToPrivateWorkspace : signOut} /></div>{workspaceAccess && !sampleMode && !workspaceAccess.demo && <div className="settings-layout"><WorkspaceAccessSection access={workspaceAccess} pendingRetry={adapter.getWorkspaceAccessRetry()} onUpdate={adapter.updateWorkspaceAccess} onChanged={setWorkspaceAccess} onClearRetry={adapter.clearWorkspaceAccessRetry} onRebootstrap={() => { setReloadNonce((current) => current + 1); }} /></div>}</>}
           </main>
@@ -1224,9 +1281,11 @@ function StatusPill({ state, compact = false }: { state: StockState | "optional"
   return <span className={`status-pill tone-${status.tone} ${compact ? "status-compact" : ""}`}><span className="status-symbol" aria-hidden="true">{status.tone === "good" ? "✓" : status.tone === "bad" ? "!" : status.tone === "warn" ? "?" : "–"}</span>{status.label}</span>;
 }
 
-function ProjectPage({ project, projects, items, offers, tab, expert, sampleMode, onTabChange, onSelectProject, onOpenItem, onNavigate, onToast, onNewProject, onNewRevision, onRetrySetup, onAddBom, onUpload, onReadReconciliation, onSaveReconciliation, onCommitReconciliation, onRefreshWorkspace }: {
+function ProjectPage({ project, projects, projectView, archivedProjectCount, items, offers, tab, expert, sampleMode, onTabChange, onSelectProject, onProjectViewChange, onOpenItem, onNavigate, onToast, onNewProject, onArchive, onRestore, onRemove, onNewRevision, onRetrySetup, onAddBom, onUpload, onReadReconciliation, onSaveReconciliation, onCommitReconciliation, onRefreshWorkspace }: {
   project: Project;
   projects: Project[];
+  projectView: "active" | "archived";
+  archivedProjectCount: number;
   items: InventoryItem[];
   offers: typeof fixtureOffers;
   tab: ProjectTab;
@@ -1234,10 +1293,14 @@ function ProjectPage({ project, projects, items, offers, tab, expert, sampleMode
   sampleMode: boolean;
   onTabChange: (tab: ProjectTab) => void;
   onSelectProject: (id: string) => void;
+  onProjectViewChange: (view: "active" | "archived") => void;
   onOpenItem: (id: string) => void;
   onNavigate: (page: Page) => void;
   onToast: (message: string) => void;
   onNewProject: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  onArchive: (project: Project) => Promise<void>;
+  onRestore: (project: Project) => Promise<void>;
+  onRemove: (project: Project) => Promise<void>;
   onNewRevision: () => void;
   onRetrySetup?: (() => void) | undefined;
   onAddBom: () => void;
@@ -1254,6 +1317,11 @@ function ProjectPage({ project, projects, items, offers, tab, expert, sampleMode
   const [reconciliation, setReconciliation] = useState<ReconciliationViewModel>();
   const [reconciliationLoading, setReconciliationLoading] = useState(false);
   const [reconciliationError, setReconciliationError] = useState<string>();
+  const [archiveConfirmationOpen, setArchiveConfirmationOpen] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+  const [removeConfirmationOpen, setRemoveConfirmationOpen] = useState(false);
+  const [removeConfirmation, setRemoveConfirmation] = useState("");
+  const [removing, setRemoving] = useState(false);
   const reconciliationRevisionId = project.serverRevisionId;
 
   useEffect(() => {
@@ -1296,10 +1364,40 @@ function ProjectPage({ project, projects, items, offers, tab, expert, sampleMode
       onToast("Close-out committed, but workspace refresh failed. The committed close-out remains visible; try refreshing again when the service is available.");
     }
   };
+  const confirmArchive = async () => {
+    if (archiving) return;
+    setArchiving(true);
+    try {
+      await onArchive(project);
+      setArchiveConfirmationOpen(false);
+    } catch {
+      // The parent reports the actionable error; keep the confirmation open
+      // so the user can retry without losing the selected project.
+    } finally {
+      setArchiving(false);
+    }
+  };
+  const confirmRemove = async () => {
+    if (removing || removeConfirmation !== project.name) return;
+    setRemoving(true);
+    try {
+      await onRemove(project);
+      setRemoveConfirmationOpen(false);
+      setRemoveConfirmation("");
+    } catch {
+      // The parent reports the actionable error; keep the confirmation open
+      // so the exact-name confirmation is still available for a retry.
+    } finally {
+      setRemoving(false);
+    }
+  };
   return <>
-    <PageHeader eyebrow="Project" title={project.name} description={project.subtitle} action="New project" onAction={onNewProject}><select className="project-select" aria-label="Choose project" value={project.id} onChange={(event) => onSelectProject(event.target.value)}>{projects.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select>{onRetrySetup && <button className="button button-secondary" onClick={onRetrySetup}><Icon name="refresh" size={16} /> Retry setup</button>}<button className="button button-secondary" onClick={onNewRevision}><Icon name="plus" size={16} /> New revision</button></PageHeader>
+    <PageHeader eyebrow="Project" title={project.name} description={project.subtitle} action="New project" onAction={onNewProject}><div className="project-view-switch" role="group" aria-label="Project view"><button type="button" className={projectView === "active" ? "is-active" : ""} onClick={() => onProjectViewChange("active")}>Active projects</button><button type="button" className={projectView === "archived" ? "is-active" : ""} onClick={() => onProjectViewChange("archived")}>Archived ({archivedProjectCount})</button></div><select className="project-select" aria-label="Choose project" value={project.id} onChange={(event) => onSelectProject(event.target.value)}>{projects.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select>{project.status === "archived" ? <><button className="button button-primary" onClick={() => { void onRestore(project); }}><Icon name="refresh" size={16} /> Restore project</button><button className="button button-secondary" onClick={() => { setRemoveConfirmation(""); setRemoveConfirmationOpen(true); }}><Icon name="close" size={16} /> Delete from workspace</button></> : <><button className="button button-secondary" onClick={() => setArchiveConfirmationOpen(true)}><Icon name="archive" size={16} /> Archive project</button><button className="button button-secondary" onClick={() => { setRemoveConfirmation(""); setRemoveConfirmationOpen(true); }}><Icon name="close" size={16} /> Delete from workspace</button></>}{onRetrySetup && project.status !== "archived" && <button className="button button-secondary" onClick={onRetrySetup}><Icon name="refresh" size={16} /> Retry setup</button>}{project.status !== "archived" && <button className="button button-secondary" onClick={onNewRevision}><Icon name="plus" size={16} /> New revision</button>}</PageHeader>
+    {archiveConfirmationOpen && <Dialog title={`Archive ${project.name}?`} role="alertdialog" onClose={() => { if (!archiving) setArchiveConfirmationOpen(false); }}><p className="dialog-intro">This hides the project from active lists and releases its active reservations. Revisions, files, BOM, stock evidence, and audit history remain retained. Archive is reversible; restore returns it to idea without recreating reservations.</p><div className="dialog-actions"><button type="button" className="button button-quiet" onClick={() => setArchiveConfirmationOpen(false)} disabled={archiving}>Cancel</button><button type="button" className="button button-primary" onClick={() => { void confirmArchive(); }} disabled={archiving} aria-busy={archiving}>{archiving ? "Archiving…" : "Archive project"}</button></div></Dialog>}
+    {removeConfirmationOpen && <Dialog title={`Remove ${project.name} from the workspace?`} role="alertdialog" onClose={() => { if (!removing) { setRemoveConfirmationOpen(false); setRemoveConfirmation(""); } }}><p className="dialog-intro"><strong>This action is irreversible.</strong> It removes the archived project from workspace lists. Its tombstone, revisions, files, reservations release evidence, and audit history remain retained for history, but the project cannot be restored.</p><label className="form-field" htmlFor="remove-project-confirmation"><span>Type <strong>{project.name}</strong> to confirm</span><input id="remove-project-confirmation" autoFocus value={removeConfirmation} onChange={(event) => setRemoveConfirmation(event.target.value)} disabled={removing} autoComplete="off" /></label><div className="dialog-actions"><button type="button" className="button button-quiet" onClick={() => { setRemoveConfirmationOpen(false); setRemoveConfirmation(""); }} disabled={removing}>Cancel</button><button type="button" className="button button-danger" onClick={() => { void confirmRemove(); }} disabled={removing || removeConfirmation !== project.name} aria-busy={removing}>{removing ? "Removing…" : "Remove from workspace"}</button></div></Dialog>}
+    {project.status === "archived" && <div className="archive-notice" role="status"><Icon name="archive" size={17} /><span><strong>Archived project</strong> Hidden from active lists. Active reservations were released; revisions, files, BOM, stock evidence, and audit history remain retained. Restore is reversible and returns the project to idea without recreating reservations.</span></div>}
     <BuildRail currentStep={project.railStep} projectName={`${project.name} · ${project.currentRevision}`} />
-    <div className="dossier-layout"><aside className="dossier-column"><div className="dossier-status"><span className={`status-pill tone-${project.status === "complete" ? "good" : "info"}`}><span className="status-symbol">●</span>{project.status}</span><span className="revision-label">{project.currentRevision}</span></div><h2>{project.workItem}</h2><p>{project.description}</p><div className="dossier-next"><span className="eyebrow">Next action</span><strong>{summary.readinessUnavailable ? "Reload project readiness" : summary.decideLines ? "Decide the open requirements" : summary.inspectLines ? "Check the physical stock" : summary.sourceLines ? "Source the remaining parts" : "Ready to validate"}</strong><span>{summary.readinessUnavailable ? "Inventory changed, but canonical project readiness could not be reloaded. Do not source parts until it returns." : summary.decideLines ? `${summary.decideLines} BOM line${summary.decideLines === 1 ? " needs" : "s need"} a specification decision before sourcing.` : summary.inspectLines ? `${summary.inspectLines} BOM line${summary.inspectLines === 1 ? " needs" : "s need"} a physical or compatibility check.` : summary.sourceLines ? `${summary.sourceLines} BOM line${summary.sourceLines === 1 ? " is" : "s are"} ready for a source proposal.` : "Every recorded requirement is covered by confirmed stock."}</span></div><dl className="dossier-facts"><div><dt>Current revision</dt><dd>{project.currentRevision}</dd></div><div><dt>Build files</dt><dd>{project.artifacts.length} artifacts</dd></div><div><dt>Last changed</dt><dd>{project.updated}</dd></div></dl>{project.buildConfigSnapshot && <BuildSetupSummary input={project.buildConfigSnapshot} printer={configuredPrinter} filament={configuredFilament} expert={expert} />}{expert && <details className="expert-detail" open><summary>Expert context</summary><div className="detail-grid"><div><span>Work item ID</span><code>{project.id}/work-item</code></div><div><span>Revision state</span><code>State is supplied by the connected service.</code></div><div><span>Artifact policy</span><code>Retained revisions are not overwritten.</code></div></div></details>}<button className="text-button dossier-inventory-link" onClick={() => onNavigate("inventory")}>Browse all inventory <Icon name="arrow-right" size={15} /></button></aside><section className="dossier-workspace"><div className="tab-list" role="tablist" aria-label="Project workspace"><button role="tab" aria-selected={tab === "plan"} className={tab === "plan" ? "is-active" : ""} onClick={() => onTabChange("plan")}><Icon name="clipboard" size={16} /> Plan <span>{summary.totalLines}</span></button><button role="tab" aria-selected={tab === "files"} className={tab === "files" ? "is-active" : ""} onClick={() => onTabChange("files")}><Icon name="folder" size={16} /> Files <span>{project.artifacts.length}</span></button><button role="tab" aria-selected={tab === "offers"} className={tab === "offers" ? "is-active" : ""} onClick={() => onTabChange("offers")}><Icon name="tag" size={16} /> Shopping list <span>{summary.sourceLines}</span></button>{hasServerRevision && <button role="tab" aria-selected={tab === "reconciliation"} className={tab === "reconciliation" ? "is-active" : ""} onClick={() => onTabChange("reconciliation")}><Icon name="check-circle" size={16} /> Close out <span>{reconciliation?.status === "committed" ? "Done" : "Review"}</span></button>}</div>{tab === "plan" && <ProjectPlan project={project} summary={summary} expert={expert} onOpenItem={onOpenItem} onAddBom={onAddBom} />}{tab === "files" && <ProjectFiles project={project} expert={expert} sampleMode={sampleMode} onUpload={(file, role) => onUpload(project.id, file, role)} />}{tab === "offers" && <ShoppingList project={project} summary={summary} offers={offers} expert={expert} onToast={onToast} onBackToPlan={() => onTabChange("plan")} />}{tab === "reconciliation" && hasServerRevision && <section className="reconciliation-page-surface">{reconciliationLoading && <div className="reconciliation-loading" role="status"><span className="eyebrow">Project close-out</span><strong>Loading the current review…</strong><p>Nothing changes in inventory while this review loads.</p></div>}{reconciliationError && !reconciliationLoading && <div className="reconciliation-loading reconciliation-load-error" role="alert"><span className="eyebrow">Could not load close-out</span><strong>{reconciliationError}</strong><button className="button button-secondary" onClick={() => onTabChange("plan")}>Back to plan</button></div>}{reconciliation && !reconciliationLoading && !reconciliationError && <ReconciliationUI model={reconciliation} expert={expert} onChange={setReconciliation} onRequestPreview={saveReconciliation} onConfirmCommit={commitReconciliation} />}</section>}</section></div>
+    <div className="dossier-layout"><aside className="dossier-column"><div className="dossier-status"><span className={`status-pill tone-${project.status === "complete" ? "good" : "info"}`}><span className="status-symbol">●</span>{project.status}</span><span className="revision-label">{project.currentRevision}</span></div><h2>{project.workItem}</h2><p>{project.description}</p><div className="dossier-next"><span className="eyebrow">Next action</span><strong>{project.status === "archived" ? "Restore to continue work" : summary.readinessUnavailable ? "Reload project readiness" : summary.decideLines ? "Decide the open requirements" : summary.inspectLines ? "Check the physical stock" : summary.sourceLines ? "Source the remaining parts" : "Ready to validate"}</strong><span>{project.status === "archived" ? "Archived projects reject new work, revisions, BOM lines, reservations, uploads, and commits until restored." : summary.readinessUnavailable ? "Inventory changed, but canonical project readiness could not be reloaded. Do not source parts until it returns." : summary.decideLines ? `${summary.decideLines} BOM line${summary.decideLines === 1 ? " needs" : "s need"} a specification decision before sourcing.` : summary.inspectLines ? `${summary.inspectLines} BOM line${summary.inspectLines === 1 ? " needs" : "s need"} a physical or compatibility check.` : summary.sourceLines ? `${summary.sourceLines} BOM line${summary.sourceLines === 1 ? " is" : "s are"} ready for a source proposal.` : "Every recorded requirement is covered by confirmed stock."}</span></div><dl className="dossier-facts"><div><dt>Current revision</dt><dd>{project.currentRevision}</dd></div><div><dt>Build files</dt><dd>{project.artifacts.length} artifacts</dd></div><div><dt>Last changed</dt><dd>{project.updated}</dd></div></dl>{project.buildConfigSnapshot && <BuildSetupSummary input={project.buildConfigSnapshot} printer={configuredPrinter} filament={configuredFilament} expert={expert} />}{expert && <details className="expert-detail" open><summary>Expert context</summary><div className="detail-grid"><div><span>Work item ID</span><code>{project.id}/work-item</code></div><div><span>Revision state</span><code>State is supplied by the connected service.</code></div><div><span>Artifact policy</span><code>Retained revisions are not overwritten.</code></div></div></details>}<button className="text-button dossier-inventory-link" onClick={() => onNavigate("inventory")}>Browse all inventory <Icon name="arrow-right" size={15} /></button></aside><section className="dossier-workspace"><div className="tab-list" role="tablist" aria-label="Project workspace"><button role="tab" aria-selected={tab === "plan"} className={tab === "plan" ? "is-active" : ""} onClick={() => onTabChange("plan")}><Icon name="clipboard" size={16} /> Plan <span>{summary.totalLines}</span></button><button role="tab" aria-selected={tab === "files"} className={tab === "files" ? "is-active" : ""} onClick={() => onTabChange("files")}><Icon name="folder" size={16} /> Files <span>{project.artifacts.length}</span></button><button role="tab" aria-selected={tab === "offers"} className={tab === "offers" ? "is-active" : ""} onClick={() => onTabChange("offers")}><Icon name="tag" size={16} /> Shopping list <span>{summary.sourceLines}</span></button>{hasServerRevision && <button role="tab" aria-selected={tab === "reconciliation"} className={tab === "reconciliation" ? "is-active" : ""} onClick={() => onTabChange("reconciliation")}><Icon name="check-circle" size={16} /> Close out <span>{reconciliation?.status === "committed" ? "Done" : "Review"}</span></button>}</div>{tab === "plan" && <ProjectPlan project={project} summary={summary} expert={expert} onOpenItem={onOpenItem} onAddBom={project.status === "archived" ? () => onToast("Restore this project before adding a requirement.") : onAddBom} />}{tab === "files" && <ProjectFiles project={project} expert={expert} sampleMode={sampleMode} onUpload={(file, role) => onUpload(project.id, file, role)} archived={project.status === "archived"} />}{tab === "offers" && <ShoppingList project={project} summary={summary} offers={offers} expert={expert} onToast={onToast} onBackToPlan={() => onTabChange("plan")} />}{tab === "reconciliation" && hasServerRevision && <section className="reconciliation-page-surface">{reconciliationLoading && <div className="reconciliation-loading" role="status"><span className="eyebrow">Project close-out</span><strong>Loading the current review…</strong><p>Nothing changes in inventory while this review loads.</p></div>}{reconciliationError && !reconciliationLoading && <div className="reconciliation-loading reconciliation-load-error" role="alert"><span className="eyebrow">Could not load close-out</span><strong>{reconciliationError}</strong><button className="button button-secondary" onClick={() => onTabChange("plan")}>Back to plan</button></div>}{reconciliation && !reconciliationLoading && !reconciliationError && <ReconciliationUI model={reconciliation} expert={expert} onChange={setReconciliation} onRequestPreview={saveReconciliation} onConfirmCommit={commitReconciliation} />}</section>}</section></div>
   </>;
 }
 
@@ -1329,7 +1427,7 @@ interface UploadRun {
   currentIndex?: number;
 }
 
-function ProjectFiles({ project, expert, sampleMode, onUpload }: { project: Project; expert: boolean; sampleMode: boolean; onUpload: (file: File, role: string) => Promise<void> }) {
+function ProjectFiles({ project, expert, sampleMode, onUpload, archived = false }: { project: Project; expert: boolean; sampleMode: boolean; onUpload: (file: File, role: string) => Promise<void>; archived?: boolean }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [uploadRun, setUploadRun] = useState<UploadRun>();
   const processFiles = async (selected: File[]) => {
@@ -1364,7 +1462,7 @@ function ProjectFiles({ project, expert, sampleMode, onUpload }: { project: Proj
   const currentEntry = uploadRun?.currentIndex === undefined ? undefined : uploadRun.entries[uploadRun.currentIndex];
   const bindings = [...new Set(project.artifacts.map((file) => [file.machine, file.material].filter(Boolean).join(" · ")).filter(Boolean))];
   const bindingLabel = bindings.length ? bindings.join(", ") : "No machine binding recorded";
-  return <section className="surface files-section"><div className="files-header"><div><span className="eyebrow">Project files</span><h2>Revisioned build evidence</h2><p>{sampleMode ? "Uploads stay inside this explicitly synthetic sample workspace." : "Keep editable CAD, exports, slicer plates, and validation notes together without overwriting an older candidate."}</p></div><div><input ref={fileInput} type="file" multiple className="sr-only" aria-label="Choose files to upload" onChange={addFiles} disabled={uploadRun?.active} /><button className="button button-primary" onClick={() => fileInput.current?.click()} disabled={uploadRun?.active} aria-busy={uploadRun?.active}><Icon name="upload" size={16} />{uploadRun?.active ? "Uploading…" : "Add files"}</button></div></div>{uploadRun && <div className={`upload-status ${errorCount ? "has-errors" : ""}`} role="status" aria-live="polite"><div className="upload-status-heading"><strong>{uploadRun.active ? `Uploading ${Math.min((uploadRun.currentIndex ?? uploadRun.completed) + 1, uploadRun.total)} of ${uploadRun.total}` : `${successCount} of ${uploadRun.total} file${uploadRun.total === 1 ? "" : "s"} uploaded`}</strong><span>{currentEntry?.name ?? (errorCount ? `${errorCount} failed` : "Complete")}</span></div><progress max={uploadRun.total} value={uploadRun.completed} aria-label="Artifact upload progress" /><ul>{uploadRun.entries.map((entry) => <li key={`${entry.name}-${entry.role}`}><span><strong>{entry.name}</strong><small>{entry.role}</small></span><span className={`upload-entry-state upload-${entry.status}`}>{entry.status === "pending" ? "Waiting" : entry.status === "uploading" ? "Uploading…" : entry.status === "success" ? "Uploaded" : "Not uploaded"}</span>{entry.status === "error" && entry.message && <p role="alert">{entry.message}</p>}</li>)}</ul></div>}<div className="file-path"><Icon name="folder" size={15} /><code>{project.id}/work-items/{project.workItem.toLowerCase().replaceAll(" ", "-")}/{project.currentRevision}</code><span>{sampleMode ? "sample workspace" : "private workspace"}</span></div>{project.artifacts.length ? <div className="table-scroll"><table className="data-table files-table"><caption className="sr-only">Project artifacts and revisions</caption><thead><tr><th scope="col">File</th><th scope="col">Role</th><th scope="col">Revision</th><th scope="col">Updated</th><th scope="col">State</th>{expert && <th scope="col">SHA-256</th>}</tr></thead><tbody>{project.artifacts.map((file) => <tr key={file.id}><td><span className="file-name"><span className={`file-type type-${file.role.toLowerCase().replaceAll(" ", "-")}`}><Icon name={file.role === "Validation" ? "clipboard" : file.role === "Editable CAD" ? "code" : "file"} size={15} /></span><span><strong>{file.name}</strong><small>{file.size}{file.machine ? ` · ${file.machine}` : ""}</small></span></span></td><td>{file.role}</td><td><span className="revision-tag">{file.revision}</span></td><td>{file.updated}</td><td><span className={`file-state state-${file.status}`}>{file.status === "candidate" ? "Candidate" : file.status === "validated" ? "Validated" : "Superseded"}</span></td>{expert && <td><code className="hash-cell">{file.hash}</code></td>}</tr>)}</tbody></table></div> : <div className="files-empty"><Icon name="folder" size={20} /><strong>No files in this revision yet.</strong><span>Add the editable source or first export when you have one.</span></div>}{expert && <details className="expert-detail file-manifest-detail"><summary>Show manifest details</summary><div className="manifest-grid"><span>Binding</span><strong>{bindingLabel}</strong><span>Retention</span><strong>Older revision files remain auditable when the service records them.</strong><span>Preview</span><strong>Browser-safe text and image previews only.</strong></div></details>}</section>;
+  return <section className="surface files-section"><div className="files-header"><div><span className="eyebrow">Project files</span><h2>Revisioned build evidence</h2><p>{archived ? "This archive keeps files and history available, but uploads resume only after you restore the project." : sampleMode ? "Uploads stay inside this explicitly synthetic sample workspace." : "Keep editable CAD, exports, slicer plates, and validation notes together without overwriting an older candidate."}</p></div><div><input ref={fileInput} type="file" multiple className="sr-only" aria-label="Choose files to upload" onChange={addFiles} disabled={uploadRun?.active || archived} /><button className="button button-primary" onClick={() => fileInput.current?.click()} disabled={uploadRun?.active || archived} aria-busy={uploadRun?.active}>{archived ? "Restore to add files" : <><Icon name="upload" size={16} />{uploadRun?.active ? "Uploading…" : "Add files"}</>}</button></div></div>{uploadRun && <div className={`upload-status ${errorCount ? "has-errors" : ""}`} role="status" aria-live="polite"><div className="upload-status-heading"><strong>{uploadRun.active ? `Uploading ${Math.min((uploadRun.currentIndex ?? uploadRun.completed) + 1, uploadRun.total)} of ${uploadRun.total}` : `${successCount} of ${uploadRun.total} file${uploadRun.total === 1 ? "" : "s"} uploaded`}</strong><span>{currentEntry?.name ?? (errorCount ? `${errorCount} failed` : "Complete")}</span></div><progress max={uploadRun.total} value={uploadRun.completed} aria-label="Artifact upload progress" /><ul>{uploadRun.entries.map((entry) => <li key={`${entry.name}-${entry.role}`}><span><strong>{entry.name}</strong><small>{entry.role}</small></span><span className={`upload-entry-state upload-${entry.status}`}>{entry.status === "pending" ? "Waiting" : entry.status === "uploading" ? "Uploading…" : entry.status === "success" ? "Uploaded" : "Not uploaded"}</span>{entry.status === "error" && entry.message && <p role="alert">{entry.message}</p>}</li>)}</ul></div>}<div className="file-path"><Icon name="folder" size={15} /><code>{project.id}/work-items/{project.workItem.toLowerCase().replaceAll(" ", "-")}/{project.currentRevision}</code><span>{sampleMode ? "sample workspace" : "private workspace"}</span></div>{project.artifacts.length ? <div className="table-scroll"><table className="data-table files-table"><caption className="sr-only">Project artifacts and revisions</caption><thead><tr><th scope="col">File</th><th scope="col">Role</th><th scope="col">Revision</th><th scope="col">Updated</th><th scope="col">State</th>{expert && <th scope="col">SHA-256</th>}</tr></thead><tbody>{project.artifacts.map((file) => <tr key={file.id}><td><span className="file-name"><span className={`file-type type-${file.role.toLowerCase().replaceAll(" ", "-")}`}><Icon name={file.role === "Validation" ? "clipboard" : file.role === "Editable CAD" ? "code" : "file"} size={15} /></span><span><strong>{file.name}</strong><small>{file.size}{file.machine ? ` · ${file.machine}` : ""}</small></span></span></td><td>{file.role}</td><td><span className="revision-tag">{file.revision}</span></td><td>{file.updated}</td><td><span className={`file-state state-${file.status}`}>{file.status === "candidate" ? "Candidate" : file.status === "validated" ? "Validated" : "Superseded"}</span></td>{expert && <td><code className="hash-cell">{file.hash}</code></td>}</tr>)}</tbody></table></div> : <div className="files-empty"><Icon name="folder" size={20} /><strong>No files in this revision yet.</strong><span>Add the editable source or first export when you have one.</span></div>}{expert && <details className="expert-detail file-manifest-detail"><summary>Show manifest details</summary><div className="manifest-grid"><span>Binding</span><strong>{bindingLabel}</strong><span>Retention</span><strong>Older revision files remain auditable when the service records them.</strong><span>Preview</span><strong>Browser-safe text and image previews only.</strong></div></details>}</section>;
 }
 
 function ShoppingList({ project, summary, offers, expert, onToast, onBackToPlan }: { project: Project; summary: ReturnType<typeof calculateProjectSummary>; offers: typeof fixtureOffers; expert: boolean; onToast: (message: string) => void; onBackToPlan: () => void }) {
@@ -1802,11 +1900,11 @@ function NewInventoryDialog({ categories, categoriesLoading, categoriesError, ca
   return <Dialog title="Add an inventory item" onClose={onClose}><form onSubmit={(event) => { void submit(event); }}><button type="button" className="text-button category-back" onClick={resetSelection} disabled={submitting}><Icon name="arrow-left" size={15} /> Choose another type or category</button><div className="inventory-selection-summary"><span><strong>Item type</strong>{itemTypeOptions.find((option) => option.value === itemType)?.label}</span><span><strong>Category</strong>{availableCategory.name}</span></div><p className="dialog-intro">This records what you received, but it starts as <strong>Check quantity</strong> until you physically count it. The entered quantity is not treated as available stock.</p><label className="form-field"><span>Name</span><input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. JST-PH 2-pin leads" disabled={submitting} /></label><div className="form-row"><label className="form-field"><span>Quantity received</span><input type="number" min="0" step="any" value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={submitting} /></label><label className="form-field"><span>Unit</span><select value={unit} onChange={(event) => setUnit(event.target.value as InventoryItem["unit"])} disabled={submitting}><option value="each">pieces</option><option value="g">grams</option><option value="m">metres</option></select></label></div>{formError && <p className="form-error" role="alert">{formError}</p>}<div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose} disabled={submitting}>Cancel</button><button type="submit" className="button button-primary" disabled={!name.trim() || submitting} aria-busy={submitting}>{submitting ? "Adding…" : "Add item"} {!submitting && <Icon name="plus" size={16} />}</button></div></form></Dialog>;
 }
 
-function Dialog({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+function Dialog({ title, role = "dialog", onClose, children }: { title: string; role?: "dialog" | "alertdialog"; onClose: () => void; children: ReactNode }) {
   const titleId = useId();
   const dialogRef = useRef<HTMLElement>(null);
   useOverlayBehavior(dialogRef, onClose);
-  return <><div className="dialog-scrim" aria-hidden="true" onClick={onClose} /><section ref={dialogRef} className="dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}><div className="dialog-header"><h2 id={titleId}>{title}</h2><button type="button" className="icon-button" aria-label="Close dialog" onClick={onClose}><Icon name="close" size={19} /></button></div>{children}</section></>;
+  return <><div className="dialog-scrim" aria-hidden="true" onClick={onClose} /><section ref={dialogRef} className="dialog" role={role} aria-modal="true" aria-labelledby={titleId} tabIndex={-1}><div className="dialog-header"><h2 id={titleId}>{title}</h2><button type="button" className="icon-button" aria-label="Close dialog" onClick={onClose}><Icon name="close" size={19} /></button></div>{children}</section></>;
 }
 
 function EmptyState({ icon, title, description, action, onAction }: { icon: Parameters<typeof Icon>[0]["name"]; title: string; description: string; action?: string; onAction?: () => void }) {

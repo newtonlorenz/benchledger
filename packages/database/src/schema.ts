@@ -64,7 +64,11 @@ CREATE TABLE IF NOT EXISTS projects (
   visibility TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  retired_at TEXT
+  retired_at TEXT,
+  removed_at TEXT,
+  removed_by_json TEXT,
+  last_lifecycle_status TEXT,
+  removed_reservation_ids_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS work_items (

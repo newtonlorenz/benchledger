@@ -1,5 +1,5 @@
 import { DomainError, consumeReservation, createReservation, createStockEvent, releaseReservation } from "@benchledger/domain";
-import type { BomAlternative, BomLine, Project, ProjectRevision, Reservation, StockEvent, WorkItem, WorkItemRevision } from "@benchledger/domain";
+import type { AuditActor, BomAlternative, BomLine, Project, ProjectRevision, Reservation, StockEvent, WorkItem, WorkItemRevision } from "@benchledger/domain";
 import { bomAlternativeFromRow, bomLineFromRow, projectFromRow, projectRevisionFromRow, reservationFromRow, workItemFromRow, workItemRevisionFromRow, jsonValue } from "./serializers.js";
 import type { BenchDatabase, SqliteRow } from "./sqlite.js";
 import type { AppendStockEventResult } from "./inventory-repository.js";
@@ -8,7 +8,7 @@ export class ProjectRepository {
   constructor(private readonly database: BenchDatabase) {}
 
   create(project: Project): Project {
-    this.database.run("INSERT INTO projects (id, name, slug, description, status, visibility, created_at, updated_at, retired_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [project.id, project.name, project.slug, project.description ?? null, project.status, project.visibility, project.createdAt, project.updatedAt, project.retiredAt ?? null]);
+    this.database.run("INSERT INTO projects (id, name, slug, description, status, visibility, created_at, updated_at, retired_at, removed_at, removed_by_json, last_lifecycle_status, removed_reservation_ids_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [project.id, project.name, project.slug, project.description ?? null, project.status, project.visibility, project.createdAt, project.updatedAt, project.retiredAt ?? null, project.removedAt ?? null, jsonValue(project.removedBy), project.lastLifecycleStatus ?? null, jsonValue(project.removedReservationIds)]);
     return project;
   }
 
@@ -18,8 +18,23 @@ export class ProjectRepository {
   }
 
   list(includeRetired = false): readonly Project[] {
-    const where = includeRetired ? "" : "WHERE retired_at IS NULL";
+    const where = includeRetired ? "" : "WHERE retired_at IS NULL AND removed_at IS NULL";
     return this.database.all<SqliteRow>(`SELECT * FROM projects ${where} ORDER BY updated_at DESC, id`, []).map(projectFromRow);
+  }
+
+  listRemoved(): readonly Project[] {
+    return this.database.all<SqliteRow>("SELECT * FROM projects WHERE removed_at IS NOT NULL ORDER BY removed_at DESC, id", []).map(projectFromRow);
+  }
+
+  /** Bounded retained-history query for workspace-global pagination. */
+  listRemovedPage(limit: number, offset: number): { readonly data: readonly Project[]; readonly total: number } {
+    const totalRow = this.database.get<SqliteRow>("SELECT COUNT(*) AS total FROM projects WHERE removed_at IS NOT NULL", []);
+    const total = typeof totalRow?.total === "number" ? totalRow.total : Number(totalRow?.total ?? 0);
+    const data = this.database.all<SqliteRow>(
+      "SELECT * FROM projects WHERE removed_at IS NOT NULL ORDER BY removed_at DESC, id LIMIT ? OFFSET ?",
+      [limit, offset]
+    ).map(projectFromRow);
+    return { data, total };
   }
 
   createWorkItem(workItem: WorkItem): WorkItem {
@@ -175,7 +190,7 @@ export class ReservationRepository {
     });
   }
 
-  release(id: string): Reservation {
+  release(id: string, options: ReservationReleaseOptions = {}): Reservation {
     const reservation = this.get(id);
     if (reservation === undefined) throw new DomainError("reservation_not_found", `reservation ${id} does not exist`);
     const released = releaseReservation(reservation);
@@ -184,8 +199,32 @@ export class ReservationRepository {
     if (item === undefined) throw new DomainError("inventory_not_found", `inventory item ${reservation.itemId} does not exist`);
     this.database.transaction(() => {
       this.database.run("UPDATE reservations SET status = ?, released_at = ? WHERE id = ?", [released.status, releasedAt, id]);
-      this.inventory.appendStockEvent(createStockEvent({ id: `reservation-${id}-release`, itemId: reservation.itemId, kind: "release", quantity: reservation.quantity, unit: item.unit, reason: `Release reservation ${id}`, idempotencyKey: `reservation:${id}:release`, occurredAt: releasedAt, createdAt: releasedAt }));
+      this.inventory.appendStockEvent(createStockEvent({
+        id: `reservation-${id}-release`,
+        itemId: reservation.itemId,
+        kind: "release",
+        quantity: reservation.quantity,
+        unit: item.unit,
+        reason: options.reason ?? `Release reservation ${id}`,
+        ...(options.actor === undefined ? {} : { actor: options.actor }),
+        ...(options.source === undefined ? {} : { source: options.source }),
+        ...(options.evidence === undefined ? {} : { evidence: options.evidence }),
+        ...(options.correlationId === undefined ? {} : { correlationId: options.correlationId }),
+        idempotencyKey: options.idempotencyKey ?? `reservation:${id}:release`,
+        occurredAt: options.occurredAt ?? releasedAt,
+        createdAt: releasedAt
+      }));
     });
     return released;
   }
+}
+
+export interface ReservationReleaseOptions {
+  readonly actor?: AuditActor;
+  readonly source?: string;
+  readonly evidence?: Record<string, unknown>;
+  readonly correlationId?: string;
+  readonly idempotencyKey?: string;
+  readonly occurredAt?: string;
+  readonly reason?: string;
 }

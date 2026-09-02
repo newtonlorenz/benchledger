@@ -1060,6 +1060,45 @@ describe("API boundaries and mutation guards", () => {
     await expect(adapter.uploadArtifact("not-loaded", new File(["data"], "data.stl"), "STL")).rejects.toMatchObject({ kind: "validation", status: 409, message: "Create a project revision before uploading a file" });
 
   });
+
+  it("removes a cached project with exact-name, version, and idempotency headers", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", csrfToken: "csrf-remove", expiresAt: "2026-08-31T10:00:00.000Z" }))
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "test", demo: false, now: "2026-08-30T10:00:00.000Z" }))
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", source: "ui", scopes: ["read", "write"] }))
+      .mockResolvedValueOnce(jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00.000Z", inventory: [], projects: [{ ...serverProject(), currentRevision: serverRevision() }], offers: [] }))
+      .mockResolvedValueOnce(jsonResponse({ data: { id: "project-1", name: "Maker project", removedAt: "2026-08-30T11:00:00.000Z", removedBy: "admin", lastLifecycleStatus: "planned", releasedReservationIds: [], version: 2, auditId: "audit-remove" } }));
+    const adapter = createWorkspaceAdapter();
+    await adapter.login("correct-password");
+    await adapter.loadWorkspace();
+
+    await expect(adapter.removeProject("project-1", 1)).resolves.toMatchObject({ id: "project-1", removedAt: "2026-08-30T11:00:00.000Z", lastLifecycleStatus: "planned", version: 2 });
+    const [url, init] = fetchMock.mock.calls[4]!;
+    expect(url).toBe("/api/v1/projects/project-1");
+    expect(init).toMatchObject({ method: "DELETE", body: JSON.stringify({ name: "Maker project" }) });
+    expect(new Headers(init?.headers).get("if-match")).toBe("1");
+    expect(new Headers(init?.headers).get("idempotency-key")).toMatch(/^web-project-remove-/u);
+  });
+
+  it("reuses the removal idempotency key after an ambiguous response", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", csrfToken: "csrf-remove-retry", expiresAt: "2026-08-31T10:00:00.000Z" }))
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "test", demo: false, now: "2026-08-30T10:00:00.000Z" }))
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", source: "ui", scopes: ["read", "write"] }))
+      .mockResolvedValueOnce(jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00.000Z", inventory: [], projects: [{ ...serverProject(), currentRevision: serverRevision() }], offers: [] }))
+      .mockResolvedValueOnce(jsonResponse({ error: { message: "The response was lost after the server committed" } }, 500))
+      .mockResolvedValueOnce(jsonResponse({ data: { id: "project-1", name: "Maker project", removedAt: "2026-08-30T11:00:00.000Z", removedBy: "admin", lastLifecycleStatus: "planned", releasedReservationIds: [], version: 2, auditId: "audit-remove-retry" } }));
+    const adapter = createWorkspaceAdapter();
+    await adapter.login("correct-password");
+    await adapter.loadWorkspace();
+
+    await expect(adapter.removeProject("project-1", 1)).rejects.toMatchObject({ kind: "server", status: 500 });
+    await expect(adapter.removeProject("project-1", 1)).resolves.toMatchObject({ id: "project-1", removedAt: "2026-08-30T11:00:00.000Z" });
+    const firstKey = new Headers(fetchMock.mock.calls[4]?.[1]?.headers).get("idempotency-key");
+    const secondKey = new Headers(fetchMock.mock.calls[5]?.[1]?.headers).get("idempotency-key");
+    expect(firstKey).toMatch(/^web-project-remove-/u);
+    expect(secondKey).toBe(firstKey);
+  });
 });
 
 describe("sample workspace adapter", () => {
@@ -1112,5 +1151,7 @@ describe("sample workspace adapter", () => {
     expect(after.inventory).toHaveLength(initialInventoryCount + 1);
     expect(after.projects).toHaveLength(initialProjectCount + 1);
     expect(after.projects.find((project) => project.id === createdProject.id)?.artifacts).toHaveLength(6);
+    await expect(adapter.removeProject(createdProject.id, after.projects.find((project) => project.id === createdProject.id)?.version)).resolves.toMatchObject({ id: createdProject.id, removedAt: expect.any(String), lastLifecycleStatus: "idea" });
+    await expect(adapter.loadWorkspace()).resolves.toMatchObject({ projects: expect.not.arrayContaining([expect.objectContaining({ id: createdProject.id })]) });
   });
 });

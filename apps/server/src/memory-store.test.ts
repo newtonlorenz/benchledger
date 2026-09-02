@@ -50,6 +50,65 @@ describe("MemoryInventory", () => {
       evidence: { state: "physically_counted" }
     });
   });
+
+  it("restores an in-memory project when removal is compensated", async () => {
+    const runtime = createMemoryRuntime();
+    const project = await runtime.projects.createProject({ id: "project-removal-rollback", name: "Rollback project", status: "planned" });
+    await expect(runtime.projects.removeProject(project.id, project.version, project.name, {
+      actor: "memory-store-test", source: "api", correlationId: "remove-project", scopes: new Set(["write"])
+    })).resolves.toMatchObject({ id: project.id, lastLifecycleStatus: "planned" });
+    await expect(runtime.projects.listRemovedProjects()).resolves.toEqual([expect.objectContaining({ id: project.id })]);
+
+    await runtime.projects.rollbackProjectRemoval(project.id);
+
+    const restored = await runtime.projects.getProject(project.id);
+    expect(restored).toMatchObject({ id: project.id, version: 1 });
+    expect(restored).not.toHaveProperty("removedAt");
+    await expect(runtime.projects.listRemovedProjects()).resolves.toEqual([]);
+  });
+
+  it("rolls back an in-memory removal when reservation release fails", async () => {
+    const runtime = createMemoryRuntime();
+    const project = await runtime.projects.createProject({ id: "project-release-failure", name: "Release failure", status: "planned" });
+    runtime.projects.projectRevisions.set("revision-release-failure", { id: "revision-release-failure", projectId: project.id, number: 1, name: "Initial", status: "concept", createdAt: project.createdAt, version: 1 });
+    runtime.projects.bomLines.set("line-release-failure", { id: "line-release-failure", revisionId: "revision-release-failure", name: "Missing item", itemId: "missing-item", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: project.createdAt, updatedAt: project.updatedAt, version: 1 });
+    runtime.projects.reservations.set("reservation-release-failure", { id: "reservation-release-failure", lineId: "line-release-failure", itemId: "missing-item", quantity: 1, status: "active", createdAt: project.createdAt, updatedAt: project.updatedAt, version: 1 });
+
+    expect(() => runtime.projects.removeProject(project.id, project.version, project.name, {
+      actor: "memory-store-test", source: "api", correlationId: "remove-project", scopes: new Set(["write"])
+    })).toThrow("refers to missing inventory item");
+    await expect(runtime.projects.getProject(project.id)).resolves.toMatchObject({ id: project.id, version: 1 });
+    expect(runtime.projects.reservations.get("reservation-release-failure")?.status).toBe("active");
+  });
+
+  it("preflights every archive reservation dependency before mutation", async () => {
+    const runtime = createMemoryRuntime();
+    const project = await runtime.projects.createProject({ id: "project-archive-preflight", name: "Archive preflight", status: "planned" });
+    runtime.projects.projectRevisions.set("revision-archive-preflight", { id: "revision-archive-preflight", projectId: project.id, number: 1, name: "Initial", status: "concept", createdAt: project.createdAt, version: 1 });
+    runtime.projects.bomLines.set("line-archive-preflight", { id: "line-archive-preflight", revisionId: "revision-archive-preflight", name: "Missing item", itemId: "missing-item", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: project.createdAt, updatedAt: project.updatedAt, version: 1 });
+    runtime.projects.reservations.set("reservation-archive-preflight", { id: "reservation-archive-preflight", lineId: "line-archive-preflight", itemId: "missing-item", quantity: 1, status: "active", createdAt: project.createdAt, updatedAt: project.updatedAt, version: 1 });
+
+    await expect(Promise.resolve().then(() => runtime.projects.archiveProject(project.id, project.version, { actor: "memory-store-test", source: "api", correlationId: "archive-preflight", scopes: new Set(["write"]) }))).rejects.toMatchObject({ code: "integrity_error" });
+    await expect(runtime.projects.getProject(project.id)).resolves.toMatchObject({ status: "planned", version: 1 });
+    expect(runtime.projects.reservations.get("reservation-archive-preflight")?.status).toBe("active");
+  });
+
+  it("closes a committed archive receipt so later rollback cannot undo it", async () => {
+    const runtime = createMemoryRuntime([{
+      id: "archive-item", name: "Archive item", kind: "electronic", quantity: 2, availableQuantity: 1, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" }, createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1
+    }]);
+    const project = await runtime.projects.createProject({ id: "project-archive-commit", name: "Archive commit", status: "planned" });
+    runtime.projects.projectRevisions.set("revision-archive-commit", { id: "revision-archive-commit", projectId: project.id, number: 1, name: "Initial", status: "concept", createdAt: project.createdAt, version: 1 });
+    runtime.projects.bomLines.set("line-archive-commit", { id: "line-archive-commit", revisionId: "revision-archive-commit", name: "Archive item", itemId: "archive-item", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: project.createdAt, updatedAt: project.updatedAt, version: 1 });
+    runtime.projects.reservations.set("reservation-archive-commit", { id: "reservation-archive-commit", lineId: "line-archive-commit", itemId: "archive-item", quantity: 1, status: "active", createdAt: project.createdAt, updatedAt: project.updatedAt, version: 1 });
+
+    const archived = await runtime.projects.archiveProject(project.id, project.version, { actor: "memory-store-test", source: "api", correlationId: "archive-commit", scopes: new Set(["write"]) });
+    await runtime.projects.commitProjectArchive(project.id);
+    await runtime.projects.rollbackProjectArchive(project.id);
+    await expect(runtime.projects.getProject(project.id)).resolves.toMatchObject({ status: "archived", version: archived.version });
+    expect(runtime.projects.reservations.get("reservation-archive-commit")?.status).toBe("released");
+    expect(runtime.inventory.items.get("archive-item")?.availableQuantity).toBe(2);
+  });
 });
 const sourcedFilament: CatalogProduct = {
   id: "memory-sourced-filament",

@@ -352,11 +352,39 @@ export const projectSchema = z.object({
   currentRevisionId: idSchema.optional(),
   createdAt: isoDateSchema,
   updatedAt: isoDateSchema,
+  removedAt: isoDateSchema.optional(),
+  removedBy: z.string().min(1).max(200).optional(),
+  lastLifecycleStatus: projectStatusSchema.optional(),
+  removedReservationIds: z.array(idSchema).max(10000).optional(),
   version: z.number().int().positive()
 }).strict();
 
 export const createProjectSchema = projectSchema.pick({ name: true, description: true, status: true }).extend({ id: idSchema.optional() }).strict();
 export const updateProjectSchema = createProjectSchema.omit({ id: true }).partial().strict();
+
+/** Exact-name confirmation required by irreversible project removal. */
+export const removeProjectSchema = z.object({
+  name: z.string().trim().min(1).max(240).optional(),
+  projectName: z.string().trim().min(1).max(240).optional()
+}).strict().superRefine((value, context) => {
+  if (value.name === undefined && value.projectName === undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "name or projectName confirmation is required" });
+  }
+  if (value.name !== undefined && value.projectName !== undefined && value.name !== value.projectName) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "name and projectName confirmations must match" });
+  }
+});
+
+export const projectTombstoneSchema = z.object({
+  id: idSchema,
+  name: z.string().min(1).max(240),
+  removedAt: isoDateSchema,
+  removedBy: z.string().min(1).max(200),
+  lastLifecycleStatus: projectStatusSchema,
+  releasedReservationIds: z.array(idSchema).max(10000),
+  version: z.number().int().positive(),
+  auditId: idSchema.optional()
+}).strict();
 
 export const workItemSchema = z.object({
   id: idSchema,

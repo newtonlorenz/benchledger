@@ -6,7 +6,7 @@ import type {
   CreateProjectWithInitialRevision, InventoryItem, Offer, Project, ProjectRevision, ProjectWithInitialRevision, Reservation, StockEvent,
   StockEventInput, UploadSession, WorkItem, WorkItemRevision, CatalogProduct, CreateCatalogProduct,
   UpdateCatalogProduct, InventoryProductProfile, CreateInventoryProductProfile,
-  UpdateInventoryProductProfile, BuildConfigurationSnapshot, CreateBuildConfigurationSnapshot,
+  UpdateInventoryProductProfile, BuildConfigurationSnapshot, CreateBuildConfigurationSnapshot, ProjectTombstone,
   ArtifactBuildConfigurationBinding, CommissionInventoryItem, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory
 } from "@benchledger/api-contract";
 import { ApplicationError, applyInventoryBulkChanges, normalizeInventoryBulkChanges, parseInventoryCursor } from "@benchledger/application";
@@ -509,15 +509,34 @@ class MemoryProjects implements ProjectPort {
   readonly bomLines = new Map<string, BomLine>();
   readonly reservations = new Map<string, Reservation>();
   private sequence = 200;
+  private readonly archiveSnapshots = new Map<string, {
+    readonly project: Project;
+    readonly reservations: readonly (readonly [string, Reservation])[];
+    readonly items: readonly (readonly [string, InventoryItem])[];
+    readonly events: readonly (readonly [string, StockEvent[] | undefined])[];
+  }>();
+  private readonly removalSnapshots = new Map<string, {
+    readonly projects: readonly (readonly [string, Project])[];
+    readonly reservations: readonly (readonly [string, Reservation])[];
+    readonly items: readonly (readonly [string, InventoryItem])[];
+    readonly events: readonly (readonly [string, StockEvent[]])[];
+  }>();
 
   constructor(private readonly inventory: MemoryInventory) {}
 
   listProjects(options: ProjectListOptions): Promise<Page<Project>> {
     const q = options.q?.trim().toLowerCase();
-    const values = [...this.projects.values()].filter((project) => (!options.status || project.status === options.status) && (!q || `${project.name} ${project.description ?? ""}`.toLowerCase().includes(q)));
+    const values = [...this.projects.values()].filter((project) => project.removedAt === undefined && (options.status === undefined ? project.status !== "archived" : project.status === options.status) && (!q || `${project.name} ${project.description ?? ""}`.toLowerCase().includes(q)));
     return Promise.resolve(page(values, options.limit, options.cursor));
   }
   getProject(idValue: string): Promise<Project | null> { const value = this.projects.get(idValue); return Promise.resolve(value ? clone(value) : null); }
+  listRemovedProjects(): Promise<readonly ProjectTombstone[]> {
+    return Promise.resolve(clone([...this.projects.values()].filter((project) => project.removedAt !== undefined).map((project) => this.projectTombstone(project))));
+  }
+  listRemovedProjectsPage(limit: number, cursor?: string): Promise<Page<ProjectTombstone>> {
+    const values = [...this.projects.values()].filter((project) => project.removedAt !== undefined).map((project) => this.projectTombstone(project));
+    return Promise.resolve(page(values, limit, cursor));
+  }
   createProject(input: CreateProject): Promise<Project> {
     const projectId = input.id ?? id("project", ++this.sequence);
     if (this.projects.has(projectId)) throw new ApplicationError("conflict", `Project '${projectId}' already exists`);
@@ -543,18 +562,173 @@ class MemoryProjects implements ProjectPort {
     }
   }
   updateProject(projectId: string, input: Partial<CreateProject>, expectedVersion: number | undefined): Promise<Project> {
-    const current = this.projects.get(projectId); if (!current) throw new ApplicationError("not_found", `Project '${projectId}' was not found`); ensureVersion(current.version, expectedVersion, "Project");
+    const current = this.projects.get(projectId); if (!current) throw new ApplicationError("not_found", `Project '${projectId}' was not found`);
+    if (current.removedAt !== undefined) throw new ApplicationError("project_removed", `Project '${projectId}' has been removed from the workspace`);
+    if (input.status === "archived") return this.archiveProject(projectId, expectedVersion, { actor: "system", source: "system", correlationId: `project:${projectId}:archive`, scopes: new Set() });
+    if (input.status === "idea" && current.status === "archived") return this.restoreProject(projectId, expectedVersion, { actor: "system", source: "system", correlationId: `project:${projectId}:restore`, scopes: new Set() });
+    ensureVersion(current.version, expectedVersion, "Project");
     const next: Project = { ...current, ...(input.name === undefined ? {} : { name: input.name }), ...(input.description === undefined ? {} : { description: input.description }), ...(input.status === undefined ? {} : { status: canonicalProjectStatus(input.status) }), updatedAt: iso(), version: current.version + 1 }; this.projects.set(projectId, next); return Promise.resolve(clone(next));
   }
+  archiveProject(projectId: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<Project> {
+    const current = this.projects.get(projectId); if (!current) throw new ApplicationError("not_found", `Project '${projectId}' was not found`); ensureVersion(current.version, expectedVersion, "Project");
+    if (current.removedAt !== undefined) throw new ApplicationError("project_removed", `Project '${projectId}' has been removed from the workspace`);
+    // A no-op is a fresh read, never an opportunity to reuse a compensation
+    // receipt from an earlier committed archive.
+    if (current.status === "archived") {
+      this.archiveSnapshots.delete(projectId);
+      return Promise.resolve(clone(current));
+    }
+    const revisionIds = new Set([...this.projectRevisions.values()].filter((revision) => revision.projectId === projectId).map((revision) => revision.id));
+    const lineIds = new Set([...this.bomLines.values()].filter((line) => revisionIds.has(line.revisionId)).map((line) => line.id));
+    const active = [...this.reservations.values()].filter((reservation) => reservation.status === "active" && lineIds.has(reservation.lineId));
+    // Preflight every dependency before changing reservations, stock, or
+    // events. This keeps an incomplete reservation graph fail-closed.
+    for (const reservation of active) {
+      if (this.inventory.items.get(reservation.itemId) === undefined) {
+        throw new ApplicationError("integrity_error", `Reservation '${reservation.id}' refers to missing inventory item`);
+      }
+    }
+    const affectedItemIds = [...new Set(active.map((reservation) => reservation.itemId))];
+    const snapshot = {
+      project: clone(current),
+      reservations: active.map((reservation) => [reservation.id, clone(reservation)] as const),
+      items: affectedItemIds.map((itemId) => [itemId, clone(this.inventory.items.get(itemId)!)] as const),
+      events: affectedItemIds.map((itemId) => [itemId, this.inventory.events.has(itemId) ? clone(this.inventory.events.get(itemId)!) : undefined] as const)
+    };
+    this.archiveSnapshots.set(projectId, snapshot);
+    try {
+      const archivedAt = iso();
+      const actor = ctx.actor;
+      for (const reservation of active) {
+        const item = this.inventory.items.get(reservation.itemId)!;
+        const updatedReservation: Reservation = { ...reservation, status: "released", updatedAt: archivedAt, version: reservation.version + 1 };
+        this.reservations.set(reservation.id, updatedReservation);
+        this.inventory.items.set(item.id, { ...item, availableQuantity: Math.min(item.quantity, item.availableQuantity + reservation.quantity), updatedAt: archivedAt, version: item.version + 1 });
+        const event: StockEvent = {
+          id: `reservation-${reservation.id}-release`, itemId: reservation.itemId, type: "release", quantity: reservation.quantity, unit: item.unit,
+          actor, source: ctx.source === "system" ? "api" : ctx.source, evidence: { projectId, projectArchive: true, reservationId: reservation.id }, correlationId: ctx.correlationId,
+          createdAt: archivedAt, itemVersion: item.version + 1
+        };
+        this.inventory.events.set(item.id, [...(this.inventory.events.get(item.id) ?? []), event]);
+      }
+      const next: Project = { ...current, status: "archived", updatedAt: archivedAt, version: current.version + 1 };
+      this.projects.set(projectId, next);
+      return Promise.resolve(clone(next));
+    } catch (error: unknown) {
+      this.projects.set(projectId, clone(snapshot.project));
+      for (const [idValue, value] of snapshot.reservations) this.reservations.set(idValue, clone(value));
+      for (const [idValue, value] of snapshot.items) this.inventory.items.set(idValue, clone(value));
+      for (const [idValue, value] of snapshot.events) {
+        if (value === undefined) this.inventory.events.delete(idValue);
+        else this.inventory.events.set(idValue, clone(value));
+      }
+      this.archiveSnapshots.delete(projectId);
+      throw error;
+    }
+  }
+  restoreProject(projectId: string, expectedVersion: number | undefined, _ctx: RequestContext): Promise<Project> {
+    const current = this.projects.get(projectId); if (!current) throw new ApplicationError("not_found", `Project '${projectId}' was not found`); ensureVersion(current.version, expectedVersion, "Project");
+    if (current.removedAt !== undefined) throw new ApplicationError("project_removed", `Project '${projectId}' has been removed from the workspace`);
+    if (current.status !== "archived") return Promise.resolve(clone(current));
+    const restored: Project = { ...current, status: "idea", updatedAt: iso(), version: current.version + 1 };
+    this.projects.set(projectId, restored);
+    this.archiveSnapshots.delete(projectId);
+    return Promise.resolve(clone(restored));
+  }
+  rollbackProjectArchive(projectId: string): Promise<void> {
+    const snapshot = this.archiveSnapshots.get(projectId);
+    if (snapshot === undefined) return Promise.resolve();
+    this.projects.set(projectId, clone(snapshot.project));
+    for (const [idValue, value] of snapshot.reservations) this.reservations.set(idValue, clone(value));
+    for (const [idValue, value] of snapshot.items) this.inventory.items.set(idValue, clone(value));
+    for (const [idValue, value] of snapshot.events) {
+      if (value === undefined) this.inventory.events.delete(idValue);
+      else this.inventory.events.set(idValue, clone(value));
+    }
+    this.archiveSnapshots.delete(projectId);
+    return Promise.resolve();
+  }
+  commitProjectArchive(projectId: string): Promise<void> {
+    this.archiveSnapshots.delete(projectId);
+    return Promise.resolve();
+  }
+  removeProject(projectId: string, expectedVersion: number | undefined, confirmationName: string, ctx: RequestContext): Promise<ProjectTombstone> {
+    const current = this.projects.get(projectId);
+    if (!current) throw new ApplicationError("not_found", `Project '${projectId}' was not found`);
+    if (current.removedAt !== undefined) return Promise.resolve(this.projectTombstone(current));
+    if (current.name !== confirmationName) throw new ApplicationError("conflict", "Project removal requires an exact, case-sensitive project-name confirmation", { expectedName: current.name });
+    ensureVersion(current.version, expectedVersion, "Project");
+
+    // MemoryRuntime has no database transaction. Snapshot every affected map
+    // before releasing stock so an injected failure cannot leave a partial
+    // removal visible to a subsequent request.
+    const snapshot = {
+      projects: [...this.projects].map(([key, value]) => [key, clone(value)] as const),
+      reservations: [...this.reservations].map(([key, value]) => [key, clone(value)] as const),
+      items: [...this.inventory.items].map(([key, value]) => [key, clone(value)] as const),
+      events: [...this.inventory.events].map(([key, value]) => [key, clone(value)] as const)
+    };
+    const restoreSnapshot = () => {
+      this.projects.clear(); for (const [key, value] of snapshot.projects) this.projects.set(key, clone(value));
+      this.reservations.clear(); for (const [key, value] of snapshot.reservations) this.reservations.set(key, clone(value));
+      this.inventory.items.clear(); for (const [key, value] of snapshot.items) this.inventory.items.set(key, clone(value));
+      this.inventory.events.clear(); for (const [key, value] of snapshot.events) this.inventory.events.set(key, clone(value));
+    };
+    try {
+      const revisionIds = new Set([...this.projectRevisions.values()].filter((revision) => revision.projectId === projectId).map((revision) => revision.id));
+      const lineIds = new Set([...this.bomLines.values()].filter((line) => revisionIds.has(line.revisionId)).map((line) => line.id));
+      const active = [...this.reservations.values()].filter((reservation) => reservation.status === "active" && lineIds.has(reservation.lineId));
+      const removedAt = iso();
+      const releasedReservationIds: string[] = [];
+      for (const reservation of active) {
+        const item = this.inventory.items.get(reservation.itemId);
+        if (item === undefined) throw new ApplicationError("integrity_error", `Reservation '${reservation.id}' refers to missing inventory item`);
+        const released: Reservation = { ...reservation, status: "released", updatedAt: removedAt, version: reservation.version + 1 };
+        this.reservations.set(reservation.id, released);
+        const itemVersion = item.version + 1;
+        this.inventory.items.set(item.id, { ...item, availableQuantity: Math.min(item.quantity, item.availableQuantity + reservation.quantity), updatedAt: removedAt, version: itemVersion });
+        const event: StockEvent = {
+          id: `reservation-${reservation.id}-release`, itemId: reservation.itemId, type: "release", quantity: reservation.quantity, unit: item.unit,
+          actor: ctx.actor, source: ctx.source === "system" ? "api" : ctx.source,
+          evidence: { projectId, projectRemoval: true, reservationId: reservation.id }, correlationId: ctx.correlationId,
+          idempotencyKey: `project:${projectId}:remove:${reservation.id}`, createdAt: removedAt, itemVersion
+        };
+        this.inventory.events.set(item.id, [...(this.inventory.events.get(item.id) ?? []), event]);
+        releasedReservationIds.push(reservation.id);
+      }
+      const removed: Project = { ...current, removedAt, removedBy: ctx.actor, lastLifecycleStatus: current.status, removedReservationIds: releasedReservationIds, updatedAt: removedAt, version: current.version + 1 };
+      this.projects.set(projectId, removed);
+      this.archiveSnapshots.delete(projectId);
+      this.removalSnapshots.set(projectId, snapshot);
+      return Promise.resolve(this.projectTombstone(removed));
+    } catch (error: unknown) {
+      restoreSnapshot();
+      throw error;
+    }
+  }
+  rollbackProjectRemoval(projectId: string): Promise<void> {
+    const snapshot = this.removalSnapshots.get(projectId);
+    if (snapshot === undefined) return Promise.resolve();
+    this.projects.clear(); for (const [key, value] of snapshot.projects) this.projects.set(key, clone(value));
+    this.reservations.clear(); for (const [key, value] of snapshot.reservations) this.reservations.set(key, clone(value));
+    this.inventory.items.clear(); for (const [key, value] of snapshot.items) this.inventory.items.set(key, clone(value));
+    this.inventory.events.clear(); for (const [key, value] of snapshot.events) this.inventory.events.set(key, clone(value));
+    this.removalSnapshots.delete(projectId);
+    return Promise.resolve();
+  }
+  commitProjectRemoval(projectId: string): Promise<void> {
+    this.removalSnapshots.delete(projectId);
+    return Promise.resolve();
+  }
   createWorkItem(projectId: string, input: CreateWorkItem): Promise<WorkItem> {
-    if (!this.projects.has(projectId)) throw new ApplicationError("not_found", `Project '${projectId}' was not found`);
+    this.assertProjectActive(projectId);
     const item: WorkItem = { id: input.id ?? id("work", ++this.sequence), projectId, name: input.name.trim(), kind: input.kind, ...(input.description === undefined ? {} : { description: input.description }), createdAt: iso(), updatedAt: iso(), version: 1 };
     this.workItems.set(item.id, item); return Promise.resolve(clone(item));
   }
   getWorkItem(idValue: string): Promise<WorkItem | null> { const value = this.workItems.get(idValue); return Promise.resolve(value ? clone(value) : null); }
   listWorkItems(projectId: string): Promise<readonly WorkItem[]> { return Promise.resolve(clone([...this.workItems.values()].filter((item) => item.projectId === projectId))); }
   createProjectRevision(projectId: string, input: CreateProjectRevision): Promise<ProjectRevision> {
-    if (!this.projects.has(projectId)) throw new ApplicationError("not_found", `Project '${projectId}' was not found`);
+    this.assertProjectActive(projectId);
     const number = [...this.projectRevisions.values()].filter((revision) => revision.projectId === projectId).length + 1;
     const revision: ProjectRevision = { id: input.id ?? id("revision", ++this.sequence), projectId, number, name: input.name, ...(input.notes === undefined ? {} : { notes: input.notes }), status: input.status, createdAt: iso(), version: 1 };
     if (this.projectRevisions.has(revision.id)) throw new ApplicationError("conflict", `Project revision '${revision.id}' already exists`);
@@ -566,6 +740,7 @@ class MemoryProjects implements ProjectPort {
   getProjectRevision(idValue: string): Promise<ProjectRevision | null> { const value = this.projectRevisions.get(idValue); return Promise.resolve(value ? clone(value) : null); }
   createWorkItemRevision(workItemId: string, input: CreateWorkItemRevision): Promise<WorkItemRevision> {
     const work = this.workItems.get(workItemId); if (!work) throw new ApplicationError("not_found", `Work item '${workItemId}' was not found`);
+    this.assertProjectActive(work.projectId);
     const number = [...this.workItemRevisions.values()].filter((revision) => revision.workItemId === workItemId).length + 1;
     const revision: WorkItemRevision = { id: input.id ?? id("work-revision", ++this.sequence), workItemId, projectId: work.projectId, number, name: input.name, ...(input.notes === undefined ? {} : { notes: input.notes }), status: input.status, createdAt: iso(), version: 1 };
     this.workItemRevisions.set(revision.id, revision); return Promise.resolve(clone(revision));
@@ -574,6 +749,8 @@ class MemoryProjects implements ProjectPort {
   listBomLines(revisionId: string, options?: { readonly includeRetired?: boolean }): Promise<readonly BomLine[]> { return Promise.resolve(clone([...this.bomLines.values()].filter((line) => line.revisionId === revisionId && (options?.includeRetired === true || line.retiredAt === undefined)))); }
   getBomLine(idValue: string): Promise<BomLine | null> { const value = this.bomLines.get(idValue); return Promise.resolve(value ? clone(value) : null); }
   createBomLine(revisionId: string, input: CreateBomLine): Promise<BomLine> {
+    const revision = this.projectRevisions.get(revisionId); if (!revision) throw new ApplicationError("not_found", `Project revision '${revisionId}' was not found`);
+    this.assertProjectActive(revision.projectId);
     const line = { id: input.id ?? id("bom", ++this.sequence), revisionId, name: input.name, ...(input.itemId === undefined ? {} : { itemId: input.itemId }), requiredQuantity: input.requiredQuantity, unit: input.unit, optional: input.optional, constraints: input.constraints ?? {}, alternatives: input.alternatives ?? [], ...(input.notes === undefined ? {} : { notes: input.notes }), createdAt: iso(), updatedAt: iso(), version: 1 } as BomLine;
     this.bomLines.set(line.id, line); return Promise.resolve(clone(line));
   }
@@ -593,6 +770,8 @@ class MemoryProjects implements ProjectPort {
     const { retiredAt: _retiredAt, ...active } = current; const next = { ...active, updatedAt: iso(), version: current.version + 1 }; this.bomLines.set(lineId, next); return Promise.resolve(clone(next));
   }
   createReservation(revisionId: string, input: CreateReservation): Promise<Reservation> {
+    const revision = this.projectRevisions.get(revisionId); if (!revision) throw new ApplicationError("not_found", `Project revision '${revisionId}' was not found`);
+    this.assertProjectActive(revision.projectId);
     const line = this.bomLines.get(input.lineId); if (!line || line.revisionId !== revisionId) throw new ApplicationError("not_found", `BOM line '${input.lineId}' was not found in this revision`);
     const item = this.inventory.items.get(input.itemId); if (!item) throw new ApplicationError("not_found", `Inventory item '${input.itemId}' was not found`); if (line.unit !== item.unit) throw new ApplicationError("validation", `Unit mismatch: BOM uses ${line.unit}, item uses ${item.unit}`); ensurePositive(input.quantity, "Reservation quantity");
     if (item.availableQuantity < input.quantity) throw new ApplicationError("conflict", "Not enough confirmed stock to reserve");
@@ -621,7 +800,18 @@ class MemoryProjects implements ProjectPort {
     return Promise.resolve(clone({ reservation, projectId: revision.projectId, projectRevisionId: bomLine.revisionId, bomLine }));
   }
   recordUsage(input: UsageInput, ctx: RequestContext): Promise<StockMutation> {
+    this.assertProjectActive(input.projectId);
     return this.inventory.recordStockEvent({ itemId: input.itemId, type: "consume", quantity: input.quantity, unit: input.unit, ...(input.note ? { note: input.note } : {}), projectId: input.projectId }, ctx);
+  }
+  private assertProjectActive(projectId: string): void {
+    const project = this.projects.get(projectId);
+    if (!project) throw new ApplicationError("not_found", `Project '${projectId}' was not found`);
+    if (project.removedAt !== undefined) throw new ApplicationError("project_removed", `Project '${projectId}' has been removed from the workspace`);
+    if (project.status === "archived") throw new ApplicationError("conflict", `Project '${projectId}' is archived`);
+  }
+  private projectTombstone(project: Project): ProjectTombstone {
+    if (project.removedAt === undefined || project.removedBy === undefined || project.lastLifecycleStatus === undefined) throw new ApplicationError("integrity_error", `Project '${project.id}' is missing removal tombstone metadata`);
+    return { id: project.id, name: project.name, removedAt: project.removedAt, removedBy: project.removedBy, lastLifecycleStatus: project.lastLifecycleStatus, releasedReservationIds: [...(project.removedReservationIds ?? [])], version: project.version };
   }
 }
 
@@ -757,6 +947,7 @@ class MemoryAudit implements AuditPort {
   readonly events: AuditEvent[] = []; private sequence = 500;
   append(input: AuditInput): Promise<AuditEvent> { const event: AuditEvent = { ...input, id: id("audit", ++this.sequence), createdAt: iso() }; this.events.push(event); return Promise.resolve(clone(event)); }
   list(limit: number, cursor?: string): Promise<Page<AuditEvent>> { return Promise.resolve(page(this.events, limit, cursor)); }
+  listEntity(entityType: string, entityId: string, limit: number, cursor?: string): Promise<Page<AuditEvent>> { return Promise.resolve(page(this.events.filter((event) => event.entityType === entityType && event.entityId === entityId), limit, cursor)); }
 }
 
 class MemoryEvents implements EventBusPort {

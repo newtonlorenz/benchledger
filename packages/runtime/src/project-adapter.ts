@@ -7,11 +7,12 @@ import type {
   BomLine as ApiBomLine, CreateBomLine, CreateProject, CreateProjectRevision, CreateReservation,
   CreateWorkItem, CreateWorkItemRevision, Project as ApiProject, ProjectRevision as ApiProjectRevision,
   ProjectWithInitialRevision as ApiProjectWithInitialRevision, CreateProjectWithInitialRevision,
-  Reservation as ApiReservation, WorkItem as ApiWorkItem, WorkItemRevision as ApiWorkItemRevision
+  Reservation as ApiReservation, WorkItem as ApiWorkItem, WorkItemRevision as ApiWorkItemRevision, ProjectTombstone
 } from "@benchledger/api-contract";
-import { matchesBomConstraints, unsupportedBomConstraintKeys } from "@benchledger/application";
+import { ApplicationError, matchesBomConstraints, unsupportedBomConstraintKeys } from "@benchledger/application";
 import type { ProjectPort, ProjectListOptions, RequestContext, ReservationDetails, StockMutation, UsageInput } from "@benchledger/application";
 import { BomRepository, ProjectRepository, ReservationRepository } from "@benchledger/database";
+import type { ReservationReleaseOptions } from "@benchledger/database";
 import type { BenchDatabase } from "@benchledger/database";
 import { RuntimeState } from "./persistence.js";
 import {
@@ -113,7 +114,8 @@ export class ProductionProjectAdapter implements ProjectPort {
 
   async listProjects(options: ProjectListOptions): Promise<{ readonly data: readonly ApiProject[]; readonly nextCursor?: string; readonly limit: number; readonly total: number }> {
     return attempt(() => {
-      const values = this.projects.list(true).map((project) => this.toApiProject(project)).filter((project) => {
+      const values = this.projects.list(true).filter((project) => project.removedAt === undefined).map((project) => this.toApiProject(project)).filter((project) => {
+        if (options.status === undefined && project.status === "archived") return false;
         if (options.status !== undefined && project.status !== options.status) return false;
         const query = options.q?.trim().toLocaleLowerCase();
         return query === undefined || query.length === 0 || `${project.name} ${project.description ?? ""}`.toLocaleLowerCase().includes(query);
@@ -126,6 +128,23 @@ export class ProductionProjectAdapter implements ProjectPort {
     return attempt(() => {
       const project = this.projects.get(id);
       return project === undefined ? null : this.toApiProject(project);
+    });
+  }
+
+  async listRemovedProjects(): Promise<readonly ProjectTombstone[]> {
+    return attempt(() => this.projects.listRemoved().map((project) => this.toProjectTombstone(project)));
+  }
+
+  async listRemovedProjectsPage(limit: number, cursor?: string) {
+    return attempt(() => {
+      const offset = cursor === undefined ? 0 : Number(cursor);
+      if (!Number.isSafeInteger(offset) || offset < 0 || (cursor !== undefined && !/^\d+$/.test(cursor))) {
+        throw new ApplicationError("validation", "cursor is invalid");
+      }
+      const result = this.projects.listRemovedPage(limit, offset);
+      const data = result.data.map((project) => this.toProjectTombstone(project));
+      const nextOffset = offset + data.length;
+      return { data, limit, total: result.total, ...(nextOffset < result.total ? { nextCursor: String(nextOffset) } : {}) };
     });
   }
 
@@ -178,10 +197,12 @@ export class ProductionProjectAdapter implements ProjectPort {
     });
   }
 
-  async updateProject(id: string, input: Partial<CreateProject>, expectedVersion: number | undefined, _ctx: RequestContext): Promise<ApiProject> {
+  async updateProject(id: string, input: Partial<CreateProject>, expectedVersion: number | undefined, ctx: RequestContext): Promise<ApiProject> {
     return attempt(() => {
       const native = this.projects.get(id);
       if (native === undefined) throw new DomainError("project_not_found", `project ${id} does not exist`);
+      if (native.removedAt !== undefined) throw new DomainError("project_removed", `project ${id} has been removed from the workspace`);
+      if (nativeProjectStatus(input.status ?? native.status) === "archived") return this.archiveProject(id, expectedVersion, ctx);
       return this.database.transaction(() => {
         this.state.ensureVersion(PROJECT, id, expectedVersion);
         const current = this.toApiProject(native);
@@ -197,9 +218,115 @@ export class ProductionProjectAdapter implements ProjectPort {
     });
   }
 
+  async archiveProject(id: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<ApiProject> {
+    return attempt(() => {
+      const native = this.projects.get(id);
+      if (native === undefined) throw new DomainError("project_not_found", `project ${id} does not exist`);
+      if (native.removedAt !== undefined) throw new DomainError("project_removed", `project ${id} has been removed from the workspace`);
+      return this.database.transaction(() => {
+        this.state.ensureVersion(PROJECT, id, expectedVersion);
+        if (native.status === "archived") return this.toApiProject(native);
+        const archivedAt = nowIso();
+        const projectRevisionIds = new Set(this.projects.listRevisions(id).map((revision) => revision.id));
+        const actor = {
+          type: ctx.source === "mcp" ? "agent" : ctx.source === "import" ? "import" : ctx.source === "system" ? "system" : "human",
+          id: ctx.actor
+        } as const;
+        const releaseOptions = (reservationId: string): ReservationReleaseOptions => ({
+          actor,
+          source: ctx.source,
+          correlationId: ctx.correlationId,
+          evidence: { projectId: id, projectArchive: true, reservationId },
+          idempotencyKey: `project:${id}:archive:${reservationId}`,
+          occurredAt: archivedAt,
+          reason: `Archive project ${id}`
+        });
+        for (const reservation of this.reservations.list()) {
+          if (reservation.status !== "active" || !projectRevisionIds.has(reservation.projectRevisionId)) continue;
+          const released = this.reservations.release(reservation.id, releaseOptions(reservation.id));
+          const reservationVersion = this.state.bumpVersion(RESERVATION, reservation.id);
+          const itemVersion = this.state.bumpVersion("inventory_item", reservation.itemId);
+          this.state.setMetadata("stock_event", `reservation-${reservation.id}-release`, { apiItemVersion: itemVersion });
+          // Keep the local result/version read authoritative for adapters that
+          // inspect the release while the enclosing transaction is open.
+          void released;
+          void reservationVersion;
+        }
+        this.database.run("UPDATE projects SET status = ?, updated_at = ?, retired_at = ? WHERE id = ?", ["archived", archivedAt, archivedAt, id]);
+        const updated: Project = { ...native, status: "archived", updatedAt: archivedAt, retiredAt: archivedAt };
+        const version = this.state.bumpVersion(PROJECT, id);
+        return apiProjectFromNative(updated, version, {}, this.latestProjectRevisionId(id));
+      });
+    });
+  }
+
+  async restoreProject(id: string, expectedVersion: number | undefined, _ctx: RequestContext): Promise<ApiProject> {
+    return attempt(() => {
+      const native = this.projects.get(id);
+      if (native === undefined) throw new DomainError("project_not_found", `project ${id} does not exist`);
+      if (native.removedAt !== undefined) throw new DomainError("project_removed", `project ${id} has been removed from the workspace`);
+      return this.database.transaction(() => {
+        this.state.ensureVersion(PROJECT, id, expectedVersion);
+        if (native.status !== "archived") return this.toApiProject(native);
+        const restoredAt = nowIso();
+        this.database.run("UPDATE projects SET status = ?, updated_at = ?, retired_at = NULL WHERE id = ?", ["idea", restoredAt, id]);
+        const { retiredAt: _retiredAt, ...withoutRetirement } = native;
+        const restored: Project = { ...withoutRetirement, status: "idea", updatedAt: restoredAt };
+        const version = this.state.bumpVersion(PROJECT, id);
+        return apiProjectFromNative(restored, version, {}, this.latestProjectRevisionId(id));
+      });
+    });
+  }
+
+  async removeProject(id: string, expectedVersion: number | undefined, confirmationName: string, ctx: RequestContext): Promise<ProjectTombstone> {
+    return attempt(() => {
+      const native = this.projects.get(id);
+      if (native === undefined) throw new DomainError("project_not_found", `project ${id} does not exist`);
+      if (native.removedAt !== undefined) return this.toProjectTombstone(native);
+      if (native.name !== confirmationName) throw new DomainError("invalid_project_name_confirmation", "project name confirmation does not match");
+      return this.database.transaction(() => {
+        this.state.ensureVersion(PROJECT, id, expectedVersion);
+        const removedAt = nowIso();
+        const actor = {
+          type: ctx.source === "mcp" ? "agent" : ctx.source === "import" ? "import" : ctx.source === "system" ? "system" : "human",
+          id: ctx.actor
+        } as const;
+        const projectRevisionIds = new Set(this.projects.listRevisions(id).map((revision) => revision.id));
+        const releasedReservationIds: string[] = [];
+        for (const reservation of this.reservations.list()) {
+          if (reservation.status !== "active" || !projectRevisionIds.has(reservation.projectRevisionId)) continue;
+          this.reservations.release(reservation.id, {
+            actor,
+            source: ctx.source,
+            correlationId: ctx.correlationId,
+            evidence: { projectId: id, projectRemoval: true, reservationId: reservation.id },
+            idempotencyKey: `project:${id}:remove:${reservation.id}`,
+            occurredAt: removedAt,
+            reason: `Remove project ${id}`
+          });
+          this.state.bumpVersion(RESERVATION, reservation.id);
+          this.state.bumpVersion("inventory_item", reservation.itemId);
+          this.state.setMetadata("stock_event", `reservation-${reservation.id}-release`, { apiItemVersion: this.state.getVersion("inventory_item", reservation.itemId) });
+          releasedReservationIds.push(reservation.id);
+        }
+        this.database.run("UPDATE projects SET removed_at = ?, removed_by_json = ?, last_lifecycle_status = ?, removed_reservation_ids_json = ?, updated_at = ? WHERE id = ?", [removedAt, JSON.stringify(actor), native.status, JSON.stringify(releasedReservationIds), removedAt, id]);
+        const removed: Project = {
+          ...native,
+          removedAt,
+          removedBy: actor,
+          lastLifecycleStatus: native.status,
+          removedReservationIds: releasedReservationIds,
+          updatedAt: removedAt
+        };
+        const version = this.state.bumpVersion(PROJECT, id);
+        return this.toProjectTombstone(removed, version);
+      });
+    });
+  }
+
   async createWorkItem(projectId: string, input: CreateWorkItem, _ctx: RequestContext): Promise<ApiWorkItem> {
     return attempt(() => {
-      if (this.projects.get(projectId) === undefined) throw new DomainError("project_not_found", `project ${projectId} does not exist`);
+      this.assertProjectActive(projectId);
       const now = nowIso();
       const native = createWorkItem({ id: input.id ?? createId("work"), projectId, name: input.name, kind: input.kind, ...(input.description === undefined ? {} : { description: input.description }), createdAt: now, updatedAt: now });
       const created = this.projects.createWorkItem(native);
@@ -221,7 +348,7 @@ export class ProductionProjectAdapter implements ProjectPort {
 
   async createProjectRevision(projectId: string, input: CreateProjectRevision, _ctx: RequestContext): Promise<ApiProjectRevision> {
     return attempt(() => {
-      if (this.projects.get(projectId) === undefined) throw new DomainError("project_not_found", `project ${projectId} does not exist`);
+      this.assertProjectActive(projectId);
       const previous = this.projects.listRevisions(projectId);
       const revision = createProjectRevision({ id: input.id ?? createId("project-revision"), projectId, number: Math.max(0, ...previous.map((candidate) => candidate.number)) + 1, label: input.name, status: input.status, ...(input.notes === undefined ? {} : { notes: input.notes }), createdAt: nowIso() });
       const created = this.projects.createRevision(revision);
@@ -243,6 +370,7 @@ export class ProductionProjectAdapter implements ProjectPort {
     return attempt(() => {
       const work = this.findWorkItem(workItemId);
       if (work === undefined) throw new DomainError("work_item_not_found", `work item ${workItemId} does not exist`);
+      this.assertProjectActive(work.projectId);
       const previous = this.projects.listWorkItemRevisions(workItemId);
       const revision = createWorkItemRevision({ id: input.id ?? createId("work-revision"), workItemId, number: Math.max(0, ...previous.map((candidate) => candidate.number)) + 1, label: input.name, status: input.status, ...(input.notes === undefined ? {} : { sourcePath: input.notes }), createdAt: nowIso() });
       const created = this.projects.createWorkItemRevision(revision);
@@ -271,7 +399,9 @@ export class ProductionProjectAdapter implements ProjectPort {
 
   async createBomLine(revisionId: string, input: CreateBomLine | LegacyCreateBomLineInput, _ctx: RequestContext): Promise<ApiBomLine> {
     return attempt(() => {
-      if (this.findProjectRevision(revisionId) === undefined) throw new DomainError("project_revision_not_found", `project revision ${revisionId} does not exist`);
+      const revision = this.findProjectRevision(revisionId);
+      if (revision === undefined) throw new DomainError("project_revision_not_found", `project revision ${revisionId} does not exist`);
+      this.assertProjectActive(revision.revision.projectId);
       const native = nativeBomFromApi(revisionId, input, input.id ?? createId("bom"));
       const created = this.boms.createLine(native);
       this.state.setInitialVersion(BOM, created.id);
@@ -351,6 +481,9 @@ export class ProductionProjectAdapter implements ProjectPort {
 
   async createReservation(revisionId: string, input: CreateReservation, _ctx: RequestContext): Promise<ApiReservation> {
     return attempt(() => {
+      const revision = this.findProjectRevision(revisionId);
+      if (revision === undefined) throw new DomainError("project_revision_not_found", `project revision ${revisionId} does not exist`);
+      this.assertProjectActive(revision.revision.projectId);
       const line = this.boms.getLine(input.lineId);
       if (line === undefined || line.revisionId !== revisionId) throw new DomainError("bom_line_not_found", `BOM line ${input.lineId} does not exist in revision ${revisionId}`);
       const apiLine = this.toApiBom(line);
@@ -414,6 +547,7 @@ export class ProductionProjectAdapter implements ProjectPort {
     return attempt(() => {
       const project = this.projects.get(input.projectId);
       if (project === undefined) throw new DomainError("project_not_found", `project ${input.projectId} does not exist`);
+      if (project.status === "archived") throw new DomainError("project_archived", `project ${input.projectId} is archived`);
       const nativeItem = this.inventory.native(input.itemId);
       if (nativeItem === undefined) throw new DomainError("inventory_not_found", `inventory item ${input.itemId} does not exist`);
       if (nativeItem.unit !== mapApiUnitToDomain(input.unit)) throw new DomainError("invalid_unit", `unit mismatch: item uses ${nativeItem.unit}, usage uses ${input.unit}`);
@@ -459,6 +593,21 @@ export class ProductionProjectAdapter implements ProjectPort {
     return apiProjectFromNative(project, this.state.getVersion(PROJECT, project.id), {}, currentRevisionId(revisions));
   }
 
+  private toProjectTombstone(project: Project, version = this.state.getVersion(PROJECT, project.id)): ProjectTombstone {
+    if (project.removedAt === undefined || project.removedBy === undefined || project.lastLifecycleStatus === undefined) {
+      throw new Error(`project ${project.id} is missing removal tombstone metadata`);
+    }
+    return {
+      id: project.id,
+      name: project.name,
+      removedAt: project.removedAt,
+      removedBy: project.removedBy.id,
+      lastLifecycleStatus: project.lastLifecycleStatus,
+      releasedReservationIds: [...(project.removedReservationIds ?? [])],
+      version
+    };
+  }
+
   private toApiBom(line: BomLine, version = this.state.getVersion(BOM, line.id)): ApiBomLine {
     const metadata = bomMetadata(this.state.getMetadata(BOM, line.id));
     return apiBomLineFromNative(line, metadata, version);
@@ -466,6 +615,13 @@ export class ProductionProjectAdapter implements ProjectPort {
 
   private latestProjectRevisionId(projectId: string): string | undefined {
     return currentRevisionId(this.projects.listRevisions(projectId));
+  }
+
+  private assertProjectActive(projectId: string): void {
+      const project = this.projects.get(projectId);
+      if (project === undefined) throw new DomainError("project_not_found", `project ${projectId} does not exist`);
+      if (project.removedAt !== undefined) throw new DomainError("project_removed", `project ${projectId} has been removed from the workspace`);
+      if (project.status === "archived") throw new DomainError("project_archived", `project ${projectId} is archived`);
   }
 
   private latestWorkItemRevisionId(workItemId: string): string | undefined {

@@ -216,6 +216,11 @@ export interface Project {
   createdAt: string;
   updatedAt: string;
   retiredAt?: string;
+  /** Irreversible workspace removal is orthogonal to lifecycle status. */
+  removedAt?: string;
+  removedBy?: AuditActor;
+  lastLifecycleStatus?: ProjectStatus;
+  removedReservationIds?: readonly string[];
 }
 
 export type WorkItemKind = "part" | "assembly" | "electronics" | "firmware" | "document" | "other";

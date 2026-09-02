@@ -363,6 +363,30 @@ export interface Project {
   updatedAt?: string;
 }
 
+export interface ProjectTombstone {
+  id: string;
+  name: string;
+  removedAt: string;
+  removedBy: string;
+  lastLifecycleStatus: ApiProjectLifecycle;
+  releasedReservationIds: readonly string[];
+  version: number;
+  auditId?: string;
+}
+
+export interface ProjectRemovalHistoryEntry {
+  id: string;
+  action: string;
+  actor: string;
+  source: "ui" | "api" | "mcp" | "import" | "system";
+  correlationId: string;
+  idempotencyKey?: string;
+  entityType: string;
+  entityId: string;
+  version?: number;
+  createdAt: string;
+}
+
 export interface ProjectListInput extends PageInput {
   query?: string;
   status?: Project["status"];
@@ -590,6 +614,14 @@ export interface ReservationInput {
   bomLineId: string;
   itemId: string;
   quantity: Quantity;
+}
+
+export interface ReservationListInput extends PageInput {
+  projectRevisionId: string;
+}
+
+export interface ReservationReadInput {
+  reservationId: string;
 }
 
 export interface Reservation {
@@ -822,11 +854,17 @@ export interface InventoryCategoriesBackend {
 
 export interface ProjectsBackend {
   list(input: ProjectListInput, context: McpRequestContext): Promise<Page<Project>>;
+  listRemoved?(input: PageInput, context: McpRequestContext): Promise<Page<ProjectTombstone>>;
   get(input: { projectId: string }, context: McpRequestContext): Promise<Project>;
   create(input: ProjectCreateInput, context: McpRequestContext): Promise<WriteResult<Project>>;
   createWithInitialRevision(input: ProjectWithInitialRevisionCreateInput, context: McpRequestContext): Promise<ProjectWithInitialRevisionResult>;
   update(input: ProjectUpdateInput, context: McpRequestContext): Promise<WriteResult<Project>>;
   retire(input: { projectId: string; expectedVersion?: number }, context: McpRequestContext): Promise<WriteResult>;
+  /** Canonical reversible lifecycle command; retire remains a compatibility alias. */
+  archive?(input: { projectId: string; expectedVersion?: number }, context: McpRequestContext): Promise<WriteResult<Project>>;
+  restore?(input: { projectId: string; expectedVersion?: number }, context: McpRequestContext): Promise<WriteResult<Project>>;
+  remove?(input: { projectId: string; expectedVersion: number; projectName: string }, context: McpRequestContext): Promise<WriteResult<ProjectTombstone>>;
+  readRemovedHistory?(input: { projectId: string } & PageInput, context: McpRequestContext): Promise<Page<ProjectRemovalHistoryEntry>>;
   createWorkItem(input: WorkItemCreateInput, context: McpRequestContext): Promise<WriteResult<WorkItem>>;
   getWorkItem(input: { workItemId: string }, context: McpRequestContext): Promise<WorkItem>;
   createProjectRevision(input: ProjectRevisionCreateInput, context: McpRequestContext): Promise<WriteResult<Revision>>;
@@ -845,6 +883,10 @@ export interface BomBackend {
   retireLine(input: { bomLineId: string; expectedVersion: number }, context: McpRequestContext): Promise<WriteResult>;
   restoreLine(input: { bomLineId: string; expectedVersion: number }, context: McpRequestContext): Promise<WriteResult>;
   evaluate(input: BomEvaluationInput, context: McpRequestContext): Promise<BomEvaluation>;
+  /** Read reservation state within one project revision with bounded pagination. */
+  listReservations?(input: ReservationListInput, context: McpRequestContext): Promise<Page<Reservation>>;
+  /** Read one reservation after resolving its durable project/revision identity. */
+  getReservation?(input: ReservationReadInput, context: McpRequestContext): Promise<Reservation>;
   reserve(input: ReservationInput, context: McpRequestContext): Promise<Reservation>;
   release(input: ReleaseReservationInput, context: McpRequestContext): Promise<Reservation>;
   recordUsage(input: UsageInput, context: McpRequestContext): Promise<UsageResult>;
@@ -949,6 +991,8 @@ export interface McpToolDefinition {
   inputSchema: JsonObject;
   requiredScope: Scope;
   mutating: boolean;
+  /** The host must obtain explicit human approval before this mutation. */
+  approvalRequired?: boolean;
 }
 
 export interface McpResource {

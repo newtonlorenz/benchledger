@@ -2,7 +2,7 @@ import type { z } from "zod";
 import type {
   artifactSchema, auditEventSchema, beginUploadSchema, bomGapCandidateSchema, bomGapSchema, bomLineSchema, createBomLineSchema,
   commissionInventoryItemSchema, createInventoryItemSchema, createOfferSchema, createProjectRevisionSchema,
-  createProjectSchema, createProjectWithInitialRevisionSchema, createReservationSchema, createWorkItemRevisionSchema,
+  createProjectSchema, createProjectWithInitialRevisionSchema, createReservationSchema, createWorkItemRevisionSchema, removeProjectSchema, projectTombstoneSchema,
   createWorkItemSchema, dimensionSchema, healthSchema, inventoryItemSchema,
   inventoryListQuerySchema, inventoryCategoryListQuerySchema, inventoryCategorySchema, createInventoryCategorySchema, updateInventoryCategorySchema, offerSchema, projectRevisionSchema, projectSchema, projectWithInitialRevisionSchema,
   readinessSchema, reservationSchema, stockEventInputSchema, stockEventSchema,
@@ -51,6 +51,8 @@ export type UsageInput = z.infer<typeof usageInputSchema>;
 export type ProjectLifecycle = z.infer<typeof projectLifecycleSchema>;
 export type ProjectStatus = ProjectLifecycle;
 export type Project = z.infer<typeof projectSchema>;
+export type RemoveProject = z.infer<typeof removeProjectSchema>;
+export type ProjectTombstone = z.infer<typeof projectTombstoneSchema>;
 export type CreateProject = z.infer<typeof createProjectSchema>;
 export type UpdateProject = z.infer<typeof updateProjectSchema>;
 export type WorkItem = z.infer<typeof workItemSchema>;

@@ -5,7 +5,7 @@ import { BUILTIN_INVENTORY_CATEGORIES, isProjectLifecycle, normalizeInventoryCat
 export const WORKSPACE_SECURITY_SCHEMA_VERSION = 1;
 export const WORKSPACE_SECURITY_SCHEMA_MIGRATION_SQL = WORKSPACE_SECURITY_SCHEMA_SQL;
 
-export const PROJECT_SCHEMA_VERSION = 2;
+export const PROJECT_SCHEMA_VERSION = 3;
 
 /** Add durable, reversible BOM retirement without rewriting requirement data. */
 export function migrateProjectSchema(database: BenchDatabase): void {
@@ -18,6 +18,11 @@ export function migrateProjectSchema(database: BenchDatabase): void {
     if (!columns.some((column) => column.name === "retired_at")) {
       database.exec("ALTER TABLE bom_lines ADD COLUMN retired_at TEXT");
     }
+    const projectColumns = database.all<SqliteRow>("PRAGMA table_info(projects)");
+    if (!projectColumns.some((column) => column.name === "removed_at")) database.exec("ALTER TABLE projects ADD COLUMN removed_at TEXT");
+    if (!projectColumns.some((column) => column.name === "removed_by_json")) database.exec("ALTER TABLE projects ADD COLUMN removed_by_json TEXT");
+    if (!projectColumns.some((column) => column.name === "last_lifecycle_status")) database.exec("ALTER TABLE projects ADD COLUMN last_lifecycle_status TEXT");
+    if (!projectColumns.some((column) => column.name === "removed_reservation_ids_json")) database.exec("ALTER TABLE projects ADD COLUMN removed_reservation_ids_json TEXT");
     if (currentVersion < 2) {
       const runtimeMetadata = database.get<SqliteRow>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'forge_runtime_metadata'");
       const metadataByProject = new Map<string, { readonly payload: Readonly<Record<string, unknown>>; readonly rawStatus?: unknown; readonly hasStatus: boolean; readonly updatedAt: string }>();

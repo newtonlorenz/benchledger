@@ -69,4 +69,25 @@ export class ProductionAuditAdapter implements AuditPort {
       return page(values, limit, cursor);
     }));
   }
+
+  async listEntity(entityType: string, entityId: string, limit: number, cursor?: string): Promise<Page<AuditEvent>> {
+    return this.unitOfWork.exclusive(() => attempt(() => {
+      const values = this.repository.list(entityId).filter((record) => record.entityType === entityType).map((record) => {
+        const metadata = this.state.getMetadata("audit", record.id);
+        return {
+          id: record.id,
+          action: record.action,
+          actor: record.actor.id,
+          source: record.sourceSurface,
+          correlationId: record.correlationId,
+          ...(typeof metadata.idempotencyKey === "string" ? { idempotencyKey: metadata.idempotencyKey } : {}),
+          entityType: record.entityType,
+          entityId: record.entityId,
+          ...(record.afterVersion === undefined ? {} : { version: record.afterVersion }),
+          createdAt: record.occurredAt
+        } satisfies AuditEvent;
+      });
+      return page(values, limit, cursor);
+    }));
+  }
 }

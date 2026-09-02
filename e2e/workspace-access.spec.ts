@@ -112,6 +112,10 @@ async function mockWorkspaceAccess(page: Page) {
   await page.route("**/api/v1/workspace", async (route) => {
     await route.fulfill({ status: signedIn ? 200 : 401, contentType: "application/json", body: JSON.stringify(signedIn ? { source: "api", fetchedAt: "2026-09-01T10:00:00.000Z", inventory: currentItems, projects: [], offers: [] } : { error: { code: "unauthenticated", message: "Authentication is required" } }) });
   });
+  await page.route("**/api/v1/projects?*", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    await route.fulfill({ status: signedIn ? 200 : 401, contentType: "application/json", body: JSON.stringify(signedIn ? { data: [], limit: 200, total: 0 } : { error: { code: "unauthenticated", message: "Authentication is required" } }) });
+  });
   await page.route("**/api/v1/inventory?*", async (route) => {
     if (route.request().method() !== "GET") return route.continue();
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: currentItems, limit: 25, total: currentItems.length }) });

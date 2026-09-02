@@ -428,6 +428,41 @@ test("creates a project atomically and finalizes a revisioned artifact", async (
   await expect(page.getByRole("cell", { name: "r01", exact: true })).toBeVisible();
 });
 
+test("archives a project into the explicit Archived view and restores it", async ({ page }) => {
+  await signIn(page);
+  await page.getByRole("button", { name: /^Projects/ }).click();
+  await page.getByRole("button", { name: "New project" }).click();
+  const createDialog = page.getByRole("dialog", { name: "Create project" });
+  await createDialog.getByLabel("Project name").fill("E2E retirement project");
+  await createDialog.getByLabel("Project goal").fill("Retained history acceptance flow.");
+  await createDialog.getByRole("button", { name: "Create project" }).click();
+  await expect(page.getByRole("heading", { name: "E2E retirement project" })).toBeVisible();
+
+  const archiveTrigger = page.getByRole("button", { name: "Archive project", exact: true });
+  await archiveTrigger.click();
+  const confirmation = page.getByRole("alertdialog", { name: "Archive E2E retirement project?" });
+  await expect(confirmation).toContainText("hides the project from active lists");
+  await expect(confirmation).toContainText("history remain retained");
+  await confirmation.getByRole("button", { name: "Cancel" }).click();
+  await expect(archiveTrigger).toBeVisible();
+
+  await archiveTrigger.click();
+  await confirmation.getByRole("button", { name: "Archive project", exact: true }).click();
+  await expect(page.getByText("Project archived.", { exact: false })).toBeVisible();
+
+  await page.getByRole("button", { name: "Active projects", exact: true }).click();
+  await expect(page.getByRole("combobox", { name: "Choose project" }).getByRole("option", { name: "E2E retirement project", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: /^Archived \(/ }).click();
+  await expect(page.getByRole("heading", { name: "E2E retirement project" })).toBeVisible();
+  await expect(page.locator(".archive-notice")).toContainText("revisions, files, BOM, stock evidence, and audit history remain retained");
+
+  await page.getByRole("button", { name: "Restore project", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "E2E retirement project" })).toBeVisible();
+  await expect(page.getByText("Project restored to idea.", { exact: false })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Active projects", exact: true })).toHaveClass(/is-active/u);
+  await expect(page.getByRole("combobox", { name: "Choose project" }).getByRole("option", { name: "E2E retirement project", exact: true })).toHaveCount(1);
+});
+
 test("keeps project creation discoverable from a populated Projects view", async ({ page }) => {
   await signIn(page);
   await page.getByRole("button", { name: /^Projects/ }).click();

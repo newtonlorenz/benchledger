@@ -412,6 +412,9 @@ export function apiProjectFromNative(project: Project, version: number, _metadat
     ...(currentRevisionId === undefined ? {} : { currentRevisionId }),
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
+    ...(project.removedAt === undefined ? {} : { removedAt: project.removedAt }),
+    ...(project.removedBy === undefined ? {} : { removedBy: project.removedBy.id }),
+    ...(project.lastLifecycleStatus === undefined ? {} : { lastLifecycleStatus: project.lastLifecycleStatus }),
     version
   };
 }

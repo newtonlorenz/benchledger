@@ -84,12 +84,19 @@ export function eventFromRow(row: SqliteRow): StockEvent {
 }
 
 export function projectFromRow(row: SqliteRow): Project {
+  const removedBy = parseJson<AuditActor>(row["removed_by_json"]);
+  const removedReservationIds = parseJson<string[]>(row["removed_reservation_ids_json"]);
+  const lastLifecycleStatus = optionalText(row, "last_lifecycle_status");
   return {
     id: text(row, "id"), name: text(row, "name"), slug: text(row, "slug"),
     ...(optionalText(row, "description") === undefined ? {} : { description: optionalText(row, "description") as string }),
     status: canonicalProjectStatus(text(row, "status")), visibility: text(row, "visibility") as Project["visibility"],
     createdAt: text(row, "created_at"), updatedAt: text(row, "updated_at"),
-    ...(optionalText(row, "retired_at") === undefined ? {} : { retiredAt: optionalText(row, "retired_at") as string })
+    ...(optionalText(row, "retired_at") === undefined ? {} : { retiredAt: optionalText(row, "retired_at") as string }),
+    ...(optionalText(row, "removed_at") === undefined ? {} : { removedAt: optionalText(row, "removed_at") as string }),
+    ...(removedBy === undefined ? {} : { removedBy }),
+    ...(lastLifecycleStatus === undefined ? {} : { lastLifecycleStatus: lastLifecycleStatus as Project["status"] }),
+    ...(removedReservationIds === undefined ? {} : { removedReservationIds })
   };
 }
 

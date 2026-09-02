@@ -77,6 +77,7 @@ function serviceFixture(): ApplicationService & Record<string, any> {
     createProject: vi.fn(async (input: unknown) => mutation(apiProject({ ...(input as object), id: "created-project" }), "created-project", 1)),
     createProjectWithInitialRevision: vi.fn(async (input: any) => mutation({ project: apiProject({ id: input.project?.id ?? "created-project", currentRevisionId: "created-revision" }), revision: apiRevision({ id: input.revision?.id ?? "created-revision" }) }, "created-project", 1)),
     updateProject: vi.fn(async (id: string, input: unknown) => mutation(apiProject({ ...(input as object), id, version: 3 }), id, 3)),
+    archiveProject: vi.fn(async (id: string) => mutation(apiProject({ id, status: "archived", version: 3 }), id, 3)),
     createWorkItem: vi.fn(async (projectId: string, input: unknown) => mutation({ id: "work-1", projectId, ...(input as object), version: 1 }, "work-1", 1)),
     getWorkItem: vi.fn(async () => ({ id: "work-1", projectId: "project-1", name: "Base", kind: "part", description: "base", currentRevisionId: "work-revision-1", createdAt: date, updatedAt: date, version: 1 })),
     createProjectRevision: vi.fn(async (projectId: string, input: unknown) => mutation(apiRevision({ id: "revision-2", projectId, ...(input as object), status: "concept" }), "revision-2", 1)),

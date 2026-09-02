@@ -97,6 +97,22 @@ requirement, optional flag, notes, and versioned evidence; `restore_bom_line`
 requires the current `expectedVersion`. Retired lines never participate in gap
 evaluation or accept new reservations.
 
+Use `list_reservations` to read active and historical reservations for one
+project revision with a bounded page and opaque cursor. Use `read_reservation`
+for one reservation; both reads return the durable revision, BOM line, item,
+quantity/unit, status, and version. Project-scoped tokens must prove revision
+or reservation ancestry before either read is dispatched.
+
+Use `list_removed_projects` only with an unscoped `projects:read` token; it is
+a bounded workspace-global tombstone page and project-scoped tokens are denied.
+Use `read_removed_project_history` for the bounded, explicitly scoped audit
+history of one removed project. `remove_project` is irreversible and requires
+explicit human approval, the current `expectedVersion`, exact case-sensitive
+`projectName`, and a stable 8–200 character idempotency key in the MCP request
+context. Retry an ambiguous response with the same key and identical input.
+Removal releases active reservations and makes the project and descendants
+unavailable through ordinary read tools; there is no restore or purge tool.
+
 ```text
 benchledger://projects/{projectId}/context
 benchledger://projects/{projectId}/revisions/{revisionId}
@@ -106,7 +122,11 @@ benchledger://projects/{projectId}/artifacts
 
 Every project list, detail, context and mutation uses the same lifecycle:
 `idea`, `planned`, `ready`, `building`, `validating`, `complete`, `archived`.
-Use `retire_project` to archive a project. Never send legacy values such as
+Use `archive_project` to reversibly archive a project; `retire_project` is a
+compatibility alias for the same application command. Archived projects are
+hidden from default lists, release active reservations with stock evidence,
+and retain all revisions, artifacts, BOM, and audits. Use `restore_project` to
+return one to `idea`; released reservations are never recreated. Never send legacy values such as
 `active`, `planning`, `paused`, `validation` or `retired`; the public boundary
 rejects them. `blocked` is derived from actionable reasons and is not a lifecycle
 value. Project lifecycle changes do not advance or reset the separate revision

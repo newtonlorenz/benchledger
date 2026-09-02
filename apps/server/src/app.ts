@@ -15,6 +15,7 @@ import {
   createInventoryProductProfileSchema, createInventoryWithProductProfileSchema, updateInventoryProductProfileSchema,
   createBuildConfigurationSnapshotSchema, saveReconciliationDraftSchema, commitReconciliationSchema,
   workspaceSecurityMutationSchema, projectStatusSchema
+  , removeProjectSchema
 } from "@benchledger/api-contract";
 import { ApplicationError, ApplicationService } from "@benchledger/application";
 import type { ApplicationPorts, BeginUploadInput, BuildConfigurationListOptions, CatalogProductListOptions, GapEvaluation, Mutation, Page, ProjectListOptions, RequestContext } from "@benchledger/application";
@@ -671,6 +672,7 @@ function jsonOpenApi(version: string): Record<string, unknown> {
         InventoryCategory: inventoryCategorySchema,
         CreateInventoryCategory: createInventoryCategorySchema,
         UpdateInventoryCategory: updateInventoryCategorySchema,
+        ProjectTombstone: { type: "object", additionalProperties: false, required: ["id", "name", "removedAt", "removedBy", "lastLifecycleStatus", "releasedReservationIds", "version"], properties: { id: { type: "string" }, name: { type: "string" }, removedAt: { type: "string", format: "date-time" }, removedBy: { type: "string" }, lastLifecycleStatus: { $ref: "#/components/schemas/ProjectLifecycle" }, releasedReservationIds: { type: "array", items: { type: "string" } }, version: { type: "integer", minimum: 1 }, auditId: { type: "string" } } },
         ProjectLifecycle: { type: "string", enum: projectLifecycleValues, description: "Canonical project lifecycle. Blocked is derived from reasons and is not a lifecycle value." }
       }
     },
@@ -775,9 +777,13 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       "/inventory/{id}/product-profile": { get: { responses: { "200": { description: "Physical inventory product profile" }, "404": { description: "Profile not found" } } }, put: { responses: { "200": { description: "Updated physical inventory product profile" } } } },
       "/inventory/{id}/count": { post: { responses: { "201": { description: "Recorded physical count" } } } },
       "/inventory/{id}/stock-events": { get: { responses: { "200": { description: "Stock event page" } } }, post: { responses: { "201": { description: "Stock mutation" } } } },
-      "/projects": { get: { description: "Returns a bounded project page. Status uses the canonical project lifecycle.", parameters: [{ name: "status", in: "query", required: false, schema: { $ref: "#/components/schemas/ProjectLifecycle" } }], responses: { "200": { description: "Project page" } } }, post: { responses: { "201": { description: "Project" } } } },
+      "/projects": { get: { description: "Returns a bounded project page. Archived and removed projects are hidden by default; status=archived is the explicit reversible Archived view.", parameters: [{ name: "status", in: "query", required: false, schema: { $ref: "#/components/schemas/ProjectLifecycle" } }], responses: { "200": { description: "Project page" } } }, post: { responses: { "201": { description: "Project" } } } },
+      "/projects/removed": { get: { description: "List retained project removal tombstones as a bounded page. Removed projects cannot be restored or purged.", parameters: [{ name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } }, { name: "cursor", in: "query", required: false, schema: { type: "string", maxLength: 200 }, description: "Opaque continuation cursor from the preceding page." }], responses: { "200": { description: "Removed project tombstone page" } } } },
       "/projects/with-initial-revision": { post: { responses: { "201": { description: "Project and initial revision mutation" } } } },
       "/projects/{id}/revisions": { post: { responses: { "201": { description: "Project revision" } } } },
+      "/projects/{id}/restore": { post: { description: "Restore an archived project to idea; retained history stays in place and released reservations are not recreated.", responses: { "200": { description: "Restored project" }, "400": { description: "Invalid version precondition" }, "409": { description: "Version or project lifecycle conflict" } } } },
+      "/projects/{id}": { delete: { description: "Irreversibly remove an archived or active project from ordinary workspace views. Requires exact name confirmation, If-Match, and Idempotency-Key; retained history remains discoverable and no purge is available.", parameters: [{ in: "header", name: "If-Match", required: true, schema: { type: "string" } }, { in: "header", name: "Idempotency-Key", required: true, schema: { type: "string", minLength: 8, maxLength: 200 } }], requestBody: { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: false, required: ["name"], properties: { name: { type: "string", minLength: 1, maxLength: 240 } } } } } }, responses: { "200": { description: "Project tombstone and released reservation IDs" }, "400": { description: "Missing preconditions or invalid confirmation" }, "409": { description: "Version, confirmation, or idempotency conflict" }, "410": { description: "Project was already removed" } } } },
+      "/projects/{id}/removed-history": { get: { description: "Read a bounded page of append-only audit history for a removed project.", parameters: [{ name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } }, { name: "cursor", in: "query", required: false, schema: { type: "string", maxLength: 200 }, description: "Opaque continuation cursor from the preceding page." }], responses: { "200": { description: "Removed project audit page" }, "409": { description: "Project has not been removed" } } } },
       "/catalog/products": { get: { responses: { "200": { description: "Bounded exact catalog product page" } } }, post: { responses: { "201": { description: "Catalog product mutation" } } } },
       "/catalog/products/{id}": { get: { responses: { "200": { description: "Exact catalog product" } } }, patch: { responses: { "200": { description: "Updated exact catalog product" } } } },
       "/project-revisions/{id}/bom": { get: { parameters: [{ name: "includeRetired", in: "query", required: false, schema: { type: "boolean", default: false } }], responses: { "200": { description: "Active BOM lines by default; retired history when explicitly requested" } } }, post: { responses: { "201": { description: "BOM line" } } } },
@@ -924,7 +930,7 @@ async function scopedProjectPage(service: ApplicationService, query: ProjectList
     }
   }));
   const needle = query.q?.trim().toLocaleLowerCase();
-  const filtered = projects.filter((project): project is ApiProject => project !== null && (query.status === undefined || project.status === query.status) && (needle === undefined || project.name.toLocaleLowerCase().includes(needle) || project.description?.toLocaleLowerCase().includes(needle) === true));
+  const filtered = projects.filter((project): project is ApiProject => project !== null && (query.status === undefined ? project.status !== "archived" : project.status === query.status) && (needle === undefined || project.name.toLocaleLowerCase().includes(needle) || project.description?.toLocaleLowerCase().includes(needle) === true));
   const offset = query.cursor === undefined ? 0 : Number.parseInt(query.cursor, 10);
   const start = Number.isSafeInteger(offset) && offset >= 0 ? offset : 0;
   const selected = filtered.slice(start, start + query.limit);
@@ -935,6 +941,7 @@ async function scopedProjectPage(service: ApplicationService, query: ProjectList
 function errorStatus(error: ApplicationError): number {
   switch (error.code) {
     case "not_found": return 404;
+    case "project_removed": return 410;
     case "invalid_cursor": return 400;
     case "conflict": case "idempotency_conflict": case "integrity_error": return 409;
     case "forbidden": return 403;
@@ -1156,7 +1163,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     name: "BenchLedger", version: service.getVersion(), protocol: "rest-v1", demo,
     authentication: { accessModes: ["lan_open", "password"], access: "/api/v1/auth/access", explicitLanSession: "/api/v1/auth/lan-session", bearerRequiredForMcp: true },
     vocabulary: { confirmed: "physically counted or commissioned stock", inspect_first: "recorded stock requiring a physical count", missing: "no confirmed or inspect-first candidate" },
-    actions: ["inventory.read", "inventory.write", "inventory.categories.read", "inventory.categories.write", "catalog.read", "catalog.write", "inventory.product_profile.read", "inventory.product_profile.write", "projects.read", "projects.write", "build_configurations.read", "build_configurations.create", "bom.evaluate", "artifacts.version", "offers.compare", "events.subscribe"],
+    actions: ["inventory.read", "inventory.write", "inventory.categories.read", "inventory.categories.write", "catalog.read", "catalog.write", "inventory.product_profile.read", "inventory.product_profile.write", "projects.read", "projects.write", "projects.remove", "projects.removed_history", "build_configurations.read", "build_configurations.create", "bom.evaluate", "artifacts.version", "offers.compare", "events.subscribe"],
     approvalBoundaries: ["purchasing", "external publication", "permanent deletion", "credential changes", "printer control"]
   }));
   app.get(route("/openapi.json"), async () => jsonOpenApi(service.getVersion()));
@@ -1380,10 +1387,29 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const parsed = { ...(query.q === undefined ? {} : { q: query.q }), ...(parsedStatus === undefined ? {} : { status: parsedStatus.data }), limit: Math.min(Math.max(Number(query.limit ?? 50), 1), 200), ...(query.cursor === undefined ? {} : { cursor: query.cursor }) } satisfies ProjectListOptions;
     return request.principal?.projectIds === undefined ? service.listProjects(parsed) : scopedProjectPage(service, parsed, request.principal.projectIds);
   });
+  app.get(route("/projects/removed"), async (request) => {
+    requireScope(request, "read", auth);
+    rejectScopedGlobalAccess(request);
+    const query = request.query as { limit?: string; cursor?: string };
+    return service.listRemovedProjectPage(Number(query.limit ?? 50), query.cursor);
+  });
   app.post(route("/projects"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const mutation = await service.createProject(parseBody(createProjectSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });
   app.post(route("/projects/with-initial-revision"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const mutation = await service.createProjectWithInitialRevision(parseBody(createProjectWithInitialRevisionSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });
+  app.get(route("/projects/:id/removed-history"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); const query = request.query as { limit?: string; cursor?: string }; return service.readRemovedProjectHistory(params.id, Number(query.limit ?? 50), query.cursor); });
   app.get(route("/projects/:id"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); const project = await service.getProject(params.id); return { project, workItems: await service.listWorkItems(params.id) }; });
   app.patch(route("/projects/:id"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); return service.updateProject(params.id, parseBody(updateProjectSchema, request.body) as never, parseExpectedVersion(request), requestContext(request)); });
+  app.post(route("/projects/:id/restore"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); return service.restoreProject(params.id, parseExpectedVersion(request), requestContext(request)); });
+  app.delete(route("/projects/:id"), async (request) => {
+    requireScope(request, "write", auth);
+    const params = request.params as { id: string };
+    requireProjectScope(request, params.id);
+    if (requestIdempotencyKey(request) === undefined) throw new ApplicationError("validation", "Idempotency-Key is required for project removal");
+    const expectedVersion = parseRequiredExpectedVersion(request);
+    const body = parseBody(removeProjectSchema, request.body);
+    const confirmationName = body.name ?? body.projectName;
+    if (confirmationName === undefined) throw new ApplicationError("validation", "Exact project-name confirmation is required");
+    return service.removeProject(params.id, expectedVersion, confirmationName, requestContext(request));
+  });
   app.get(route("/projects/:id/work-items"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); return service.listWorkItems(params.id); });
   app.post(route("/projects/:id/work-items"), async (request, reply) => { requireScope(request, "write", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); const mutation = await service.createWorkItem(params.id, parseBody(createWorkItemSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });
   app.post(route("/projects/:id/revisions"), async (request, reply) => { requireScope(request, "write", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); const mutation = await service.createProjectRevision(params.id, parseBody(createProjectRevisionSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });
