@@ -347,20 +347,20 @@ describe("McpAdapter", () => {
     const result = await adapter.callTool("begin_artifact_upload", { projectId: "project-1", projectRevisionId: "project-revision-1", filename: "source.step", role: "source", mediaType: "model/step", byteLength: 12, sha256: "a".repeat(64) }, context);
 
     expect(result.isError).toBe(true);
-    expect(result.structuredContent).toMatchObject({ error: { code: "UNSAFE_LINK" } });
+    expect(result.structuredContent).toMatchObject({ error: { code: "HOST_TRANSFER_UNAVAILABLE" } });
     expect(JSON.stringify(result)).not.toMatch(/https:\/\/benchledger\.test|token|base64/i);
 
     const unsafeBackend = backend();
     unsafeBackend.artifacts.beginUpload = async () => ({ uploadId: "upload-2", uploadUrl: "data:application/octet-stream;base64,AAAA", expiresAt: "2026-08-30T10:15:00.000Z", maxBytes: 100, method: "PUT" });
     const unsafeResult = await new McpAdapter(unsafeBackend).callTool("begin_artifact_upload", { projectId: "project-1", projectRevisionId: "project-revision-1", filename: "source.step", role: "source", mediaType: "model/step", byteLength: 12, sha256: "a".repeat(64) }, context);
     expect(unsafeResult.isError).toBe(true);
-    expect(unsafeResult.structuredContent).toMatchObject({ error: { code: "UNSAFE_LINK" } });
+    expect(unsafeResult.structuredContent).toMatchObject({ error: { code: "HOST_TRANSFER_UNAVAILABLE" } });
 
     const queryBackend = backend();
     queryBackend.artifacts.downloadMetadata = async () => ({ artifactId: "artifact-1", revisionId: "artifact-revision-1", filename: "source.step", byteLength: 12, sha256: "a".repeat(64), downloadUrl: "https://benchledger.test/api/v1/transfers/artifacts/artifact-1/download?token=must-not-be-used", expiresAt: "2026-08-30T10:15:00.000Z" });
     const queryResult = await new McpAdapter(queryBackend).callTool("read_artifact_download_metadata", { artifactId: "artifact-1" }, context);
     expect(queryResult.isError).toBe(true);
-    expect(queryResult.structuredContent).toMatchObject({ error: { code: "UNSAFE_LINK" } });
+    expect(queryResult.structuredContent).toMatchObject({ error: { code: "HOST_TRANSFER_UNAVAILABLE" } });
   });
 
   it("exposes only bounded, model-neutral capabilities", () => {
@@ -547,7 +547,7 @@ describe("McpAdapter", () => {
     const adapter = new McpAdapter(backend());
     await expect(adapter.callTool("record_usage", { projectRevisionId: "project-revision-1", bomLineId: "bom-1", expectedVersion: 1, itemId: "item-esp32", quantity: { value: 1, unit: "piece" } }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
     await expect(adapter.callTool("create_project_revision", { projectId: "project-1", summary: "r02", basedOnRevisionId: "project-revision-1" }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
-    await expect(adapter.callTool("finalize_artifact_upload", { uploadId: "upload-1", expectedFilename: "renamed.step" }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
+    await expect(adapter.callTool("finalize_artifact_upload", { uploadId: "upload-1", expectedFilename: "renamed.step" }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "HOST_TRANSFER_UNAVAILABLE" } } });
     await expect(adapter.callTool("begin_artifact_upload", { projectId: "project-1", workItemRevisionId: "work-revision-1", filename: "source.step", role: "step", mediaType: "model/step", byteLength: 12, sha256: "a".repeat(64) }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
     await expect(adapter.callTool("begin_artifact_upload", { projectId: "project-1", projectRevisionId: "project-revision-1", workItemId: "work-1", filename: "source.step", role: "step", mediaType: "model/step", byteLength: 12, sha256: "a".repeat(64) }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
   });
@@ -586,8 +586,8 @@ describe("McpAdapter", () => {
     second.projectScope = projectScope;
 
     await expect(new McpAdapter(first).callTool("release_reservation", { reservationId: "reservation-1" }, scoped)).resolves.toMatchObject({ isError: false });
-    await expect(new McpAdapter(second).callTool("finalize_artifact_upload", { uploadId: "upload-1" }, scoped)).resolves.toMatchObject({ isError: false });
-    expect(resolverCalls).toEqual(["reservation:reservation-1", "upload:upload-1"]);
+    await expect(new McpAdapter(second).callTool("finalize_artifact_upload", { uploadId: "upload-1" }, scoped)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "HOST_TRANSFER_UNAVAILABLE" } } });
+    expect(resolverCalls).toEqual(["reservation:reservation-1"]);
   });
 
   it("dispatches bounded reservation list and durable reservation reads", async () => {
@@ -836,8 +836,8 @@ describe("McpAdapter", () => {
     ];
     for (const [name, input] of calls) {
       const result = await adapter.callTool(name, input, context);
-      if (name === "begin_artifact_upload" || name === "read_artifact_download_metadata" || name === "download_artifact") {
-        expect(result, `${name} should fail closed`).toMatchObject({ isError: true, structuredContent: { error: { code: "UNSAFE_LINK" } } });
+      if (name === "begin_artifact_upload" || name === "finalize_artifact_upload" || name === "read_artifact_download_metadata" || name === "download_artifact") {
+        expect(result, `${name} should fail closed`).toMatchObject({ isError: true, structuredContent: { error: { code: "HOST_TRANSFER_UNAVAILABLE" } } });
       } else {
         expect(result.isError, `${name} should dispatch successfully`).toBe(false);
       }
@@ -1102,7 +1102,7 @@ describe("McpAdapter", () => {
     unscopedBackend.artifacts.beginUpload = async () => notFound();
     const unscopedAdapter = new McpAdapter(unscopedBackend);
     await expect(unscopedAdapter.callTool("read_build_configuration", { buildConfigurationId: "missing-build-config" }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "NOT_FOUND" } } });
-    await expect(unscopedAdapter.callTool("begin_artifact_upload", { ...uploadInput, buildConfigurationSnapshotId: "missing-build-config" }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "NOT_FOUND" } } });
+    await expect(unscopedAdapter.callTool("begin_artifact_upload", { ...uploadInput, buildConfigurationSnapshotId: "missing-build-config" }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "HOST_TRANSFER_UNAVAILABLE" } } });
     await expect(unscopedAdapter.callTool("create_build_configuration", { ...createInput, supersedesSnapshotId: "missing-build-config" }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "NOT_FOUND" } } });
   });
 
@@ -1134,13 +1134,13 @@ describe("McpAdapter", () => {
       ["update_bom_line", { bomLineId: "bom-1", description: "changed" }, "bom-1"],
       ["release_reservation", { reservationId: "reservation-1" }, "reservation-1"],
       ["read_artifact_metadata", { artifactId: "artifact-1" }, "artifact-1"],
-      ["finalize_artifact_upload", { uploadId: "upload-1" }, "upload-1"],
       ["read_build_configuration", { buildConfigurationId: "build-config-1" }, "build-config-1"],
     ];
     for (const [name, input] of identifiers) {
       const result = await new McpAdapter(backend()).callTool(name, input, scoped);
       expect(result.structuredContent).toMatchObject({ error: { code: "FORBIDDEN" } });
     }
+    await expect(new McpAdapter(backend()).callTool("finalize_artifact_upload", { uploadId: "upload-1" }, scoped)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "HOST_TRANSFER_UNAVAILABLE" } } });
 
     const throwing = backend();
     throwing.projectScope = {
@@ -1175,6 +1175,6 @@ describe("McpAdapter", () => {
     await expect(new McpAdapter(large, { maxToolResultBytes: 20 }).callTool("list_inventory", {}, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "RESOURCE_TOO_LARGE" } } });
     const nestedUnsafe = backend();
     nestedUnsafe.artifacts.finalizeUpload = async () => ({ artifact: { downloadUrl: "https://maker.example/api/v1/transfers/artifacts/artifact-1/download?token=x" } });
-    await expect(new McpAdapter(nestedUnsafe).callTool("finalize_artifact_upload", { uploadId: "upload-1" }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "UNSAFE_LINK" } } });
+    await expect(new McpAdapter(nestedUnsafe).callTool("finalize_artifact_upload", { uploadId: "upload-1" }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "HOST_TRANSFER_UNAVAILABLE" } } });
   });
 });

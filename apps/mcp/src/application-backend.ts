@@ -55,7 +55,6 @@ import type {
   ArtifactListInput,
   ArtifactUploadTicket,
   Availability,
-  BeginArtifactUploadInput,
   BomAlternative,
   BomCompatibility,
   BomConstraintKey,
@@ -652,16 +651,18 @@ export function createApplicationBackend(service: ApplicationService, options: P
         // Generic MCP cannot safely carry the authenticated URL/header
         // capability used by the direct HTTP host. Fail before application
         // service dispatch so no upload session, audit row, or capability is
-        // created. A future transactional trusted-host bridge may replace
-        // this boundary explicitly.
-        throw new McpAdapterError("HOST_TRANSFER_UNAVAILABLE", "Artifact transfer is unavailable through generic MCP until a trusted host bridge exists.");
+        // created; authenticated browser/HTTP Files requests own this flow.
+        throw new McpAdapterError("HOST_TRANSFER_UNAVAILABLE", "Artifact transfer is unavailable through generic MCP; use the authenticated browser/HTTP Files flow.");
       },
-      finalizeUpload: async (input, context) => toMcpArtifact((await service.finalizeArtifactUpload(input.uploadId, appContext(context))).data as ApiArtifact),
+      finalizeUpload: async () => {
+        // Raw upload-session IDs must never become a model-facing write path.
+        throw new McpAdapterError("HOST_TRANSFER_UNAVAILABLE", "Artifact transfer is unavailable through generic MCP; use the authenticated browser/HTTP Files flow.");
+      },
       downloadMetadata: async (input, context) => {
         // Keep this before getArtifact for the same fail-closed guarantee as
         // upload: generic MCP must not turn a model request into a capability
         // lookup or reveal whether a private artifact exists.
-        throw new McpAdapterError("HOST_TRANSFER_UNAVAILABLE", "Artifact transfer is unavailable through generic MCP until a trusted host bridge exists.");
+        throw new McpAdapterError("HOST_TRANSFER_UNAVAILABLE", "Artifact transfer is unavailable through generic MCP; use the authenticated browser/HTTP Files flow.");
       },
       retire: async (input, context) => mutationResult(await service.retireArtifact(input.artifactId, input.expectedVersion, appContext(context)), "artifact", (value) => toMcpArtifact(value as ApiArtifact)),
     },
@@ -1652,10 +1653,6 @@ function toMcpArtifact(value: ApiArtifact): Artifact {
       ? { projectRevisionId: value.revisionId }
       : { workItemRevisionId: value.revisionId };
   return { id: value.id, projectId: value.projectId, ...(value.workItemId === undefined ? {} : { workItemId: value.workItemId }), ...revision, filename: value.filename, role: toMcpArtifactRole(value.role), mediaType: value.mediaType, byteLength: value.byteSize, sha256: value.sha256, revision: value.version, status: value.retired ? "retired" : value.currentCandidate ? "candidate" : "frozen", ...(value.createdAt === undefined ? {} : { createdAt: value.createdAt }) };
-}
-
-function toApiArtifactRole(role: BeginArtifactUploadInput["role"]): ApiArtifact["role"] {
-  return role as ApiArtifact["role"];
 }
 
 function toMcpArtifactRole(role: ApiArtifact["role"]): Artifact["role"] {

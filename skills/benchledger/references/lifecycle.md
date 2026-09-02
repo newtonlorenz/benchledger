@@ -135,15 +135,20 @@ firmware, slicer/version/profile, calibration, and explicit unknowns. A
 correction creates a superseding snapshot; it never edits history.
 
 Upload source, CAD, STEP/STL/3MF, slicer project, drawing, firmware, validation,
-or document artifacts with:
+or document artifacts through the authenticated browser/HTTP Files surface:
 
-1. `begin_artifact_upload` using the correct project/work-item revision,
-   filename, role, byte length, SHA-256, and optional build-configuration ID;
-2. the returned short-lived header-bound HTTP upload capability;
-3. `finalize_artifact_upload` after the bytes are present.
+1. choose exactly one project revision or work-item revision in the File scope
+   picker; the all-files view is read-only;
+2. use the file role shown in the upload status;
+3. let the browser hash the bytes while the application runs its existing
+   begin/write/finalize flow;
+4. review the returned artifact metadata without overwriting an older revision.
 
-Never send binary files as base64 MCP payloads, reveal transfer tokens, use host
-paths, execute an upload, or replace evidence from an older revision.
+Generic MCP does not expose upload sessions or transfer capabilities: its raw
+`begin_artifact_upload`, `finalize_artifact_upload`, and download tools fail
+closed. Never send binary files as base64 MCP payloads, reveal transfer tokens,
+use host paths, execute an upload, or replace evidence from an older revision.
+Atomic 50-file transfers and download-to-host remain deferred.
 
 Output: revision binding, role, filename, byte length, SHA-256, and build-
 configuration hash/unknowns.

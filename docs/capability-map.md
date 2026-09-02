@@ -94,7 +94,7 @@ and invalid hashes. Mutating tools use optimistic versions where applicable.
 | Build setup | `list_build_configurations`, `read_build_configuration` | `projects:read` | No |
 | Build setup | `create_build_configuration` | `projects:write` | Yes, immutable create |
 | Artifacts | `list_artifacts`, `read_artifact_metadata`, `read_artifact_download_metadata` / `download_artifact` | `artifacts:read` | No; list one exact project revision, one exact work-item revision, or the read-only all-project view |
-| Artifacts | `begin_artifact_upload`, `finalize_artifact_upload`, `retire_artifact` | `artifacts:write` | Yes; a new upload requires exactly one explicit revision scope |
+| Artifacts | `retire_artifact` | `artifacts:write` | Yes; browser/HTTP Files upload is authenticated and revision-scoped; raw MCP transfer tools fail closed |
 | Offers | `list_offers` | `offers:read` | No |
 | Offers | `record_offer_snapshot` | `offers:write` | Yes |
 | Context | `refresh_context`, `get_capabilities` | `context:read` | No |
@@ -223,7 +223,7 @@ profiles when present.
 | Understand a build gap | BOM editor and gap panel | `list_bom_lines` → `calculate_bom_gaps`; Decide before supplier lookup, inspect candidate diagnostics and conversion capacity/overage reasons in Check results, and shop only Source lines |
 | Resolve a physical project check | Project Plan Checks panel above the BOM; beginner shows three concrete questions and View all, expert reveals canonical traceability; confirmed compatibility and conversion collect explicit values/evidence, and completion is preview-first with exact before/after line alternatives/conversions plus explicit confirmation | HTTP: `GET /api/v1/project-revisions/{revisionId}/inspections` → `GET .../{inspectionId}` → `POST .../{inspectionId}/completion-preview` → explicit `POST .../{inspectionId}/completion-commit`; MCP: `list_inspections` → `read_inspection` → `preview_inspection_completion` → `commit_inspection_completion`, with nested REST `each` ↔ MCP `piece` unit/conversion mapping, affected line/item plus relevant reservation staleness basis, before/after items/gaps/lines, affected and reevaluated gaps, refreshed inspections/evidence, and project-scoped fail-closed authorization |
 | Hold confirmed parts | Reservation panel | `create_reservation` → `list_reservations` / `read_reservation` → read BOM/gaps again |
-| Add a CAD revision | Files scope selector defaults to the exact project revision and offers named work-item revisions; All files is read-only | Authenticated browser/HTTP upload → `finalize_artifact_upload`; generic MCP remains unavailable until a transactional trusted-host bridge exists |
+| Add a CAD revision | Files scope selector defaults to the exact project revision and offers named work-item revisions; All files is read-only; upload status shows the file role | Authenticated browser/HTTP upload through the existing begin → write → finalize flow; raw MCP transfer commands remain fail-closed |
 | Record exact build setup | Project build-configuration form | catalog/profile reads → `create_build_configuration` |
 | Compare buying options | Offers and shopping-list view | `list_offers` → `record_offer_snapshot` (observation only) |
 | Close and learn from a build | Project **Close out** review | `read_reconciliation` → `save_reconciliation_draft` → explicit `commit_reconciliation` |
@@ -270,28 +270,21 @@ retirement, partial, undo, and import operations are outside this command.
 ## Artifact transfer contract
 
 Generic MCP never returns live artifact-transfer URLs, headers, tokens, or
-credentials, including through `_meta`. Artifact upload and download tools
-currently fail closed with `HOST_TRANSFER_UNAVAILABLE` before creating an upload
-session, reading artifact metadata, or minting a capability. A future
-transactional trusted-host bridge must consume private transfer credentials
-outside MCP result serialization. Direct authenticated browser and HTTP
-transfer routes retain short-lived, action-, actor-, project-, byte-length-, and
-SHA-256-bound header capabilities. Download capabilities are one-use after a
-successful read.
+credentials, including through `_meta`. Raw begin, finalize, and download tools
+fail closed with `HOST_TRANSFER_UNAVAILABLE`. The authenticated browser/HTTP
+Files surface selects exactly one project revision or work-item revision (the
+all-files view is read-only), carries the selected role, hashes the bytes, and
+uses the existing begin → write → finalize flow. No base64, inline bytes, paths,
+or diagnostics cross MCP. Direct authenticated browser and HTTP transfer routes
+retain short-lived, action-, actor-, project-, byte-length-, and SHA-256-bound
+header capabilities. Download capabilities are one-use after a successful
+read.
 
-`begin_artifact_upload` requires the caller's SHA-256 and exactly one explicit
-scope: `projectRevisionId`, or `workItemId` plus `workItemRevisionId`. Mixed,
-missing, unrevisioned, and cross-project scopes fail before an upload session,
-audit event, or capability is created. `list_artifacts` accepts either exact
-scope or a project-only read-only view that includes retained legacy/unbound
-records. Exact project-revision results exclude work-item artifacts. The web
-defaults to the exact current project revision, exposes each work item by its
-real name/ID/current revision, and freezes one chosen scope for an upload run.
-The typed finalize tool
-uses the durable upload declaration. Finalization trusts the durable upload
-session's project ancestry, resolved by
-the application service or an optional host resolver before a scoped request is
-allowed to proceed.
+`list_artifacts` accepts either exact scope or a project-only read-only view that
+includes retained legacy/unbound records. Exact project-revision results exclude
+work-item artifacts. The web defaults to the exact current project revision,
+exposes each work item by its real name/ID/current revision, and freezes one
+chosen scope for an upload run.
 
 ## Deliberate non-capabilities
 

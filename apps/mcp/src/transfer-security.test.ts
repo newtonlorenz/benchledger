@@ -48,11 +48,11 @@ describe("artifact transfer model boundary", () => {
 
     await expect(backend.artifacts.beginUpload(uploadInput, context)).rejects.toMatchObject({
       code: "HOST_TRANSFER_UNAVAILABLE",
-      message: "Artifact transfer is unavailable through generic MCP until a trusted host bridge exists.",
+      message: "Artifact transfer is unavailable through generic MCP; use the authenticated browser/HTTP Files flow.",
     });
     await expect(backend.artifacts.downloadMetadata({ artifactId: "artifact-1" }, context)).rejects.toMatchObject({
       code: "HOST_TRANSFER_UNAVAILABLE",
-      message: "Artifact transfer is unavailable through generic MCP until a trusted host bridge exists.",
+      message: "Artifact transfer is unavailable through generic MCP; use the authenticated browser/HTTP Files flow.",
     });
 
     expect(service.beginArtifactUpload).not.toHaveBeenCalled();
@@ -77,7 +77,7 @@ describe("artifact transfer model boundary", () => {
       structuredContent: {
         error: {
           code: "HOST_TRANSFER_UNAVAILABLE",
-          message: "Artifact transfer is unavailable through generic MCP until a trusted host bridge exists.",
+          message: "Artifact transfer is unavailable through generic MCP; use the authenticated browser/HTTP Files flow.",
         },
       },
     });
@@ -96,7 +96,7 @@ describe("artifact transfer model boundary", () => {
     for (const payload of payloads) {
       const backend = { artifacts: { beginUpload: async () => payload } } as unknown as BenchLedgerBackend;
       const result = await new McpAdapter(backend).callTool("begin_artifact_upload", uploadInput, context);
-      expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: "UNSAFE_LINK" } } });
+      expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: "HOST_TRANSFER_UNAVAILABLE" } } });
       expect(JSON.stringify(result)).not.toContain("secret");
       expect(JSON.stringify(result)).not.toContain("maker.test");
     }
@@ -116,7 +116,7 @@ describe("artifact transfer model boundary", () => {
       },
     });
 
-    expect(response).toMatchObject({ result: { isError: true, structuredContent: { error: { code: "FORBIDDEN", message: "The current token is not allowed to perform this artifact transfer." } } } });
+    expect(response).toMatchObject({ result: { isError: true, structuredContent: { error: { code: "HOST_TRANSFER_UNAVAILABLE" } } } });
     expect(JSON.stringify(response)).not.toContain(unsafeValue);
     expect(JSON.stringify(response)).not.toContain("details");
   });
