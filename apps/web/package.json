@@ -12,6 +12,7 @@
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
+    "@benchledger/domain": "0.1.0",
     "@vitejs/plugin-react": "^5.0.4",
     "vite": "^7.1.3",
     "react": "^19.1.1",

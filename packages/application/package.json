@@ -16,6 +16,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@benchledger/api-contract": "0.1.0"
+    "@benchledger/api-contract": "0.1.0",
+    "@benchledger/domain": "0.1.0"
   }
 }

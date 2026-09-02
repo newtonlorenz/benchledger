@@ -33,9 +33,9 @@ const nullableCategoryIdProperty = (description: string): JsonObject => ({ oneOf
 const quantityProperty: JsonObject = object({ value: number("Positive amount."), unit: string("Canonical unit: piece, gram, millimetre, millilitre, metre, roll, or set.") }, ["value", "unit"]);
 const bomSpecificationProperty: JsonObject = { ...object({
   status: enumString(["sufficient", "insufficient"]),
-  decisions: object(Object.fromEntries(["identity", "purpose", "voltage", "current_or_load", "connector", "compatibility", "dimensions"].map((key) => [key, string()]))),
-  missingDecisions: { ...array(enumString(["identity", "purpose", "voltage", "current_or_load", "connector", "compatibility", "dimensions"])), minItems: 1, maxItems: 7 },
-}, ["status"]), description: "Insufficient requires missingDecisions; sufficient requires decisions. Power supplies require current_or_load and connector." };
+  decisions: object(Object.fromEntries(["identity", "purpose", "voltage", "current_or_load", "connector", "compatibility", "dimensions", "resistance", "power_rating"].map((key) => [key, string()]))),
+  missingDecisions: { ...array(enumString(["identity", "purpose", "voltage", "current_or_load", "connector", "compatibility", "dimensions", "resistance", "power_rating"])), minItems: 1, maxItems: 9 },
+}, ["status"]), description: "Insufficient requires missingDecisions; sufficient requires decisions. Power supplies require current_or_load and connector. LED resistors require resistance and power_rating." };
 const bomConstraintsProperty: JsonObject = object({
   ...Object.fromEntries(BOM_CONSTRAINT_KEYS.map((key) => [key, string(`Match inventory ${key}.`)])),
   specification: bomSpecificationProperty,
@@ -340,6 +340,13 @@ export const CAPABILITY_DOCUMENT: JsonObject = {
     ordered_unverified: "Order evidence only; never treated as available stock.",
     allocated: "Reserved or assigned stock; availability is reduced by the allocation.",
     depleted: "No remaining usable quantity recorded.",
+  },
+  bomSemantics: {
+    decisions: ["identity", "purpose", "voltage", "current_or_load", "connector", "compatibility", "dimensions", "resistance", "power_rating"],
+    outcomes: ["ready", "check", "decide", "source"],
+    decide: "Requirements with unresolved specification decisions are Decide and return those exact missingDecisions; recommendedAction is specify and they are excluded from shopping proposals.",
+    resistor: "LED resistor requirements remain Decide until both resistance and power_rating are recorded; a sufficient claim with only one is still incomplete.",
+    shopping: "Only required Source lines may appear in a shopping proposal. Ready, Check, Decide, and optional lines are excluded.",
   },
   projectLifecycle: {
     values: ["idea", "planned", "ready", "building", "validating", "complete", "archived"],

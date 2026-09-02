@@ -104,9 +104,12 @@ Ask one concrete question in plain language:
 > actually missing. Do not buy anything.”
 
 The agent should inspect the BOM and call `calculate_bom_gaps`. Explain results
-as **supplied**, **inspect first**, **partial**, **missing**, or **optional**.
-Use one recommended next action, such as “count the delivered wire” or
-“compare the missing insert offers.” Do not expose raw database jargon by
+as **Ready**, **Check**, **Decide**, or **Source**, while keeping the underlying
+supplied, inspect-first, partial, missing, and optional evidence visible when
+useful. A Decide result must name its exact `missingDecisions` (for example, an
+LED resistor needs `resistance` and `power_rating`) and stays out of shopping
+until resolved. Use one recommended next action, such as “count the delivered
+wire” or “resolve the resistor rating.” Do not expose raw database jargon by
 default.
 
 ## Minute 4–6: expert path
@@ -188,10 +191,15 @@ revisions separate; do not overwrite an accepted artifact.
 ## Minute 9–10: shopping proposal
 
 Call `list_offers` and optionally `record_offer_snapshot` for supplied supplier
-observations. A useful shopping proposal separates:
+observations. A shopping proposal contains only required BOM lines whose
+decision is **Source**. Keep Ready, Check, Decide, and optional lines visible
+as separate readiness context; never turn them into shopping rows, counts, or
+copied draft text. If no Source line exists while Decide or Check work remains,
+say “Nothing is ready to source” and explain those blockers. A useful readiness
+summary separates:
 
 ```text
-already supplied | inspect-first | required purchase | optional purchase | substitute
+Ready/reuse | Check/inspect | Decide/specify | Source/required purchase | optional context
 ```
 
 Include package rounding, minor-unit price and currency, shipping when known,

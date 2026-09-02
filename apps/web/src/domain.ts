@@ -1,3 +1,7 @@
+// Import the browser-safe specification subpath so the web bundle does not
+// pull the domain package's Node-only ID helpers through its barrel export.
+import { resolveBomSpecification } from "@benchledger/domain/specification";
+
 export type StockState =
   | "available"
   | "inspect-first"
@@ -12,7 +16,9 @@ export type BomSpecificationDecision =
   | "current_or_load"
   | "connector"
   | "compatibility"
-  | "dimensions";
+  | "dimensions"
+  | "resistance"
+  | "power_rating";
 
 export type BomSpecificationDecisions = Readonly<Partial<Record<BomSpecificationDecision, string>>>;
 
@@ -519,24 +525,40 @@ export interface ProjectSummary {
   lineStatuses: BomLineStatus[];
 }
 
-const POWER_SUPPLY_NAME = /\b(?:power\s+supply|power\s+adapter|dc\s+adapter|ac\s+adapter|wall\s+adapter|mains\s+adapter)\b/i;
-const POWER_SUPPLY_DECISIONS: readonly BomSpecificationDecision[] = ["current_or_load", "connector"];
+/** The shopping surface is a proposal for required Source lines only. */
+export function shoppingEligibleLines(summary: ProjectSummary): BomLineStatus[] {
+  if (summary.readinessUnavailable) return [];
+  return summary.lineStatuses.filter((line) => line.line.optional !== true && line.decision === "source");
+}
+
+export function shoppingEmptyState(summary: ProjectSummary): { title: string; description: string } {
+  if (summary.readinessUnavailable) {
+    return {
+      title: "Readiness needs to reload",
+      description: "Inventory changed, but canonical project readiness is unavailable. Reload before preparing a shopping proposal.",
+    };
+  }
+  if (summary.decideLines > 0 || summary.checkLines > 0 || summary.optionalLines > 0) {
+    const blockers = [
+      summary.decideLines > 0 ? `${summary.decideLines} requirement${summary.decideLines === 1 ? " still needs" : "s still need"} a decision` : undefined,
+      summary.checkLines > 0 ? `${summary.checkLines} requirement${summary.checkLines === 1 ? " still needs" : "s still need"} checking` : undefined,
+    ].filter((value): value is string => value !== undefined);
+    return {
+      title: "Nothing is ready to source",
+      description: blockers.length > 0
+        ? `${blockers.join(" and ")}. Optional requirements are not included in shopping proposals.`
+        : "Optional requirements are not included in shopping proposals.",
+    };
+  }
+  return { title: "No items required", description: "Current inventory covers every required line." };
+}
 
 function specificationForLine(line: BomLine): { sufficient: boolean; missingDecisions: readonly BomSpecificationDecision[] } {
-  const specification = line.constraints?.specification;
-  if (specification !== undefined) {
-    const decisions = specification.decisions ?? {};
-    const mandatoryMissing = POWER_SUPPLY_NAME.test(line.label)
-      ? POWER_SUPPLY_DECISIONS.filter((decision) => {
-        const value = decisions[decision];
-        return typeof value !== "string" || value.trim().length === 0;
-      })
-      : [];
-    const missingDecisions = [...new Set([...(specification.missingDecisions ?? []), ...mandatoryMissing])];
-    return { sufficient: specification.status === "sufficient" && missingDecisions.length === 0, missingDecisions };
-  }
-  if (POWER_SUPPLY_NAME.test(line.label)) return { sufficient: false, missingDecisions: POWER_SUPPLY_DECISIONS };
-  return { sufficient: true, missingDecisions: [] };
+  return resolveBomSpecification({
+    name: line.label,
+    ...(line.itemId === undefined ? {} : { itemId: line.itemId }),
+    ...(line.constraints === undefined ? {} : { constraints: line.constraints }),
+  } as Parameters<typeof resolveBomSpecification>[0]);
 }
 
 function decisionForLine(line: BomLine, state: BomLineStatus["state"], sufficient: boolean, needsCheck: boolean): BomDecision {

@@ -485,6 +485,90 @@ describe("ApplicationService", () => {
     expect(result.totals).toMatchObject({ requiredLines: 1, decideLines: 1, sourceLines: 0, missingLines: 0 });
   });
 
+  it("canonicalizes new LED resistor writes and keeps exact identities behind Decide", async () => {
+    const ports = fakePorts(item({ id: "resistor-stock", name: "330 ohm resistor", kind: "electronic", unit: "each", quantity: 1, availableQuantity: 1 }));
+    const service = new ApplicationService(ports);
+    const created = await service.createBomLine("rev-1", {
+      id: "bom-led-resistor",
+      name: "LED-current-limiting resistor",
+      itemId: "resistor-stock",
+      requiredQuantity: 1,
+      unit: "each",
+      optional: false,
+      alternatives: [],
+      constraints: {},
+    }, context);
+
+    expect(created.data.constraints).toMatchObject({ specification: { status: "insufficient", missingDecisions: ["resistance", "power_rating"] } });
+    const result = await service.evaluateBomGaps("rev-1");
+    expect(result.lines[0]).toMatchObject({
+      status: "specify_first",
+      decision: "decide",
+      missingDecisions: ["resistance", "power_rating"],
+      suppliedQuantity: 0,
+      inspectQuantity: 0,
+      missingQuantity: 1,
+    });
+    expect(result.totals).toMatchObject({ decideLines: 1, sourceLines: 0 });
+  });
+
+  it("lets uncertain LED resistor stock take Check precedence over Decide", async () => {
+    const ports = fakePorts(item({ id: "resistor-delivery", name: "LED resistor", kind: "electronic", unit: "each", quantity: 1, availableQuantity: 0, evidence: { state: "delivered_uncounted" } }));
+    const service = new ApplicationService(ports);
+    await service.createBomLine("rev-1", {
+      id: "bom-led-resistor-check",
+      name: "LED resistor",
+      itemId: "resistor-delivery",
+      requiredQuantity: 1,
+      unit: "each",
+      optional: false,
+      alternatives: [],
+      constraints: {},
+    }, context);
+
+    const result = await service.evaluateBomGaps("rev-1");
+    expect(result.lines[0]).toMatchObject({ status: "inspect_first", decision: "check", missingDecisions: ["resistance", "power_rating"] });
+    expect(result.totals).toMatchObject({ checkLines: 1, decideLines: 0, sourceLines: 0 });
+  });
+
+  it("sources a fully specified resistor only after the specification is complete", async () => {
+    const service = new ApplicationService(fakePorts());
+    await service.createBomLine("rev-1", {
+      id: "bom-led-resistor-source",
+      name: "LED resistor",
+      requiredQuantity: 1,
+      unit: "each",
+      optional: false,
+      alternatives: [],
+      constraints: { specification: { status: "sufficient", decisions: { resistance: "330 ohm", power_rating: "0.25 W" } } },
+    }, context);
+
+    const result = await service.evaluateBomGaps("rev-1");
+    expect(result.lines[0]).toMatchObject({ status: "missing", decision: "source", missingQuantity: 1 });
+    expect(result.totals).toMatchObject({ sourceLines: 1, decideLines: 0 });
+  });
+
+  it("rejects a sufficient LED resistor claim without both electrical decisions", async () => {
+    const service = new ApplicationService(fakePorts());
+    await expect(service.createBomLine("rev-1", {
+      id: "bom-led-resistor-incomplete",
+      name: "LED series resistor",
+      requiredQuantity: 1,
+      unit: "each",
+      optional: false,
+      alternatives: [],
+      constraints: { specification: { status: "sufficient", decisions: { resistance: "330 ohm" } } },
+    }, context)).rejects.toMatchObject({ code: "validation" });
+  });
+
+  it.each(["LED board", "resistor bracket", "LED board resistor bracket", "resistor bracket for LED", "delivered resistor"])("does not classify unrelated requirement %s as an LED resistor", async (name) => {
+    const service = new ApplicationService(fakePorts());
+    const created = await service.createBomLine("rev-1", { id: `bom-${name.replaceAll(" ", "-")}`, name, requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context);
+    expect(created.data.constraints).toEqual({});
+    const result = await service.evaluateBomGaps("rev-1");
+    expect(result.lines[0]).toMatchObject({ status: "missing", decision: "source" });
+  });
+
   it("does not allocate confirmed stock while an explicit specification blocker remains", async () => {
     const ports = fakePorts(item({ id: "power-supply", name: "12 V supply", quantity: 1, availableQuantity: 1, unit: "each" }));
     const service = new ApplicationService(ports);
@@ -571,6 +655,24 @@ describe("ApplicationService", () => {
     expect(preview.gaps.totals).toMatchObject({ requiredLines: 1, suppliedLines: 1, readyLines: 1, checkLines: 0, decideLines: 0, sourceLines: 0, optionalLines: 0 });
     const committed = await service.commitProjectSetup({ previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmReservations: false }, { ...context, idempotencyKey: "setup-source-key" });
     expect(committed.data.gaps).toEqual(preview.gaps);
+  });
+
+  it("canonicalizes LED resistor specifications in setup preview and durable commit", async () => {
+    const ports = fakePorts(item({ id: "setup-resistor", name: "330 ohm resistor", kind: "electronic", unit: "each", quantity: 1, availableQuantity: 1 }));
+    ports.projects.getProjectRevision = async () => null;
+    const service = new ApplicationService(ports);
+    const proposal = setupProposal({
+      project: { id: "setup-led-project", name: "LED setup", status: "planned" },
+      revision: { id: "setup-led-revision", name: "Initial", status: "concept" },
+      bomLines: [{ localRef: "led-line", id: "setup-led-line", name: "LED limiting resistor", itemId: "setup-resistor", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }],
+    });
+
+    const preview = await service.previewProjectSetup(proposal, context);
+    expect(preview.proposal.bomLines[0]?.constraints).toMatchObject({ specification: { status: "insufficient", missingDecisions: ["resistance", "power_rating"] } });
+    expect(preview.unresolvedSpecifications).toEqual([{ bomLineLocalRef: "led-line", missingDecisions: ["resistance", "power_rating"] }]);
+
+    const committed = await service.commitProjectSetup(setupCommitInput(preview), { ...context, idempotencyKey: "setup-led-key" });
+    expect(committed.data.bomLines[0]?.constraints).toMatchObject({ specification: { status: "insufficient", missingDecisions: ["resistance", "power_rating"] } });
   });
 
   it("enforces workspace scope and runtime guards before previewing setup", async () => {

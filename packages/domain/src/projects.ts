@@ -1,6 +1,7 @@
 import { createId, nowIso, slugify } from "./ids.js";
 import { DomainError, assertNonNegativeQuantity, assertPositiveQuantity } from "./errors.js";
 import { classifyAvailability } from "./stock.js";
+import { isLedResistorRequirement, resolveBomSpecification, type ResolvedBomSpecification } from "./specification.js";
 import type {
   AvailabilityClass,
   BomCandidate,
@@ -11,7 +12,6 @@ import type {
   BomLine,
   BomLineEvaluation,
   BomEvaluation,
-  BomSpecificationDecision,
   BomSummary,
   InventoryItem,
   Project,
@@ -158,6 +158,14 @@ export function createBomLine(input: NewBomLine): BomLine {
   if (!input.revisionId.trim()) throw new DomainError("invalid_revision_id", "BOM line revisionId is required");
   if (!input.name.trim()) throw new DomainError("invalid_bom_name", "BOM line name is required");
   assertPositiveQuantity(input.quantity, "BOM line quantity");
+  const rawSpecification = input.constraints?.specification;
+  const resolvedSpecification = resolveBomSpecification({ name: input.name, constraints: input.constraints });
+  if (isLedResistorRequirement(input.name) && rawSpecification?.status === "sufficient" && !resolvedSpecification.sufficient) {
+    throw new DomainError("invalid_bom_specification", "A sufficient LED resistor requirement must resolve resistance and power_rating.");
+  }
+  const writtenConstraints = isLedResistorRequirement(input.name) && rawSpecification === undefined
+    ? { ...(input.constraints ?? {}), specification: { status: "insufficient" as const, missingDecisions: [...resolvedSpecification.missingDecisions] } }
+    : input.constraints;
   return {
     id: input.id ?? createId("bom"),
     revisionId: input.revisionId,
@@ -169,7 +177,7 @@ export function createBomLine(input: NewBomLine): BomLine {
     ...(input.itemId === undefined ? {} : { itemId: input.itemId }),
     ...(input.alternativeItemIds === undefined ? {} : { alternativeItemIds: input.alternativeItemIds.slice() }),
     ...(input.alternatives === undefined ? {} : { alternatives: input.alternatives.map((alternative) => ({ ...alternative, ...(alternative.constraints === undefined ? {} : { constraints: { ...alternative.constraints, ...(alternative.constraints.tags === undefined ? {} : { tags: alternative.constraints.tags.slice() }) } }) })) }),
-    ...(input.constraints === undefined ? {} : { constraints: { ...input.constraints, ...(input.constraints.tags === undefined ? {} : { tags: input.constraints.tags.slice() }) } }),
+    ...(writtenConstraints === undefined ? {} : { constraints: { ...writtenConstraints, ...(writtenConstraints.tags === undefined ? {} : { tags: writtenConstraints.tags.slice() }) } }),
     ...(input.notes === undefined ? {} : { notes: input.notes })
   };
 }
@@ -313,29 +321,8 @@ function evaluateCandidates(line: BomLine, candidates: readonly BomCandidate[]):
   };
 }
 
-const POWER_SUPPLY_NAME = /\b(?:power\s+supply|power\s+adapter|dc\s+adapter|ac\s+adapter|wall\s+adapter|mains\s+adapter)\b/i;
-const POWER_SUPPLY_DECISIONS: readonly BomSpecificationDecision[] = ["current_or_load", "connector"];
-
-interface BomSpecificationResult {
-  sufficient: boolean;
-  missingDecisions: readonly BomSpecificationDecision[];
-}
-
-function specificationForLine(line: BomLine): BomSpecificationResult {
-  const specification = line.constraints?.specification;
-  if (specification !== undefined) {
-    const decisions = specification.decisions ?? {};
-    const mandatoryMissing = POWER_SUPPLY_NAME.test(line.name)
-      ? POWER_SUPPLY_DECISIONS.filter((decision) => {
-        const value = decisions[decision];
-        return typeof value !== "string" || value.trim().length === 0;
-      })
-      : [];
-    const missingDecisions = [...new Set([...(specification.missingDecisions ?? []), ...mandatoryMissing])];
-    return { sufficient: specification.status === "sufficient" && missingDecisions.length === 0, missingDecisions };
-  }
-  if (POWER_SUPPLY_NAME.test(line.name)) return { sufficient: false, missingDecisions: POWER_SUPPLY_DECISIONS };
-  return { sufficient: true, missingDecisions: [] };
+function specificationForLine(line: BomLine): ResolvedBomSpecification {
+  return resolveBomSpecification(line);
 }
 
 function decisionForLine(line: BomLine, status: BomLineEvaluation["status"], sufficient: boolean, needsCheck: boolean): BomDecision {

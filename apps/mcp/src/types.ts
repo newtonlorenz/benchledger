@@ -519,7 +519,7 @@ export interface BomLine {
 
 export const BOM_CONSTRAINT_KEYS = ["kind", "manufacturer", "model", "sku", "tag", "nameIncludes"] as const;
 export type BomConstraintKey = typeof BOM_CONSTRAINT_KEYS[number];
-export type BomSpecificationDecision = "identity" | "purpose" | "voltage" | "current_or_load" | "connector" | "compatibility" | "dimensions";
+export type BomSpecificationDecision = "identity" | "purpose" | "voltage" | "current_or_load" | "connector" | "compatibility" | "dimensions" | "resistance" | "power_rating";
 export type BomSpecificationDecisions = Readonly<Partial<Record<BomSpecificationDecision, string>>>;
 export interface BomSpecification {
   status: "sufficient" | "insufficient";
