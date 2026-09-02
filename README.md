@@ -5,41 +5,51 @@
 <p align="center"><strong>Know what you have. Plan what to build. Close the loop.</strong></p>
 
 <p align="center">
-  A self-hosted inventory and project workspace for 3D printing, CAD, electronics, and AI-assisted making.
+  BenchLedger is a self-hosted workspace for 3D-printing and electronics makers, from hobbyists to expert workshops.
+</p>
+
+<p align="center">
+  Manage projects yourself in the web UI, or ask an authorized AI agent to help. Both use the same records, application rules, and approval boundaries.
 </p>
 
 > [!NOTE]
 > BenchLedger is an early open-source release. The private-LAN workflow is
 > working, but APIs, schemas, and MCP capabilities may change before 1.0.
 
-## Why BenchLedger
+## Make a project you can trust
 
-Maker projects usually split their truth across shopping history, drawers,
-spreadsheets, slicer files, CAD folders, and memory. BenchLedger brings that
-information together so a person or an AI agent can answer three useful
-questions:
+BenchLedger keeps the information around a maker project together. Use it to:
 
-1. What equipment, tools, materials, and parts are actually available?
-2. What does this project need, and what can be reused with confidence?
-3. What is missing, where could it be sourced, and what might it cost?
+- Track printers, tools, accessories, spare parts, electronics, and consumables.
+- Keep exact product profiles for printers, filament, nozzles, plates, and parts.
+- Keep an append-only stock ledger with confirmed, uncertain, reserved, and unavailable states.
+- Start projects with work items, revisions, bills of materials (BOMs), and build gaps.
+- See what you can reuse, what needs a physical check, and what is missing.
+- Compare recorded supplier offers, package quantities, observed prices, and alternatives.
+- Keep versioned CAD, STEP, STL, 3MF, firmware, drawing, and validation files.
+- Bind build configurations and SHA-256 hashes to project revisions.
+- Record actual use, returns, loss, leftovers, and converted assets after a build.
 
-It treats uncertainty honestly. An old order is evidence that something was
-bought, not proof that it is still on hand. A compatible-looking part is a
-candidate, not an exact match. Every recommendation can retain the reason,
-source, observation time, and next physical check.
+It treats uncertainty honestly. An old order is evidence that something was bought,
+not proof that it is still on hand. A compatible-looking part is a candidate,
+not an exact match. Recommendations can retain their reason, source, observation
+time, and next physical check.
 
-## What it does
+## One workspace, two ways to work
 
-- Tracks printers, tools, accessories, spare parts, electronics, and consumables
-- Keeps exact product profiles for printers, filament, nozzles, plates, and parts
-- Uses an append-only stock ledger with confirmed, uncertain, reserved, and
-  unavailable states
-- Plans projects with work items, revisions, BOMs, reuse decisions, and gaps
-- Compares supplier offers, package quantities, observed prices, and alternatives
-- Stores versioned CAD, STEP, STL, 3MF, firmware, drawing, and validation files
-- Binds build configurations and SHA-256 hashes to project revisions
-- Reconciles actual use, returns, loss, leftovers, and converted assets after a build
-- Gives the web app and MCP clients the same application rules and approval boundaries
+Use the web UI when you want to manage the project yourself. Add inventory,
+organize categories, create a project, review its BOM, attach files, and close
+out the build from the same workspace.
+
+Use authorized AI agents when you want help with the same bounded workflow.
+The model-neutral MCP server lets an agent inspect inventory, calculate BOM gaps,
+prepare shopping proposals, manage revisions and artifacts, and draft project
+close-out reconciliation. The agent works against the same records through the
+same application rules as the UI. It is not a separate agent-only system.
+
+Beginners see plain outcomes such as **Ready to use**, **Check quantity**, and
+**Need to buy**. Expert detail remains available in place: exact variants,
+dimensions, lots, compatibility evidence, build configuration, hashes, and audit history.
 
 BenchLedger does **not** purchase products, scrape retailers, execute uploads,
 slice models, generate G-code, or control printers.
@@ -60,10 +70,6 @@ flowchart LR
   F --> X[Post-project reconciliation]
   X --> I
 ```
-
-Beginners see plain outcomes such as **Ready to use**, **Check quantity**, and
-**Need to buy**. Expert detail is available in place: exact variants, dimensions,
-lots, compatibility evidence, build configuration, hashes, and audit history.
 
 ![BenchLedger synthetic sample workspace showing a project build path, the next useful action, inventory status, and project summary](docs/assets/benchledger-workspace.png)
 
