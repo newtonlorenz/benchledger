@@ -377,3 +377,104 @@ describe("MemoryCatalog provenance parity", () => {
     expect(corrected.provenance).toBeUndefined();
   });
 });
+
+describe("Memory BOM quantity conversion parity", () => {
+  const conversion = {
+    inventory: { quantity: 1, unit: "set" as const },
+    requirement: { quantity: 10, unit: "each" as const },
+    evidence: {
+      basis: "package_label" as const,
+      observedAt: "2026-09-02T10:00:00.000Z",
+      source: "synthetic package label",
+      sourceId: "synthetic-label-1",
+      note: "Ten pieces per sealed set.",
+    },
+  } as const;
+
+  it("reserves whole converted sets and rejects an unconverted unit mismatch", async () => {
+    const runtime = createMemoryRuntime([{
+      id: "memory-conversion-set",
+      name: "LED set",
+      kind: "electronic",
+      quantity: 3,
+      availableQuantity: 3,
+      unit: "set",
+      tags: [],
+      links: [],
+      evidence: { state: "physically_counted" },
+      createdAt: "2026-09-02T00:00:00.000Z",
+      updatedAt: "2026-09-02T00:00:00.000Z",
+      version: 1,
+    }]);
+    const service = new ApplicationService(runtime.ports);
+    const context = { actor: "memory-conversion-direct", source: "api" as const, correlationId: "memory-conversion-direct", scopes: new Set(["projects:write", "bom:write"]) };
+    const project = await service.createProject({ id: "memory-conversion-project", name: "Memory conversion project", status: "planned" }, context);
+    const revision = await service.createProjectRevision(project.data.id, { id: "memory-conversion-revision", name: "Initial", status: "concept" }, context);
+    const line = await service.createBomLine(revision.data.id, {
+      id: "memory-conversion-line",
+      name: "LEDs",
+      requiredQuantity: 15,
+      unit: "each",
+      optional: false,
+      constraints: {},
+      alternatives: [{ itemId: "memory-conversion-set", compatible: "confirmed", quantityConversion: conversion }],
+    }, context);
+
+    const reservation = await service.createReservation(revision.data.id, { id: "memory-conversion-reservation", lineId: line.data.id, itemId: "memory-conversion-set", quantity: 2 }, context);
+    expect(reservation.data).toMatchObject({ itemId: "memory-conversion-set", quantity: 2, status: "active" });
+    expect(runtime.inventory.items.get("memory-conversion-set")?.availableQuantity).toBe(1);
+    await expect(service.evaluateBomGaps(revision.data.id)).resolves.toMatchObject({ lines: [{ suppliedQuantity: 15, missingQuantity: 0, unit: "each" }] });
+
+    const noConversion = await service.createBomLine(revision.data.id, {
+      id: "memory-no-conversion-line",
+      name: "Unconverted LEDs",
+      requiredQuantity: 1,
+      unit: "each",
+      optional: false,
+      constraints: {},
+      alternatives: [{ itemId: "memory-conversion-set", compatible: "confirmed" }],
+    }, context);
+    await expect(Promise.resolve().then(() => runtime.projects.createReservation(revision.data.id, { lineId: noConversion.data.id, itemId: "memory-conversion-set", quantity: 1 }))).rejects.toMatchObject({ code: "validation" });
+  });
+
+  it("preserves converted alternatives through setup commit and rolls back injected audit failure", async () => {
+    const runtime = createMemoryRuntime([{
+      id: "memory-setup-conversion-set",
+      name: "Setup LED set",
+      kind: "electronic",
+      quantity: 2,
+      availableQuantity: 2,
+      unit: "set",
+      tags: [],
+      links: [],
+      evidence: { state: "physically_counted" },
+      createdAt: "2026-09-02T00:00:00.000Z",
+      updatedAt: "2026-09-02T00:00:00.000Z",
+      version: 1,
+    }]);
+    const service = new ApplicationService(runtime.ports);
+    const context = { actor: "memory-conversion-setup", source: "api" as const, correlationId: "memory-conversion-setup", scopes: new Set(["projects:write", "bom:write"]) };
+    const proposal = {
+      project: { id: "memory-conversion-setup-project", name: "Memory converted setup", status: "planned" as const },
+      revision: { id: "memory-conversion-setup-revision", name: "Initial", status: "concept" as const },
+      workItems: [],
+      bomLines: [{ localRef: "led-line", id: "memory-conversion-setup-line", name: "LEDs", requiredQuantity: 15, unit: "each" as const, optional: false, constraints: {}, alternatives: [{ itemId: "memory-setup-conversion-set", compatible: "confirmed" as const, quantityConversion: conversion }] }],
+      reservations: [{ localRef: "led-reservation", bomLineLocalRef: "led-line", id: "memory-conversion-setup-reservation", itemId: "memory-setup-conversion-set", quantity: 2, unit: "set" as const }],
+    };
+    const preview = await service.previewProjectSetup(proposal, context);
+    expect(preview.fieldErrors).toEqual([]);
+    expect(preview.gaps.lines[0]).toMatchObject({ suppliedQuantity: 15, missingQuantity: 0, unit: "each" });
+
+    const failingAudit = vi.spyOn(runtime.ports.audit, "append").mockRejectedValueOnce(new Error("injected converted setup audit failure"));
+    await expect(service.commitProjectSetup({ previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmReservations: true }, { ...context, idempotencyKey: "memory-conversion-setup-key" })).rejects.toThrow("injected converted setup audit failure");
+    failingAudit.mockRestore();
+    await expect(runtime.ports.projects.getProject("memory-conversion-setup-project")).resolves.toBeNull();
+    expect(runtime.projects.reservations.size).toBe(0);
+    expect(runtime.inventory.items.get("memory-setup-conversion-set")?.availableQuantity).toBe(2);
+    expect(runtime.inventory.events.get("memory-setup-conversion-set")).toBeUndefined();
+
+    const committed = await service.commitProjectSetup({ previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmReservations: true }, { ...context, idempotencyKey: "memory-conversion-setup-retry" });
+    expect(committed.data.bomLines[0]?.alternatives).toEqual(proposal.bomLines[0]?.alternatives);
+    expect(committed.data.reservations).toMatchObject([{ id: "memory-conversion-setup-reservation", quantity: 2 }]);
+  });
+});

@@ -446,10 +446,45 @@ export const createWorkItemRevisionSchema = z.object({
   status: revisionStatusSchema
 }).strict();
 
+export const quantityConversionEvidenceBasisSchema = z.enum([
+  "package_label",
+  "manufacturer_spec",
+  "physical_count",
+  "user_assertion",
+]);
+
+export const quantityConversionEvidenceSchema = z.object({
+  basis: quantityConversionEvidenceBasisSchema,
+  observedAt: isoDateSchema,
+  source: z.string().max(500).optional(),
+  sourceId: z.string().max(500).optional(),
+  note: z.string().max(1000).optional(),
+}).strict();
+
+const quantityConversionInventorySchema = z.object({
+  quantity: z.literal(1),
+  unit: z.literal("set"),
+}).strict();
+
+const quantityConversionRequirementSchema = z.object({
+  quantity: z.number().int().positive().safe(),
+  unit: z.literal("each"),
+}).strict();
+
+export const quantityConversionSchema = z.object({
+  inventory: quantityConversionInventorySchema,
+  requirement: quantityConversionRequirementSchema,
+  evidence: quantityConversionEvidenceSchema,
+}).strict();
+
+/** Alias that makes the owner of this nested contract explicit to consumers. */
+export const bomAlternativeQuantityConversionSchema = quantityConversionSchema;
+
 export const bomAlternativeSchema = z.object({
   itemId: idSchema,
   reason: z.string().max(1000).optional(),
-  compatible: z.enum(["confirmed", "conditional", "unknown"]).default("conditional")
+  compatible: z.enum(["confirmed", "conditional", "unknown"]).default("conditional"),
+  quantityConversion: quantityConversionSchema.optional(),
 }).strict();
 
 /**
@@ -1298,7 +1333,9 @@ export const reconciliationPreviewLineSchema = z.object({
   reservedQuantity: z.number().finite().nonnegative(),
   accountedQuantity: z.number().finite().nonnegative(),
   unaccountedQuantity: z.number().finite().nonnegative(),
-  outcomeCount: z.number().int().nonnegative()
+  outcomeCount: z.number().int().nonnegative(),
+  /** All three scalar totals use this one active-reservation unit. */
+  unit: quantityUnitSchema
 }).strict();
 
 export const reconciliationPreviewSchema = z.object({

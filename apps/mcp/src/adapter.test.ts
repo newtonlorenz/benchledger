@@ -406,6 +406,14 @@ describe("McpAdapter", () => {
     });
 
     const bomCreate = adapter.listTools().find((tool) => tool.name === "create_bom_line");
+    const alternative = (bomCreate?.inputSchema.properties.alternatives as Record<string, any>).items as Record<string, any>;
+    expect(alternative.properties.quantityConversion).toMatchObject({
+      required: ["inventory", "requirement", "evidence"],
+      properties: {
+        requirement: { required: ["quantity", "unit"], properties: { unit: { enum: ["piece"] } } },
+      },
+    });
+    expect((alternative.properties.quantityConversion as Record<string, any>).properties.inventory.properties.unit.enum).toEqual(["set"]);
     expect(bomCreate?.inputSchema.properties.constraints).toMatchObject({
       properties: {
         specification: {
@@ -418,6 +426,8 @@ describe("McpAdapter", () => {
     });
     expect(JSON.stringify(adapter.capabilityDocument())).toContain("resistance");
     expect(JSON.stringify(adapter.capabilityDocument())).toContain("power_rating");
+    expect(JSON.stringify(adapter.capabilityDocument())).toContain("quantityConversions");
+    expect(JSON.stringify(adapter.capabilityDocument())).toContain("piece");
 
     const reconciliation = adapter.listTools().find((tool) => tool.name === "save_reconciliation_draft");
     expect(reconciliation?.inputSchema).toMatchObject({

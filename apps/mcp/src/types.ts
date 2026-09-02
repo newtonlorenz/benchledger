@@ -197,10 +197,18 @@ export type BuildConfigurationCreateInput = ApiCreateBuildConfigurationSnapshot;
 export type ReconciliationDraft = ApiReconciliationDraft;
 export type ReconciliationCommit = ApiReconciliationCommit;
 export type ReconciliationDraftSaveInput = ApiSaveReconciliationDraft;
-export type ProjectSetupProposal = ApiProjectSetupProposal;
+
+type ApiProjectSetupBomLine = ApiProjectSetupProposal["bomLines"][number];
+type McpProjectSetupBomLine = Omit<ApiProjectSetupBomLine, "alternatives"> & { alternatives: readonly BomAlternative[] };
+type McpProjectSetupGapLine = Omit<ApiProjectSetupPreview["gaps"]["lines"][number], "alternatives"> & { alternatives: readonly BomAlternative[] };
+type McpProjectSetupGaps = Omit<ApiProjectSetupPreview["gaps"], "lines"> & { lines: readonly McpProjectSetupGapLine[] };
+type McpProjectSetupResultBomLine = Omit<ApiProjectSetupCommitResult["bomLines"][number], "alternatives"> & { alternatives: readonly BomAlternative[] };
+
+/** Project-setup alternatives use the MCP `piece` vocabulary at this boundary. */
+export type ProjectSetupProposal = Omit<ApiProjectSetupProposal, "bomLines"> & { bomLines: readonly McpProjectSetupBomLine[] };
 export type CommitProjectSetupInput = ApiCommitProjectSetup;
-export type ProjectSetupPreview = ApiProjectSetupPreview;
-export type ProjectSetupCommitResult = ApiProjectSetupCommitResult;
+export type ProjectSetupPreview = Omit<ApiProjectSetupPreview, "proposal" | "gaps"> & { proposal: ProjectSetupProposal; gaps: McpProjectSetupGaps };
+export type ProjectSetupCommitResult = Omit<ApiProjectSetupCommitResult, "bomLines" | "gaps"> & { bomLines: readonly McpProjectSetupResultBomLine[]; gaps: McpProjectSetupGaps };
 /** MCP keeps the revision in the input because it is the ancestry anchor. */
 export type ReconciliationCommitInput = { projectRevisionId: string } & ApiCommitReconciliation;
 
@@ -533,7 +541,30 @@ export interface BomAlternative {
   itemId: string;
   compatible: BomCompatibility;
   reason?: string;
+  /**
+   * Evidence-backed package conversion. MCP uses `piece`; the REST and
+   * application contracts use the equivalent canonical unit `each`.
+   */
+  quantityConversion?: BomAlternativeQuantityConversion;
 }
+
+export type QuantityConversionEvidenceBasis = "package_label" | "manufacturer_spec" | "physical_count" | "user_assertion";
+
+export interface QuantityConversionEvidence {
+  basis: QuantityConversionEvidenceBasis;
+  observedAt: string;
+  source?: string;
+  sourceId?: string;
+  note?: string;
+}
+
+export interface BomAlternativeQuantityConversion {
+  inventory: { quantity: 1; unit: "set" };
+  requirement: { quantity: number; unit: "piece" };
+  evidence: QuantityConversionEvidence;
+}
+
+export type QuantityConversion = BomAlternativeQuantityConversion;
 
 export interface BomLineListInput extends PageInput {
   projectRevisionId: string;
@@ -615,6 +646,8 @@ export interface BomMatch {
   availability: Availability;
   compatible: BomCompatibility;
   reason: string;
+  /** Conversion evidence when candidate quantities are requirement-side pieces. */
+  quantityConversion?: BomAlternativeQuantityConversion;
 }
 
 export interface ReservationInput {

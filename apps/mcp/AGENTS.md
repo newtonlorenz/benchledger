@@ -154,6 +154,16 @@ one of four decisions:
   partial line is Source for its remaining quantity when no inspect-first
   candidate could cover that shortfall.
 
+Structured alternatives preserve `compatible`, `reason`, and optional
+evidence-backed `quantityConversion`: one inventory `set` covers a positive
+whole number of requirement-side MCP `piece`s. MCP maps `piece` losslessly to
+the REST/application unit `each`. Candidate available, supplied, and inspect
+quantities stay in requirement units, while candidate reasons retain conversion
+capacity, allocation, and overage diagnostics. Missing/invalid conversions and
+conditional or unknown alternatives remain Check and are never buyable or
+reservable. Valid converted reservations are whole-number inventory `set`s and
+read back as `set`.
+
 Optional lines remain separately identified and never authorize Source. A BOM
 line may record `constraints.specification` with a required `status`, resolved
 `decisions`, and exact `missingDecisions`. The closed decision vocabulary

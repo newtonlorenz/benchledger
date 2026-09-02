@@ -9,8 +9,10 @@ import {
   getStockLabel,
   inventoryKindOptions,
   shoppingEligibleLines,
+  shoppingOfferItemIds,
   shoppingEmptyState,
-  sumMoneyByCurrency
+  sumMoneyByCurrency,
+  unitDiagnostics
 } from "./domain";
 import { inventory, projects } from "./mock-data";
 import type { BomLine, BomLineStatus, InventoryItem, Project } from "./domain";
@@ -60,6 +62,8 @@ describe("BenchLedger beginner-friendly domain language", () => {
     expect(formatQuantity(2, "each")).toBe("2 pieces");
     expect(formatQuantity(1250, "g")).toBe("1,250 g");
     expect(formatQuantity(1.5, "m")).toBe("1.5 m");
+    expect(formatQuantity(1, "set")).toBe("1 set");
+    expect(formatQuantity(2, "set")).toBe("2 sets");
   });
 
   it("searches every user-facing inventory field and honours category filters", () => {
@@ -220,6 +224,91 @@ describe("BenchLedger beginner-friendly domain language", () => {
     expect(summary.lineStatuses[0]).toMatchObject({ missingDecisions: ["resistance", "power_rating"] });
   });
 
+  it("keeps confirmed set conversions usable offline while mismatches remain Check", () => {
+    const setItem = (id: string, unit: InventoryItem["unit"]): InventoryItem => ({
+      ...inventory[0]!,
+      id,
+      name: id,
+      unit,
+      quantity: 2,
+      availableQuantity: 2,
+      reserved: 0,
+      state: "available",
+      evidence: "counted"
+    });
+    const converted: BomLine = {
+      id: "converted",
+      label: "LED pack",
+      required: 15,
+      unit: "each",
+      alternatives: [{
+        itemId: "led-sets",
+        compatible: "confirmed",
+        reason: "Manufacturer package count",
+        quantityConversion: {
+          inventory: { quantity: 1, unit: "set" },
+          requirement: { quantity: 8, unit: "each" },
+          evidence: { basis: "package_label", observedAt: "2026-08-30T00:00:00.000Z", source: "https://example.test/led-sets" }
+        }
+      }]
+    };
+    const mismatch: BomLine = {
+      id: "mismatch",
+      label: "Unverified set",
+      required: 3,
+      unit: "each",
+      alternatives: [{ itemId: "unknown-set", compatible: "confirmed" }]
+    };
+    const project: Project = { ...projects[0]!, id: "conversion-project", bom: [converted, mismatch] };
+    const summary = calculateProjectSummary(project, [setItem("led-sets", "set"), setItem("unknown-set", "set")]);
+
+    expect(summary.lineStatuses[0]).toMatchObject({ state: "ready", decision: "ready", supplied: 15, remaining: 0 });
+    expect(summary.lineStatuses[1]).toMatchObject({ state: "inspect-first", decision: "check", supplied: 0, remaining: 3 });
+    expect(shoppingEligibleLines(summary).map((line) => line.line.id)).toEqual([]);
+  });
+
+  it("reports canonical unit diagnostics for connected candidates", () => {
+    const line: BomLine = {
+      id: "diagnostic",
+      label: "LED pack",
+      required: 8,
+      unit: "each",
+      alternatives: [{
+        itemId: "led-sets",
+        compatible: "confirmed",
+        quantityConversion: {
+          inventory: { quantity: 1, unit: "set" },
+          requirement: { quantity: 8, unit: "each" },
+          evidence: { basis: "manufacturer_spec", observedAt: "2026-08-30T00:00:00.000Z" }
+        }
+      }]
+    };
+    const item = { ...inventory[0]!, id: "led-sets", unit: "set" as const };
+    const status: BomLineStatus = {
+      line,
+      item,
+      items: [item],
+      supplied: 8,
+      remaining: 0,
+      state: "ready",
+      decision: "ready",
+      gap: {
+        lineId: line.id,
+        status: "supplied",
+        decision: "ready",
+        suppliedQuantity: 8,
+        inspectQuantity: 0,
+        missingQuantity: 0,
+        matchedItemIds: [item.id],
+        reasons: [],
+        requiredQuantity: 8,
+        unit: "each",
+        candidates: [{ itemId: item.id, relationship: "confirmed_alternative", compatibility: "confirmed", availableQuantity: 16, suppliedQuantity: 8, inspectQuantity: 0, reason: "Conversion: 1 set = 8 each. Capacity: 2 set(s) = 16 each." }]
+      }
+    };
+    expect(unitDiagnostics(status)).toEqual(["Conversion: 1 set = 8 each (observed 2026-08-30)."]);
+  });
+
   it("keeps shopping proposals limited to required Source lines and explains blocked proposals", () => {
     const source: BomLineStatus[] = [
       { line: { id: "source", label: "Insert", required: 1, unit: "each" }, supplied: 0, remaining: 1, state: "missing", decision: "source" },
@@ -243,6 +332,26 @@ describe("BenchLedger beginner-friendly domain language", () => {
     };
 
     expect(shoppingEligibleLines(summary).map((line) => line.line.id)).toEqual(["source"]);
+    expect(shoppingOfferItemIds({
+      ...source[0]!,
+      line: { ...source[0]!.line, itemId: "exact-item", alternatives: [{ itemId: "confirmed-alt", compatible: "confirmed" }, { itemId: "conditional-alt", compatible: "conditional" }] },
+      gap: {
+        lineId: "source",
+        status: "missing",
+        decision: "source",
+        suppliedQuantity: 0,
+        inspectQuantity: 0,
+        missingQuantity: 1,
+        matchedItemIds: ["exact-item", "confirmed-alt", "conditional-alt"],
+        reasons: [],
+        candidates: [
+          { itemId: "exact-item", relationship: "exact", compatibility: "confirmed", availableQuantity: 0, suppliedQuantity: 0, inspectQuantity: 0, reason: "Exact" },
+          { itemId: "confirmed-alt", relationship: "confirmed_alternative", compatibility: "confirmed", availableQuantity: 0, suppliedQuantity: 0, inspectQuantity: 0, reason: "Confirmed" },
+          { itemId: "conditional-alt", relationship: "uncertain_alternative", compatibility: "conditional", availableQuantity: 1, suppliedQuantity: 0, inspectQuantity: 1, reason: "Check" }
+        ]
+      }
+    })).toEqual(["source", "exact-item", "confirmed-alt"]);
+    expect(shoppingOfferItemIds(source[2]!)).toEqual([]);
     expect(shoppingEmptyState({ ...summary, sourceLines: 0, lineStatuses: source.slice(1) })).toEqual({
       title: "Nothing is ready to source",
       description: "1 requirement still needs a decision and 1 requirement still needs checking. Optional requirements are not included in shopping proposals.",

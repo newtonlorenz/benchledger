@@ -8,8 +8,9 @@ import type {
   UpdateCatalogProduct, InventoryProductProfile, CreateInventoryProductProfile,
   UpdateInventoryProductProfile, BuildConfigurationSnapshot, CreateBuildConfigurationSnapshot, ProjectTombstone,
   ArtifactBuildConfigurationBinding, CommissionInventoryItem, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory,
-  CommitProjectSetup, ProjectSetupCommitResult, ProjectSetupPreview
+  CommitProjectSetup, ProjectSetupCommitResult, ProjectSetupPreview, BomAlternative
 } from "@benchledger/api-contract";
+import { bomAlternativeSchema } from "@benchledger/api-contract";
 import { ApplicationError, applyInventoryBulkChanges, bomSpecification, conflict, matchesBomConstraints, normalizeInventoryBulkChanges, parseInventoryCursor, stableCreateConflict } from "@benchledger/application";
 import type {
   ApplicationPorts, ArtifactDownload, ArtifactPort, AuditEvent, AuditInput, AuditPort,
@@ -139,6 +140,26 @@ function ensureVersion(actual: number, expected: number | undefined, entity: str
 
 function ensurePositive(value: number, label: string): void {
   if (!Number.isFinite(value) || value <= 0) throw new ApplicationError("validation", `${label} must be positive`);
+}
+
+type QuantityConversion = NonNullable<BomAlternative["quantityConversion"]>;
+
+function canonicalBomAlternatives(value: readonly BomAlternative[]): BomAlternative[] {
+  return value.map((alternative) => bomAlternativeSchema.parse(alternative));
+}
+
+function bomQuantityConversion(line: Pick<BomLine, "unit" | "alternatives">, item: Pick<InventoryItem, "id" | "unit">): QuantityConversion | undefined {
+  if (item.unit === line.unit) return undefined;
+  const conversions = line.alternatives
+    .filter((alternative) => alternative.itemId === item.id)
+    .flatMap((alternative) => {
+      const conversion = alternative.quantityConversion;
+      return conversion !== undefined && conversion.inventory.unit === item.unit && conversion.requirement.unit === line.unit
+        ? [conversion]
+        : [];
+    });
+  const factors = new Set(conversions.map((conversion) => conversion.requirement.quantity));
+  return factors.size === 1 ? conversions[0] : undefined;
 }
 
 function normalizeInventoryListOptions(options: InventoryListOptions): InventoryListOptions {
@@ -816,12 +837,34 @@ class MemoryProjects implements ProjectPort {
   createBomLine(revisionId: string, input: CreateBomLine): Promise<BomLine> {
     const revision = this.projectRevisions.get(revisionId); if (!revision) throw new ApplicationError("not_found", `Project revision '${revisionId}' was not found`);
     this.assertProjectActive(revision.projectId);
-    const line = { id: input.id ?? id("bom", ++this.sequence), revisionId, name: input.name, ...(input.itemId === undefined ? {} : { itemId: input.itemId }), requiredQuantity: input.requiredQuantity, unit: input.unit, optional: input.optional, constraints: input.constraints ?? {}, alternatives: input.alternatives ?? [], ...(input.notes === undefined ? {} : { notes: input.notes }), createdAt: iso(), updatedAt: iso(), version: 1 } as BomLine;
+    const line = {
+      id: input.id ?? id("bom", ++this.sequence),
+      revisionId,
+      name: input.name,
+      ...(input.itemId === undefined ? {} : { itemId: input.itemId }),
+      requiredQuantity: input.requiredQuantity,
+      unit: input.unit,
+      optional: input.optional,
+      constraints: clone(input.constraints ?? {}),
+      alternatives: canonicalBomAlternatives(input.alternatives ?? []),
+      ...(input.notes === undefined ? {} : { notes: input.notes }),
+      createdAt: iso(),
+      updatedAt: iso(),
+      version: 1
+    } as BomLine;
     this.bomLines.set(line.id, line); return Promise.resolve(clone(line));
   }
   updateBomLine(lineId: string, input: Partial<CreateBomLine>, expectedVersion: number | undefined): Promise<BomLine> {
     const current = this.bomLines.get(lineId); if (!current) throw new ApplicationError("not_found", `BOM line '${lineId}' was not found`); ensureVersion(current.version, expectedVersion, "BOM line");
-    const next = { ...current, ...input, ...(input.alternatives ? { alternatives: clone(input.alternatives) } : {}), ...(input.constraints ? { constraints: clone(input.constraints) } : {}), updatedAt: iso(), version: current.version + 1 } as BomLine; this.bomLines.set(lineId, next); return Promise.resolve(clone(next));
+    const next = {
+      ...current,
+      ...input,
+      ...(input.alternatives === undefined ? {} : { alternatives: canonicalBomAlternatives(input.alternatives) }),
+      ...(input.constraints === undefined ? {} : { constraints: clone(input.constraints) }),
+      updatedAt: iso(),
+      version: current.version + 1
+    } as BomLine;
+    this.bomLines.set(lineId, next); return Promise.resolve(clone(next));
   }
   retireBomLine(lineId: string, expectedVersion: number | undefined): Promise<BomLine> {
     const current = this.bomLines.get(lineId); if (!current) throw new ApplicationError("not_found", `BOM line '${lineId}' was not found`); ensureVersion(current.version, expectedVersion, "BOM line");
@@ -838,7 +881,29 @@ class MemoryProjects implements ProjectPort {
     const revision = this.projectRevisions.get(revisionId); if (!revision) throw new ApplicationError("not_found", `Project revision '${revisionId}' was not found`);
     this.assertProjectActive(revision.projectId);
     const line = this.bomLines.get(input.lineId); if (!line || line.revisionId !== revisionId) throw new ApplicationError("not_found", `BOM line '${input.lineId}' was not found in this revision`);
-    const item = this.inventory.items.get(input.itemId); if (!item) throw new ApplicationError("not_found", `Inventory item '${input.itemId}' was not found`); if (line.unit !== item.unit) throw new ApplicationError("validation", `Unit mismatch: BOM uses ${line.unit}, item uses ${item.unit}`); ensurePositive(input.quantity, "Reservation quantity");
+    const item = this.inventory.items.get(input.itemId); if (!item) throw new ApplicationError("not_found", `Inventory item '${input.itemId}' was not found`);
+    const conversion = bomQuantityConversion(line, item);
+    if (item.unit !== line.unit && conversion === undefined) throw new ApplicationError("validation", `Unit mismatch: BOM uses ${line.unit}, item uses ${item.unit}; no valid quantity conversion is recorded`);
+    if (conversion !== undefined && !Number.isSafeInteger(input.quantity)) throw new ApplicationError("validation", "Converted reservations must use a whole number of sets");
+    const approved = line.itemId === item.id || line.alternatives.some((alternative) => alternative.itemId === item.id && alternative.compatible === "confirmed");
+    if (!approved) throw new ApplicationError("validation", "Reservation item must be the exact BOM item or an approved alternative");
+    if (!matchesBomConstraints(item, line.constraints)) throw new ApplicationError("validation", "Inventory item does not satisfy the BOM constraints");
+    if (!canCount(item.evidence.state)) throw new ApplicationError("conflict", "Only physically confirmed stock can be reserved");
+    ensurePositive(input.quantity, "Reservation quantity");
+    const factor = conversion?.requirement.quantity ?? 1;
+    const reservedCoverage = [...this.reservations.values()]
+      .filter((reservation) => reservation.status === "active" && reservation.lineId === input.lineId)
+      .reduce((total, reservation) => {
+        const reservedItem = this.inventory.items.get(reservation.itemId);
+        if (reservedItem === undefined) throw new ApplicationError("integrity_error", `Reservation '${reservation.id}' refers to missing inventory item`);
+        const reservedConversion = bomQuantityConversion(line, reservedItem);
+        if (reservedItem.unit !== line.unit && reservedConversion === undefined) throw new ApplicationError("integrity_error", "Existing reservation has no valid quantity conversion");
+        if (reservedConversion !== undefined && !Number.isSafeInteger(reservation.quantity)) throw new ApplicationError("integrity_error", "Existing converted reservation is not a whole number of sets");
+        return total + reservation.quantity * (reservedConversion?.requirement.quantity ?? 1);
+      }, 0);
+    const remainingCoverage = Math.max(0, line.requiredQuantity - reservedCoverage);
+    const maximumInventoryUnits = Math.ceil(remainingCoverage / factor);
+    if (input.quantity > maximumInventoryUnits) throw new ApplicationError("conflict", `Cannot reserve beyond the BOM requirement of ${line.requiredQuantity} ${line.unit}; whole-unit coverage would be exceeded`);
     if (item.availableQuantity < input.quantity) throw new ApplicationError("conflict", "Not enough confirmed stock to reserve");
     const reservation: Reservation = { id: input.id ?? id("reservation", ++this.sequence), lineId: input.lineId, itemId: input.itemId, quantity: input.quantity, status: "active", createdAt: iso(), updatedAt: iso(), version: 1 };
     this.reservations.set(reservation.id, reservation);
@@ -934,6 +999,9 @@ class MemoryProjectSetup implements ProjectSetupPort {
     readonly correlationId: string;
   }): Promise<ProjectSetupCommitResult> {
     const { preview } = input;
+    // Any prior successful setup has already passed its enclosing audit and
+    // must never remain available as a compensation receipt for this command.
+    this.lastSnapshot = undefined;
     if (preview.fieldErrors.length > 0) throw new ApplicationError("validation", "Project setup preview contains semantic field errors");
 
     const staleItems: string[] = [];
@@ -965,10 +1033,15 @@ class MemoryProjectSetup implements ProjectSetupPort {
       if (line === undefined || item === null) throw new ApplicationError("validation", `Reservation '${reservation.localRef}' references missing setup data`);
       if (!bomSpecification(line).sufficient) throw new ApplicationError("validation", "Resolve the BOM specification decisions before reserving stock");
       const approved = item.id === line.itemId || line.alternatives.some((alternative) => alternative.itemId === item.id && alternative.compatible === "confirmed");
-      if (!approved || item.unit !== line.unit || (reservation.unit !== undefined && reservation.unit !== item.unit) || !matchesBomConstraints(item, line.constraints) || !["physically_counted", "commissioned"].includes(item.evidence.state)) throw conflict("Reservation preflight no longer passes", { reason: "reservation_preflight", itemId: item.id, retryable: false, commitState: "not_committed", recoveryAction: "preview_project_setup" });
-      const lineTotal = (reservedByLine.get(line.localRef) ?? 0) + reservation.quantity;
-      if (lineTotal > line.requiredQuantity) throw conflict("Reservation exceeds BOM requirement", { reason: "reservation_requirement", itemId: item.id, retryable: false, commitState: "not_committed", recoveryAction: "preview_project_setup" });
-      reservedByLine.set(line.localRef, lineTotal);
+      const conversion = bomQuantityConversion(line, item);
+      if (!approved || (item.unit !== line.unit && conversion === undefined) || (reservation.unit !== undefined && reservation.unit !== item.unit) || !matchesBomConstraints(item, line.constraints) || !["physically_counted", "commissioned"].includes(item.evidence.state)) throw conflict("Reservation preflight no longer passes", { reason: "reservation_preflight", itemId: item.id, retryable: false, commitState: "not_committed", recoveryAction: "preview_project_setup" });
+      if (conversion !== undefined && !Number.isSafeInteger(reservation.quantity)) throw conflict("Converted reservation quantity is not a whole number of sets", { reason: "reservation_preflight", itemId: item.id, retryable: false, commitState: "not_committed", recoveryAction: "preview_project_setup" });
+      const factor = conversion?.requirement.quantity ?? 1;
+      const priorCoverage = reservedByLine.get(line.localRef) ?? 0;
+      const remainingCoverage = Math.max(0, line.requiredQuantity - priorCoverage);
+      const maximumInventoryUnits = Math.ceil(remainingCoverage / factor);
+      if (reservation.quantity > maximumInventoryUnits) throw conflict("Reservation exceeds BOM requirement", { reason: "reservation_requirement", itemId: item.id, retryable: false, commitState: "not_committed", recoveryAction: "preview_project_setup" });
+      reservedByLine.set(line.localRef, priorCoverage + reservation.quantity * factor);
       reservedByItem.set(item.id, (reservedByItem.get(item.id) ?? 0) + reservation.quantity);
     }
     for (const [itemId, quantity] of reservedByItem) {

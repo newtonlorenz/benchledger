@@ -102,10 +102,15 @@ preview/commit patterns; do not create a parallel MCP or web implementation.
   only. Broader structured search and guided specification editing remain
   separate slices.**
 - [ ] `BL-AW-008` → `REQ-008`: maker-specific profiles, package/unit
-  conversions, and explicit quantity semantics. **Partial foundation only:**
-  exact printer/filament product and physical-profile records exist, but the
-  complete maker quantity/profile contract and migrations remain. Depends on
-  inventory category, catalog, and stock semantics.
+  conversions, and explicit quantity semantics. **Partially implemented on the
+  current feature branch:** exact printer/filament product and physical-profile
+  records exist; canonical set-to-each conversions retain nested evidence,
+  capacity/overage diagnostics, and web gap mapping preserves set units,
+  alternatives, and candidate reasons. Connected web readiness remains driven
+  by the server gap response, while the offline fallback uses the shared
+  conversion resolver and fails closed on mismatches. The complete maker
+  quantity/profile contract and migrations remain. Depends on inventory
+  category, catalog, and stock semantics.
 
 Dependency gate: land search and specification state before changing shopping
 output; package/unit migrations precede reliable component reservations.

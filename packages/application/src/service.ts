@@ -13,7 +13,7 @@ import {
   inventoryItemSchema,
   saveReconciliationDraftSchema, commitReconciliationSchema, reconciliationDraftSchema,
   reconciliationCommitSchema, reservationSchema, workspaceSecurityStatusSchema, workspaceSecurityMutationSchema,
-  projectSetupProposalSchema, commitProjectSetupSchema, projectSetupPreviewSchema
+  projectSetupProposalSchema, commitProjectSetupSchema, projectSetupPreviewSchema, quantityConversionSchema
 } from "@benchledger/api-contract";
 import type {
   Artifact, BomGap, BomGapCandidate, BomLine, CreateBomLine, CreateInventoryItem, CreateOffer, CreateProject,
@@ -125,6 +125,8 @@ interface BomCandidate {
   readonly kind: BomCandidateKind;
 }
 
+type BomQuantityConversion = NonNullable<BomLine["alternatives"][number]["quantityConversion"]>;
+
 type LegacyBomLineInput = Omit<CreateBomLine, "constraints"> & {
   /** @deprecated Accepted only for internal callers reading legacy records. */
   constraints?: Readonly<Record<string, BomConstraintValue>>;
@@ -138,6 +140,41 @@ function bomCandidateAlternative(line: BomLine, itemId: string): BomLine["altern
   return line.alternatives.find((alternative) => alternative.itemId === itemId);
 }
 
+/**
+ * Resolve a persisted conversion only when its orientation matches the
+ * inventory row and BOM line. Boundary schemas validate new writes, but live
+ * gap reads also need to fail closed for older or hand-written records.
+ * Conflicting conversion factors are ambiguous and therefore unusable.
+ */
+function bomCandidateQuantityConversion(line: BomLine, item: InventoryItem): BomQuantityConversion | undefined {
+  if (item.unit === line.unit) return undefined;
+  const conversions = line.alternatives
+    .filter((alternative) => alternative.itemId === item.id)
+    .map((alternative) => {
+      const parsed = quantityConversionSchema.safeParse(alternative.quantityConversion);
+      return parsed.success && parsed.data.inventory.unit === item.unit && parsed.data.requirement.unit === line.unit
+        ? parsed.data
+        : undefined;
+    })
+    .filter((conversion): conversion is BomQuantityConversion => conversion !== undefined);
+  const quantities = new Set(conversions.map((conversion) => conversion.requirement.quantity));
+  if (quantities.size !== 1) return undefined;
+  return conversions[0];
+}
+
+function bomCandidateQuantityFactor(line: BomLine, item: InventoryItem): number | undefined {
+  if (item.unit === line.unit) return 1;
+  return bomCandidateQuantityConversion(line, item)?.requirement.quantity;
+}
+
+function bomCandidateHasResolvableQuantity(line: BomLine, candidate: BomCandidate): boolean {
+  return bomCandidateQuantityFactor(line, candidate.item) !== undefined;
+}
+
+function bomCandidateUsesWholeSets(line: BomLine, item: InventoryItem): boolean {
+  return item.unit !== line.unit && bomCandidateQuantityConversion(line, item) !== undefined;
+}
+
 function bomCandidateCompatibility(line: BomLine, candidate: BomCandidate): BomGapCandidate["compatibility"] {
   if (candidate.kind === "exact") return "confirmed";
   if (candidate.kind === "constraint_match") return "unknown";
@@ -146,11 +183,15 @@ function bomCandidateCompatibility(line: BomLine, candidate: BomCandidate): BomG
 
 function bomCandidateReason(line: BomLine, candidate: BomCandidate): string {
   const alternative = bomCandidateAlternative(line, candidate.item.id);
-  if (alternative?.reason !== undefined) return alternative.reason;
-  if (candidate.kind === "exact") return "Exact inventory item declared by the BOM.";
-  if (candidate.kind === "confirmed_alternative") return "Explicitly confirmed BOM alternative.";
-  if (candidate.kind === "uncertain_alternative") return "Alternative compatibility is not explicitly confirmed.";
-  return "Matched the BOM constraints; compatibility is not explicitly confirmed.";
+  const base = alternative?.reason
+    ?? (candidate.kind === "exact" ? "Exact inventory item declared by the BOM."
+      : candidate.kind === "confirmed_alternative" ? "Explicitly confirmed BOM alternative."
+        : candidate.kind === "uncertain_alternative" ? "Alternative compatibility is not explicitly confirmed."
+          : "Matched the BOM constraints; compatibility is not explicitly confirmed.");
+  if (candidate.item.unit === line.unit) return base;
+  const conversion = bomCandidateQuantityConversion(line, candidate.item);
+  if (conversion === undefined) return `${base} No valid one-set conversion from ${candidate.item.unit} to ${line.unit} is recorded; inspect before use.`;
+  return `${base} Conversion: 1 set = ${conversion.requirement.quantity} each.`;
 }
 
 /**
@@ -181,7 +222,8 @@ function canSupplyBomCandidate(candidate: BomCandidate): boolean {
 
 function canReserveBomItem(line: BomLine, item: InventoryItem): boolean {
   const kind = bomCandidateKind(line, item);
-  return kind === "exact" || kind === "confirmed_alternative";
+  return (kind === "exact" || kind === "confirmed_alternative")
+    && bomCandidateHasResolvableQuantity(line, { item, kind });
 }
 
 type BomSpecificationDecision = z.infer<typeof bomSpecificationDecisionSchema>;
@@ -395,10 +437,14 @@ function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], active: 
   const candidatesByLine = new Map<BomLine, readonly BomCandidate[]>();
   for (const line of lines) {
     const candidates = active
-      .filter((item) => item.unit === line.unit && matchesBomConstraints(item, line.constraints))
+      // Explicit identities are retained across units so the gap can explain
+      // why an alternative is blocked. Descriptive/constraint-only matches
+      // remain same-unit to avoid inventing cross-unit candidates.
+      .filter((item) => matchesBomConstraints(item, line.constraints))
       .flatMap((item): readonly BomCandidate[] => {
         const kind = bomCandidateKind(line, item);
-        return kind === undefined ? [] : [{ item, kind }];
+        if (kind === undefined || (item.unit !== line.unit && line.alternatives.every((alternative) => alternative.itemId !== item.id))) return [];
+        return [{ item, kind }];
       });
     candidatesByLine.set(line, candidates);
   }
@@ -414,6 +460,7 @@ function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], active: 
   const remainingReserved = new Map(active.map((item) => [item.id, Math.min(Math.max(0, item.quantity), Math.max(0, reservedByItem.get(item.id) ?? 0))]));
   const allocations = new Map<BomLine, BomLineAllocation>();
   const candidateFacts = new Map<string, BomGapCandidate>();
+  const candidateInventoryAllocations = new Map<string, number>();
   const allocationLines = [...lines].sort(compareBomLinesForAllocation);
 
   const candidateCapacity = (line: BomLine, candidate: BomCandidate, mode: "confirmed" | "inspect"): number => {
@@ -427,8 +474,17 @@ function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], active: 
     // its declaring line. Exclude reservations owned by other lines while
     // retaining the historical inspect-first treatment of otherwise
     // unavailable, unreserved physical stock.
-    if (mode === "inspect") return Math.min(physical, Math.max(0, physical - (reserved - own)));
-    return Math.min(physical, free + own);
+    const inventoryCapacity = mode === "inspect"
+      ? Math.min(physical, Math.max(0, physical - (reserved - own)))
+      : Math.min(physical, free + own);
+    const factor = bomCandidateQuantityFactor(line, candidate.item);
+    if (factor === undefined) return 0;
+    // A converted package is indivisible for planning/reservation purposes.
+    // Fractional set rows therefore cannot create phantom individual parts.
+    const wholeInventoryCapacity = bomCandidateUsesWholeSets(line, candidate.item)
+      ? Math.floor(inventoryCapacity)
+      : inventoryCapacity;
+    return wholeInventoryCapacity * factor;
   };
 
   const recordCandidateFacts = (line: BomLine, candidates: readonly BomCandidate[], mode: "confirmed" | "inspect"): void => {
@@ -454,33 +510,48 @@ function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], active: 
       const itemId = candidate.item.id;
       const physical = remainingPhysical.get(itemId) ?? 0;
       const capacity = candidateCapacity(line, candidate, mode);
+      const factor = bomCandidateQuantityFactor(line, candidate.item);
+      if (factor === undefined) {
+        recordCandidateFacts(line, [candidate], mode);
+        continue;
+      }
       const free = mode === "confirmed" ? remainingFree.get(itemId) ?? 0 : 0;
       const own = mode === "confirmed"
         ? Math.min(remainingReserved.get(itemId) ?? 0, Math.max(0, ownedReservations.get(`${line.id}\u0000${itemId}`) ?? 0))
         : 0;
+      const inventoryCapacity = mode === "inspect"
+        ? Math.min(physical, Math.max(0, physical - (remainingReserved.get(itemId) ?? 0) + own))
+        : Math.min(physical, free + own);
+      const wholeInventoryCapacity = bomCandidateUsesWholeSets(line, candidate.item)
+        ? Math.floor(inventoryCapacity)
+        : inventoryCapacity;
       const factKey = `${line.id}\u0000${itemId}`;
       const prior = candidateFacts.get(factKey);
       const taken = Math.min(remaining, capacity);
+      const requestedInventory = bomCandidateUsesWholeSets(line, candidate.item) ? Math.ceil(taken / factor) : taken;
+      const takenInventory = Math.min(wholeInventoryCapacity, requestedInventory);
+      const covered = Math.min(remaining, takenInventory * factor);
       candidateFacts.set(factKey, {
         itemId,
         relationship: bomCandidateRelationship(candidate.kind),
         compatibility: bomCandidateCompatibility(line, candidate),
         availableQuantity: Math.max(prior?.availableQuantity ?? 0, capacity),
         suppliedQuantity: (prior?.suppliedQuantity ?? 0) + (mode === "confirmed" ? taken : 0),
-        inspectQuantity: (prior?.inspectQuantity ?? 0) + (mode === "inspect" ? taken : 0),
+        inspectQuantity: (prior?.inspectQuantity ?? 0) + (mode === "inspect" ? covered : 0),
         reason: bomCandidateReason(line, candidate),
       });
-      if (taken <= 0) continue;
+      if (takenInventory <= 0 || covered <= 0) continue;
       if (mode === "confirmed") {
         // Consume a line's own reservation first; unreserved stock is then
         // consumed from the shared free pool for later lines.
-        const fromReservation = Math.min(own, taken);
-        const fromFree = taken - fromReservation;
+        const fromReservation = Math.min(own, takenInventory);
+        const fromFree = takenInventory - fromReservation;
         remainingReserved.set(itemId, Math.max(0, (remainingReserved.get(itemId) ?? 0) - fromReservation));
         remainingFree.set(itemId, Math.max(0, free - fromFree));
       }
-      remainingPhysical.set(itemId, Math.max(0, physical - taken));
-      remaining -= taken;
+      remainingPhysical.set(itemId, Math.max(0, physical - takenInventory));
+      candidateInventoryAllocations.set(factKey, (candidateInventoryAllocations.get(factKey) ?? 0) + takenInventory);
+      remaining -= covered;
     }
     return requested - remaining;
   };
@@ -490,14 +561,14 @@ function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], active: 
   // approved-alternative line later in the stable ordering.
   for (const line of allocationLines) {
     const candidates = candidatesByLine.get(line) ?? [];
-    const confirmed = candidates.filter((candidate) => canSupplyBomCandidate(candidate) && CONFIRMED_EVIDENCE.has(candidate.item.evidence.state));
+    const confirmed = candidates.filter((candidate) => canSupplyBomCandidate(candidate) && CONFIRMED_EVIDENCE.has(candidate.item.evidence.state) && bomCandidateHasResolvableQuantity(line, candidate));
     recordCandidateFacts(line, confirmed, "confirmed");
     const suppliedQuantity = bomSpecification(line).sufficient ? allocate(line, confirmed, line.requiredQuantity, "confirmed") : 0;
     allocations.set(line, { suppliedQuantity, inspectQuantity: 0 });
   }
   for (const line of allocationLines) {
     const candidates = candidatesByLine.get(line) ?? [];
-    const uncertain = candidates.filter((candidate) => !canSupplyBomCandidate(candidate) || !CONFIRMED_EVIDENCE.has(candidate.item.evidence.state));
+    const uncertain = candidates.filter((candidate) => !canSupplyBomCandidate(candidate) || !CONFIRMED_EVIDENCE.has(candidate.item.evidence.state) || !bomCandidateHasResolvableQuantity(line, candidate));
     recordCandidateFacts(line, uncertain, "inspect");
     const suppliedQuantity = allocations.get(line)?.suppliedQuantity ?? 0;
     const inspectQuantity = allocate(line, uncertain, Math.max(line.requiredQuantity - suppliedQuantity, 0), "inspect");
@@ -506,13 +577,18 @@ function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], active: 
 
   const gaps: BomGap[] = lines.map((line) => {
     const candidates = candidatesByLine.get(line) ?? [];
-    const uncertain = candidates.filter((candidate) => !canSupplyBomCandidate(candidate) || !CONFIRMED_EVIDENCE.has(candidate.item.evidence.state));
+    const uncertain = candidates.filter((candidate) => !canSupplyBomCandidate(candidate) || !CONFIRMED_EVIDENCE.has(candidate.item.evidence.state) || !bomCandidateHasResolvableQuantity(line, candidate));
     const suppliedQuantity = allocations.get(line)?.suppliedQuantity ?? 0;
     const inspectQuantity = allocations.get(line)?.inspectQuantity ?? 0;
     const missingQuantity = Math.max(line.requiredQuantity - suppliedQuantity - inspectQuantity, 0);
     const specification = bomSpecification(line);
+    // Preserve Source for an identified same-unit item with no stock. A
+    // cross-unit explicit alternative is different: even with no conversion
+    // capacity it remains visible as Check so the maker can resolve it.
+    const inspectFirstCandidate = inspectQuantity > 0 || uncertain.some((candidate) => candidate.item.unit !== line.unit);
     let status: BomGap["status"];
     if (line.optional && suppliedQuantity === 0 && inspectQuantity === 0) status = "optional";
+    else if (inspectFirstCandidate && inspectQuantity === 0) status = "inspect_first";
     else if (!specification.sufficient && inspectQuantity === 0) status = "specify_first";
     else if (missingQuantity === 0 && inspectQuantity === 0) status = "supplied";
     else if (suppliedQuantity > 0 && missingQuantity > 0) status = "partially_supplied";
@@ -522,12 +598,22 @@ function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], active: 
     const candidateResults = candidates.map((candidate) => {
       const fact = candidateFacts.get(`${line.id}\u0000${candidate.item.id}`);
       if (fact === undefined) throw new ApplicationError("integrity_error", "BOM candidate facts were not recorded");
-      return fact;
+      const conversion = bomCandidateQuantityConversion(line, candidate.item);
+      if (conversion === undefined || candidate.item.unit === line.unit) return fact;
+      const allocatedInventory = candidateInventoryAllocations.get(`${line.id}\u0000${candidate.item.id}`) ?? 0;
+      const availableSets = Math.floor(fact.availableQuantity / conversion.requirement.quantity);
+      const allocatedCoverage = allocatedInventory * conversion.requirement.quantity;
+      const overage = allocatedCoverage > fact.suppliedQuantity ? allocatedCoverage - fact.suppliedQuantity : 0;
+      return {
+        ...fact,
+        reason: `${fact.reason} Capacity: ${availableSets} set(s) = ${fact.availableQuantity} each.${allocatedInventory > 0 ? ` Allocation: ${allocatedInventory} set(s) = ${allocatedCoverage} each${overage > 0 ? `, ${overage} each overage` : ""}.` : ""}`,
+      };
     });
     const reasons = [
       ...(suppliedQuantity > 0 ? ["Physically confirmed stock covers part or all of this requirement."] : []),
       ...(uncertain.some((candidate) => !canSupplyBomCandidate(candidate)) ? ["Some matching stock needs an explicit compatibility decision before use."] : []),
       ...(uncertain.some((candidate) => canSupplyBomCandidate(candidate) && !CONFIRMED_EVIDENCE.has(candidate.item.evidence.state)) ? ["Some matching stock is recorded but needs a physical count before use."] : []),
+      ...(uncertain.some((candidate) => !bomCandidateHasResolvableQuantity(line, candidate)) ? ["A cross-unit alternative has no valid evidence-backed conversion; inspect before use."] : []),
       ...(decision === "decide" ? [`Specify ${specification.missingDecisions.join(" and ")} before sourcing this requirement.`] : []),
       ...(decision !== "decide" && missingQuantity > 0 ? ["No confirmed stock covers the remaining quantity."] : []),
       ...(decision !== "decide" && candidates.length === 0 ? ["No matching inventory item was found for this line."] : []),
@@ -1564,7 +1650,9 @@ export class ApplicationService {
     const now = nowIso();
     const setupLines = setupBomLines(proposal, now);
     const plannedByItem = new Map<string, number>();
-    const plannedByLine = new Map<string, number>();
+    const plannedByLineCoverage = new Map<string, number>();
+    const reservationUnitsByLine = new Map<string, InventoryItem["unit"]>();
+    const mixedReservationLines = new Set<string>();
     const fieldErrors: ProjectSetupFieldError[] = [];
     const lineByRef = new Map(proposal.bomLines.map((line) => [line.localRef, line]));
     const setupLineByRef = new Map(proposal.bomLines.map((line, index) => [line.localRef, setupLines[index]! ]));
@@ -1578,19 +1666,39 @@ export class ApplicationService {
       if (item === undefined) fieldErrors.push({ path: `reservations.${index}.itemId`, code: "inventory_not_found", message: "Reservation references an unknown inventory item" });
       if (line !== undefined && setupLine !== undefined && item !== undefined) {
         const approved = canReserveBomItem(setupLine, item);
+        const conversion = bomCandidateQuantityConversion(setupLine, item);
+        const factor = conversion?.requirement.quantity ?? 1;
         if (!approved) fieldErrors.push({ path: `reservations.${index}.itemId`, code: "invalid_reservation_reference", message: "Reservation item must be the exact BOM item or a confirmed alternative" });
         if (!bomSpecification(setupLine).sufficient) fieldErrors.push({ path: `reservations.${index}.bomLineLocalRef`, code: "unresolved_specification", message: "Resolve the BOM specification decisions before reserving stock" });
-        if (item.unit !== line.unit || (reservation.unit !== undefined && reservation.unit !== item.unit)) fieldErrors.push({ path: `reservations.${index}.unit`, code: "unit_mismatch", message: "Reservation unit must match the BOM and inventory item" });
+        if (item.unit !== line.unit && conversion === undefined) {
+          // Keep the legacy semantic diagnostic alongside the more precise
+          // conversion error. Consumers use unit_mismatch to group all
+          // cross-unit reservation failures, while invalid_quantity_conversion
+          // explains why this particular pair cannot be reserved safely.
+          fieldErrors.push({ path: `reservations.${index}.unit`, code: "unit_mismatch", message: "Reservation unit must match the inventory item" });
+          fieldErrors.push({ path: `reservations.${index}.unit`, code: "invalid_quantity_conversion", message: `Reservation requires a valid one-set conversion from ${item.unit} to ${line.unit}` });
+        }
+        if (reservation.unit !== undefined && reservation.unit !== item.unit) fieldErrors.push({ path: `reservations.${index}.unit`, code: "unit_mismatch", message: "Reservation unit must match the inventory item" });
+        if (conversion !== undefined && !Number.isSafeInteger(reservation.quantity)) fieldErrors.push({ path: `reservations.${index}.quantity`, code: "unit_mismatch", message: "Converted reservations must use a whole number of sets" });
         if (!matchesBomConstraints(item, line.constraints)) fieldErrors.push({ path: `reservations.${index}.itemId`, code: "constraint_mismatch", message: "Inventory item does not satisfy the BOM constraints" });
         if (!CONFIRMED_EVIDENCE.has(item.evidence.state)) fieldErrors.push({ path: `reservations.${index}.itemId`, code: "insufficient_evidence", message: "Only physically confirmed stock can be reserved" });
-        if (reservation.quantity > line.requiredQuantity) fieldErrors.push({ path: `reservations.${index}.quantity`, code: "requirement_exceeded", message: "Reservation cannot exceed the BOM requirement" });
+        const priorUnit = reservationUnitsByLine.get(line.localRef);
+        if (priorUnit !== undefined && priorUnit !== item.unit) {
+          mixedReservationLines.add(line.localRef);
+          fieldErrors.push({ path: `reservations.${index}.unit`, code: "unit_mismatch", message: `BOM line '${line.localRef}' cannot mix active reservation units` });
+        } else if (priorUnit === undefined) {
+          reservationUnitsByLine.set(line.localRef, item.unit);
+        }
+        // Do not sum quantities for a line after its active reservation units
+        // diverge. The preview remains reviewable, but cannot imply a valid
+        // scalar total or commit a mixed-unit reservation set.
+        if (mixedReservationLines.has(line.localRef)) continue;
+        const priorCoverage = plannedByLineCoverage.get(line.localRef) ?? 0;
+        const remainingCoverage = Math.max(0, line.requiredQuantity - priorCoverage);
+        if (reservation.quantity > Math.ceil(remainingCoverage / factor)) fieldErrors.push({ path: `reservations.${index}.quantity`, code: "requirement_exceeded", message: "Reservation cannot exceed the BOM requirement after whole-unit conversion" });
         plannedByItem.set(item.id, (plannedByItem.get(item.id) ?? 0) + reservation.quantity);
-        plannedByLine.set(line.localRef, (plannedByLine.get(line.localRef) ?? 0) + reservation.quantity);
+        plannedByLineCoverage.set(line.localRef, priorCoverage + reservation.quantity * factor);
       }
-    }
-    for (const line of proposal.bomLines) {
-      const planned = plannedByLine.get(line.localRef) ?? 0;
-      if (planned > line.requiredQuantity) fieldErrors.push({ path: "reservations", code: "requirement_exceeded", message: `Planned reservations exceed requirement for '${line.localRef}'` });
     }
     for (const item of inventory) {
       const planned = plannedByItem.get(item.id) ?? 0;
@@ -1659,6 +1767,10 @@ export class ApplicationService {
       if (preview.expiresAt <= nowIso()) throw conflict("Project setup preview has expired", { reason: "preview_expired", retryable: false, commitState: "not_committed", recoveryAction: "preview_project_setup" });
       if (preview.version !== parsed.expectedPreviewVersion || preview.contentSha256 !== parsed.contentSha256) throw conflict("Project setup preview is stale", { reason: "stale_preview", retryable: false, commitState: "not_committed", recoveryAction: "preview_project_setup" });
       if (preview.plannedReservations.length > 0 && parsed.confirmReservations !== true) throw new ApplicationError("validation", "confirmReservations must be true when reservations are planned");
+      // Semantic preview errors have always been rejected as validation
+      // failures. Preserve that precedence before reading the live inventory;
+      // stale-basis checks apply only to otherwise valid previews.
+      if (preview.fieldErrors.length > 0) throw new ApplicationError("validation", "Project setup preview contains semantic field errors");
       // Candidate identity is part of the preview basis as well as the
       // quantity/evidence rows below. A new inventory row that now matches a
       // constraint has no prior version to compare, so recompute candidate
@@ -1666,6 +1778,33 @@ export class ApplicationService {
       const currentInventory = await listAllInventory(this.ports.inventory);
       const setupLines = setupBomLines(preview.proposal, preview.createdAt);
       const setupReservations = setupReservationRecords(preview.proposal, setupLines, preview.createdAt);
+      const currentInventoryById = new Map(currentInventory.map((item) => [item.id, item]));
+      const changedReservationItems = preview.affectedInventory.flatMap((basis) => {
+        const item = currentInventoryById.get(basis.itemId);
+        if (item === undefined) return [basis.itemId];
+        const allocated = item.allocatedQuantity ?? Math.max(0, item.quantity - item.availableQuantity);
+        const evidenceChanged = JSON.stringify(canonicalize(item.evidence)) !== JSON.stringify(canonicalize(basis.evidenceBasis));
+        return item.unit !== basis.unit || item.version !== basis.before.version || item.quantity !== basis.before.quantity
+          || item.availableQuantity !== basis.before.availableQuantity || allocated !== basis.before.allocatedQuantity || evidenceChanged
+          ? [basis.itemId]
+          : [];
+      });
+      if (changedReservationItems.length > 0) {
+        throw conflict("Project setup inventory reservation basis is stale", {
+          reason: "stale_basis",
+          staleItems: [...new Set(changedReservationItems)].sort((left, right) => left.localeCompare(right)),
+          recoveryAction: "preview_project_setup",
+          retryable: false,
+          commitState: "not_committed",
+        });
+      }
+      for (const reservation of preview.proposal.reservations) {
+        const line = setupLines.find((candidate) => candidate.id === preview.proposal.bomLines.find((entry) => entry.localRef === reservation.bomLineLocalRef)?.id);
+        const item = currentInventoryById.get(reservation.itemId);
+        if (line === undefined || item === undefined || !canReserveBomItem(line, item) || !CONFIRMED_EVIDENCE.has(item.evidence.state)) {
+          throw conflict("Project setup reservation basis is stale", { reason: "stale_basis", staleItems: [reservation.itemId], recoveryAction: "preview_project_setup", retryable: false, commitState: "not_committed" });
+        }
+      }
       const currentGaps = evaluateBomGapsFromData(preview.gaps.revisionId, setupLines, setupProjectedInventory(currentInventory, setupReservations), setupReservations);
       const previewGaps = new Map(preview.gaps.lines.map((gap) => [gap.lineId, gap]));
       const changedCandidates = currentGaps.lines.filter((gap) => {
@@ -1827,8 +1966,12 @@ export class ApplicationService {
       if (!canReserveBomItem(line, item)) {
         throw new ApplicationError("validation", "Reservation item must be the exact BOM item or an approved alternative");
       }
-      if (item.unit !== line.unit) {
-        throw new ApplicationError("validation", `Unit mismatch: BOM uses ${line.unit}, item uses ${item.unit}`);
+      const conversion = bomCandidateQuantityConversion(line, item);
+      if (item.unit !== line.unit && conversion === undefined) {
+        throw new ApplicationError("validation", `Reservation requires a valid one-set conversion from ${item.unit} to ${line.unit}`);
+      }
+      if (conversion !== undefined && !Number.isSafeInteger(parsed.quantity)) {
+        throw new ApplicationError("validation", "Converted reservations must use a whole number of sets");
       }
       if (!matchesBomConstraints(item, line.constraints)) {
         throw new ApplicationError("validation", "Inventory item does not satisfy the BOM constraints");
@@ -1836,14 +1979,40 @@ export class ApplicationService {
       if (!CONFIRMED_EVIDENCE.has(item.evidence.state)) {
         throw new ApplicationError("conflict", "Only physically confirmed stock can be reserved");
       }
-      const reservedForLine = (await this.ports.projects.listReservations(parentId))
-        .filter((reservation) => reservation.status === "active" && reservation.lineId === line.id)
-        .reduce((total, reservation) => total + reservation.quantity, 0);
-      if (reservedForLine + parsed.quantity > line.requiredQuantity) {
-        throw conflict(`Cannot reserve beyond the BOM requirement of ${line.requiredQuantity} ${line.unit}`);
+      const activeReservations = (await this.ports.projects.listReservations(parentId))
+        .filter((reservation) => reservation.status === "active" && reservation.lineId === line.id);
+      const activeUnits = new Set<InventoryItem["unit"]>([item.unit]);
+      let reservedCoverage = 0;
+      for (const reservation of activeReservations) {
+        const reservedItem = reservation.itemId === item.id ? item : await this.ports.inventory.getItem(reservation.itemId);
+        if (reservedItem === null) throw new ApplicationError("integrity_error", `Reservation references missing inventory item '${reservation.itemId}'`);
+        activeUnits.add(reservedItem.unit);
+        if (activeUnits.size > 1) {
+          throw new ApplicationError("validation", `BOM line '${line.id}' cannot mix active reservation units`);
+        }
+        if (reservedItem.unit === line.unit) {
+          reservedCoverage += reservation.quantity;
+          continue;
+        }
+        const reservedConversion = bomCandidateQuantityConversion(line, reservedItem);
+        if (reservedConversion === undefined || !Number.isSafeInteger(reservation.quantity)) {
+          throw new ApplicationError("integrity_error", "Existing reservation has no valid quantity conversion for this BOM line");
+        }
+        reservedCoverage += reservation.quantity * reservedConversion.requirement.quantity;
+      }
+      if (conversion === undefined) {
+        if (reservedCoverage + parsed.quantity > line.requiredQuantity) {
+          throw conflict(`Cannot reserve beyond the BOM requirement of ${line.requiredQuantity} ${line.unit}`);
+        }
+      } else {
+        const remainingCoverage = Math.max(0, line.requiredQuantity - reservedCoverage);
+        const maximumSets = Math.ceil(remainingCoverage / conversion.requirement.quantity);
+        if (parsed.quantity > maximumSets) {
+          throw conflict(`Cannot reserve beyond the BOM requirement of ${line.requiredQuantity} ${line.unit}; ${parsed.quantity} set(s) would exceed whole-set coverage`);
+        }
       }
       if (item.availableQuantity < parsed.quantity) {
-        throw conflict(`Not enough confirmed stock to reserve ${parsed.quantity} ${line.unit}`);
+        throw conflict(`Not enough confirmed stock to reserve ${parsed.quantity} ${item.unit}`);
       }
       const reservation = await this.ports.projects.createReservation(parentId, parsed, ctx);
       return { value: reservation, entityId: reservation.id, version: reservation.version };

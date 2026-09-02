@@ -24,6 +24,43 @@ function integer(row: SqliteRow, key: string): number {
   return value;
 }
 
+function record(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Readonly<Record<string, unknown>>
+    : undefined;
+}
+
+/**
+ * Preview lines gained an explicit unit after older reconciliation documents
+ * had already been persisted. Reconstruct only that missing scalar from the
+ * document's own immutable basis; ambiguous reservation units remain an
+ * integrity failure rather than being guessed.
+ */
+function normalizeLegacyPreviewLineUnits(value: unknown): unknown {
+  const root = record(value);
+  const preview = record(root?.preview);
+  const basis = record(root?.basis);
+  if (root === undefined || preview === undefined || basis === undefined || !Array.isArray(preview.lines)) return value;
+
+  const reservations = Array.isArray(basis.reservations)
+    ? basis.reservations.map(record).filter((candidate): candidate is Readonly<Record<string, unknown>> => candidate !== undefined)
+    : [];
+  const bomLines = Array.isArray(basis.bomLines)
+    ? basis.bomLines.map(record).filter((candidate): candidate is Readonly<Record<string, unknown>> => candidate !== undefined)
+    : [];
+  const lines = preview.lines.map((candidate) => {
+    const line = record(candidate);
+    if (line === undefined || Object.hasOwn(line, "unit") || typeof line.bomLineId !== "string") return candidate;
+    const units = [...new Set(reservations
+      .filter((reservation) => reservation.lineId === line.bomLineId && reservation.status === "active")
+      .map((reservation) => reservation.unit))];
+    if (units.length > 1) throw new Error(`reconciliation preview line '${line.bomLineId}' has mixed active reservation units`);
+    const unit = units[0] ?? bomLines.find((bomLine) => bomLine.bomLineId === line.bomLineId)?.unit;
+    return unit === undefined ? candidate : { ...line, unit };
+  });
+  return { ...root, preview: { ...preview, lines } };
+}
+
 function parsePayload<T>(row: SqliteRow, schema: { parse: (value: unknown) => T }): T {
   const raw = row.payload_json;
   if (typeof raw !== "string") throw new Error("reconciliation payload is not text");
@@ -33,7 +70,7 @@ function parsePayload<T>(row: SqliteRow, schema: { parse: (value: unknown) => T 
   } catch {
     throw new Error("reconciliation payload is malformed JSON");
   }
-  return schema.parse(value);
+  return schema.parse(normalizeLegacyPreviewLineUnits(value));
 }
 
 function draftFromRow(row: SqliteRow): ReconciliationDraft {

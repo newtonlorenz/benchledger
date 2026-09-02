@@ -31,6 +31,8 @@ import type {
   CatalogProduct as ApiCatalogProduct,
   InventoryProductProfile as ApiInventoryProductProfile,
   ProjectSetupProposal as ApiProjectSetupProposal,
+  ProjectSetupPreview as ApiProjectSetupPreview,
+  ProjectSetupCommitResult as ApiProjectSetupCommitResult,
   CommitProjectSetup as ApiCommitProjectSetup,
 } from "@benchledger/api-contract";
 import { canonicalProjectLifecycle } from "@benchledger/api-contract";
@@ -40,6 +42,7 @@ import { McpAdapterError } from "./errors.js";
 import { McpAdapter } from "./adapter.js";
 import { McpProtocol } from "./protocol.js";
 import { BOM_CONSTRAINT_KEYS } from "./types.js";
+import { fromApiQuantityConversion, toApiQuantityConversion } from "./quantity-conversion.js";
 import type {
   Artifact,
   ArtifactDownloadMetadata,
@@ -195,12 +198,18 @@ export function createApplicationBackend(service: ApplicationService, options: P
     try {
       const details = await service.getReservationDetails(reservationId);
       if (details === null) return null;
+      const item = typeof (service as Partial<ApplicationService>).getInventoryItem === "function"
+        ? await service.getInventoryItem(details.reservation.itemId)
+        : undefined;
       return {
         projectId: details.projectId,
         projectRevisionId: details.projectRevisionId,
         bomLineId: details.reservation.lineId,
         itemId: details.reservation.itemId,
-        unit: fromApiUnit(details.bomLine.unit),
+        // Reservations are stored in inventory units. The BOM line is the
+        // requirement-side unit and is therefore not authoritative when a
+        // package conversion supplied the line.
+        unit: fromApiUnit(item?.unit ?? details.bomLine.unit),
       };
     } catch (error) {
       if (error instanceof ApplicationError && error.code === "not_found") return null;
@@ -451,10 +460,13 @@ export function createApplicationBackend(service: ApplicationService, options: P
           replayed: mutation.replayed,
         } satisfies ProjectWithInitialRevisionResult;
       },
-      previewSetup: async (input: ProjectSetupProposal, context): Promise<ProjectSetupPreview> => service.previewProjectSetup(input as ApiProjectSetupProposal, appContext(context)),
+      previewSetup: async (input: ProjectSetupProposal, context): Promise<ProjectSetupPreview> => {
+        const preview = await service.previewProjectSetup(toApiProjectSetupProposal(input), appContext(context));
+        return toMcpProjectSetupPreview(preview);
+      },
       commitSetup: async (input: CommitProjectSetupInput, context): Promise<ProjectSetupCommitResult & { auditId?: string; correlationId?: string; replayed?: boolean }> => {
         const mutation = await service.commitProjectSetup(input as ApiCommitProjectSetup, appContext(context));
-        return { ...mutation.data, auditId: mutation.audit.id, correlationId: mutation.correlationId, replayed: mutation.replayed };
+        return { ...toMcpProjectSetupCommitResult(mutation.data), auditId: mutation.audit.id, correlationId: mutation.correlationId, replayed: mutation.replayed };
       },
       update: async (input, context) => {
         const { projectId, expectedVersion, ...changes } = input;
@@ -539,12 +551,15 @@ export function createApplicationBackend(service: ApplicationService, options: P
       },
       getReservation: async (input) => {
         const details = await service.getReservationDetails(input.reservationId);
+        const item = typeof (service as Partial<ApplicationService>).getInventoryItem === "function"
+          ? await service.getInventoryItem(details.reservation.itemId)
+          : undefined;
         const identity: ReservationDetails = {
           projectId: details.projectId,
           projectRevisionId: details.projectRevisionId,
           bomLineId: details.reservation.lineId,
           itemId: details.reservation.itemId,
-          unit: fromApiUnit(details.bomLine.unit),
+          unit: fromApiUnit(item?.unit ?? details.bomLine.unit),
         };
         return mapReservationRecord(details.reservation, identity);
       },
@@ -1174,7 +1189,68 @@ function toApiWorkItemRevisionCreate(input: WorkItemRevisionCreateInput): Create
 }
 
 function toMcpBomAlternative(alternative: ApiBomLine["alternatives"][number]): BomAlternative {
-  return { itemId: alternative.itemId, compatible: alternative.compatible, ...(alternative.reason === undefined ? {} : { reason: alternative.reason }) };
+  return {
+    itemId: alternative.itemId,
+    compatible: alternative.compatible,
+    ...(alternative.reason === undefined ? {} : { reason: alternative.reason }),
+    ...(alternative.quantityConversion === undefined ? {} : { quantityConversion: fromApiQuantityConversion(alternative.quantityConversion, "BOM alternative quantityConversion") }),
+  };
+}
+
+function toApiProjectSetupProposal(input: ProjectSetupProposal): ApiProjectSetupProposal {
+  return {
+    ...input,
+    bomLines: input.bomLines.map((line) => ({
+      ...line,
+      alternatives: line.alternatives.map((alternative) => ({
+        itemId: alternative.itemId,
+        compatible: alternative.compatible,
+        ...(alternative.reason === undefined ? {} : { reason: alternative.reason }),
+        ...(alternative.quantityConversion === undefined ? {} : { quantityConversion: toApiQuantityConversion(alternative.quantityConversion, `alternative '${alternative.itemId}' quantityConversion`) }),
+      })),
+    })),
+  } as ApiProjectSetupProposal;
+}
+
+function toMcpProjectSetupProposal(value: ApiProjectSetupProposal): ProjectSetupProposal {
+  return {
+    ...value,
+    bomLines: value.bomLines.map((line) => ({
+      ...line,
+      alternatives: line.alternatives.map(toMcpBomAlternative),
+    })),
+  } as ProjectSetupProposal;
+}
+
+function toMcpProjectSetupPreview(value: ApiProjectSetupPreview): ProjectSetupPreview {
+  return {
+    ...value,
+    proposal: toMcpProjectSetupProposal(value.proposal),
+    gaps: {
+      ...value.gaps,
+      lines: value.gaps.lines.map((line) => ({
+        ...line,
+        alternatives: line.alternatives.map(toMcpBomAlternative),
+      })),
+    },
+  } as ProjectSetupPreview;
+}
+
+function toMcpProjectSetupCommitResult(value: ApiProjectSetupCommitResult): ProjectSetupCommitResult {
+  return {
+    ...value,
+    bomLines: value.bomLines.map((line) => ({
+      ...line,
+      alternatives: line.alternatives.map(toMcpBomAlternative),
+    })),
+    gaps: {
+      ...value.gaps,
+      lines: value.gaps.lines.map((line) => ({
+        ...line,
+        alternatives: line.alternatives.map(toMcpBomAlternative),
+      })),
+    },
+  } as ProjectSetupCommitResult;
 }
 
 function toMcpBomConstraints(value: ApiBomLine["constraints"]): BomConstraints {
@@ -1219,7 +1295,12 @@ function toApiBomAlternatives(input: { alternatives?: readonly BomAlternative[];
     throw new McpAdapterError("INVALID_ARGUMENT", "alternatives and compatibleItemIds cannot both be provided; use structured alternatives.");
   }
   if (input.alternatives !== undefined) {
-    return input.alternatives.map((alternative) => ({ itemId: alternative.itemId, compatible: alternative.compatible, ...(alternative.reason === undefined ? {} : { reason: alternative.reason }) }));
+    return input.alternatives.map((alternative) => ({
+      itemId: alternative.itemId,
+      compatible: alternative.compatible,
+      ...(alternative.reason === undefined ? {} : { reason: alternative.reason }),
+      ...(alternative.quantityConversion === undefined ? {} : { quantityConversion: toApiQuantityConversion(alternative.quantityConversion, `alternative '${alternative.itemId}' quantityConversion`) }),
+    }));
   }
   return (input.compatibleItemIds ?? []).map((itemId) => ({ itemId, compatible: "conditional" as const }));
 }
@@ -1232,7 +1313,11 @@ function toMcpBomMatch(line: BomGap, itemId: string): BomMatch {
   const availableQuantity = { value: candidate.availableQuantity, unit: fromApiUnit(line.unit) };
   const suppliedQuantity = { value: candidate.suppliedQuantity, unit: fromApiUnit(line.unit) };
   const inspectQuantity = { value: candidate.inspectQuantity, unit: fromApiUnit(line.unit) };
-  const availability: Availability = candidate.compatibility === "confirmed"
+  const conversion = line.alternatives.find((alternative) => alternative.itemId === itemId)?.quantityConversion;
+  const unresolvedUnitMismatch = /No valid one-set conversion/iu.test(candidate.reason);
+  const availability: Availability = unresolvedUnitMismatch
+    ? "inspect_first"
+    : candidate.compatibility === "confirmed"
     ? candidate.availableQuantity > 0 ? "confirmed" : "depleted"
     : candidate.availableQuantity > 0 || candidate.inspectQuantity > 0 ? "inspect_first" : "depleted";
   return {
@@ -1244,6 +1329,7 @@ function toMcpBomMatch(line: BomGap, itemId: string): BomMatch {
     availability,
     compatible: candidate.compatibility,
     reason: candidate.reason,
+    ...(conversion === undefined ? {} : { quantityConversion: fromApiQuantityConversion(conversion, `BOM candidate '${itemId}' quantityConversion`) }),
   };
 }
 

@@ -1293,6 +1293,256 @@ describe("ApplicationService", () => {
     expect(result.lines[0]).toMatchObject({ status: "supplied", suppliedQuantity: 1, missingQuantity: 0 });
   });
 
+  it("allocates a confirmed whole-set alternative into each-unit gap quantities", async () => {
+    const setItem = item({ id: "led-set", name: "LED set", kind: "electronic", quantity: 2, availableQuantity: 2, unit: "set" });
+    const conversion = {
+      inventory: { quantity: 1, unit: "set" as const },
+      requirement: { quantity: 10, unit: "each" as const },
+      evidence: { basis: "package_label" as const, observedAt: "2026-09-02T10:00:00.000Z", source: "set label" },
+    } as const;
+    const ports = fakePorts(setItem);
+    ports.inventory.listItems = async () => ({ data: [setItem], limit: 200 });
+    ports.inventory.getItem = async (id) => id === setItem.id ? setItem : null;
+    const service = new ApplicationService(ports);
+    await service.createBomLine("rev-1", {
+      name: "LEDs",
+      itemId: "missing-led",
+      requiredQuantity: 15,
+      unit: "each",
+      optional: false,
+      alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: conversion }],
+      constraints: {},
+    }, context);
+
+    const result = await service.evaluateBomGaps("rev-1");
+
+    expect(result.lines[0]).toMatchObject({ status: "supplied", decision: "ready", requiredQuantity: 15, suppliedQuantity: 15, inspectQuantity: 0, missingQuantity: 0, unit: "each", matchedItemIds: [setItem.id] });
+    expect(result.lines[0]?.candidates).toEqual([expect.objectContaining({
+      itemId: setItem.id,
+      relationship: "confirmed_alternative",
+      compatibility: "confirmed",
+      availableQuantity: 20,
+      suppliedQuantity: 15,
+      inspectQuantity: 0,
+      reason: expect.stringMatching(/1 set = 10 each|5 each overage/),
+    })]);
+  });
+
+  it("keeps an explicit cross-unit alternative inspect-first with a full each-unit gap when conversion is absent", async () => {
+    const setItem = item({ id: "led-set", name: "LED set", kind: "electronic", quantity: 2, availableQuantity: 2, unit: "set" });
+    const ports = fakePorts(setItem);
+    ports.inventory.listItems = async () => ({ data: [setItem], limit: 200 });
+    ports.inventory.getItem = async (id) => id === setItem.id ? setItem : null;
+    const service = new ApplicationService(ports);
+    await service.createBomLine("rev-1", {
+      name: "LEDs",
+      itemId: "missing-led",
+      requiredQuantity: 15,
+      unit: "each",
+      optional: false,
+      alternatives: [{ itemId: setItem.id, compatible: "confirmed" }],
+      constraints: {},
+    }, context);
+
+    const result = await service.evaluateBomGaps("rev-1");
+
+    expect(result.lines[0]).toMatchObject({ status: "inspect_first", decision: "check", requiredQuantity: 15, suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 15, unit: "each", matchedItemIds: [setItem.id] });
+    expect(result.lines[0]?.candidates).toEqual([expect.objectContaining({ itemId: setItem.id, availableQuantity: 0, suppliedQuantity: 0, inspectQuantity: 0, reason: expect.stringMatching(/no valid.*conversion/i) })]);
+    await expect(service.createReservation("rev-1", { lineId: "bom-1", itemId: setItem.id, quantity: 1 }, context)).rejects.toMatchObject({ code: "validation" });
+  });
+
+  it.each(["conditional", "unknown"] as const)("keeps a %s converted alternative in Check even when its set stock is physically confirmed", async (compatibility) => {
+    const setItem = item({ id: `led-set-${compatibility}`, name: "LED set", kind: "electronic", quantity: 2, availableQuantity: 2, unit: "set" });
+    const conversion = {
+      inventory: { quantity: 1, unit: "set" as const },
+      requirement: { quantity: 10, unit: "each" as const },
+      evidence: { basis: "package_label" as const, observedAt: "2026-09-02T10:00:00.000Z" },
+    } as const;
+    const ports = fakePorts(setItem);
+    ports.inventory.listItems = async () => ({ data: [setItem], limit: 200 });
+    ports.inventory.getItem = async (id) => id === setItem.id ? setItem : null;
+    const service = new ApplicationService(ports);
+    await service.createBomLine("rev-1", {
+      name: "LEDs",
+      itemId: "missing-led",
+      requiredQuantity: 15,
+      unit: "each",
+      optional: false,
+      alternatives: [{ itemId: setItem.id, compatible: compatibility, quantityConversion: conversion }],
+      constraints: {},
+    }, context);
+
+    const result = await service.evaluateBomGaps("rev-1");
+
+    expect(result.lines[0]).toMatchObject({ status: "inspect_first", decision: "check", suppliedQuantity: 0, inspectQuantity: 15, missingQuantity: 0 });
+    expect(result.lines[0]?.candidates[0]).toMatchObject({ availableQuantity: 20, suppliedQuantity: 0, inspectQuantity: 15, compatibility });
+    await expect(service.createReservation("rev-1", { lineId: "bom-1", itemId: setItem.id, quantity: 1 }, context)).rejects.toMatchObject({ code: "validation" });
+  });
+
+  it("reserves whole sets for a converted each-unit requirement and permits deterministic set overage", async () => {
+    const setItem = item({ id: "led-set", name: "LED set", kind: "electronic", quantity: 3, availableQuantity: 3, unit: "set" });
+    const conversion = {
+      inventory: { quantity: 1, unit: "set" as const },
+      requirement: { quantity: 10, unit: "each" as const },
+      evidence: { basis: "package_label" as const, observedAt: "2026-09-02T10:00:00.000Z" },
+    } as const;
+    const ports = fakePorts(setItem);
+    ports.inventory.listItems = async () => ({ data: [setItem], limit: 200 });
+    ports.inventory.getItem = async (id) => id === setItem.id ? setItem : null;
+    const service = new ApplicationService(ports);
+    await service.createBomLine("rev-1", {
+      name: "LEDs",
+      itemId: "missing-led",
+      requiredQuantity: 15,
+      unit: "each",
+      optional: false,
+      alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: conversion }],
+      constraints: {},
+    }, context);
+
+    const reservation = await service.createReservation("rev-1", { lineId: "bom-1", itemId: setItem.id, quantity: 2 }, context);
+
+    expect(reservation.data).toMatchObject({ itemId: setItem.id, quantity: 2, status: "active" });
+    await expect(service.createReservation("rev-1", { lineId: "bom-1", itemId: setItem.id, quantity: 1 }, context)).rejects.toMatchObject({ code: "conflict" });
+  });
+
+  it("rejects fractional quantities for converted set reservations", async () => {
+    const setItem = item({ id: "fractional-led-set", name: "LED set", kind: "electronic", quantity: 2, availableQuantity: 2, unit: "set" });
+    const ports = fakePorts(setItem);
+    ports.inventory.listItems = async () => ({ data: [setItem], limit: 200 });
+    ports.inventory.getItem = async (id) => id === setItem.id ? setItem : null;
+    const service = new ApplicationService(ports);
+    await service.createBomLine("rev-1", {
+      name: "LEDs",
+      itemId: "missing-led",
+      requiredQuantity: 15,
+      unit: "each",
+      optional: false,
+      alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: {
+        inventory: { quantity: 1, unit: "set" },
+        requirement: { quantity: 10, unit: "each" },
+        evidence: { basis: "package_label", observedAt: "2026-09-02T10:00:00.000Z" }
+      } }],
+      constraints: {},
+    }, context);
+
+    await expect(service.createReservation("rev-1", { lineId: "bom-1", itemId: setItem.id, quantity: 1.5 }, context))
+      .rejects.toMatchObject({ code: "validation", message: expect.stringMatching(/whole number of sets/i) });
+  });
+
+  it("reports converted whole-set reservations that exceed each-unit requirement", async () => {
+    const setItem = item({ id: "overage-led-set", name: "LED set", kind: "electronic", quantity: 3, availableQuantity: 3, unit: "set" });
+    const ports = fakePorts(setItem);
+    ports.projects.getProjectRevision = async () => null;
+    const service = new ApplicationService(ports);
+    const preview = await service.previewProjectSetup({
+      project: { id: "setup-overage-project", name: "Converted setup", status: "planned" },
+      revision: { id: "setup-overage-revision", name: "Initial", status: "concept" },
+      workItems: [],
+      bomLines: [{ localRef: "led-line", id: "setup-overage-line", name: "LEDs", itemId: "missing-led", requiredQuantity: 15, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: {
+        inventory: { quantity: 1, unit: "set" },
+        requirement: { quantity: 10, unit: "each" },
+        evidence: { basis: "package_label", observedAt: "2026-09-02T10:00:00.000Z" }
+      } }] }],
+      reservations: [{ localRef: "led-reservation", bomLineLocalRef: "led-line", id: "setup-overage-reservation", itemId: setItem.id, quantity: 3, unit: "set" }],
+    }, context);
+
+    expect(preview.fieldErrors).toEqual(expect.arrayContaining([expect.objectContaining({ code: "requirement_exceeded" })]));
+    expect(preview.plannedReservations[0]).toMatchObject({ quantity: 3, unit: "set", itemId: setItem.id });
+    expect(preview.gaps.lines[0]).toMatchObject({ requiredQuantity: 15, suppliedQuantity: 15, unit: "each" });
+  });
+
+  it("keeps setup diagnostics for a cross-unit reservation without a valid conversion", async () => {
+    const setItem = item({ id: "invalid-conversion-set", name: "LED set", kind: "electronic", quantity: 2, availableQuantity: 2, unit: "set" });
+    const ports = fakePorts(setItem);
+    ports.projects.getProjectRevision = async () => null;
+    const service = new ApplicationService(ports);
+    const preview = await service.previewProjectSetup({
+      project: { id: "setup-invalid-conversion-project", name: "Invalid conversion setup", status: "planned" },
+      revision: { id: "setup-invalid-conversion-revision", name: "Initial", status: "concept" },
+      workItems: [],
+      bomLines: [{ localRef: "led-line", id: "setup-invalid-conversion-line", name: "LEDs", itemId: "missing-led", requiredQuantity: 10, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: setItem.id, compatible: "confirmed" }] }],
+      reservations: [{ localRef: "led-reservation", bomLineLocalRef: "led-line", id: "setup-invalid-conversion-reservation", itemId: setItem.id, quantity: 1, unit: "each" }],
+    }, context);
+
+    expect(preview.fieldErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "unit_mismatch" }),
+      expect.objectContaining({ code: "invalid_quantity_conversion" }),
+    ]));
+  });
+
+  it("keeps specification, constraint, and evidence blockers on converted setup reservations", async () => {
+    const setItem = item({ id: "blocked-conversion-set", name: "LED set", kind: "electronic", quantity: 2, availableQuantity: 0, unit: "set", manufacturer: "Observed maker", evidence: { state: "delivered_uncounted" } });
+    const ports = fakePorts(setItem);
+    ports.projects.getProjectRevision = async () => null;
+    const service = new ApplicationService(ports);
+    const preview = await service.previewProjectSetup({
+      project: { id: "setup-blocked-conversion-project", name: "Blocked conversion setup", status: "planned" },
+      revision: { id: "setup-blocked-conversion-revision", name: "Initial", status: "concept" },
+      workItems: [],
+      bomLines: [{ localRef: "led-line", id: "setup-blocked-conversion-line", name: "LEDs", itemId: "missing-led", requiredQuantity: 10, unit: "each", optional: false, constraints: { manufacturer: "Required maker", specification: { status: "insufficient", missingDecisions: ["voltage"] } }, alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: {
+        inventory: { quantity: 1, unit: "set" },
+        requirement: { quantity: 10, unit: "each" },
+        evidence: { basis: "package_label", observedAt: "2026-09-02T10:00:00.000Z" }
+      } }] }],
+      reservations: [{ localRef: "led-reservation", bomLineLocalRef: "led-line", id: "setup-blocked-conversion-reservation", itemId: setItem.id, quantity: 1, unit: "set" }],
+    }, context);
+
+    expect(preview.fieldErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "unresolved_specification" }),
+      expect.objectContaining({ code: "constraint_mismatch" }),
+      expect.objectContaining({ code: "insufficient_evidence" }),
+    ]));
+  });
+
+  it("shows set reservations and converted each coverage in an atomic setup preview", async () => {
+    const setItem = item({ id: "led-set", name: "LED set", kind: "electronic", quantity: 2, availableQuantity: 2, unit: "set" });
+    const conversion = {
+      inventory: { quantity: 1, unit: "set" as const },
+      requirement: { quantity: 10, unit: "each" as const },
+      evidence: { basis: "package_label" as const, observedAt: "2026-09-02T10:00:00.000Z" },
+    } as const;
+    const ports = fakePorts(setItem);
+    ports.projects.getProjectRevision = async () => null;
+    const service = new ApplicationService(ports);
+    const preview = await service.previewProjectSetup({
+      project: { id: "setup-conversion-project", name: "Converted setup", status: "planned" },
+      revision: { id: "setup-conversion-revision", name: "Initial", status: "concept" },
+      workItems: [],
+      bomLines: [{ localRef: "led-line", id: "setup-conversion-line", name: "LEDs", itemId: "missing-led", requiredQuantity: 15, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: conversion }] }],
+      reservations: [{ localRef: "led-reservation", bomLineLocalRef: "led-line", id: "setup-conversion-reservation", itemId: setItem.id, quantity: 2, unit: "set" }],
+    }, context);
+
+    expect(preview.fieldErrors).toEqual([]);
+    expect(preview.plannedReservations).toEqual([expect.objectContaining({ quantity: 2, unit: "set", itemId: setItem.id })]);
+    expect(preview.gaps.lines[0]).toMatchObject({ requiredQuantity: 15, suppliedQuantity: 15, inspectQuantity: 0, missingQuantity: 0, unit: "each" });
+    expect(preview.contentSha256).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("rejects a setup commit when a reserved conversion item loses physical confirmation", async () => {
+    const setItem = item({ id: "led-set", name: "LED set", kind: "electronic", quantity: 2, availableQuantity: 2, unit: "set" });
+    const conversion = {
+      inventory: { quantity: 1, unit: "set" as const },
+      requirement: { quantity: 10, unit: "each" as const },
+      evidence: { basis: "package_label" as const, observedAt: "2026-09-02T10:00:00.000Z" },
+    } as const;
+    const ports = fakePorts(setItem);
+    ports.projects.getProjectRevision = async () => null;
+    const service = new ApplicationService(ports);
+    const preview = await service.previewProjectSetup({
+      project: { id: "setup-commit-project", name: "Converted setup", status: "planned" },
+      revision: { id: "setup-commit-revision", name: "Initial", status: "concept" },
+      workItems: [],
+      bomLines: [{ localRef: "led-line", id: "setup-commit-line", name: "LEDs", itemId: "missing-led", requiredQuantity: 15, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: conversion }] }],
+      reservations: [{ localRef: "led-reservation", bomLineLocalRef: "led-line", id: "setup-commit-reservation", itemId: setItem.id, quantity: 2, unit: "set" }],
+    }, context);
+    const unconfirmed = { ...setItem, evidence: { state: "delivered_uncounted" as const } };
+    ports.inventory.listItems = async () => ({ data: [unconfirmed], limit: 200 });
+    ports.inventory.getItem = async (id) => id === unconfirmed.id ? unconfirmed : null;
+
+    await expect(service.commitProjectSetup({ ...setupCommitInput(preview), confirmReservations: true }, { ...context, idempotencyKey: "setup-conversion-commit" })).rejects.toMatchObject({ code: "conflict", details: { reason: "stale_basis" } });
+  });
+
   it("does not describe fully allocated stock as available to an unrelated BOM line", async () => {
     const ports = fakePorts(item({ quantity: 2, availableQuantity: 0, unit: "each" }));
     const service = new ApplicationService(ports);
@@ -1612,5 +1862,61 @@ describe("ApplicationService", () => {
     expect(() => buildReconciliationDocument(reservedSource, [noChange], false)).toThrow(/sole outcome.*zero active reserved quantity/i);
     const consumed = { kind: "consumed" as const, reservationId: active.id, itemId: active.itemId, quantity: 100, unit: "gram" as const, evidence: { state: "consumed" as const } };
     expect(() => buildReconciliationDocument(reservedSource, [{ ...noChange, outcomes: [noChange.outcomes[0]!, consumed] }], false)).toThrow(/sole outcome.*zero active reserved quantity/i);
+  });
+
+  it("labels reconciliation preview totals in the active reservation unit and fails closed on mixed units", () => {
+    const line: BomLine = {
+      id: "bom-reconcile-units", revisionId: "rev-1", name: "LED package", requiredQuantity: 10, unit: "each", optional: false,
+      constraints: {}, alternatives: [], createdAt: "2026-09-02T00:00:00.000Z", updatedAt: "2026-09-02T00:00:00.000Z", version: 1
+    };
+    const eachItem = item({ id: "reconcile-each", unit: "each", quantity: 10, availableQuantity: 0 });
+    const setItem = item({ id: "reconcile-set", unit: "set", quantity: 2, availableQuantity: 0 });
+    const setReservation = { id: "reconcile-set-reservation", lineId: line.id, itemId: setItem.id, quantity: 2, status: "active" as const, unit: "set" as const, version: 1 };
+    const eachReservation = { id: "reconcile-each-reservation", lineId: line.id, itemId: eachItem.id, quantity: 1, status: "active" as const, unit: "each" as const, version: 1 };
+    const source: ReconciliationSourceSnapshot = { projectId: "project-1", projectRevisionId: "rev-1", lines: [line], reservations: [setReservation], items: [eachItem, setItem] };
+    const preview = buildReconciliationDocument(source, [], false).preview;
+    expect(preview.lines[0]).toMatchObject({ reservedQuantity: 2, accountedQuantity: 0, unaccountedQuantity: 2, unit: "set" });
+
+    const unreserved = buildReconciliationDocument({ ...source, reservations: [] }, [], false).preview;
+    expect(unreserved.lines[0]).toMatchObject({ reservedQuantity: 0, accountedQuantity: 0, unaccountedQuantity: 0, unit: "each" });
+    expect(() => buildReconciliationDocument({ ...source, reservations: [setReservation, eachReservation] }, [], false)).toThrow(/mixed.*reservation.*unit/i);
+  });
+
+  it("rejects a direct reservation that would mix active reservation units on one BOM line", async () => {
+    const eachItem = item({ id: "reservation-each", unit: "each", quantity: 20, availableQuantity: 20 });
+    const setItem = item({ id: "reservation-set", unit: "set", quantity: 2, availableQuantity: 2 });
+    const ports = fakePorts(eachItem);
+    ports.inventory.listItems = async () => ({ data: [eachItem, setItem], limit: 200 });
+    ports.inventory.getItem = async (id) => id === eachItem.id ? eachItem : id === setItem.id ? setItem : null;
+    ports.projects.listReservations = async () => [{ id: "existing-set-reservation", lineId: "bom-mixed-reservation", itemId: setItem.id, quantity: 1, status: "active", createdAt: eachItem.createdAt, updatedAt: eachItem.updatedAt, version: 1 }];
+    const service = new ApplicationService(ports);
+    await service.createBomLine("rev-1", {
+      id: "bom-mixed-reservation", name: "LED package", itemId: eachItem.id, requiredQuantity: 20, unit: "each", optional: false, constraints: {},
+      alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: { inventory: { quantity: 1, unit: "set" }, requirement: { quantity: 10, unit: "each" }, evidence: { basis: "package_label", observedAt: "2026-09-02T00:00:00.000Z" } } }]
+    }, context);
+
+    await expect(service.createReservation("rev-1", { lineId: "bom-mixed-reservation", itemId: eachItem.id, quantity: 1 }, context)).rejects.toMatchObject({ code: "validation", message: expect.stringMatching(/mixed.*reservation.*unit/i) });
+  });
+
+  it("reports mixed active reservation units as a setup preview validation error", async () => {
+    const eachItem = item({ id: "setup-each", unit: "each", quantity: 20, availableQuantity: 20 });
+    const setItem = item({ id: "setup-set", unit: "set", quantity: 2, availableQuantity: 2 });
+    const ports = fakePorts(eachItem);
+    ports.inventory.listItems = async () => ({ data: [eachItem, setItem], limit: 200 });
+    ports.inventory.getItem = async (id) => id === eachItem.id ? eachItem : id === setItem.id ? setItem : null;
+    ports.projects.getProjectRevision = async () => null;
+    const service = new ApplicationService(ports);
+    const preview = await service.previewProjectSetup({
+      project: { id: "setup-mixed-project", name: "Mixed setup", status: "planned" },
+      revision: { id: "setup-mixed-revision", name: "Initial", status: "concept" },
+      workItems: [],
+      bomLines: [{ localRef: "mixed-line", id: "setup-mixed-line", name: "LED package", itemId: eachItem.id, requiredQuantity: 20, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: { inventory: { quantity: 1, unit: "set" }, requirement: { quantity: 10, unit: "each" }, evidence: { basis: "package_label", observedAt: "2026-09-02T00:00:00.000Z" } } }] }],
+      reservations: [
+        { localRef: "each-reservation", bomLineLocalRef: "mixed-line", id: "setup-each-reservation", itemId: eachItem.id, quantity: 1, unit: "each" },
+        { localRef: "set-reservation", bomLineLocalRef: "mixed-line", id: "setup-set-reservation", itemId: setItem.id, quantity: 1, unit: "set" }
+      ]
+    }, context);
+
+    expect(preview.fieldErrors).toEqual(expect.arrayContaining([expect.objectContaining({ code: "unit_mismatch", message: expect.stringMatching(/mixed.*reservation.*unit/i) })]));
   });
 });

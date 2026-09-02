@@ -291,12 +291,39 @@ export interface BomLine {
   retiredAt?: string;
 }
 
+export type BomAlternativeQuantityConversionEvidenceBasis =
+  | "package_label"
+  | "manufacturer_spec"
+  | "physical_count"
+  | "user_assertion";
+
+export interface BomAlternativeQuantityConversionEvidence {
+  readonly basis: BomAlternativeQuantityConversionEvidenceBasis;
+  readonly observedAt: string;
+  readonly source?: string;
+  readonly sourceId?: string;
+  readonly note?: string;
+}
+
+export interface BomAlternativeQuantityConversion {
+  readonly inventory: {
+    readonly quantity: 1;
+    readonly unit: "set";
+  };
+  readonly requirement: {
+    readonly quantity: number;
+    readonly unit: "piece";
+  };
+  readonly evidence: BomAlternativeQuantityConversionEvidence;
+}
+
 export interface BomAlternative {
   id: string;
   bomLineId: string;
   itemId?: string;
   label: string;
   compatible?: BomCompatibility;
+  readonly quantityConversion?: BomAlternativeQuantityConversion;
   constraints?: BomConstraints;
 }
 

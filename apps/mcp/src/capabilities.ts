@@ -40,7 +40,29 @@ const bomConstraintsProperty: JsonObject = object({
   ...Object.fromEntries(BOM_CONSTRAINT_KEYS.map((key) => [key, string(`Match inventory ${key}.`)])),
   specification: bomSpecificationProperty,
 });
-const bomAlternativeProperty: JsonObject = object({ itemId: idProperty("Alternative inventory item."), compatible: string("Compatibility evidence: confirmed, conditional, or unknown."), reason: string("Why this alternative is or is not compatible.") }, ["itemId", "compatible"]);
+const quantityConversionProperty: JsonObject = object({
+  inventory: object({
+    quantity: { ...integer("Exactly one indivisible inventory package."), const: 1 },
+    unit: enumString(["set"], "Inventory-side package unit."),
+  }, ["quantity", "unit"]),
+  requirement: object({
+    quantity: { ...integer("Positive whole-number requirement coverage per package."), minimum: 1 },
+    unit: enumString(["piece"], "MCP requirement unit; maps losslessly to REST/application `each`."),
+  }, ["quantity", "unit"]),
+  evidence: object({
+    basis: enumString(["package_label", "manufacturer_spec", "physical_count", "user_assertion"], "Evidence basis for the package conversion."),
+    observedAt: string("ISO-8601 observation timestamp."),
+    source: string("Optional evidence source."),
+    sourceId: string("Optional evidence source identifier."),
+    note: string("Optional observation note."),
+  }, ["basis", "observedAt"]),
+}, ["inventory", "requirement", "evidence"]);
+const bomAlternativeProperty: JsonObject = object({
+  itemId: idProperty("Alternative inventory item."),
+  compatible: string("Compatibility evidence: confirmed, conditional, or unknown."),
+  reason: string("Why this alternative is or is not compatible; converted candidates retain capacity/allocation/overage diagnostics here."),
+  quantityConversion: quantityConversionProperty,
+}, ["itemId", "compatible"]);
 const projectSetupRevisionProperty: JsonObject = object({ id: idProperty("Optional stable revision identifier."), name: string("Revision name."), notes: string("Optional revision notes."), status: string("Initial revision status.") }, ["name", "status"]);
 const projectSetupWorkItemProperty: JsonObject = object({ localRef: idProperty("Unique proposal-local reference."), id: idProperty("Optional stable work-item identifier."), name: string("Work-item name."), kind: string("Work-item kind."), description: string("Optional work-item description."), revision: projectSetupRevisionProperty }, ["localRef", "name", "kind", "revision"]);
 const projectSetupBomLineProperty: JsonObject = object({ localRef: idProperty("Unique proposal-local reference."), revisionLocalRef: idProperty("Optional work-item revision reference; defaults to project."), id: idProperty("Optional stable BOM-line identifier."), name: string("Requirement name."), itemId: idProperty("Optional exact inventory item."), requiredQuantity: number("Positive required quantity."), unit: string("Canonical quantity unit."), optional: boolean("Whether the requirement is optional."), constraints: bomConstraintsProperty, alternatives: { ...array(bomAlternativeProperty), maxItems: 20 }, notes: string("Optional requirement notes.") }, ["localRef", "name", "requiredQuantity", "unit"]);
@@ -265,7 +287,7 @@ export const TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
   tool("update_bom_line", "Update one BOM requirement using optimistic versioning and evidence-bearing alternatives.", "bom:write", true, { bomLineId: idProperty("BOM line identifier."), expectedVersion: integer(), description: string(), quantity: number(), unit: string(), requirement: string(), itemId: idProperty("Exact inventory item, when known."), alternatives: array(bomAlternativeProperty), compatibleItemIds: array(string("Deprecated IDs-only alternative list; use alternatives for compatibility evidence.")), constraints: bomConstraintsProperty, notes: string() }, ["bomLineId"]),
   tool("retire_bom_line", "Retire a BOM requirement without erasing its history.", "bom:write", true, { bomLineId: idProperty("BOM line identifier."), expectedVersion: integer() }, ["bomLineId", "expectedVersion"]),
   tool("restore_bom_line", "Restore a retired BOM requirement with optimistic versioning.", "bom:write", true, { bomLineId: idProperty("BOM line identifier."), expectedVersion: integer() }, ["bomLineId", "expectedVersion"]),
-  tool("calculate_bom_gaps", "Evaluate each BOM line as supplied, inspect-first, specify-first, partial, missing, or optional. Under-specified lines are Decide and never become buy recommendations; sufficiently specified gaps are Source.", "bom:read", false, { projectRevisionId: idProperty("Project revision identifier.") }, ["projectRevisionId"]),
+  tool("calculate_bom_gaps", "Evaluate each BOM line as supplied, inspect-first, specify-first, partial, missing, or optional. Results expose candidate-level available/supplied/inspect quantities in the requirement unit and preserve capacity/allocation/overage diagnostics in each reason; converted candidates include quantityConversion. Under-specified, mismatched, or unconfirmed lines remain Check/Decide and never become buy recommendations; sufficiently specified gaps are Source.", "bom:read", false, { projectRevisionId: idProperty("Project revision identifier.") }, ["projectRevisionId"]),
   tool("list_reservations", "List reservations for one project revision with bounded pagination, including active and historical states.", "bom:read", false, { ...pageProperties, projectRevisionId: idProperty("Project revision identifier.") }, ["projectRevisionId"]),
   tool("read_reservation", "Read one reservation and its durable project-revision identity.", "bom:read", false, { reservationId: idProperty("Reservation identifier.") }, ["reservationId"]),
   tool("create_reservation", "Reserve confirmed stock for one BOM line; uncertain stock is never silently reserved.", "bom:write", true, { projectRevisionId: idProperty("Project revision identifier."), bomLineId: idProperty("BOM line identifier."), itemId: idProperty("Inventory item identifier."), quantity: quantityProperty }, ["projectRevisionId", "bomLineId", "itemId", "quantity"]),
@@ -347,6 +369,7 @@ export const CAPABILITY_DOCUMENT: JsonObject = {
     decide: "Requirements with unresolved specification decisions are Decide and return those exact missingDecisions; recommendedAction is specify and they are excluded from shopping proposals.",
     resistor: "LED resistor requirements remain Decide until both resistance and power_rating are recorded; a sufficient claim with only one is still incomplete.",
     shopping: "Only required Source lines may appear in a shopping proposal. Ready, Check, Decide, and optional lines are excluded.",
+    quantityConversions: "Structured alternatives may include evidence-backed quantityConversion: one inventory set equals a positive whole number of MCP requirement pieces. MCP maps requirement piece losslessly to REST/application each. Candidate quantities remain in requirement units and candidate reasons preserve capacity, allocation, and overage diagnostics. Missing/invalid conversions and conditional or unknown alternatives remain Check and are never buyable or reservable; valid converted reservations use whole inventory set quantities and read back as set.",
   },
   projectLifecycle: {
     values: ["idea", "planned", "ready", "building", "validating", "complete", "archived"],

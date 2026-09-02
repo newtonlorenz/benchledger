@@ -14,6 +14,7 @@ import {
   projectSetupProposalSchema,
   commitProjectSetupSchema,
 } from "@benchledger/api-contract";
+import { fromApiQuantityConversion, parseMcpQuantityConversion, toApiQuantityConversion } from "./quantity-conversion.js";
 import { BOM_CONSTRAINT_KEYS } from "./types.js";
 import type {
   Availability,
@@ -213,7 +214,38 @@ export function restoreProject(value: unknown): { projectId: string; expectedVer
 }
 
 export function projectSetupProposal(value: unknown): import("./types.js").ProjectSetupProposal {
-  return canonicalSchema(projectSetupProposalSchema, record(value, "arguments"), "arguments");
+  const input = record(value, "arguments");
+  const normalized = {
+    ...input,
+    ...(Array.isArray(input.bomLines)
+      ? {
+          bomLines: input.bomLines.map((line, lineIndex) => {
+            const lineRecord = record(line, `arguments.bomLines[${lineIndex}]`);
+            if (!Array.isArray(lineRecord.alternatives)) return lineRecord;
+            return {
+              ...lineRecord,
+              alternatives: lineRecord.alternatives.map((alternative, alternativeIndex) => {
+                const alternativeRecord = record(alternative, `arguments.bomLines[${lineIndex}].alternatives[${alternativeIndex}]`);
+                if (alternativeRecord.quantityConversion === undefined) return alternativeRecord;
+                const conversion = parseMcpQuantityConversion(alternativeRecord.quantityConversion, `arguments.bomLines[${lineIndex}].alternatives[${alternativeIndex}].quantityConversion`);
+                return { ...alternativeRecord, quantityConversion: toApiQuantityConversion(conversion, `arguments.bomLines[${lineIndex}].alternatives[${alternativeIndex}].quantityConversion`) };
+              }),
+            };
+          }),
+        }
+      : {}),
+  };
+  const parsed = canonicalSchema(projectSetupProposalSchema, normalized, "arguments");
+  return {
+    ...parsed,
+    bomLines: parsed.bomLines.map((line) => ({
+      ...line,
+      alternatives: line.alternatives.map((alternative) => ({
+        ...alternative,
+        ...(alternative.quantityConversion === undefined ? {} : { quantityConversion: fromApiQuantityConversion(alternative.quantityConversion, "arguments.bomLines.alternatives.quantityConversion") }),
+      })),
+    })),
+  } as import("./types.js").ProjectSetupProposal;
 }
 
 export function projectSetupCommit(value: unknown): import("./types.js").CommitProjectSetupInput {
@@ -751,11 +783,15 @@ function alternatives(value: unknown, label: string): readonly BomAlternative[] 
   if (!Array.isArray(value) || value.length > 100) fail(`${label} must be an array of at most 100 alternatives.`);
   return value.map((entry, index) => {
     const candidate = record(entry, `${label}[${index}]`);
-    keys(candidate, ["itemId", "compatible", "reason"], `${label}[${index}]`);
+    keys(candidate, ["itemId", "compatible", "reason", "quantityConversion"], `${label}[${index}]`);
+    const conversion = candidate.quantityConversion === undefined
+      ? undefined
+      : parseMcpQuantityConversion(candidate.quantityConversion, `${label}[${index}].quantityConversion`);
     return {
       itemId: id(candidate.itemId, `${label}[${index}].itemId`),
       compatible: enumValue(candidate.compatible, `${label}[${index}].compatible`, ["confirmed", "conditional", "unknown"] as const),
       ...(candidate.reason === undefined ? {} : { reason: optionalString(candidate.reason, `${label}[${index}].reason`, 1000) }),
+      ...(conversion === undefined ? {} : { quantityConversion: conversion }),
     };
   });
 }

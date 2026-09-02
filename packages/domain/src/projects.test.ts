@@ -109,6 +109,67 @@ describe("project BOM domain", () => {
     expect(result.lines[0]?.candidates[0]?.reason).toBe("Explicit BOM alternative matches this inventory item.");
   });
 
+  it("allocates confirmed whole-set alternatives in BOM units", () => {
+    const line = createBomLine({
+      id: "b-set-conversion",
+      revisionId: "r1",
+      name: "LED",
+      quantity: 12,
+      unit: "piece",
+      alternatives: [{
+        id: "alt-set-conversion",
+        bomLineId: "b-set-conversion",
+        itemId: "led-set",
+        label: "Ten LEDs per set",
+        compatible: "confirmed",
+        quantityConversion: {
+          inventory: { quantity: 1, unit: "set" },
+          requirement: { quantity: 10, unit: "piece" },
+          evidence: { basis: "package_label", source: "package label", observedAt: "2026-09-02T10:00:00.000Z" }
+        }
+      }]
+    });
+    const item: InventoryItem = {
+      id: "led-set",
+      name: "LED set",
+      category: "electronics",
+      purchasedQuantity: 2,
+      unit: "set",
+      sourceStatus: "physically_confirmed",
+      reusePolicy: "available",
+      confidence: "confirmed",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    };
+    const result = evaluateBom([line], [{ item, balance: { itemId: item.id, onHand: 2, allocated: 0, available: 2, confidence: "confirmed" } }]);
+    expect(result.lines[0]).toMatchObject({ status: "available", supplied: 12, shortfall: 0 });
+  });
+
+  it("keeps a unit mismatch visible for checking and never supplies it implicitly", () => {
+    const line = createBomLine({
+      id: "b-set-mismatch",
+      revisionId: "r1",
+      name: "LED",
+      quantity: 10,
+      unit: "piece",
+      alternatives: [{ id: "alt-set-mismatch", bomLineId: "b-set-mismatch", itemId: "led-set-mismatch", label: "Unconverted set", compatible: "confirmed" }]
+    });
+    const item: InventoryItem = {
+      id: "led-set-mismatch",
+      name: "LED set",
+      category: "electronics",
+      purchasedQuantity: 1,
+      unit: "set",
+      sourceStatus: "physically_confirmed",
+      reusePolicy: "available",
+      confidence: "confirmed",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    };
+    const result = evaluateBom([line], [{ item, balance: { itemId: item.id, onHand: 1, allocated: 0, available: 1, confidence: "confirmed" } }]);
+    expect(result.lines[0]).toMatchObject({ status: "inspect-first", supplied: 0, shortfall: 10 });
+  });
+
   it("does not pool a different inventory item into an exact BOM line", () => {
     const line = createBomLine({ id: "b-exact", revisionId: "r1", name: "ESP32", quantity: 2, unit: "board", itemId: "esp-requested" });
     const result = evaluateBom([line], [

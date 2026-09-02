@@ -137,6 +137,15 @@ non-retryable 409 with `commitState: "not_committed"` and a fresh-preview
 recovery action. Identical same-actor/key/canonical commits replay; changed
 payloads conflict.
 
+Structured BOM alternatives preserve their compatibility state and reason,
+and may carry evidence-backed `quantityConversion`. MCP names the requirement
+side `piece` and maps it losslessly to the REST/application unit `each`; gap
+candidate quantities remain in requirement units while reasons retain
+capacity, allocation, and overage diagnostics. Missing or invalid conversions,
+and conditional or unknown compatibility, remain Check and are never buyable or
+reservable. Valid converted reservations use whole inventory `set` quantities
+and read back as `set`.
+
 `create_project_with_initial_revision` accepts optional caller-provided stable
 project and revision IDs. Those IDs identify records and never act as replay
 keys. An identical retry requires the same idempotency key and complete
@@ -200,7 +209,7 @@ profiles when present.
 | Add an exact printer or spool | Exact-product guided add; reported printers remain inspect-first until explicitly commissioned | catalog search/read → `create_inventory_with_product_profile` |
 | Start a project | Guided project setup | `create_project_with_initial_revision` → `create_work_item`; optional stable `projectId`/`revisionId` identify records; use `create_project_revision` for later planning baselines |
 | Archive or restore a project | Project Archive action and explicit Archived view | `archive_project` / `restore_project`; archive hides default lists, releases active reservations with evidence, retains history, and restore never recreates reservations |
-| Understand a build gap | BOM editor and gap panel | `list_bom_lines` → `calculate_bom_gaps`; Decide before supplier lookup, Check recorded candidates, and shop only Source lines |
+| Understand a build gap | BOM editor and gap panel | `list_bom_lines` → `calculate_bom_gaps`; Decide before supplier lookup, inspect candidate diagnostics and conversion capacity/overage reasons in Check results, and shop only Source lines |
 | Hold confirmed parts | Reservation panel | `create_reservation` → `list_reservations` / `read_reservation` → read BOM/gaps again |
 | Add a CAD revision | Artifact upload flow | Authenticated browser/HTTP upload → `finalize_artifact_upload`; generic MCP remains unavailable until a transactional trusted-host bridge exists |
 | Record exact build setup | Project build-configuration form | catalog/profile reads → `create_build_configuration` |
@@ -209,6 +218,13 @@ profiles when present.
 
 All UI actions in the table are application-service operations. The frontend
 does not silently invent compatibility, current counts, or purchase outcomes.
+Connected project plans render canonical gap units, structured alternatives,
+candidate relationships, reasons, and nested conversion evidence. The web
+preserves `set` as `set`; it may show `g`/`m` as beginner aliases but never
+collapses a package into pieces. Unit mismatches and invalid conversions remain
+explicit Check diagnostics, and a failed readiness load disables sourcing until
+canonical gaps reload. Shopping includes alternative-linked offers only for
+exact or confirmed-alternative candidates from that canonical read.
 
 Commissioning is deliberately separate from generic PATCH. It requires an
 observed quantity, commissioned evidence with a source and timestamp, and the

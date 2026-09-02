@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, createSampleWorkspaceAdapter, createWorkspaceAdapter, mapInventoryItem } from "./api";
 import type { Artifact, InventoryItem, Project } from "./domain";
+import type { ReconciliationViewModel } from "./reconciliation-ui";
 
 type ServerInventoryItem = Parameters<typeof mapInventoryItem>[0];
 
@@ -1011,6 +1012,184 @@ describe("web data mappers", () => {
       expect.objectContaining({ id: "offer-eur", itemId: "item-1", currency: "EUR", pack: "Package size not recorded" }),
       expect.objectContaining({ id: "offer-usd", itemId: "", currency: "USD", pack: "2 pieces" }),
       expect.objectContaining({ id: "offer-other", currency: "GBP" })
+    ]);
+  });
+
+  it("preserves set units, structured alternatives, conversions, and canonical gap candidates", async () => {
+    const conversion = {
+      inventory: { quantity: 1, unit: "set" },
+      requirement: { quantity: 8, unit: "each" },
+      evidence: { basis: "package_label", observedAt: "2026-08-30T00:00:00.000Z", source: "https://example.test/led-sets", sourceId: "label-1", note: "Eight per sealed set" }
+    };
+    const alternative = { itemId: "led-sets", compatible: "confirmed", reason: "Sealed package is a confirmed substitute", quantityConversion: conversion };
+    const candidate = { itemId: "led-sets", relationship: "confirmed_alternative", compatibility: "confirmed", availableQuantity: 16, suppliedQuantity: 8, inspectQuantity: 0, reason: "Sealed package. Conversion: 1 set = 8 each. Capacity: 2 set(s) = 16 each." };
+    const project = serverProject({
+      currentRevision: serverRevision({
+        bom: [{ id: "bom-led", revisionId: "revision-1", name: "LED package", itemId: undefined, requiredQuantity: 8, unit: "each", optional: false, constraints: {}, alternatives: [alternative], createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 }],
+        gapEvaluation: {
+          lines: [{ lineId: "bom-led", name: "LED package", optional: false, status: "supplied", decision: "ready", requiredQuantity: 8, unit: "each", suppliedQuantity: 8, inspectQuantity: 0, missingQuantity: 0, matchedItemIds: ["led-sets"], reasons: ["Physically confirmed stock covers this requirement."], alternatives: [alternative], candidates: [candidate] }],
+          totals: { requiredLines: 1, optionalLines: 0, readyLines: 1, checkLines: 0, decideLines: 0, sourceLines: 0, partialLines: 0, missingLines: 0 }
+        }
+      })
+    });
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-units" });
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "test", demo: false, now: "2026-08-30T10:00:00.000Z" }))
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", scopes: ["read"] }))
+      .mockResolvedValueOnce(jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00.000Z", inventory: [serverItem({ id: "led-sets", unit: "set", quantity: 2, availableQuantity: 2 })], projects: [project], offers: [] }));
+
+    const snapshot = await createWorkspaceAdapter().loadWorkspace();
+    expect(snapshot.inventory[0]).toMatchObject({ id: "led-sets", unit: "set" });
+    expect(snapshot.projects[0]?.bom[0]).toMatchObject({ unit: "each", serverUnit: "each", alternatives: [alternative] });
+    expect(snapshot.projects[0]?.gapEvaluation?.lines[0]).toMatchObject({ unit: "each", requiredQuantity: 8, alternatives: [alternative], candidates: [candidate] });
+  });
+
+  it("keeps a set-valued reconciliation preview scalar labelled as set after commit mapping", async () => {
+    const project = serverProject({
+      id: "project-set-reconciliation",
+      currentRevisionId: "revision-set-reconciliation",
+      currentRevision: serverRevision({
+        id: "revision-set-reconciliation",
+        bom: [{ id: "bom-set-reconciliation", revisionId: "revision-set-reconciliation", name: "LED package", requiredQuantity: 10, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 }]
+      })
+    });
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-reconciliation-units" });
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "test", demo: false, now: "2026-08-30T10:00:00.000Z" }))
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", scopes: ["read", "write"] }))
+      .mockResolvedValueOnce(jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00.000Z", inventory: [serverItem({ id: "set-reconciliation-item", unit: "set", quantity: 2, availableQuantity: 0 })], projects: [project], offers: [] }))
+      .mockResolvedValueOnce(jsonResponse({ data: {
+        id: "commit-set-reconciliation",
+        projectId: project.id,
+        projectRevisionId: "revision-set-reconciliation",
+        draftId: "draft-set-reconciliation",
+        status: "committed",
+        basis: {
+          hash: "a".repeat(64),
+          bomLines: [{ bomLineId: "bom-set-reconciliation", version: 1, requiredQuantity: 10, unit: "each" }],
+          reservations: [{ reservationId: "reservation-set-reconciliation", lineId: "bom-set-reconciliation", itemId: "set-reconciliation-item", quantity: 2, unit: "set", status: "active", version: 1 }],
+          items: [{ itemId: "set-reconciliation-item", version: 1, onHand: 2, allocated: 2, available: 0, unit: "set" }]
+        },
+        lines: [{ bomLineId: "bom-set-reconciliation", outcomes: [{ reservationId: "reservation-set-reconciliation", itemId: "set-reconciliation-item", kind: "consumed", quantity: 2, unit: "set", evidence: { state: "physically_counted" } }] }],
+        stockChanges: [],
+        reservationChanges: [],
+        createdAssets: [],
+        committedAt: "2026-08-30T10:00:00.000Z"
+      } }));
+
+    const adapter = createWorkspaceAdapter();
+    await adapter.loadWorkspace();
+    const committed = await adapter.commitReconciliation(project.id, "revision-set-reconciliation", {
+      projectId: project.id,
+      projectName: project.name,
+      projectRevisionId: "revision-set-reconciliation",
+      status: "draft",
+      lines: [],
+      trace: { draftId: "draft-set-reconciliation" }
+    });
+
+    expect(committed.preview?.lines[0]).toMatchObject({ bomLineId: "bom-set-reconciliation", reservedQuantity: 2, unit: "set" });
+    expect(committed.lines[0]).toMatchObject({ plannedQuantity: 10, plannedUnit: "each", reservedQuantity: 2, unit: "set", outcomes: [{ quantity: 2, unit: "set" }] });
+  });
+
+  it("maps and submits a set-valued reconciliation draft without relabelling the BOM", async () => {
+    const revisionId = "revision-set-draft";
+    const project = serverProject({
+      id: "project-set-draft",
+      currentRevisionId: revisionId,
+      currentRevision: serverRevision({
+        id: revisionId,
+        projectId: "project-set-draft",
+        bom: [{ id: "bom-set-draft", revisionId, name: "LED package", requiredQuantity: 10, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 3 }]
+      })
+    });
+    const reservation = { reservationId: "reservation-set-draft", lineId: "bom-set-draft", itemId: "set-item", quantity: 1, unit: "set", status: "active", version: 4 };
+    const draft = {
+      id: "draft-set-draft",
+      projectId: project.id,
+      projectRevisionId: revisionId,
+      status: "draft",
+      version: 5,
+      basis: {
+        hash: "b".repeat(64),
+        bomLines: [{ bomLineId: "bom-set-draft", version: 3, requiredQuantity: 10, unit: "each" }],
+        reservations: [reservation],
+        items: [{ itemId: "set-item", version: 7, onHand: 2, allocated: 1, available: 1, unit: "set" }]
+      },
+      lines: [{ bomLineId: "bom-set-draft", outcomes: [{ reservationId: reservation.reservationId, itemId: reservation.itemId, kind: "consumed", quantity: 1, unit: "set", evidence: { state: "physically_counted", source: "Build notes" } }] }],
+      preview: {
+        lines: [{ bomLineId: "bom-set-draft", reservedQuantity: 1, accountedQuantity: 1, unaccountedQuantity: 0, outcomeCount: 1, unit: "set" }],
+        reservationChanges: [{ reservationId: reservation.reservationId, fromStatus: "active", toStatus: "settled", quantity: 1, unit: "set" }],
+        stockChanges: [{ itemId: "set-item", kind: "consume", quantity: 1, unit: "set", beforeOnHand: 2, afterOnHand: 1, beforeAllocated: 1, afterAllocated: 0, beforeAvailable: 1, afterAvailable: 1, eventKey: "event-set-draft" }],
+        createdAssets: []
+      },
+      createdAt: "2026-08-30T10:00:00.000Z",
+      updatedAt: "2026-08-30T10:05:00.000Z"
+    };
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-reconciliation-draft" });
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "test", demo: false, now: "2026-08-30T10:00:00.000Z" }))
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", scopes: ["read", "write"] }))
+      .mockResolvedValueOnce(jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00.000Z", inventory: [serverItem({ id: "set-item", unit: "set", quantity: 2, availableQuantity: 1 })], projects: [project], offers: [] }))
+      .mockResolvedValueOnce(jsonResponse({ data: draft, replayed: false }));
+
+    const adapter = createWorkspaceAdapter();
+    await adapter.loadWorkspace();
+    const input: ReconciliationViewModel = {
+      projectId: project.id,
+      projectName: project.name,
+      projectRevisionId: revisionId,
+      status: "draft",
+      version: 4,
+      lines: [{
+        id: "bom-set-draft",
+        bomLineId: "bom-set-draft",
+        name: "LED package",
+        itemLabel: "LED sets",
+        plannedQuantity: 10,
+        plannedUnit: "each",
+        reservedQuantity: 1,
+        unit: "set",
+        reservations: [{ id: reservation.reservationId, itemId: reservation.itemId, quantity: 1, unit: "set", status: "active", version: 4 }],
+        outcomes: [{ id: "outcome-set-draft", reservationId: reservation.reservationId, itemId: reservation.itemId, kind: "consumed", quantity: 1, unit: "set", evidence: { state: "physically_counted", source: "Build notes" } }]
+      }],
+      trace: { draftId: "draft-set-draft", basisHash: "b".repeat(64) }
+    };
+    const mapped = await adapter.saveReconciliationDraft(project.id, revisionId, input);
+    expect(mapped.lines[0]).toMatchObject({ plannedQuantity: 10, plannedUnit: "each", reservedQuantity: 1, unit: "set", outcomes: [{ quantity: 1, unit: "set" }] });
+    expect(mapped.preview?.lines[0]).toMatchObject({ reservedQuantity: 1, accountedQuantity: 1, unit: "set" });
+    const body = JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body));
+    expect(body).toMatchObject({ projectRevisionId: revisionId, draftId: "draft-set-draft", expectedVersion: 4, lines: [{ outcomes: [{ quantity: 1, unit: "set" }] }] });
+  });
+
+  it("uses an active reservation unit and falls back to the BOM unit when none is reserved", async () => {
+    const revisionId = "revision-reconciliation-initial";
+    const project = serverProject({
+      id: "project-reconciliation-initial",
+      currentRevisionId: revisionId,
+      currentRevision: serverRevision({
+        id: revisionId,
+        projectId: "project-reconciliation-initial",
+        bom: [
+          { id: "bom-set-initial", revisionId, name: "LED package", requiredQuantity: 10, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 },
+          { id: "bom-empty-initial", revisionId, name: "Spacer", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 }
+        ]
+      })
+    });
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "test", demo: false, now: "2026-08-30T10:00:00.000Z" }))
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", scopes: ["read"] }))
+      .mockResolvedValueOnce(jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00.000Z", inventory: [serverItem({ id: "set-item-initial", unit: "set", quantity: 1, availableQuantity: 0 })], projects: [project], offers: [] }))
+      .mockResolvedValueOnce(jsonResponse(null))
+      .mockResolvedValueOnce(jsonResponse([{ id: "reservation-set-initial", lineId: "bom-set-initial", itemId: "set-item-initial", quantity: 1, unit: "set", status: "active", version: 2 }]));
+
+    const adapter = createWorkspaceAdapter();
+    await adapter.loadWorkspace();
+    const initial = await adapter.readReconciliation(project.id, revisionId);
+
+    expect(initial.lines).toMatchObject([
+      { bomLineId: "bom-set-initial", plannedQuantity: 10, plannedUnit: "each", reservedQuantity: 1, unit: "set" },
+      { bomLineId: "bom-empty-initial", plannedQuantity: 1, plannedUnit: "each", reservedQuantity: 0, unit: "each" }
     ]);
   });
 });
