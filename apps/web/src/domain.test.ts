@@ -152,19 +152,104 @@ describe("BenchLedger beginner-friendly domain language", () => {
 
     expect(summary.totalLines).toBe(7);
     expect(summary.readyLines).toBe(1);
-    expect(summary.inspectLines).toBe(1);
-    expect(summary.missingLines).toBe(4);
+    expect(summary.inspectLines).toBe(2);
+    expect(summary.missingLines).toBe(3);
     expect(summary.optionalLines).toBe(1);
     expect(summary.lineStatuses.map((line) => [line.state, line.supplied, line.remaining])).toEqual([
       ["ready", 2, 0],
       ["partial", 1, 2],
-      ["inspect-first", 1, 0],
-      ["partial", 1, 0],
-      ["partial", 1, 0],
+      ["inspect-first", 0, 1],
+      ["missing", 0, 1],
+      ["inspect-first", 0, 1],
       ["missing", 0, 1],
       ["optional", 0, 1]
     ]);
     expect(calculateProjectSummary({ ...project, bom: [] }, []).lineStatuses).toEqual([]);
+  });
+
+  it("shows Decide for under-specified requirements and only sources safe required gaps", () => {
+    const project: Project = {
+      ...projects[0]!,
+      id: "decision-project",
+      bom: [
+        { id: "power", label: "12 V power supply", required: 1, unit: "each", constraints: { specification: { status: "insufficient", decisions: { current_or_load: "5 A" }, missingDecisions: ["voltage"] } } },
+        { id: "missing", label: "Controller", required: 1, unit: "each", constraints: { specification: { status: "sufficient", decisions: { identity: "CTRL-1" } } } },
+        { id: "optional", label: "Optional cover", required: 1, unit: "each", optional: true },
+        { id: "inspect", label: "Delivered board", itemId: "inspect", required: 1, unit: "each", constraints: { specification: { status: "sufficient", decisions: { identity: "BOARD-1" } } } },
+        { id: "conditional", label: "Conditional board", itemId: "conditional", required: 1, unit: "each", alternatives: [{ itemId: "conditional", compatible: "conditional" }] }
+      ]
+    };
+    const summary = calculateProjectSummary(project, [
+      { ...inventory[0]!, id: "inspect", name: "Delivered board", state: "inspect-first", evidence: "delivered", quantity: 1, reserved: 0 },
+      { ...inventory[0]!, id: "conditional", name: "Conditional board", state: "available", evidence: "counted", quantity: 1, reserved: 0 }
+    ]);
+
+    expect(summary.lineStatuses.map((line) => [line.state, line.decision])).toEqual([
+      ["specify-first", "decide"],
+      ["missing", "source"],
+      ["optional", "source"],
+      ["inspect-first", "check"],
+      ["inspect-first", "check"]
+    ]);
+    expect(summary.lineStatuses[0]).toMatchObject({ missingDecisions: ["voltage", "connector"] });
+    expect(summary).toMatchObject({ decideLines: 1, sourceLines: 1, checkLines: 2, optionalLines: 1 });
+    expect(getLineLabel("specify-first")).toEqual({ label: "Specify first", tone: "warn" });
+  });
+
+  it("combines explicit candidates and excludes stocked optional lines from required totals", () => {
+    const project: Project = {
+      ...projects[0]!,
+      id: "candidate-project",
+      bom: [
+        { id: "combined", label: "Controller pair", itemId: "controller-a", required: 2, unit: "each", alternatives: [{ itemId: "controller-b", compatible: "confirmed" }] },
+        { id: "stocked-optional", label: "Optional cover", itemId: "cover", required: 2, unit: "each", optional: true },
+      ],
+    };
+    const counted = (id: string): InventoryItem => ({ ...inventory[0]!, id, name: id, quantity: 1, availableQuantity: 1, reserved: 0, state: "available", evidence: "counted" });
+
+    const summary = calculateProjectSummary(project, [counted("controller-a"), counted("controller-b"), counted("cover")]);
+
+    expect(summary.lineStatuses.map((line) => [line.state, line.decision, line.supplied])).toEqual([["ready", "ready", 2], ["partial", "source", 1]]);
+    expect(summary).toMatchObject({ totalLines: 2, optionalLines: 1, readyLines: 1, readyDecisionLines: 1, sourceLines: 0 });
+  });
+
+  it("blocks source outcomes while connected readiness is unavailable", () => {
+    const project: Project = {
+      ...projects[0]!,
+      id: "unavailable-readiness",
+      readinessUnavailable: true,
+      bom: [{ id: "missing", label: "Controller", required: 1, unit: "each", constraints: { specification: { status: "sufficient", decisions: { identity: "CTRL-1" } } } }],
+    };
+
+    const summary = calculateProjectSummary(project, []);
+
+    expect(summary.lineStatuses[0]).toMatchObject({ state: "missing", decision: "source" });
+    expect(summary).toMatchObject({ readinessUnavailable: true, sourceLines: 0 });
+  });
+
+  it("uses the canonical application gap evaluation for connected projects", () => {
+    const project: Project = {
+      ...projects[0]!,
+      bom: [
+        { id: "power", label: "12 V power supply", itemId: "misleading-stock", required: 1, unit: "each" },
+        { id: "controller", label: "Controller", required: 1, unit: "each" },
+        { id: "optional", label: "Optional cover", required: 1, unit: "each", optional: true },
+      ],
+      gapEvaluation: {
+        lines: [
+          { lineId: "power", status: "specify_first", decision: "decide", missingDecisions: ["current_or_load", "connector"], suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 1, matchedItemIds: [], reasons: ["Specify first."] },
+          { lineId: "controller", status: "missing", decision: "source", suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 1, matchedItemIds: [], reasons: ["No stock."] },
+          { lineId: "optional", status: "optional", decision: "source", suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 1, matchedItemIds: [], reasons: [] },
+        ],
+        totals: { requiredLines: 2, optionalLines: 1, readyLines: 0, checkLines: 0, decideLines: 1, sourceLines: 1, partialLines: 0, missingLines: 1 },
+      },
+    };
+    const misleadingStock = [{ ...inventory[0]!, id: "misleading-stock", quantity: 20, availableQuantity: 20, reserved: 0, state: "available" as const }];
+
+    const summary = calculateProjectSummary(project, misleadingStock);
+
+    expect(summary.lineStatuses.map((line) => [line.state, line.decision])).toEqual([["specify-first", "decide"], ["missing", "source"], ["optional", "source"]]);
+    expect(summary).toMatchObject({ totalLines: 3, optionalLines: 1, readyLines: 0, checkLines: 0, decideLines: 1, sourceLines: 1, partialLines: 0 });
   });
 
   it("subtracts reserved stock before declaring a BOM line ready", () => {

@@ -29,7 +29,30 @@ export type InventorySourceStatus =
 
 export type StockConfidence = "confirmed" | "inspect_first" | "ordered" | "unknown";
 
-export type AvailabilityClass = "available" | "inspect-first" | "partial" | "missing";
+export type AvailabilityClass = "available" | "inspect-first" | "specify-first" | "partial" | "missing" | "optional";
+
+/** Decisions that must be resolved before a BOM line can move through the
+ * reuse/source workflow. These values are deliberately shared with the API
+ * and MCP surfaces so an agent and the web UI cannot silently disagree. */
+export type BomSpecificationDecision =
+  | "identity"
+  | "purpose"
+  | "voltage"
+  | "current_or_load"
+  | "connector"
+  | "compatibility"
+  | "dimensions";
+
+export type BomSpecificationDecisions = Readonly<Partial<Record<BomSpecificationDecision, string>>>;
+
+export interface BomSpecification {
+  status: "sufficient" | "insufficient";
+  decisions?: BomSpecificationDecisions;
+  missingDecisions?: readonly BomSpecificationDecision[];
+}
+
+export type BomDecision = "ready" | "check" | "decide" | "source";
+export type BomCompatibility = "confirmed" | "conditional" | "unknown";
 
 export type QuantityUnit =
   | "piece"
@@ -179,7 +202,9 @@ export type RevisionStatus =
   | "fit/function verified"
   | "production approved";
 
-export type ProjectStatus = "active" | "on_hold" | "complete" | "retired";
+/** Canonical project lifecycle. Legacy values are accepted only by migration
+ * adapters and are never represented by a domain Project. */
+export type ProjectStatus = "idea" | "planned" | "ready" | "building" | "validating" | "complete" | "archived";
 
 export interface Project {
   id: string;
@@ -238,6 +263,8 @@ export interface BomConstraints {
   machineId?: string;
   dimensions?: Partial<Dimensions>;
   tags?: readonly string[];
+  /** Requirement-level decisions are not inventory matching constraints. */
+  specification?: BomSpecification;
 }
 
 export interface BomLine {
@@ -250,8 +277,11 @@ export interface BomLine {
   optional?: boolean;
   itemId?: string;
   alternativeItemIds?: readonly string[];
+  alternatives?: readonly BomAlternative[];
   constraints?: BomConstraints;
   notes?: string;
+  /** A retired requirement remains inspectable but is excluded from active planning. */
+  retiredAt?: string;
 }
 
 export interface BomAlternative {
@@ -259,6 +289,7 @@ export interface BomAlternative {
   bomLineId: string;
   itemId?: string;
   label: string;
+  compatible?: BomCompatibility;
   constraints?: BomConstraints;
 }
 
@@ -266,11 +297,14 @@ export interface BomCandidate {
   item: InventoryItem;
   balance: StockBalance;
   reason: string;
+  compatibility?: BomCompatibility;
 }
 
 export interface BomLineEvaluation {
   line: BomLine;
   status: AvailabilityClass;
+  decision: BomDecision;
+  missingDecisions?: readonly BomSpecificationDecision[];
   supplied: number;
   shortfall: number;
   candidates: readonly BomCandidate[];
@@ -285,6 +319,11 @@ export interface BomSummary {
   partialLines: number;
   missingLines: number;
   optionalMissingLines: number;
+  optionalLines: number;
+  readyLines: number;
+  checkLines: number;
+  decideLines: number;
+  sourceLines: number;
   estimatedMissingCostMinor?: number;
 }
 

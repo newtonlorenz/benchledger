@@ -3,6 +3,27 @@
 This roadmap records intentionally deferred work. It is not part of the first
 private LAN deployment gate.
 
+The consolidated product outcome and simplified beginner-to-expert experience are
+defined in [`maker-project-management-prd.md`](maker-project-management-prd.md).
+The detailed `REQ-*` engineering contracts below remain the implementation annex.
+
+### Maker project management delivery status
+
+- [x] `MPM-A` / `MPM-001`: active BOM rows, optional requirements, confirmed,
+  allocated and inspect-first inventory, and Ready/Check/Decide/Source totals now
+  reconcile across the shared application, HTTP, MCP and web projections.
+- [x] `MPM-002`: project lifecycle is now the single canonical
+  `idea → planned → ready → building → validating → complete → archived`
+  vocabulary across domain, database, HTTP/OpenAPI, MCP and web. `blocked`
+  remains derived from reasons, while the revision-scoped manufacturing evidence
+  ladder remains independent. The migration maps only known legacy values,
+  retains each original value in audit history and fails closed on unknown data.
+  Project context also returns the canonical lifecycle and structured derived
+  blocker reasons without persisting `blocked` as a status.
+
+These checks describe the current roadmap branch. They do not imply that its
+commits have been pushed, reviewed on GitHub, merged or deployed.
+
 ## Agent-first maker workflow backlog
 
 The client-agent feedback and its complete sanitized contract live in
@@ -30,8 +51,14 @@ purchasing, credential changes, destructive cleanup, or merging.
 - [ ] `BL-AW-002` → `REQ-002`: compact, cacheable capability discovery and
   bounded named-schema lookup. **Proposed.**
 - [ ] `BL-AW-003` → `REQ-004`: truthful inventory/BOM summaries that reconcile
-  confirmed, allocated, inspect-first, optional, and gap totals. **Proposed;
-  coordinate with inventory availability and reconciliation work below.**
+  confirmed, allocated, inspect-first, optional, and gap totals. **Partially
+  implemented on the current feature branch:** durable BOM retirement excludes
+  inactive requirements; inventory reads distinguish on-hand, available,
+  allocated, depleted, unverified, and retired states; summary allocation
+  quantities are grouped by unit; optional lines no longer inflate required
+  outcome totals; and Ready/Check/Decide/Source outcomes now preserve exact
+  missing specification decisions. Remaining work is the broader `REQ-004`
+  graph/read-back contract, not a second readiness vocabulary.**
 - [ ] `BL-AW-004` → `REQ-005`: bounded graph list/read-back tools and resources
   for every created project entity. **Proposed; audit existing list operations
   before adding new ones.**
@@ -58,7 +85,12 @@ preview/commit patterns; do not create a parallel MCP or web implementation.
   fixtures. **Proposed.**
 - [ ] `BL-AW-007` → `REQ-007`: distinguish missing stock from missing
   specification with `specify_first` decisions and shopping exclusions.
-  **Proposed.**
+  **Partially implemented on the current feature branch:** BOM requirements can
+  persist explicit sufficient/insufficient specification decisions; gap reads
+  expose Ready/Check/Decide/Source outcomes and exact missing decisions; and
+  under-specified, inspect-first, and optional requirements are excluded from
+  Source/shopping. Broader structured search and guided specification editing
+  remain separate slices.**
 - [ ] `BL-AW-008` → `REQ-008`: maker-specific profiles, package/unit
   conversions, and explicit quantity semantics. **Partial foundation only:**
   exact printer/filament product and physical-profile records exist, but the

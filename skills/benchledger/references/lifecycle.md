@@ -48,6 +48,12 @@ polarity, connector, dimensions, and condition meet that line's constraints.
 
 ## 3. Project and revision structure
 
+- Read and write project lifecycle only as `idea`, `planned`, `ready`,
+  `building`, `validating`, `complete`, or `archived`. Report structured
+  `blocked` reasons separately; do not persist `blocked` as lifecycle.
+- A lifecycle change is an intent/progress update, not manufacturing evidence.
+  Never infer or reset CAD, DFAM, mesh, slicer, test-print, fit/function, or
+  production approval state from it.
 - Use the current planning revision as the BOM basis.
 - For a new project, retain the project and initial revision returned by the
   atomic create operation. For an existing project, read its current revision

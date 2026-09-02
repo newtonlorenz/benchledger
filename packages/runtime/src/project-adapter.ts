@@ -1,4 +1,5 @@
 import { createBomLine, createId, createProject, createProjectRevision, createWorkItem, createWorkItemRevision, DomainError } from "@benchledger/domain";
+import { bomSpecificationSchema } from "@benchledger/api-contract";
 import type {
   BomConstraints, BomLine, Project, ProjectRevision, Reservation, WorkItem, WorkItemRevision
 } from "@benchledger/domain";
@@ -41,10 +42,16 @@ function number(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function bomMetadata(value: Readonly<Record<string, unknown>>): { readonly constraints?: Readonly<Record<string, string>>; readonly alternatives?: readonly ApiBomLine["alternatives"][number][]; readonly retired?: boolean; readonly createdAt?: string; readonly updatedAt?: string } {
+function bomMetadata(value: Readonly<Record<string, unknown>>): { readonly constraints?: ApiBomLine["constraints"]; readonly alternatives?: readonly ApiBomLine["alternatives"][number][]; readonly retired?: boolean; readonly createdAt?: string; readonly updatedAt?: string } {
   const constraintsRecord = record(value.constraints);
-  const constraints: Record<string, string> = {};
-  for (const [key, candidate] of Object.entries(constraintsRecord)) if (typeof candidate === "string") constraints[key] = candidate;
+  const constraints: Record<string, unknown> = {};
+  for (const [key, candidate] of Object.entries(constraintsRecord)) {
+    if (typeof candidate === "string") constraints[key] = candidate;
+    else if (key === "specification") {
+      if (!bomSpecificationSchema.safeParse(candidate).success) throw new Error("BOM specification decision is malformed");
+      constraints[key] = candidate;
+    }
+  }
   const alternatives: ApiBomLine["alternatives"] | undefined = Array.isArray(value.alternatives)
     ? value.alternatives.flatMap((candidate) => {
       const item = record(candidate);
@@ -56,7 +63,7 @@ function bomMetadata(value: Readonly<Record<string, unknown>>): { readonly const
   const createdAt = text(value.createdAt);
   const updatedAt = text(value.updatedAt);
   return {
-    ...(Object.keys(constraints).length === 0 ? {} : { constraints }),
+    ...(Object.keys(constraints).length === 0 ? {} : { constraints: constraints as ApiBomLine["constraints"] }),
     ...(alternatives === undefined ? {} : { alternatives }),
     ...(value.retired === true ? { retired: true } : {}),
     ...(createdAt === undefined ? {} : { createdAt }),
@@ -74,7 +81,7 @@ function currentRevisionId(revisions: readonly { readonly id: string; readonly n
  * relies on the application matcher to fail closed on unknown keys.
  */
 type LegacyCreateBomLineInput = Omit<CreateBomLine, "constraints"> & {
-  constraints?: Readonly<Record<string, string>>;
+  constraints?: ApiBomLine["constraints"];
 };
 
 function nativeBomFromApi(revisionId: string, input: CreateBomLine | LegacyCreateBomLineInput, id: string): BomLine {
@@ -130,7 +137,6 @@ export class ProductionProjectAdapter implements ProjectPort {
       return this.database.transaction(() => {
         const created = this.projects.create(native);
         this.state.setInitialVersion(PROJECT, created.id);
-        this.state.setMetadata(PROJECT, created.id, { status: input.status });
         return this.toApiProject(created);
       });
     });
@@ -161,12 +167,11 @@ export class ProductionProjectAdapter implements ProjectPort {
       return this.database.transaction(() => {
         const createdProject = this.projects.create(nativeProject);
         this.state.setInitialVersion(PROJECT, createdProject.id);
-        this.state.setMetadata(PROJECT, createdProject.id, { status: input.project.status });
         const createdRevision = this.projects.createRevision(nativeRevision);
         this.state.setInitialVersion(PROJECT_REVISION, createdRevision.id);
-        this.state.setMetadata(PROJECT, createdProject.id, { status: input.project.status, currentRevisionId: createdRevision.id });
+        this.state.setMetadata(PROJECT, createdProject.id, { currentRevisionId: createdRevision.id });
         return {
-          project: apiProjectFromNative(createdProject, 1, this.state.getMetadata(PROJECT, createdProject.id), createdRevision.id),
+          project: apiProjectFromNative(createdProject, 1, {}, createdRevision.id),
           revision: apiProjectRevisionFromNative(createdRevision, 1)
         };
       });
@@ -182,11 +187,12 @@ export class ProductionProjectAdapter implements ProjectPort {
         const current = this.toApiProject(native);
         const status = input.status ?? current.status;
         const updatedAt = nowIso();
-        this.database.run("UPDATE projects SET name = ?, description = ?, status = ?, updated_at = ?, retired_at = ? WHERE id = ?", [input.name ?? native.name, input.description ?? native.description ?? null, nativeProjectStatus(status), updatedAt, status === "retired" ? updatedAt : native.retiredAt ?? null, id]);
-        const updated: Project = { ...native, name: input.name ?? native.name, ...(input.description === undefined && native.description === undefined ? {} : { description: input.description ?? native.description }), status: nativeProjectStatus(status), updatedAt, ...(status === "retired" ? { retiredAt: updatedAt } : native.retiredAt === undefined ? {} : { retiredAt: native.retiredAt }) };
+        const canonicalStatus = nativeProjectStatus(status);
+        this.database.run("UPDATE projects SET name = ?, description = ?, status = ?, updated_at = ?, retired_at = ? WHERE id = ?", [input.name ?? native.name, input.description ?? native.description ?? null, canonicalStatus, updatedAt, canonicalStatus === "archived" ? updatedAt : null, id]);
+        const { retiredAt: _retiredAt, ...nativeWithoutRetirement } = native;
+        const updated: Project = { ...nativeWithoutRetirement, name: input.name ?? native.name, ...(input.description === undefined && native.description === undefined ? {} : { description: input.description ?? native.description }), status: canonicalStatus, updatedAt, ...(canonicalStatus === "archived" ? { retiredAt: updatedAt } : {}) };
         const version = this.state.bumpVersion(PROJECT, id);
-        this.state.setMetadata(PROJECT, id, { ...this.state.getMetadata(PROJECT, id), status });
-        return apiProjectFromNative(updated, version, this.state.getMetadata(PROJECT, id), this.latestProjectRevisionId(id));
+        return apiProjectFromNative(updated, version, {}, this.latestProjectRevisionId(id));
       });
     });
   }
@@ -252,8 +258,8 @@ export class ProductionProjectAdapter implements ProjectPort {
     });
   }
 
-  async listBomLines(revisionId: string): Promise<readonly ApiBomLine[]> {
-    return attempt(() => this.boms.listLines(revisionId).map((line) => this.toApiBom(line)));
+  async listBomLines(revisionId: string, options?: { readonly includeRetired?: boolean }): Promise<readonly ApiBomLine[]> {
+    return attempt(() => this.boms.listLines(revisionId, options?.includeRetired === true).map((line) => this.toApiBom(line)));
   }
 
   async getBomLine(id: string): Promise<ApiBomLine | null> {
@@ -306,9 +312,40 @@ export class ProductionProjectAdapter implements ProjectPort {
   }
 
   async retireBomLine(id: string, expectedVersion: number | undefined, _ctx: RequestContext): Promise<ApiBomLine> {
-    return this.updateBomLine(id, { optional: true, notes: "Retired" }, expectedVersion, _ctx).then((line) => {
-      this.state.setMetadata(BOM, id, { ...this.state.getMetadata(BOM, id), retired: true });
-      return line;
+    return attempt(() => {
+      const native = this.boms.getLine(id);
+      if (native === undefined) throw new DomainError("bom_line_not_found", `BOM line ${id} does not exist`);
+      if (this.reservations.list().some((reservation) => reservation.bomLineId === id && reservation.status === "active")) {
+        throw new DomainError("active_reservation_conflict", "release active reservations before retiring this BOM line");
+      }
+      return this.database.transaction(() => {
+        this.state.ensureVersion(BOM, id, expectedVersion);
+        if (native.retiredAt !== undefined) return this.toApiBom(native);
+        const retiredAt = nowIso();
+        this.database.run("UPDATE bom_lines SET retired_at = ? WHERE id = ?", [retiredAt, id]);
+        const retired = { ...native, retiredAt };
+        const version = this.state.bumpVersion(BOM, id);
+        this.state.setMetadata(BOM, id, { ...this.state.getMetadata(BOM, id), retired: true, updatedAt: retiredAt });
+        return this.toApiBom(retired, version);
+      });
+    });
+  }
+
+  async restoreBomLine(id: string, expectedVersion: number | undefined, _ctx: RequestContext): Promise<ApiBomLine> {
+    return attempt(() => {
+      const native = this.boms.getLine(id);
+      if (native === undefined) throw new DomainError("bom_line_not_found", `BOM line ${id} does not exist`);
+      return this.database.transaction(() => {
+        this.state.ensureVersion(BOM, id, expectedVersion);
+        if (native.retiredAt === undefined) return this.toApiBom(native);
+        const updatedAt = nowIso();
+        this.database.run("UPDATE bom_lines SET retired_at = NULL WHERE id = ?", [id]);
+        const { retiredAt: _retiredAt, ...restored } = native;
+        const version = this.state.bumpVersion(BOM, id);
+        const metadata = { ...this.state.getMetadata(BOM, id), retired: false, updatedAt };
+        this.state.setMetadata(BOM, id, metadata);
+        return this.toApiBom(restored, version);
+      });
     });
   }
 
@@ -419,7 +456,7 @@ export class ProductionProjectAdapter implements ProjectPort {
 
   private toApiProject(project: Project): ApiProject {
     const revisions = this.projects.listRevisions(project.id);
-    return apiProjectFromNative(project, this.state.getVersion(PROJECT, project.id), this.state.getMetadata(PROJECT, project.id), currentRevisionId(revisions));
+    return apiProjectFromNative(project, this.state.getVersion(PROJECT, project.id), {}, currentRevisionId(revisions));
   }
 
   private toApiBom(line: BomLine, version = this.state.getVersion(BOM, line.id)): ApiBomLine {

@@ -28,7 +28,7 @@ async function makeRuntime(): Promise<ProductionRuntime> {
 async function setup(runtime: ProductionRuntime, itemId = "reconciliation-item") {
   const service = new ApplicationService(runtime.ports);
   const item = await service.createInventoryItem({ id: itemId, name: "Reconciliation part", kind: "electronic", quantity: 4, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
-  const project = await service.createProject({ id: `${itemId}-project`, name: "Reconciliation project", status: "planning" }, context());
+  const project = await service.createProject({ id: `${itemId}-project`, name: "Reconciliation project", status: "planned" }, context());
   const revision = await service.createProjectRevision(project.data.id, { id: `${itemId}-revision`, name: "Initial", status: "concept" }, context());
   const line = await service.createBomLine(revision.data.id, { id: `${itemId}-line`, name: "Reconciliation part", itemId, requiredQuantity: 2, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
   const reservation = await service.createReservation(revision.data.id, { id: `${itemId}-reservation`, lineId: line.data.id, itemId, quantity: 2 }, context());

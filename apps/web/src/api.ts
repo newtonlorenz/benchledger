@@ -2,6 +2,9 @@ import { catalogProducts as fallbackCatalogProducts, inventory as fallbackInvent
 import type {
   Artifact,
   BomLine,
+  BomCompatibility,
+  BomSpecification,
+  BomSpecificationDecision,
   BuildConfigInput,
   BuildConfigSnapshot,
   CatalogKind,
@@ -13,6 +16,7 @@ import type {
   InventoryProductProfile,
   Offer,
   Project,
+  ProjectGapEvaluation,
   SnapshotDescriptor
 } from "./domain";
 import type {
@@ -46,9 +50,11 @@ type ServerInventoryItem = {
   createdAt: string; updatedAt: string; version: number;
 };
 type ServerWorkItem = { id: string; projectId: string; name: string; kind: string; description?: string; currentRevisionId?: string; createdAt: string; updatedAt: string; version: number };
-type ServerBomLine = { id: string; revisionId: string; name: string; itemId?: string; requiredQuantity: number; unit: string; optional: boolean; constraints?: Record<string, string>; alternatives?: Array<{ itemId: string; reason?: string; compatible?: string }>; notes?: string; createdAt: string; updatedAt: string; version: number };
+type ServerBomLine = { id: string; revisionId: string; name: string; itemId?: string; requiredQuantity: number; unit: string; optional: boolean; constraints?: Record<string, unknown>; alternatives?: Array<{ itemId: string; reason?: string; compatible?: string }>; notes?: string; createdAt: string; updatedAt: string; version: number };
+type ServerGapLine = { lineId: string; status: string; decision?: string; missingDecisions?: string[]; suppliedQuantity: number; inspectQuantity: number; missingQuantity: number; matchedItemIds: string[]; reasons: string[] };
+type ServerGapEvaluation = { lines: ServerGapLine[]; totals: { requiredLines: number; optionalLines: number; readyLines?: number; checkLines?: number; decideLines?: number; sourceLines?: number; partialLines: number; missingLines: number } };
 type ServerArtifact = { id: string; projectId: string; workItemId?: string; revisionId?: string; role: string; filename: string; mediaType: string; byteSize: number; sha256: string; author?: string; source?: string; machineBinding?: Record<string, string>; currentCandidate: boolean; retired: boolean; createdAt: string; version: number };
-type ServerRevision = { id: string; projectId: string; number: number; name: string; notes?: string; status: string; createdAt: string; version: number; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; buildConfigSnapshot?: unknown; buildConfiguration?: unknown };
+type ServerRevision = { id: string; projectId: string; number: number; name: string; notes?: string; status: string; createdAt: string; version: number; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; gapEvaluation?: ServerGapEvaluation; buildConfigSnapshot?: unknown; buildConfiguration?: unknown };
 type ServerProject = { id: string; name: string; description?: string; status: string; currentRevisionId?: string; createdAt: string; updatedAt: string; version: number; workItems?: ServerWorkItem[]; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; currentRevision?: ServerRevision };
 type ServerOffer = { id: string; itemId?: string; name: string; supplier: string; url: string; priceMinor: number; currency: CurrencyCode; packageQuantity?: number; observedAt: string; staleAfterDays?: number; version: number };
 type ServerWorkspace = { inventory: ServerInventoryItem[]; projects: ServerProject[]; offers: ServerOffer[]; source: "api"; fetchedAt: string };
@@ -212,6 +218,7 @@ export interface WorkspaceAdapter {
   login(password: string): Promise<LoginResult>;
   logout(): Promise<void>;
   loadWorkspace(): Promise<WorkspaceSnapshot>;
+  refreshProjectReadiness(): Promise<Project[]>;
   listInventory(query: InventoryListQuery): Promise<InventoryPage>;
   bulkUpdateInventory(input: InventoryBulkUpdateInput): Promise<InventoryBulkUpdateResult>;
   recordCount(itemId: string, quantity: number): Promise<InventoryItem>;
@@ -911,7 +918,49 @@ function managedCategoryPage(value: unknown): InventoryCategoryPage {
   return { data: categories, limit: typeof limit === "number" ? limit : categories.length, ...(typeof nextCursor === "string" ? { nextCursor } : {}), ...(typeof total === "number" ? { total } : {}) };
 }
 
+const BOM_SPECIFICATION_DECISIONS = ["identity", "purpose", "voltage", "current_or_load", "connector", "compatibility", "dimensions"] as const;
+
+function mapBomSpecification(value: unknown): BomSpecification | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const status = record.status;
+  if (status !== "sufficient" && status !== "insufficient") return undefined;
+  const decisionsRecord = asRecord(record.decisions);
+  const decisions = decisionsRecord
+    ? Object.fromEntries(BOM_SPECIFICATION_DECISIONS.flatMap((key) => {
+        const decision = stringValue(decisionsRecord[key]);
+        return decision === undefined ? [] : [[key, decision]];
+      }))
+    : undefined;
+  const missingDecisions = Array.isArray(record.missingDecisions)
+    ? record.missingDecisions.filter((decision): decision is BomSpecificationDecision => typeof decision === "string" && (BOM_SPECIFICATION_DECISIONS as readonly string[]).includes(decision))
+    : undefined;
+  return {
+    status,
+    ...(decisions && Object.keys(decisions).length > 0 ? { decisions } : {}),
+    ...(missingDecisions && missingDecisions.length > 0 ? { missingDecisions } : {})
+  };
+}
+
+function mapBomConstraints(value: Record<string, unknown> | undefined): BomLine["constraints"] | undefined {
+  if (!value) return undefined;
+  const result: NonNullable<BomLine["constraints"]> = {};
+  for (const key of ["kind", "manufacturer", "model", "sku", "tag", "nameIncludes"] as const) {
+    const mapped = stringValue(value[key]);
+    if (mapped !== undefined) result[key] = mapped;
+  }
+  const specification = mapBomSpecification(value.specification);
+  if (specification !== undefined) result.specification = specification;
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
 function mapBomLine(line: ServerBomLine): BomLine {
+  const constraints = mapBomConstraints(line.constraints);
+  const alternatives = (line.alternatives ?? []).flatMap((alternative) => {
+    if (typeof alternative.itemId !== "string" || !alternative.itemId.trim()) return [];
+    const compatible: BomCompatibility | undefined = alternative.compatible === "confirmed" || alternative.compatible === "conditional" || alternative.compatible === "unknown" ? alternative.compatible : undefined;
+    return [{ itemId: alternative.itemId, ...(compatible === undefined ? {} : { compatible }), ...(alternative.reason ? { reason: alternative.reason } : {}) }];
+  });
   return {
     id: line.id,
     label: line.name,
@@ -919,7 +968,88 @@ function mapBomLine(line: ServerBomLine): BomLine {
     required: line.requiredQuantity,
     unit: mapUnit(line.unit),
     optional: line.optional,
+    ...(constraints === undefined ? {} : { constraints }),
+    ...(alternatives.length > 0 ? { alternatives } : {}),
     ...(line.notes ? { note: line.notes } : {})
+  };
+}
+
+function invalidGapEvaluation(): never {
+  throw new ApiError("The service returned inconsistent project readiness", { kind: "server", status: 502, code: "invalid_gap_evaluation" });
+}
+
+function mapGapEvaluation(value: ServerGapEvaluation | undefined, bom: readonly BomLine[]): ProjectGapEvaluation | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value.lines) || value.lines.length !== bom.length || value.totals === null || typeof value.totals !== "object") return invalidGapEvaluation();
+  const bomById = new Map(bom.map((line) => [line.id, line] as const));
+  const seen = new Set<string>();
+  const lines = value.lines.map((line): ProjectGapEvaluation["lines"][number] => {
+    if (line === null || typeof line !== "object") return invalidGapEvaluation();
+    const bomLine = bomById.get(line.lineId);
+    if (bomLine === undefined || seen.has(line.lineId)) return invalidGapEvaluation();
+    seen.add(line.lineId);
+    const status = line.status;
+    const decision = line.decision;
+    if (!["supplied", "inspect_first", "specify_first", "partially_supplied", "missing", "optional"].includes(status)) return invalidGapEvaluation();
+    if (status === "optional" && bomLine.optional !== true) return invalidGapEvaluation();
+    if (!["ready", "check", "decide", "source"].includes(decision ?? "")) return invalidGapEvaluation();
+    if (!Array.isArray(line.missingDecisions ?? []) || (line.missingDecisions ?? []).some((item) => !(BOM_SPECIFICATION_DECISIONS as readonly string[]).includes(item))) return invalidGapEvaluation();
+    const missingDecisions = [...new Set((line.missingDecisions ?? []) as BomSpecificationDecision[])];
+    const quantities = [line.suppliedQuantity, line.inspectQuantity, line.missingQuantity];
+    if (quantities.some((quantity) => !Number.isFinite(quantity) || quantity < 0)) return invalidGapEvaluation();
+    if (Math.abs(quantities.reduce((total, quantity) => total + quantity, 0) - bomLine.required) > 1e-9) return invalidGapEvaluation();
+    const isZero = (quantity: number): boolean => Math.abs(quantity) <= 1e-9;
+    const isRequired = (quantity: number): boolean => Math.abs(quantity - bomLine.required) <= 1e-9;
+    const expectedDecision = status === "supplied"
+      ? "ready"
+      : status === "inspect_first"
+        ? "check"
+        : status === "specify_first"
+          ? "decide"
+          : status === "partially_supplied"
+            ? line.inspectQuantity > 0 ? "check" : "source"
+            : status === "missing"
+              ? "source"
+              : missingDecisions.length > 0 ? "decide" : "source";
+    if (decision !== expectedDecision || (decision === "decide" && missingDecisions.length === 0)) return invalidGapEvaluation();
+    if ((decision === "ready" || decision === "source") && missingDecisions.length > 0) return invalidGapEvaluation();
+    if (status === "supplied" && (!isRequired(line.suppliedQuantity) || !isZero(line.inspectQuantity) || !isZero(line.missingQuantity))) return invalidGapEvaluation();
+    if (status === "inspect_first" && (isZero(line.inspectQuantity) || (line.suppliedQuantity > 0 && line.missingQuantity > 0))) return invalidGapEvaluation();
+    if (status === "specify_first" && (!isZero(line.suppliedQuantity) || !isZero(line.inspectQuantity) || !isRequired(line.missingQuantity))) return invalidGapEvaluation();
+    if (status === "partially_supplied" && (isZero(line.suppliedQuantity) || isZero(line.missingQuantity))) return invalidGapEvaluation();
+    if ((status === "missing" || status === "optional") && (!isZero(line.suppliedQuantity) || !isZero(line.inspectQuantity) || !isRequired(line.missingQuantity))) return invalidGapEvaluation();
+    if (!Array.isArray(line.matchedItemIds) || line.matchedItemIds.some((itemId) => typeof itemId !== "string" || itemId.trim().length === 0)) return invalidGapEvaluation();
+    if (!Array.isArray(line.reasons) || line.reasons.some((reason) => typeof reason !== "string")) return invalidGapEvaluation();
+    return {
+      lineId: line.lineId,
+      status: status as ProjectGapEvaluation["lines"][number]["status"],
+      decision: decision as ProjectGapEvaluation["lines"][number]["decision"],
+      ...(missingDecisions.length === 0 ? {} : { missingDecisions }),
+      suppliedQuantity: line.suppliedQuantity,
+      inspectQuantity: line.inspectQuantity,
+      missingQuantity: line.missingQuantity,
+      matchedItemIds: [...line.matchedItemIds],
+      reasons: [...line.reasons],
+    };
+  });
+  const required = lines.filter((line) => bomById.get(line.lineId)?.optional !== true);
+  const computedTotals: ProjectGapEvaluation["totals"] = {
+    requiredLines: required.length,
+    optionalLines: lines.length - required.length,
+    readyLines: required.filter((line) => line.decision === "ready").length,
+    checkLines: required.filter((line) => line.decision === "check").length,
+    decideLines: required.filter((line) => line.decision === "decide").length,
+    sourceLines: required.filter((line) => line.decision === "source").length,
+    partialLines: required.filter((line) => line.status === "partially_supplied").length,
+    missingLines: required.filter((line) => line.status === "missing").length,
+  };
+  for (const [key, expected] of Object.entries(computedTotals) as [keyof ProjectGapEvaluation["totals"], number][]) {
+    const observed = value.totals[key];
+    if (observed !== undefined && (!Number.isSafeInteger(observed) || observed < 0 || observed !== expected)) return invalidGapEvaluation();
+  }
+  return {
+    lines,
+    totals: computedTotals,
   };
 }
 
@@ -942,18 +1072,39 @@ function mapArtifact(artifact: ServerArtifact, revision?: ServerRevision): Artif
   };
 }
 
-function railStepFor(status: string | undefined, projectStatus: string): number {
-  if (status === "concept" || projectStatus === "idea") return 0;
+function railStepFor(status: string | undefined): number {
+  if (status === undefined || status === "concept") return 0;
   if (status === "CAD complete") return 1;
   if (status === "DFAM reviewed") return 2;
   if (status === "mesh validated") return 3;
   if (status === "slicer validated") return 4;
-  if (status === "test printed" || status === "fit/function verified" || status === "production approved" || projectStatus === "complete") return 5;
-  return projectStatus === "planning" ? 2 : 3;
+  if (status === "test printed" || status === "fit/function verified" || status === "production approved") return 5;
+  return 0;
+}
+
+function canonicalProjectLifecycle(status: string): Project["status"] {
+  switch (status) {
+    case "idea":
+    case "planned":
+    case "ready":
+    case "building":
+    case "validating":
+    case "complete":
+    case "archived": return status;
+    // Read compatibility for snapshots produced before MPM-002. New writes
+    // are rejected by the shared API/MCP schemas.
+    case "planning": return "planned";
+    case "in_progress": return "building";
+    case "validation": return "validating";
+    case "retired": return "archived";
+    case "active":
+    case "on_hold":
+    default: return "idea";
+  }
 }
 
 function mapProject(project: ServerProject): Project {
-  const status: Project["status"] = project.status === "complete" ? "Complete" : project.status === "idea" ? "Idea" : "In progress";
+  const status = canonicalProjectLifecycle(project.status);
   const revision = project.currentRevision;
   const workItem = project.workItems?.[0];
   const bom = revision?.bom ?? project.bom ?? [];
@@ -963,6 +1114,8 @@ function mapProject(project: ServerProject): Project {
   const buildConfigSnapshot = revision && rawBuildConfig !== undefined
     ? mapBuildConfigSnapshot(responseValue(rawBuildConfig), project.id, revision.id, { accessories: [], unknowns: [] })
     : undefined;
+  const mappedBom = bom.map(mapBomLine);
+  const gapEvaluation = mapGapEvaluation(revision?.gapEvaluation, mappedBom);
   return {
     id: project.id,
     name: project.name,
@@ -972,12 +1125,13 @@ function mapProject(project: ServerProject): Project {
     updated: project.updatedAt.slice(0, 10),
     currentRevision,
     workItem: workItem?.name ?? "Project setup",
-    railStep: railStepFor(revision?.status, project.status),
-    bom: bom.map(mapBomLine),
+    railStep: railStepFor(revision?.status),
+    bom: mappedBom,
     artifacts: artifacts.map((artifact) => mapArtifact(artifact, revision)),
     notes: revision?.notes ? [revision.notes] : [],
-    accent: status === "Complete" ? "blue" : "orange",
+    accent: status === "complete" ? "blue" : "orange",
     ...(revision?.id ?? project.currentRevisionId ? { serverRevisionId: revision?.id ?? project.currentRevisionId } : {}),
+    ...(gapEvaluation === undefined ? {} : { gapEvaluation }),
     ...(buildConfigSnapshot ? { buildConfigSnapshot } : {})
   };
 }
@@ -1714,7 +1868,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
   const nextRevision = (project: Project, input: RevisionInput): Project => ({
     ...project,
     currentRevision: input.name,
-    railStep: railStepFor(input.status ?? "concept", project.status === "Idea" ? "idea" : "planning"),
+    railStep: railStepFor(input.status ?? "concept"),
     bom: [],
     artifacts: [],
     notes: input.notes ? [input.notes] : [],
@@ -1733,6 +1887,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     async login() { return { authenticated: true, actor: "sample", csrfToken: "sample", expiresAt: new Date(Date.now() + 3_600_000).toISOString() }; },
     async logout() {},
     async loadWorkspace() { return state; },
+    async refreshProjectReadiness() { return structuredClone(state.projects); },
     async listInventory(query) { return sampleInventoryPage(state.inventory, query); },
     async bulkUpdateInventory(input) {
       const prepared = prepareBulkInventoryInput(input);
@@ -1911,7 +2066,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
       return { ...item, ...(item.productProfile ? { productProfile: { ...item.productProfile } } : {}) };
     },
     async createProject(input) {
-      const project: Project = { id: `sample-project-${Date.now()}`, name: input.name, description: input.description, subtitle: "A new maker project", status: "Idea", updated: "Just now", currentRevision: "r01", workItem: "First work item", railStep: 0, bom: [], artifacts: [], notes: [], accent: "orange", serverRevisionId: `sample-revision-${Date.now()}` };
+      const project: Project = { id: `sample-project-${Date.now()}`, name: input.name, description: input.description, subtitle: "A new maker project", status: "idea", updated: "Just now", currentRevision: "r01", workItem: "First work item", railStep: 0, bom: [], artifacts: [], notes: [], accent: "orange", serverRevisionId: `sample-revision-${Date.now()}` };
       state.projects = [project, ...state.projects];
       return project;
     },
@@ -2052,6 +2207,18 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       projectCache.clear();
       mappedProjects.forEach((project) => projectCache.set(project.id, project));
       return { inventory: mappedInventory, projects: mappedProjects, offers: workspace.offers.map(mapOffer), source: "api", fetchedAt: workspace.fetchedAt || new Date().toISOString(), health: currentHealth };
+    },
+    async refreshProjectReadiness() {
+      const refreshed = await Promise.all([...projectCache.values()].map(async (project): Promise<Project> => {
+        const revisionId = project.serverRevisionId;
+        if (revisionId === undefined) return project;
+        const gaps = await request<ServerGapEvaluation>(`/project-revisions/${encodeURIComponent(revisionId)}/gaps`);
+        const gapEvaluation = mapGapEvaluation(gaps, project.bom);
+        if (gapEvaluation === undefined) return invalidGapEvaluation();
+        return { ...project, gapEvaluation };
+      }));
+      refreshed.forEach((project) => projectCache.set(project.id, project));
+      return refreshed;
     },
     async listInventory(query) {
       const params = new URLSearchParams();
@@ -2352,7 +2519,8 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       try {
         const payload = await request<{ data: ServerRevision }>(`/projects/${encodeURIComponent(projectId)}/revisions`, { method: "POST", headers: { "Idempotency-Key": command.key }, body: JSON.stringify(command.body) }, token);
         const revision = mutationData(payload);
-        const project = { ...current, currentRevision: `r${String(revision.number).padStart(2, "0")}`, serverRevisionId: revision.id, railStep: railStepFor(revision.status, current.status === "Idea" ? "idea" : "planning"), bom: [], artifacts: [], notes: revision.notes ? [revision.notes] : [] };
+        const { gapEvaluation: _staleGapEvaluation, ...currentWithoutGaps } = current;
+        const project = { ...currentWithoutGaps, currentRevision: `r${String(revision.number).padStart(2, "0")}`, serverRevisionId: revision.id, railStep: railStepFor(revision.status), bom: [], artifacts: [], notes: revision.notes ? [revision.notes] : [] };
         projectCache.set(projectId, project);
         // A successful response resolves this logical command. The next
         // intentional revision receives a new key, even if its fields match.
@@ -2457,7 +2625,9 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       const payload = await request<{ data: ServerBomLine }>(`/project-revisions/${encodeURIComponent(revisionId)}/bom`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey("bom") }, body: JSON.stringify({ name: input.name, requiredQuantity: input.requiredQuantity, unit: input.unit === "g" ? "gram" : input.unit === "m" ? "metre" : "each", ...(input.itemId ? { itemId: input.itemId } : {}), optional: input.optional ?? false, constraints: {}, alternatives: [], ...(input.note ? { notes: input.note } : {}) }) }, token);
       const line = mutationData(payload);
       if (!current) throw new ApiError("The project is not available in this workspace snapshot", { kind: "validation", status: 409 });
-      const project = { ...current, bom: [...current.bom, mapBomLine(line)] };
+      const nextBom = [...current.bom, mapBomLine(line)];
+      const gapEvaluation = mapGapEvaluation(await request<ServerGapEvaluation>(`/project-revisions/${encodeURIComponent(revisionId)}/gaps`), nextBom);
+      const project = { ...current, bom: nextBom, ...(gapEvaluation === undefined ? {} : { gapEvaluation }) };
       projectCache.set(projectId, project);
       return project;
     },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commissionInventoryItemSchema, createBomLineSchema, createInventoryItemSchema, inventoryBulkUpdateSchema, inventoryListQuerySchema, updateBomLineSchema, updateInventoryItemSchema } from "./schemas.js";
+import { bomSpecificationSchema, commissionInventoryItemSchema, createBomLineSchema, createInventoryItemSchema, createProjectSchema, inventoryBulkUpdateSchema, inventoryItemSchema, inventoryListQuerySchema, projectSchema, projectStatusSchema, updateBomLineSchema, updateInventoryItemSchema, updateProjectSchema } from "./schemas.js";
 
 const constraints = {
   kind: "electronic",
@@ -30,6 +30,47 @@ describe("REST BOM constraint schema", () => {
     expect(() => createBomLineSchema.parse({ name: "Controller", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: { unsupported: "value" } })).toThrow();
     expect(() => updateBomLineSchema.parse({ constraints: { kind: 42 } })).toThrow();
   });
+
+  it("accepts only the closed specification decision vocabulary", () => {
+    const incomplete = { status: "insufficient", missingDecisions: ["current_or_load", "connector"] } as const;
+    const sufficient = { status: "sufficient", decisions: { voltage: "12 V", current_or_load: "5 A", connector: "5.5 x 2.1 mm barrel, centre-positive" } } as const;
+    expect(bomSpecificationSchema.parse(incomplete)).toEqual(incomplete);
+    expect(bomSpecificationSchema.parse(sufficient)).toEqual(sufficient);
+    expect(createBomLineSchema.parse({
+      name: "12 V power supply",
+      requiredQuantity: 1,
+      unit: "each",
+      optional: false,
+      alternatives: [],
+      constraints: { specification: incomplete },
+    }).constraints.specification).toEqual(incomplete);
+    expect(() => bomSpecificationSchema.parse({ status: "insufficient", missingDecisions: ["unknown_decision"] })).toThrow();
+    expect(() => bomSpecificationSchema.parse({ status: "sufficient", missingDecisions: ["connector"] })).toThrow();
+    expect(() => bomSpecificationSchema.parse({ status: "sufficient" })).toThrow();
+  });
+});
+
+describe("REST project lifecycle schema", () => {
+  const canonical = ["idea", "planned", "ready", "building", "validating", "complete", "archived"] as const;
+
+  it("accepts exactly the canonical lifecycle and rejects derived/legacy values", () => {
+    for (const status of canonical) {
+      expect(projectStatusSchema.parse(status)).toBe(status);
+      expect(projectSchema.parse({
+        id: `project-${status}`,
+        name: "Lifecycle test",
+        status,
+        createdAt: "2026-09-01T10:00:00.000Z",
+        updatedAt: "2026-09-01T10:00:00.000Z",
+        version: 1
+      }).status).toBe(status);
+    }
+    for (const status of ["active", "on_hold", "planning", "in_progress", "validation", "retired", "blocked"]) {
+      expect(() => projectStatusSchema.parse(status)).toThrow();
+      expect(() => createProjectSchema.parse({ name: "Legacy status", status })).toThrow();
+      expect(() => updateProjectSchema.parse({ status })).toThrow();
+    }
+  });
 });
 
 describe("REST inventory pagination filters", () => {
@@ -41,6 +82,29 @@ describe("REST inventory pagination filters", () => {
 });
 
 describe("REST inventory quantity invariants", () => {
+  const persistedItem = {
+    id: "item-esp32",
+    name: "ESP32 board",
+    kind: "electronic" as const,
+    quantity: 2,
+    availableQuantity: 1,
+    allocatedQuantity: 1,
+    unit: "each" as const,
+    tags: [],
+    links: [],
+    evidence: { state: "physically_counted" as const },
+    createdAt: "2026-08-31T10:00:00.000Z",
+    updatedAt: "2026-08-31T10:00:00.000Z",
+    version: 1,
+  };
+
+  it("requires persisted allocated quantity to reconcile on-hand and available stock", () => {
+    expect(inventoryItemSchema.parse(persistedItem)).toMatchObject({ quantity: 2, availableQuantity: 1, allocatedQuantity: 1 });
+    expect(() => inventoryItemSchema.parse({ ...persistedItem, allocatedQuantity: 0 })).toThrow(/quantity minus availableQuantity/i);
+    expect(() => inventoryItemSchema.parse({ ...persistedItem, availableQuantity: 3, allocatedQuantity: 0 })).toThrow(/availableQuantity.*quantity/i);
+    expect(inventoryItemSchema.parse({ ...persistedItem, quantity: 2, availableQuantity: 0, allocatedQuantity: 0, evidence: { state: "delivered_uncounted" } })).toMatchObject({ quantity: 2, availableQuantity: 0, allocatedQuantity: 0 });
+  });
+
   it("rejects available confirmed stock above the total quantity", () => {
     expect(() => createInventoryItemSchema.parse({
       name: "ESP32 board",

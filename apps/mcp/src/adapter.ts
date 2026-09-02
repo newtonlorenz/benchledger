@@ -445,6 +445,7 @@ export class McpAdapter {
       ["create_bom_line", (input, context) => this.backend.bom.createLine(bomLineCreate(input), context)],
       ["update_bom_line", (input, context) => this.backend.bom.updateLine(bomLineUpdate(input), context)],
       ["retire_bom_line", (input, context) => this.backend.bom.retireLine(retireBomLine(input), context)],
+      ["restore_bom_line", (input, context) => this.backend.bom.restoreLine(retireBomLine(input), context)],
       ["calculate_bom_gaps", (input, context) => this.backend.bom.evaluate(bomEvaluation(input), context)],
       ["create_reservation", (input, context) => this.backend.bom.reserve(reservation(input), context)],
       ["release_reservation", (input, context) => this.backend.bom.release(releaseReservation(input), context)],

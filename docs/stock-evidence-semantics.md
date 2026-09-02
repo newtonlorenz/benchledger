@@ -21,6 +21,15 @@ The domain may expose additional source-specific evidence labels, but the MCP
 adapter maps them to the plain-language states above. It never upgrades an
 uncertain state simply because a BOM line mentions the same name.
 
+Every MCP inventory row keeps three quantities distinct: total on-hand,
+currently available, and currently allocated. When allocation is present it
+reconciles exactly as `allocated = on-hand - available`. A fully allocated row
+is not depleted, and a partially allocated row exposes both remaining and held
+stock. Summary availability buckets are mutually exclusive, while the separate
+confirmed-evidence, available-confirmed, and allocated-quantity figures remain
+derivable from the same returned rows. Retired rows do not contribute available
+or allocated quantities.
+
 ## Evidence hierarchy
 
 Prefer, in order:
@@ -65,21 +74,36 @@ stock state. The response must include:
 - requested and supplied quantities in canonical units;
 - candidate item IDs and compatibility reasons;
 - whether the candidate is confirmed or inspect-first;
-- shortfall and recommended action (`reuse`, `inspect`, `buy`, or `none`);
+- shortfall, the Ready/Check/Decide/Source decision, and recommended action
+  (`reuse`, `inspect`, `specify`, `buy`, or `none`);
 - the evidence that caused the classification.
+
+Required readiness totals exclude optional lines in every outcome state.
+Optionality remains a separate flag and total, so a supplied optional line does
+not inflate the required supplied count.
+
+An insufficient requirement is `specify_first` / Decide, not missing stock. Its
+`missingDecisions` identify the unanswered identity, purpose, electrical,
+connector, compatibility, or dimensional choices. Power-supply requirements
+must at least resolve current/load and connector before Source is permitted.
+If a plausible recorded item still needs a count or compatibility decision,
+Check takes precedence so the existing item can be inspected before shopping.
+A known shortfall after confirmed partial coverage is Source for the remaining
+quantity unless an inspect-first candidate could cover it.
 
 Confirmed stock is consumed by allocation arithmetic, so two projects cannot
 silently reserve the same available quantity. If no confirmed candidate covers a
-line, the agent may prepare a shopping proposal. It must not reserve uncertain
-stock merely to make the gap disappear.
+fully specified required line, the agent may prepare a shopping proposal. It
+must not reserve uncertain stock merely to make the gap disappear.
 
 ## Shopping-list semantics
 
 Shopping output is a proposal composed from BOM gaps and offer observations:
 
-```text
-already supplied | inspect-first | required purchase | optional purchase | substitute
-```
+Only required Source lines are eligible for shopping. Ready, Check,
+`specify_first`/Decide, and optional lines are excluded. This avoids proposing
+a purchase before required characteristics have been decided or while plausible
+stock still needs inspection.
 
 Show package rounding, observed price, currency, shipping when known, link, and
 price age. Never claim that the offer is current without a fresh observation.

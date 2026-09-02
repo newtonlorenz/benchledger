@@ -25,12 +25,21 @@ const categoryPageProperties = {
   ...pageProperties,
   cursor: string("Opaque category pagination cursor from the previous response; maximum 512 characters."),
 };
+const projectLifecycleProperty = enumString(["idea", "planned", "ready", "building", "validating", "complete", "archived"], "Canonical project lifecycle; blocked is derived from reasons and is not a status.");
 const idProperty = (description = "Stable identifier."): JsonObject => string(description);
 const nullableIdProperty = (description: string): JsonObject => ({ oneOf: [idProperty(description), { type: "null" }] });
 const categoryIdProperty = (description = "Stable managed category identifier."): JsonObject => ({ ...string(description), maxLength: 160 });
 const nullableCategoryIdProperty = (description: string): JsonObject => ({ oneOf: [categoryIdProperty(description), { type: "null" }] });
 const quantityProperty: JsonObject = object({ value: number("Positive amount."), unit: string("Canonical unit: piece, gram, millimetre, millilitre, metre, roll, or set.") }, ["value", "unit"]);
-const bomConstraintsProperty: JsonObject = object(Object.fromEntries(BOM_CONSTRAINT_KEYS.map((key) => [key, string(`Match inventory ${key}.`)])));
+const bomSpecificationProperty: JsonObject = { ...object({
+  status: enumString(["sufficient", "insufficient"]),
+  decisions: object(Object.fromEntries(["identity", "purpose", "voltage", "current_or_load", "connector", "compatibility", "dimensions"].map((key) => [key, string()]))),
+  missingDecisions: { ...array(enumString(["identity", "purpose", "voltage", "current_or_load", "connector", "compatibility", "dimensions"])), minItems: 1, maxItems: 7 },
+}, ["status"]), description: "Insufficient requires missingDecisions; sufficient requires decisions. Power supplies require current_or_load and connector." };
+const bomConstraintsProperty: JsonObject = object({
+  ...Object.fromEntries(BOM_CONSTRAINT_KEYS.map((key) => [key, string(`Match inventory ${key}.`)])),
+  specification: bomSpecificationProperty,
+});
 const bomAlternativeProperty: JsonObject = object({ itemId: idProperty("Alternative inventory item."), compatible: string("Compatibility evidence: confirmed, conditional, or unknown."), reason: string("Why this alternative is or is not compatible.") }, ["itemId", "compatible"]);
 
 const catalogFilamentProperty: JsonObject = object({
@@ -220,12 +229,12 @@ export const TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
   tool("read_inventory_product_profile", "Read the exact-product link for one physical inventory item without exposing serials or implying stock confirmation.", "catalog:read", false, { itemId: idProperty("Inventory item identifier.") }, ["itemId"]),
   tool("link_inventory_product_profile", "Link one physical printer or filament inventory item to an exact catalog product; reported and suggested links remain non-confirming.", "catalog:write", true, { itemId: idProperty("Inventory item identifier."), expectedVersion: integer(), catalogProductId: idProperty("Exact catalog product identifier."), profileType: string("filament_spool or printer_asset."), linkState: string("confirmed, reported, or suggested."), details: profileDetailsProperty }, ["itemId", "catalogProductId", "profileType", "linkState", "details"]),
 
-  tool("list_projects", "List projects with bounded pagination and status filtering.", "projects:read", false, { ...pageProperties, query: string(), status: string() }),
+  tool("list_projects", "List projects with bounded pagination and canonical lifecycle filtering.", "projects:read", false, { ...pageProperties, query: string(), status: projectLifecycleProperty }),
   tool("read_project", "Read a project identity and current lifecycle state.", "projects:read", false, { projectId: idProperty("Project identifier.") }, ["projectId"]),
   tool("create_project", "Create a project workspace for an end-to-end build.", "projects:write", true, { name: string(), description: string() }, ["name"]),
   tool("create_project_with_initial_revision", "Atomically create a project and its first planning revision; retries with the same idempotency key are safe.", "projects:write", true, { name: string(), description: string(), projectId: idProperty("Optional stable project identifier."), revisionId: idProperty("Optional stable initial revision identifier."), revisionSummary: string("Optional summary for the initial planning revision.") }, ["name"]),
-  tool("update_project", "Update project metadata with optimistic versioning.", "projects:write", true, { projectId: idProperty("Project identifier."), expectedVersion: integer(), name: string(), description: string(), status: string() }, ["projectId"]),
-  tool("retire_project", "Retire a project while retaining its revisions, artifacts, and evidence.", "projects:write", true, { projectId: idProperty("Project identifier."), expectedVersion: integer() }, ["projectId"]),
+  tool("update_project", "Update project metadata or its canonical lifecycle with optimistic versioning.", "projects:write", true, { projectId: idProperty("Project identifier."), expectedVersion: integer(), name: string(), description: string(), status: projectLifecycleProperty }, ["projectId"]),
+  tool("retire_project", "Archive a project while retaining its revisions, artifacts, and evidence.", "projects:write", true, { projectId: idProperty("Project identifier."), expectedVersion: integer() }, ["projectId"]),
   tool("create_work_item", "Create a versioned part, assembly, electronics, firmware, or document within a project.", "projects:write", true, { projectId: idProperty("Project identifier."), name: string(), kind: string(), description: string() }, ["projectId", "name", "kind"]),
   tool("read_work_item", "Read one project work item.", "projects:read", false, { workItemId: idProperty("Work-item identifier.") }, ["workItemId"]),
   tool("create_project_revision", "Create a versioned planning revision for a project.", "projects:write", true, { projectId: idProperty("Project identifier."), summary: string() }, ["projectId"]),
@@ -233,11 +242,12 @@ export const TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
   tool("create_work_item_revision", "Create a versioned engineering revision for a work item.", "projects:write", true, { workItemId: idProperty("Work-item identifier."), summary: string() }, ["workItemId"]),
   tool("read_work_item_revision", "Read one work-item engineering revision.", "projects:read", false, { revisionId: idProperty("Work-item revision identifier.") }, ["revisionId"]),
 
-  tool("list_bom_lines", "List the requirements for one project revision.", "bom:read", false, { ...pageProperties, projectRevisionId: idProperty("Project revision identifier.") }, ["projectRevisionId"]),
+  tool("list_bom_lines", "List active requirements for one project revision, with retired history only when explicitly requested.", "bom:read", false, { ...pageProperties, projectRevisionId: idProperty("Project revision identifier."), includeRetired: boolean() }, ["projectRevisionId"]),
   tool("create_bom_line", "Add one required or optional BOM requirement with evidence-bearing compatible alternatives.", "bom:write", true, { projectRevisionId: idProperty("Project revision identifier."), description: string(), quantity: number(), unit: string(), requirement: string(), itemId: idProperty("Exact inventory item, when known."), alternatives: array(bomAlternativeProperty), compatibleItemIds: array(string("Deprecated IDs-only alternative list; use alternatives for compatibility evidence.")), constraints: bomConstraintsProperty, notes: string() }, ["projectRevisionId", "description", "quantity", "unit"]),
   tool("update_bom_line", "Update one BOM requirement using optimistic versioning and evidence-bearing alternatives.", "bom:write", true, { bomLineId: idProperty("BOM line identifier."), expectedVersion: integer(), description: string(), quantity: number(), unit: string(), requirement: string(), itemId: idProperty("Exact inventory item, when known."), alternatives: array(bomAlternativeProperty), compatibleItemIds: array(string("Deprecated IDs-only alternative list; use alternatives for compatibility evidence.")), constraints: bomConstraintsProperty, notes: string() }, ["bomLineId"]),
-  tool("retire_bom_line", "Retire a BOM requirement without erasing its history.", "bom:write", true, { bomLineId: idProperty("BOM line identifier."), expectedVersion: integer() }, ["bomLineId"]),
-  tool("calculate_bom_gaps", "Evaluate each BOM line as supplied, inspect-first, partial, missing, or optional, with match reasons.", "bom:read", false, { projectRevisionId: idProperty("Project revision identifier.") }, ["projectRevisionId"]),
+  tool("retire_bom_line", "Retire a BOM requirement without erasing its history.", "bom:write", true, { bomLineId: idProperty("BOM line identifier."), expectedVersion: integer() }, ["bomLineId", "expectedVersion"]),
+  tool("restore_bom_line", "Restore a retired BOM requirement with optimistic versioning.", "bom:write", true, { bomLineId: idProperty("BOM line identifier."), expectedVersion: integer() }, ["bomLineId", "expectedVersion"]),
+  tool("calculate_bom_gaps", "Evaluate each BOM line as supplied, inspect-first, specify-first, partial, missing, or optional. Under-specified lines are Decide and never become buy recommendations; sufficiently specified gaps are Source.", "bom:read", false, { projectRevisionId: idProperty("Project revision identifier.") }, ["projectRevisionId"]),
   tool("create_reservation", "Reserve confirmed stock for one BOM line; uncertain stock is never silently reserved.", "bom:write", true, { projectRevisionId: idProperty("Project revision identifier."), bomLineId: idProperty("BOM line identifier."), itemId: idProperty("Inventory item identifier."), quantity: quantityProperty }, ["projectRevisionId", "bomLineId", "itemId", "quantity"]),
   tool("release_reservation", "Release one stock reservation with optimistic version checking.", "bom:write", true, { reservationId: idProperty("Reservation identifier."), expectedVersion: integer() }, ["reservationId"]),
   tool("record_usage", "Record actual consumption against a project and optional reservation.", "bom:write", true, { projectRevisionId: idProperty("Project revision identifier."), reservationId: idProperty("Optional reservation identifier."), itemId: idProperty("Inventory item identifier."), quantity: quantityProperty, note: string() }, ["projectRevisionId", "itemId", "quantity"]),
@@ -291,7 +301,8 @@ export const CAPABILITY_DOCUMENT: JsonObject = {
   summary: "Evidence-first inventory and versioned project workspace for 3D printing and electronics.",
   resources: RESOURCES as unknown as JsonValue,
   resourceTemplates: RESOURCE_TEMPLATES as unknown as JsonValue,
-  tools: TOOL_DEFINITIONS as unknown as JsonValue,
+  tools: TOOL_DEFINITIONS.map(({ name, description, requiredScope, mutating }) => ({ name, description, requiredScope, mutating })) as unknown as JsonValue,
+  toolDiscovery: "Call tools/list for authoritative bounded input schemas; this capability resource keeps only the compact tool index.",
   browserAccess: {
     modes: {
       lan_open: "Browser session routes do not require a workspace password. Use only on a trusted LAN: anyone who can reach the configured interface and port can use the browser workspace as an authenticated user, including write actions available to that session.",
@@ -309,6 +320,11 @@ export const CAPABILITY_DOCUMENT: JsonObject = {
     ordered_unverified: "Order evidence only; never treated as available stock.",
     allocated: "Reserved or assigned stock; availability is reduced by the allocation.",
     depleted: "No remaining usable quantity recorded.",
+  },
+  projectLifecycle: {
+    values: ["idea", "planned", "ready", "building", "validating", "complete", "archived"],
+    blocked: "Derived from current required BOM readiness with structured reasons; blocked is never a project lifecycle value.",
+    manufacturingEvidence: "Revision-scoped concept/CAD/DFAM/mesh/slicer/test/fit/production evidence remains independent and is never advanced or reset by a project lifecycle change.",
   },
   scopeBehavior: {
     projectTokens: "A token with projectIds may address only those projects. Project list results are allow-list filtered; workspace-wide aggregate endpoints are rejected.",

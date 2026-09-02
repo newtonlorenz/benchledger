@@ -247,12 +247,13 @@ export interface ProjectPort {
   getProjectRevision(id: string): Promise<ProjectRevision | null>;
   createWorkItemRevision(workItemId: string, input: CreateWorkItemRevision, ctx: RequestContext): Promise<WorkItemRevision>;
   getWorkItemRevision(id: string): Promise<WorkItemRevision | null>;
-  listBomLines(revisionId: string): Promise<readonly BomLine[]>;
+  listBomLines(revisionId: string, options?: { readonly includeRetired?: boolean }): Promise<readonly BomLine[]>;
   /** Resolve a BOM line across all revisions, including historical ones. */
   getBomLine(id: string): Promise<BomLine | null>;
   createBomLine(revisionId: string, input: CreateBomLine, ctx: RequestContext): Promise<BomLine>;
   updateBomLine(id: string, input: Partial<CreateBomLine>, expectedVersion: number | undefined, ctx: RequestContext): Promise<BomLine>;
   retireBomLine(id: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<BomLine>;
+  restoreBomLine(id: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<BomLine>;
   createReservation(revisionId: string, input: CreateReservation, ctx: RequestContext): Promise<Reservation>;
   releaseReservation(id: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<Reservation>;
   listReservations(revisionId: string): Promise<readonly Reservation[]>;
@@ -444,10 +445,15 @@ export interface GapEvaluation {
   readonly revisionId: string;
   readonly lines: readonly BomGap[];
   readonly totals: {
+    readonly requiredLines: number;
     readonly suppliedLines: number;
     readonly inspectFirstLines: number;
     readonly partialLines: number;
     readonly missingLines: number;
     readonly optionalLines: number;
+    readonly readyLines: number;
+    readonly checkLines: number;
+    readonly decideLines: number;
+    readonly sourceLines: number;
   };
 }

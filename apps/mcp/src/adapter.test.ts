@@ -111,7 +111,7 @@ function backend(): BenchLedgerBackend {
     inventory: {
       summary: async () => ({
         generatedAt: "2026-08-30T10:00:00.000Z",
-        counts: { totalItems: 1, confirmedItems: 1, inspectFirstItems: 0, missingItems: 0 },
+        counts: { totalItems: 1, confirmedItems: 1, confirmedEvidenceItems: 1, availableConfirmedItems: 1, inspectFirstItems: 0, allocatedItems: 0, allocatedQuantities: [], depletedItems: 0, unverifiedItems: 0, retiredItems: 0, missingItems: 0 },
         categories: [{ category: "electronics", itemCount: 1 }],
       }),
       list: async () => page([inventoryItem]),
@@ -153,10 +153,10 @@ function backend(): BenchLedgerBackend {
     },
     projects: {
       list: async () => page([]),
-      get: async () => ({ id: "project-1", name: "Reference project", status: "active", visibility: "private", version: 1 }),
-      create: async () => ({ id: "project-1", version: 1, project: { id: "project-1", name: "Reference project", status: "active", visibility: "private", version: 1 } }),
-      createWithInitialRevision: async () => ({ id: "project-1", version: 1, project: { id: "project-1", name: "Reference project", status: "active", visibility: "private", version: 1 }, revision: { id: "project-revision-1", projectId: "project-1", number: 1, status: "concept" } }),
-      update: async () => ({ id: "project-1", version: 2, project: { id: "project-1", name: "Reference project", status: "active", visibility: "private", version: 2 } }),
+      get: async () => ({ id: "project-1", name: "Reference project", status: "planned", visibility: "private", version: 1 }),
+      create: async () => ({ id: "project-1", version: 1, project: { id: "project-1", name: "Reference project", status: "idea", visibility: "private", version: 1 } }),
+      createWithInitialRevision: async () => ({ id: "project-1", version: 1, project: { id: "project-1", name: "Reference project", status: "idea", visibility: "private", version: 1 }, revision: { id: "project-revision-1", projectId: "project-1", number: 1, status: "concept" } }),
+      update: async () => ({ id: "project-1", version: 2, project: { id: "project-1", name: "Reference project", status: "ready", visibility: "private", version: 2 } }),
       retire: async () => ({ id: "project-1", version: 3, retired: true }),
       createWorkItem: async () => ({ id: "work-1", version: 1, workItem: { id: "work-1", projectId: "project-1", name: "Enclosure", kind: "part" } }),
       getWorkItem: async () => ({ id: "work-1", projectId: "project-1", name: "Enclosure", kind: "part" }),
@@ -171,6 +171,7 @@ function backend(): BenchLedgerBackend {
       createLine: async () => ({ id: "bom-1", version: 1, line: { id: "bom-1", projectRevisionId: "project-revision-1", description: "ESP32 board", quantity: 1, unit: "piece", requirement: "required" } }),
       updateLine: async () => ({ id: "bom-1", version: 2, line: { id: "bom-1", projectRevisionId: "project-revision-1", description: "ESP32 board", quantity: 1, unit: "piece", requirement: "required" } }),
       retireLine: async () => ({ id: "bom-1", version: 3, retired: true }),
+      restoreLine: async () => ({ id: "bom-1", version: 4, restored: true }),
       evaluate: async () => ({ projectRevisionId: "project-revision-1", lines: [], totals: { required: 0, supplied: 0, inspectFirst: 0, missing: 0 }, generatedAt: "2026-08-30T10:00:00.000Z" }),
       reserve: async (input) => ({ reservationId: "reservation-1", projectRevisionId: input.projectRevisionId, itemId: input.itemId, quantity: input.quantity, status: "active", version: 1 }),
       release: async () => ({ reservationId: "reservation-1", status: "released", version: 2 }),
@@ -441,8 +442,8 @@ describe("McpAdapter", () => {
   it("authorizes project-scoped indirect identifiers before dispatch", async () => {
     const scopedBackend = backend();
     scopedBackend.projects.list = async () => page([
-      { id: "project-1", name: "Allowed", status: "active", visibility: "private", version: 1 },
-      { id: "project-2", name: "Denied", status: "active", visibility: "private", version: 1 },
+      { id: "project-1", name: "Allowed", status: "planned", visibility: "private", version: 1 },
+      { id: "project-2", name: "Denied", status: "planned", visibility: "private", version: 1 },
     ]);
     scopedBackend.projectScope = {
       projectForProjectRevision: async (revisionId) => revisionId === "project-revision-1" ? "project-1" : "project-2",
@@ -542,8 +543,12 @@ describe("McpAdapter", () => {
     const definition = adapter.listTools().find((tool) => tool.name === "create_bom_line");
     const properties = definition?.inputSchema.properties as Record<string, any>;
     const constraints = properties.constraints as Record<string, any>;
-    expect(Object.keys(constraints.properties)).toEqual(["kind", "manufacturer", "model", "sku", "tag", "nameIncludes"]);
+    expect(Object.keys(constraints.properties)).toEqual(["kind", "manufacturer", "model", "sku", "tag", "nameIncludes", "specification"]);
     expect(constraints.additionalProperties).toBe(false);
+    expect(constraints.properties.specification).toMatchObject({
+      required: ["status"],
+      properties: { status: { enum: ["sufficient", "insufficient"] } },
+    });
 
     const result = await adapter.callTool("create_bom_line", {
       projectRevisionId: "project-revision-1",
@@ -573,11 +578,11 @@ describe("McpAdapter", () => {
       ["update_catalog_product", { productId: "catalog-filament-1", colourName: "Graphite" }],
       ["read_inventory_product_profile", { itemId: "item-esp32" }],
       ["link_inventory_product_profile", { itemId: "item-esp32", catalogProductId: "catalog-filament-1", profileType: "filament_spool", linkState: "reported", details: { openedState: "sealed" } }],
-      ["list_projects", { query: "reference", status: "active", limit: 5 }],
+      ["list_projects", { query: "reference", status: "building", limit: 5 }],
       ["read_project", { projectId: "project-1" }],
       ["create_project", { name: "New project" }],
       ["create_project_with_initial_revision", { name: "New project", revisionSummary: "plan" }],
-      ["update_project", { projectId: "project-1", status: "paused" }],
+      ["update_project", { projectId: "project-1", status: "ready" }],
       ["retire_project", { projectId: "project-1" }],
       ["create_work_item", { projectId: "project-1", name: "Part", kind: "part" }],
       ["read_work_item", { workItemId: "work-1" }],
@@ -585,10 +590,11 @@ describe("McpAdapter", () => {
       ["read_project_revision", { revisionId: "project-revision-1" }],
       ["create_work_item_revision", { workItemId: "work-1", summary: "r2" }],
       ["read_work_item_revision", { revisionId: "work-revision-1" }],
-      ["list_bom_lines", { projectRevisionId: "project-revision-1", limit: 5 }],
+      ["list_bom_lines", { projectRevisionId: "project-revision-1", includeRetired: true, limit: 5 }],
       ["create_bom_line", { projectRevisionId: "project-revision-1", description: "ESP32", quantity: 1, unit: "piece" }],
       ["update_bom_line", { bomLineId: "bom-1", description: "ESP32 v2" }],
-      ["retire_bom_line", { bomLineId: "bom-1" }],
+      ["retire_bom_line", { bomLineId: "bom-1", expectedVersion: 2 }],
+      ["restore_bom_line", { bomLineId: "bom-1", expectedVersion: 3 }],
       ["calculate_bom_gaps", { projectRevisionId: "project-revision-1" }],
       ["create_reservation", { projectRevisionId: "project-revision-1", bomLineId: "bom-1", itemId: "item-esp32", quantity: { value: 1, unit: "piece" } }],
       ["release_reservation", { reservationId: "reservation-1" }],
@@ -615,6 +621,7 @@ describe("McpAdapter", () => {
     expect(adapter.listResources()).toHaveLength(3);
     expect(adapter.listResourceTemplates()).toHaveLength(11);
     expect(adapter.capabilityDocument()).toMatchObject({ product: "BenchLedger" });
+    expect(JSON.stringify(adapter.capabilityDocument()).length).toBeLessThan(48 * 1024);
   });
 
   it("reads each documented resource, enforces scope, and supports bounded results", async () => {

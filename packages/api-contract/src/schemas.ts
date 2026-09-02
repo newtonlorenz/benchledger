@@ -86,7 +86,7 @@ export const evidenceSchema = z.object({
   note: z.string().max(1000).optional()
 }).strict();
 
-export const inventoryItemSchema = z.object({
+const inventoryItemShape = z.object({
   id: idSchema,
   name: z.string().min(1).max(240),
   kind: itemKindSchema,
@@ -98,6 +98,8 @@ export const inventoryItemSchema = z.object({
   sku: z.string().max(200).optional(),
   quantity: z.number().finite().nonnegative(),
   availableQuantity: z.number().finite().nonnegative(),
+  /** On-hand quantity currently reserved for projects; not depleted stock. */
+  allocatedQuantity: z.number().finite().nonnegative().optional(),
   unit: quantityUnitSchema,
   location: z.string().max(240).optional(),
   condition: inventoryConditionSchema.optional(),
@@ -111,11 +113,38 @@ export const inventoryItemSchema = z.object({
   version: z.number().int().positive()
 }).strict();
 
+function validateInventoryItemQuantityInvariant(
+  value: { readonly quantity: number; readonly availableQuantity: number; readonly allocatedQuantity?: number | undefined; readonly evidence: { readonly state: string } },
+  ctx: z.RefinementCtx
+): void {
+  if (value.availableQuantity > value.quantity) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["availableQuantity"],
+      message: "availableQuantity cannot exceed quantity"
+    });
+  }
+  const confirmedEvidence = value.evidence.state === "physically_counted" || value.evidence.state === "commissioned";
+  const expectedAllocatedQuantity = value.quantity - value.availableQuantity;
+  const allocationTolerance = Number.EPSILON * Math.max(1, value.quantity, value.availableQuantity);
+  if (confirmedEvidence && value.allocatedQuantity !== undefined && Math.abs(value.allocatedQuantity - expectedAllocatedQuantity) > allocationTolerance) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["allocatedQuantity"],
+      message: "allocatedQuantity must equal quantity minus availableQuantity"
+    });
+  }
+}
+
+export const inventoryItemSchema = inventoryItemShape.superRefine(validateInventoryItemQuantityInvariant);
+
 export const inventoryListQuerySchema = z.object({
   q: z.string().max(200).optional(),
   kind: itemKindSchema.optional(),
   evidence: stockEvidenceSchema.optional(),
   available: z.preprocess((value) => value === "true" ? true : value === "false" ? false : value, z.boolean()).optional(),
+  /** Summary/audit callers may include retired history explicitly. */
+  includeRetired: z.preprocess((value) => value === "true" ? true : value === "false" ? false : value, z.boolean()).optional(),
   categoryNodeId: idSchema.optional(),
   unassigned: z.preprocess((value) => value === "true" ? true : value === "false" ? false : value, z.boolean()).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
@@ -154,7 +183,7 @@ export const updateInventoryCategorySchema = z.object({
   message: "at least one category field must change"
 });
 
-const createInventoryItemShape = inventoryItemSchema.pick({
+const createInventoryItemShape = inventoryItemShape.pick({
   name: true, kind: true, categoryNodeId: true, description: true, manufacturer: true, model: true,
   sku: true, quantity: true, unit: true, location: true, condition: true,
   dimensions: true, tags: true, links: true, evidence: true
@@ -286,7 +315,29 @@ export const usageInputSchema = z.object({
   note: z.string().max(2000).optional()
 }).strict();
 
-export const projectStatusSchema = z.enum(["idea", "planning", "in_progress", "validation", "complete", "retired"]);
+/**
+ * The only project lifecycle exposed by the public contract.  `blocked` is a
+ * derived readiness condition and deliberately cannot be persisted as a
+ * project status.  Legacy values are handled by the runtime migration/read
+ * projection, never accepted as new public writes.
+ */
+export const projectLifecycleSchema = z.enum(["idea", "planned", "ready", "building", "validating", "complete", "archived"]);
+export const projectStatusSchema = projectLifecycleSchema;
+export type ProjectLifecycleValue = z.infer<typeof projectLifecycleSchema>;
+
+/** Read/migration helper for records written before MPM-002. */
+export function canonicalProjectLifecycle(value: unknown): ProjectLifecycleValue | undefined {
+  if (projectLifecycleSchema.safeParse(value).success) return value as ProjectLifecycleValue;
+  switch (value) {
+    case "active":
+    case "on_hold": return "idea";
+    case "planning": return "planned";
+    case "in_progress": return "building";
+    case "validation": return "validating";
+    case "retired": return "archived";
+    default: return undefined;
+  }
+}
 export const workItemKindSchema = z.enum(["part", "assembly", "electronics", "firmware", "document", "other"]);
 export const revisionStatusSchema = z.enum([
   "concept", "CAD complete", "DFAM reviewed", "mesh validated", "slicer validated",
@@ -364,13 +415,60 @@ export const bomAlternativeSchema = z.object({
  * this object strict prevents an unrecognised field from being persisted and
  * later interpreted as a broader inventory match by another adapter.
  */
+/**
+ * A requirement-level specification decision. This deliberately lives beside,
+ * but not inside, inventory matching constraints: it describes what the maker
+ * still needs to decide and must never make an inventory item appear
+ * compatible by itself.
+ */
+export const bomSpecificationDecisionSchema = z.enum([
+  "identity",
+  "purpose",
+  "voltage",
+  "current_or_load",
+  "connector",
+  "compatibility",
+  "dimensions",
+]);
+const bomSpecificationDecisionValueSchema = z.string().trim().min(1).max(240);
+const bomSpecificationDecisionsSchema = z.object({
+  identity: bomSpecificationDecisionValueSchema.optional(),
+  purpose: bomSpecificationDecisionValueSchema.optional(),
+  voltage: bomSpecificationDecisionValueSchema.optional(),
+  current_or_load: bomSpecificationDecisionValueSchema.optional(),
+  connector: bomSpecificationDecisionValueSchema.optional(),
+  compatibility: bomSpecificationDecisionValueSchema.optional(),
+  dimensions: bomSpecificationDecisionValueSchema.optional(),
+}).strict();
+
+export const bomSpecificationSchema = z.object({
+  status: z.enum(["sufficient", "insufficient"]),
+  decisions: bomSpecificationDecisionsSchema.optional(),
+  missingDecisions: z.array(bomSpecificationDecisionSchema).min(1).max(7).optional(),
+}).strict().superRefine((value, ctx) => {
+  const missing = value.missingDecisions ?? [];
+  if (value.status === "insufficient" && missing.length === 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["missingDecisions"], message: "Insufficient specifications must name at least one missing decision" });
+  }
+  if (value.status === "sufficient" && missing.length > 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["missingDecisions"], message: "Sufficient specifications cannot include missing decisions" });
+  }
+  if (value.status === "sufficient" && Object.keys(value.decisions ?? {}).length === 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["decisions"], message: "Sufficient specifications must record at least one resolved decision" });
+  }
+  if (new Set(missing).size !== missing.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["missingDecisions"], message: "Missing decisions must be unique" });
+  }
+});
+
 export const bomConstraintsSchema = z.object({
   kind: z.string().optional(),
   manufacturer: z.string().optional(),
   model: z.string().optional(),
   sku: z.string().optional(),
   tag: z.string().optional(),
-  nameIncludes: z.string().optional()
+  nameIncludes: z.string().optional(),
+  specification: bomSpecificationSchema.optional(),
 }).strict();
 
 export const bomLineSchema = z.object({
@@ -384,6 +482,7 @@ export const bomLineSchema = z.object({
   constraints: bomConstraintsSchema.default({}),
   alternatives: z.array(bomAlternativeSchema).max(20),
   notes: z.string().max(2000).optional(),
+  retiredAt: isoDateSchema.optional(),
   createdAt: isoDateSchema,
   updatedAt: isoDateSchema,
   version: z.number().int().positive()
@@ -395,7 +494,8 @@ export const createBomLineSchema = bomLineSchema.pick({
 }).extend({ id: idSchema.optional() }).strict();
 export const updateBomLineSchema = createBomLineSchema.omit({ id: true }).partial().strict();
 
-export const gapStatusSchema = z.enum(["supplied", "inspect_first", "partially_supplied", "missing", "optional"]);
+export const gapStatusSchema = z.enum(["supplied", "inspect_first", "specify_first", "partially_supplied", "missing", "optional"]);
+export const bomDecisionSchema = z.enum(["ready", "check", "decide", "source"]);
 export const bomGapCandidateSchema = z.object({
   itemId: idSchema,
   relationship: z.enum(["exact", "confirmed_alternative", "uncertain_alternative", "constraint_match"]),
@@ -408,7 +508,11 @@ export const bomGapCandidateSchema = z.object({
 export const bomGapSchema = z.object({
   lineId: idSchema,
   name: z.string(),
+  optional: z.boolean().optional(),
   status: gapStatusSchema,
+  /** Beginner-facing grouping derived from the structured gap state. */
+  decision: bomDecisionSchema.optional(),
+  missingDecisions: z.array(bomSpecificationDecisionSchema).max(7).optional(),
   requiredQuantity: z.number().finite().nonnegative(),
   suppliedQuantity: z.number().finite().nonnegative(),
   inspectQuantity: z.number().finite().nonnegative(),

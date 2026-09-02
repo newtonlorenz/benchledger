@@ -128,6 +128,7 @@ function makePorts(): ServicePorts & {
       createBomLine: async () => { throw new Error("not implemented"); },
       updateBomLine: async () => { throw new Error("not implemented"); },
       retireBomLine: async () => { throw new Error("not implemented"); },
+      restoreBomLine: async () => { throw new Error("not implemented"); },
       createReservation: async () => { throw new Error("not implemented"); },
       releaseReservation: async () => { throw new Error("not implemented"); },
       listReservations: async () => [],
@@ -271,6 +272,35 @@ describe("catalog and build configuration application services", () => {
       profile: { catalogProductId: "product-petg-hf", profileType: "filament_spool", linkState: "confirmed", details: { openedState: "sealed" } },
     }, context)).rejects.toThrow("forced profile-write failure");
     expect(itemPresent).toBe(false);
+  });
+
+  it("accepts reported quantity with zero available stock in the compound inventory command", async () => {
+    const ports = makePorts();
+    const createdItem: InventoryItem = {
+      id: "delivered-compound-item",
+      name: "Delivered PETG spool",
+      kind: "filament",
+      quantity: 1000,
+      availableQuantity: 0,
+      allocatedQuantity: 0,
+      unit: "gram",
+      tags: [],
+      links: [],
+      evidence: { state: "delivered_uncounted" },
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      version: 1,
+    };
+    ports.inventory.createItem = async () => createdItem;
+    ports.inventory.rollbackCreatedItem = async () => undefined;
+    ports.catalog!.rollbackCreatedProfile = async () => undefined;
+
+    const result = await serviceFor(ports).createInventoryWithProductProfile({
+      item: { id: createdItem.id, name: createdItem.name, kind: createdItem.kind, quantity: createdItem.quantity, unit: createdItem.unit, tags: [], links: [], evidence: createdItem.evidence },
+      profile: { catalogProductId: "product-petg-hf", profileType: "filament_spool", linkState: "reported", details: { openedState: "sealed" } },
+    }, context);
+
+    expect(result.data.item).toMatchObject({ quantity: 1000, availableQuantity: 0, allocatedQuantity: 0, evidence: { state: "delivered_uncounted" } });
   });
 
   it("keeps reported and suggested links non-confirming and snapshots exact owned facts", async () => {

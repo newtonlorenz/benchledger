@@ -14,10 +14,10 @@ import {
   createCatalogProductSchema, updateCatalogProductSchema,
   createInventoryProductProfileSchema, createInventoryWithProductProfileSchema, updateInventoryProductProfileSchema,
   createBuildConfigurationSnapshotSchema, saveReconciliationDraftSchema, commitReconciliationSchema,
-  workspaceSecurityMutationSchema
+  workspaceSecurityMutationSchema, projectStatusSchema
 } from "@benchledger/api-contract";
 import { ApplicationError, ApplicationService } from "@benchledger/application";
-import type { ApplicationPorts, BeginUploadInput, BuildConfigurationListOptions, CatalogProductListOptions, Mutation, Page, ProjectListOptions, RequestContext } from "@benchledger/application";
+import type { ApplicationPorts, BeginUploadInput, BuildConfigurationListOptions, CatalogProductListOptions, GapEvaluation, Mutation, Page, ProjectListOptions, RequestContext } from "@benchledger/application";
 import { createProductionRuntime } from "@benchledger/runtime";
 import { createApplicationMcpProtocol, createMcpHttpHandler } from "@benchledger/mcp";
 import type { McpRequestContext, Scope as McpScope } from "@benchledger/mcp";
@@ -148,7 +148,7 @@ function parseExpectedVersion(request: FastifyRequest): number | undefined {
 
 function parseRequiredExpectedVersion(request: FastifyRequest): number {
   const version = parseExpectedVersion(request);
-  if (version === undefined) throw new ApplicationError("validation", "If-Match is required for this category mutation");
+  if (version === undefined) throw new ApplicationError("validation", "If-Match is required for this versioned mutation");
   return version;
 }
 
@@ -642,11 +642,13 @@ function jsonOpenApi(version: string): Record<string, unknown> {
     { name: "kind", in: "query", required: false, schema: { type: "string", enum: ["printer", "tool", "accessory", "consumable", "electronic", "fastener", "filament", "wire", "adhesive", "other"] } },
     { name: "evidence", in: "query", required: false, schema: { type: "string", enum: ["physically_counted", "commissioned", "delivered_uncounted", "ordered_unverified", "allocated", "consumed", "unknown"] } },
     { name: "available", in: "query", required: false, schema: { type: "boolean" } },
+    { name: "includeRetired", in: "query", required: false, description: "Include retired inventory history; active rows are returned by default.", schema: { type: "boolean", default: false } },
     { name: "categoryNodeId", in: "query", required: false, description: "Exact managed category or subcategory ID. Mutually exclusive with unassigned=true.", schema: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" } },
     { name: "unassigned", in: "query", required: false, description: "Return inventory without a managed category assignment. Mutually exclusive with categoryNodeId.", schema: { type: "boolean" } },
     { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } },
     { name: "cursor", in: "query", required: false, schema: { type: "string", maxLength: 200 } }
   ];
+  const projectLifecycleValues = ["idea", "planned", "ready", "building", "validating", "complete", "archived"];
   return {
     openapi: "3.1.0",
     info: { title: "BenchLedger API", version, description: "Evidence-based maker inventory and project workspace API." },
@@ -666,7 +668,8 @@ function jsonOpenApi(version: string): Record<string, unknown> {
         CreateInventoryWithProductProfile: inventoryWithProductProfileSchema,
         InventoryCategory: inventoryCategorySchema,
         CreateInventoryCategory: createInventoryCategorySchema,
-        UpdateInventoryCategory: updateInventoryCategorySchema
+        UpdateInventoryCategory: updateInventoryCategorySchema,
+        ProjectLifecycle: { type: "string", enum: projectLifecycleValues, description: "Canonical project lifecycle. Blocked is derived from reasons and is not a lifecycle value." }
       }
     },
     paths: {
@@ -770,12 +773,14 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       "/inventory/{id}/product-profile": { get: { responses: { "200": { description: "Physical inventory product profile" }, "404": { description: "Profile not found" } } }, put: { responses: { "200": { description: "Updated physical inventory product profile" } } } },
       "/inventory/{id}/count": { post: { responses: { "201": { description: "Recorded physical count" } } } },
       "/inventory/{id}/stock-events": { get: { responses: { "200": { description: "Stock event page" } } }, post: { responses: { "201": { description: "Stock mutation" } } } },
-      "/projects": { get: { responses: { "200": { description: "Project page" } } }, post: { responses: { "201": { description: "Project" } } } },
+      "/projects": { get: { description: "Returns a bounded project page. Status uses the canonical project lifecycle.", parameters: [{ name: "status", in: "query", required: false, schema: { $ref: "#/components/schemas/ProjectLifecycle" } }], responses: { "200": { description: "Project page" } } }, post: { responses: { "201": { description: "Project" } } } },
       "/projects/with-initial-revision": { post: { responses: { "201": { description: "Project and initial revision mutation" } } } },
       "/projects/{id}/revisions": { post: { responses: { "201": { description: "Project revision" } } } },
       "/catalog/products": { get: { responses: { "200": { description: "Bounded exact catalog product page" } } }, post: { responses: { "201": { description: "Catalog product mutation" } } } },
       "/catalog/products/{id}": { get: { responses: { "200": { description: "Exact catalog product" } } }, patch: { responses: { "200": { description: "Updated exact catalog product" } } } },
-      "/project-revisions/{id}/bom": { get: { responses: { "200": { description: "BOM lines" } } }, post: { responses: { "201": { description: "BOM line" } } } },
+      "/project-revisions/{id}/bom": { get: { parameters: [{ name: "includeRetired", in: "query", required: false, schema: { type: "boolean", default: false } }], responses: { "200": { description: "Active BOM lines by default; retired history when explicitly requested" } } }, post: { responses: { "201": { description: "BOM line" } } } },
+      "/bom-lines/{id}": { delete: { parameters: [{ name: "If-Match", in: "header", required: true, schema: { type: "integer", minimum: 1 } }], responses: { "200": { description: "Retired BOM line" }, "400": { description: "Missing or invalid version precondition" }, "409": { description: "Version or active-reservation conflict" } } } },
+      "/bom-lines/{id}/restore": { post: { parameters: [{ name: "If-Match", in: "header", required: true, schema: { type: "integer", minimum: 1 } }], responses: { "200": { description: "Restored BOM line" }, "400": { description: "Missing or invalid version precondition" }, "409": { description: "Version conflict" } } } },
       "/project-revisions/{id}/build-configurations": { get: { responses: { "200": { description: "Immutable build configuration snapshot page" } } }, post: { responses: { "201": { description: "Immutable build configuration snapshot" } } } },
       "/build-configurations/{id}": { get: { responses: { "200": { description: "Immutable build configuration snapshot" } } } },
       "/project-revisions/{id}/gaps": { get: { responses: { "200": { description: "Evidence-backed BOM gaps" } } } },
@@ -802,6 +807,8 @@ interface WorkspaceProject extends ApiProject {
   readonly currentRevision?: ApiProjectRevision & {
     readonly bom: readonly ApiBomLine[];
     readonly artifacts: readonly ApiArtifact[];
+    /** Canonical application-service readiness used by the browser. */
+    readonly gapEvaluation: GapEvaluation;
     /** Latest immutable setup captured for this current revision, if any. */
     readonly buildConfigSnapshot?: ApiBuildConfigurationSnapshot;
   };
@@ -877,15 +884,17 @@ async function workspaceSnapshot(service: ApplicationService): Promise<Workspace
     ]);
     if (project.currentRevisionId === undefined) return { ...project, workItems, bom: [], artifacts };
     const revision = await service.getProjectRevision(project.currentRevisionId);
-    const [bom, revisionArtifacts] = await Promise.all([
+    const [bom, revisionArtifacts, gapEvaluation] = await Promise.all([
       service.listBomLines(revision.id),
-      service.listArtifacts(project.id, undefined, revision.id)
+      service.listArtifacts(project.id, undefined, revision.id),
+      service.evaluateBomGaps(revision.id),
     ]);
     const latestConfiguration = await service.getLatestBuildConfiguration(revision.id);
     const currentRevision = {
       ...revision,
       bom,
       artifacts: revisionArtifacts,
+      gapEvaluation,
       ...(latestConfiguration === null ? {} : { buildConfigSnapshot: latestConfiguration })
     };
     return { ...project, workItems, bom, artifacts, currentRevision };
@@ -1360,7 +1369,9 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   app.get(route("/projects"), async (request) => {
     requireScope(request, "read", auth);
     const query = request.query as { q?: string; status?: ProjectListOptions["status"]; limit?: string; cursor?: string };
-    const parsed = { ...(query.q === undefined ? {} : { q: query.q }), ...(query.status === undefined ? {} : { status: query.status }), limit: Math.min(Math.max(Number(query.limit ?? 50), 1), 200), ...(query.cursor === undefined ? {} : { cursor: query.cursor }) } satisfies ProjectListOptions;
+    const parsedStatus = query.status === undefined ? undefined : projectStatusSchema.safeParse(query.status);
+    if (parsedStatus !== undefined && !parsedStatus.success) throw new ApplicationError("validation", "Project status must be one of the canonical lifecycle values");
+    const parsed = { ...(query.q === undefined ? {} : { q: query.q }), ...(parsedStatus === undefined ? {} : { status: parsedStatus.data }), limit: Math.min(Math.max(Number(query.limit ?? 50), 1), 200), ...(query.cursor === undefined ? {} : { cursor: query.cursor }) } satisfies ProjectListOptions;
     return request.principal?.projectIds === undefined ? service.listProjects(parsed) : scopedProjectPage(service, parsed, request.principal.projectIds);
   });
   app.post(route("/projects"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const mutation = await service.createProject(parseBody(createProjectSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });
@@ -1396,10 +1407,11 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   app.post(route("/work-items/:id/revisions"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; const mutation = await service.createWorkItemRevision(params.id, parseBody(createWorkItemRevisionSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });
   app.get(route("/work-item-revisions/:id"), async (request) => { requireScope(request, "read", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.getWorkItemRevision(params.id); });
 
-  app.get(route("/project-revisions/:id/bom"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireRevisionScope(request, service, params.id); return service.listBomLines(params.id); });
+  app.get(route("/project-revisions/:id/bom"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireRevisionScope(request, service, params.id); const query = request.query as { includeRetired?: unknown }; const includeRetired = query.includeRetired === true || query.includeRetired === "true"; return service.listBomLines(params.id, { includeRetired }); });
   app.post(route("/project-revisions/:id/bom"), async (request, reply) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireRevisionScope(request, service, params.id); const mutation = await service.createBomLine(params.id, parseBody(createBomLineSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });
   app.patch(route("/bom-lines/:id"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.updateBomLine(params.id, parseBody(updateBomLineSchema, request.body) as never, parseExpectedVersion(request), requestContext(request)); });
-  app.delete(route("/bom-lines/:id"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.retireBomLine(params.id, parseExpectedVersion(request), requestContext(request)); });
+  app.delete(route("/bom-lines/:id"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.retireBomLine(params.id, parseRequiredExpectedVersion(request), requestContext(request)); });
+  app.post(route("/bom-lines/:id/restore"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.restoreBomLine(params.id, parseRequiredExpectedVersion(request), requestContext(request)); });
   app.get(route("/project-revisions/:id/gaps"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireRevisionScope(request, service, params.id); return service.evaluateBomGaps(params.id); });
   app.get(route("/project-revisions/:id/reservations"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireRevisionScope(request, service, params.id); return service.listReservations(params.id); });
   app.post(route("/project-revisions/:id/reservations"), async (request, reply) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireRevisionScope(request, service, params.id); const mutation = await service.createReservation(params.id, parseBody(createReservationSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });

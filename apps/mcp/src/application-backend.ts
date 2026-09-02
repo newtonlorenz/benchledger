@@ -31,6 +31,9 @@ import type {
   CatalogProduct as ApiCatalogProduct,
   InventoryProductProfile as ApiInventoryProductProfile,
 } from "@benchledger/api-contract";
+import { canonicalProjectLifecycle } from "@benchledger/api-contract";
+import { bomSpecificationSchema } from "@benchledger/api-contract";
+import { deriveProjectBlocked } from "@benchledger/domain";
 import { McpAdapterError } from "./errors.js";
 import { McpAdapter } from "./adapter.js";
 import { McpProtocol } from "./protocol.js";
@@ -72,6 +75,7 @@ import type {
   OfferListInput,
   Page,
   Project,
+  ProjectBlocked,
   ProjectCreateInput,
   ProjectWithInitialRevisionCreateInput,
   ProjectListInput,
@@ -248,7 +252,7 @@ export function createApplicationBackend(service: ApplicationService, options: P
         const visitedCursors = new Set<string>(cursor === undefined ? [] : [cursor]);
 
         for (let pageNumber = 0; pageNumber < MAX_INVENTORY_SUMMARY_PAGES; pageNumber += 1) {
-          const page = await service.listInventory({ limit, ...(cursor === undefined ? {} : { cursor }) });
+          const page = await service.listInventory({ limit, includeRetired: true, ...(cursor === undefined ? {} : { cursor }) });
           items = [...items, ...page.data.map(toMcpInventoryItem)];
           if (page.nextCursor === undefined) return inventorySummary(items);
           if (visitedCursors.has(page.nextCursor)) {
@@ -262,20 +266,29 @@ export function createApplicationBackend(service: ApplicationService, options: P
       },
       list: async (input, context) => {
         const localLocationFilter = input.location !== undefined;
-        if (localLocationFilter) {
+        // Availability is derived from evidence, retirement, on-hand, and
+        // allocated quantities. Filtering by raw evidence would miss
+        // commissioned stock, fully allocated physical stock, and retired
+        // records whose historical evidence is still present.
+        const localAvailabilityFilter = input.availability !== undefined;
+        if (localLocationFilter || localAvailabilityFilter) {
           return filteredPage({
             cursor: input.cursor,
             limit: input.limit ?? 25,
             loadPage: async (cursor) => service.listInventory({
               limit: FILTERED_SOURCE_PAGE_LIMIT,
               ...(cursor === undefined ? {} : { cursor }),
+              ...(input.availability === "retired" ? { includeRetired: true } : {}),
               ...(input.query === undefined ? {} : { q: input.query }),
               ...(input.category === undefined ? {} : { kind: toApiKind(input.category) }),
               ...(input.categoryNodeId === undefined ? {} : { categoryNodeId: input.categoryNodeId }),
               ...(input.unassigned === undefined ? {} : { unassigned: input.unassigned }),
-              ...(input.availability === undefined ? {} : { evidence: toApiEvidence(input.availability) }),
             }),
-            matches: (item) => toMcpInventoryItem(item).location === input.location,
+            matches: (item) => {
+              const mapped = toMcpInventoryItem(item);
+              return (input.location === undefined || mapped.location === input.location)
+                && (input.availability === undefined || mapped.availability === input.availability);
+            },
             map: toMcpInventoryItem,
             id: (item) => item.id,
             label: "inventory",
@@ -416,7 +429,7 @@ export function createApplicationBackend(service: ApplicationService, options: P
         const { projectId, expectedVersion, ...changes } = input;
         return mutationResult(await service.updateProject(projectId, toApiProjectUpdate(changes), expectedVersion, appContext(context)), "project", toMcpProject);
       },
-      retire: async (input, context) => mutationResult(await service.updateProject(input.projectId, { status: "retired" }, input.expectedVersion, appContext(context)), "project", toMcpProject),
+      retire: async (input, context) => mutationResult(await service.updateProject(input.projectId, { status: "archived" }, input.expectedVersion, appContext(context)), "project", toMcpProject),
       createWorkItem: async (input, context) => mutationResult(await service.createWorkItem(input.projectId, toApiWorkItemCreate(input), appContext(context)), "workItem", toMcpWorkItem),
       getWorkItem: async (input) => toMcpWorkItem(await service.getWorkItem(input.workItemId)),
       createProjectRevision: async (input, context) => mutationResult(await service.createProjectRevision(input.projectId, toApiProjectRevisionCreate(input), appContext(context)), "revision", toMcpRevision),
@@ -426,19 +439,24 @@ export function createApplicationBackend(service: ApplicationService, options: P
       context: async (input) => {
         const project = await service.getProject(input.projectId);
         const workItems = await service.listWorkItems(input.projectId);
+        const blocked = project.currentRevisionId === undefined
+          ? { blocked: false, reasons: [] }
+          : projectBlockedFromBom(project.currentRevisionId, await service.evaluateBomGaps(project.currentRevisionId));
         const text = [
           `Project: ${project.name}`,
           `Status: ${project.status}`,
+          `Blocked: ${blocked.blocked ? "yes" : "no"}`,
+          ...(blocked.reasons.length === 0 ? [] : [`Blockers: ${blocked.reasons.length}`]),
           project.description === undefined ? undefined : `Description: ${project.description}`,
           `Work items: ${workItems.map((item) => `${item.name} (${item.kind})`).join(", ") || "none recorded"}`,
           project.currentRevisionId === undefined ? "Current revision: not selected" : `Current revision: ${project.currentRevisionId}`,
         ].filter((line): line is string => line !== undefined).join("\n");
-        return { projectId: project.id, generatedAt: new Date().toISOString(), text, ...(project.currentRevisionId === undefined ? {} : { currentRevisionId: project.currentRevisionId }) };
+        return { projectId: project.id, generatedAt: new Date().toISOString(), text, status: project.status, blocked, ...(project.currentRevisionId === undefined ? {} : { currentRevisionId: project.currentRevisionId }) };
       },
     },
     bom: {
       listLines: async (input) => {
-        const lines = await service.listBomLines(input.projectRevisionId);
+        const lines = await service.listBomLines(input.projectRevisionId, { includeRetired: input.includeRetired === true });
         return slicePage(lines.map((line) => toMcpBomLine(line as ApiBomLine)), input.limit ?? 25, input.cursor);
       },
       listProjectLines: async (input) => {
@@ -456,6 +474,7 @@ export function createApplicationBackend(service: ApplicationService, options: P
         return mutationResult(await service.updateBomLine(bomLineId, toApiBomUpdate(changes), expectedVersion, appContext(context)), "line", (value) => toMcpBomLine(value as ApiBomLine));
       },
       retireLine: async (input, context) => mutationResult(await service.retireBomLine(input.bomLineId, input.expectedVersion, appContext(context)), "line", (value) => toMcpBomLine(value as ApiBomLine)),
+      restoreLine: async (input, context) => mutationResult(await service.restoreBomLine(input.bomLineId, input.expectedVersion, appContext(context)), "line", (value) => toMcpBomLine(value as ApiBomLine)),
       evaluate: async (input) => toMcpBomEvaluation(await service.evaluateBomGaps(input.projectRevisionId), input),
       reserve: async (input, context) => {
         const mutation = await service.createReservation(input.projectRevisionId, toApiReservation(input), appContext(context));
@@ -823,12 +842,32 @@ function slicePage<T>(items: readonly T[], limit: number, cursor: string | undef
 function inventorySummary(items: readonly InventoryItem[]) {
   const categories = new Map<string, number>();
   for (const item of items) categories.set(item.category, (categories.get(item.category) ?? 0) + 1);
+  const hasAllocation = (item: InventoryItem): boolean => item.availability !== "retired"
+    && (item.availability === "allocated" || (item.allocatedQuantity?.value ?? 0) > 0);
+  const confirmedEvidence = (item: InventoryItem): boolean => item.evidence.state === "physical_count" || item.evidence.state === "commissioned";
+  const allocatedQuantities = new Map<Quantity["unit"], number>();
+  for (const item of items) {
+    if (item.availability === "retired") continue;
+    const allocated = item.allocatedQuantity;
+    if (allocated === undefined || allocated.value <= 0) continue;
+    allocatedQuantities.set(allocated.unit, (allocatedQuantities.get(allocated.unit) ?? 0) + allocated.value);
+  }
   return {
     generatedAt: new Date().toISOString(),
     counts: {
       totalItems: items.length,
-      confirmedItems: items.filter((item) => item.availability === "confirmed").length,
+      // Keep the primary buckets mutually exclusive so they sum to
+      // totalItems; confirmedEvidenceItems preserves the physical evidence
+      // count when an item moves into the allocated bucket.
+      confirmedItems: items.filter((item) => item.availability === "confirmed" && !hasAllocation(item)).length,
+      confirmedEvidenceItems: items.filter(confirmedEvidence).length,
+      availableConfirmedItems: items.filter((item) => item.availability !== "retired" && confirmedEvidence(item) && (item.availableQuantity?.value ?? 0) > 0).length,
       inspectFirstItems: items.filter((item) => item.availability === "inspect_first").length,
+      allocatedItems: items.filter(hasAllocation).length,
+      allocatedQuantities: [...allocatedQuantities.entries()].map(([unit, value]) => ({ unit, value })),
+      depletedItems: items.filter((item) => item.availability === "depleted").length,
+      unverifiedItems: items.filter((item) => item.availability === "ordered_unverified" || item.availability === "delivered_uncounted").length,
+      retiredItems: items.filter((item) => item.availability === "retired").length,
       missingItems: 0,
     },
     categories: [...categories.entries()].map(([category, itemCount]) => ({ category, itemCount })),
@@ -876,9 +915,10 @@ function toApiUnit(unit: Quantity["unit"]): ApiInventoryItem["unit"] {
 }
 
 function toMcpAvailability(item: ApiInventoryItem): Availability {
+  if (item.retiredAt !== undefined) return "retired";
   switch (item.evidence.state) {
     case "physically_counted":
-    case "commissioned": return item.availableQuantity > 0 ? "confirmed" : "depleted";
+    case "commissioned": return item.quantity <= 0 ? "depleted" : (item.allocatedQuantity ?? Math.max(0, item.quantity - item.availableQuantity)) > 0 ? "allocated" : "confirmed";
     case "delivered_uncounted": return "delivered_uncounted";
     case "ordered_unverified": return "ordered_unverified";
     case "allocated": return "allocated";
@@ -899,11 +939,17 @@ function toMcpDimensions(value: Dimension | undefined): Dimensions | undefined {
 }
 
 function toMcpInventoryItem(item: ApiInventoryItem): InventoryItem {
+  const allocatedQuantity = item.allocatedQuantity
+    ?? (item.evidence.state === "physically_counted" || item.evidence.state === "commissioned"
+      ? Math.max(0, Math.min(item.quantity, item.quantity - item.availableQuantity))
+      : 0);
   return {
     id: item.id,
     name: item.name,
     category: item.kind,
     quantity: toQuantity(item.quantity, item.unit),
+    availableQuantity: toQuantity(item.availableQuantity, item.unit),
+    allocatedQuantity: toQuantity(allocatedQuantity, item.unit),
     availability: toMcpAvailability(item),
     evidence: toMcpEvidence(item),
     ...(item.categoryNodeId === undefined ? {} : { categoryNodeId: item.categoryNodeId }),
@@ -982,12 +1028,12 @@ function toApiStockEvent(input: RecordStockEventInput): StockEventInput {
 }
 
 function toMcpProject(project: ApiProject): Project {
-  const status: Project["status"] = project.status === "retired" ? "retired" : project.status === "complete" ? "complete" : "active";
+  const status = canonicalProjectLifecycle(project.status) ?? "idea";
   return { id: project.id, name: project.name, status, visibility: "private", ...(project.description === undefined ? {} : { description: project.description }), version: project.version, ...(project.updatedAt === undefined ? {} : { updatedAt: project.updatedAt }) };
 }
 
 function toApiProjectStatus(value: Project["status"]): ApiProject["status"] {
-  return value === "retired" ? "retired" : value === "complete" ? "complete" : value === "paused" ? "validation" : "in_progress";
+  return value;
 }
 
 function toApiProjectCreate(input: ProjectCreateInput): CreateProject {
@@ -1054,8 +1100,14 @@ function toMcpBomAlternative(alternative: ApiBomLine["alternatives"][number]): B
 }
 
 function toMcpBomConstraints(value: ApiBomLine["constraints"]): BomConstraints {
-  const result: Partial<Record<BomConstraintKey, string>> = {};
+  const result: Partial<Record<BomConstraintKey, string>> & { specification?: BomConstraints["specification"] } = {};
   for (const [key, candidate] of Object.entries(value)) {
+    if (key === "specification") {
+      const specification = bomSpecificationSchema.safeParse(candidate);
+      if (!specification.success) throw new McpAdapterError("BACKEND_ERROR", "The BOM specification decision is malformed.");
+      result.specification = specification.data;
+      continue;
+    }
     if (!(BOM_CONSTRAINT_KEYS as readonly string[]).includes(key) || typeof candidate !== "string") {
       throw new McpAdapterError("BACKEND_ERROR", `The BOM contains unsupported constraint '${key}'.`);
     }
@@ -1064,16 +1116,24 @@ function toMcpBomConstraints(value: ApiBomLine["constraints"]): BomConstraints {
   return result;
 }
 
-function toApiBomConstraints(value: BomConstraints | undefined): Record<string, string> {
+function toApiBomConstraints(value: BomConstraints | undefined): ApiBomLine["constraints"] {
   if (value === undefined) return {};
-  const result: Record<string, string> = {};
+  const result: Record<string, unknown> = {};
   for (const [key, candidate] of Object.entries(value)) {
+    if (key === "specification") {
+      const specification = bomSpecificationSchema.safeParse(candidate);
+      if (!specification.success) {
+        throw new McpAdapterError("INVALID_ARGUMENT", "BOM specification must be a bounded decision object.");
+      }
+      result[key] = specification.data;
+      continue;
+    }
     if (!(BOM_CONSTRAINT_KEYS as readonly string[]).includes(key) || typeof candidate !== "string") {
       throw new McpAdapterError("INVALID_ARGUMENT", `BOM constraint '${key}' is unsupported; use one of: ${BOM_CONSTRAINT_KEYS.join(", ")}.`);
     }
     result[key] = candidate;
   }
-  return result;
+  return result as ApiBomLine["constraints"];
 }
 
 function toApiBomAlternatives(input: { alternatives?: readonly BomAlternative[]; compatibleItemIds?: readonly string[] }): ApiBomLine["alternatives"] {
@@ -1122,6 +1182,7 @@ function toMcpBomLine(line: ApiBomLine): BomLine {
     ...(alternatives.length === 0 ? {} : { alternatives, compatibleItemIds: alternatives.map((alternative) => alternative.itemId) }),
     ...(Object.keys(line.constraints ?? {}).length === 0 ? {} : { constraints: toMcpBomConstraints(line.constraints) }),
     ...(line.notes === undefined ? {} : { notes: line.notes }),
+    ...(line.retiredAt === undefined ? {} : { retiredAt: line.retiredAt }),
     version: line.version,
   };
 }
@@ -1134,8 +1195,68 @@ function toApiBomUpdate(input: Omit<BomLineUpdateInput, "bomLineId" | "expectedV
   return { ...(input.description === undefined ? {} : { name: input.description }), ...(input.quantity === undefined ? {} : { requiredQuantity: input.quantity }), ...(input.unit === undefined ? {} : { unit: toApiUnit(input.unit) }), ...(input.requirement === undefined ? {} : { optional: input.requirement === "optional" }), ...(input.itemId === undefined ? {} : { itemId: input.itemId }), ...((input.alternatives !== undefined || input.compatibleItemIds !== undefined) ? { alternatives: toApiBomAlternatives(input) } : {}), ...(input.constraints === undefined ? {} : { constraints: toApiBomConstraints(input.constraints) }), ...(input.notes === undefined ? {} : { notes: input.notes }) };
 }
 
-function toMcpBomEvaluation(value: { revisionId: string; lines: readonly BomGap[]; totals: { suppliedLines: number; inspectFirstLines: number; partialLines: number; missingLines: number; optionalLines: number } }, input: BomEvaluationInput): BomEvaluation {
-  return { projectRevisionId: value.revisionId, generatedAt: new Date().toISOString(), lines: value.lines.map((line) => ({ bomLineId: line.lineId, description: line.name, requested: { value: line.requiredQuantity, unit: fromApiUnit(line.unit) }, state: line.status === "partially_supplied" ? "partial" : line.status === "inspect_first" ? "inspect_first" : line.status, supplied: { value: line.suppliedQuantity, unit: fromApiUnit(line.unit) }, matches: line.matchedItemIds.map((itemId) => toMcpBomMatch(line, itemId)), recommendedAction: line.status === "supplied" ? "reuse" : line.status === "inspect_first" ? "inspect" : line.status === "optional" ? "none" : "buy", explanation: line.reasons.join(" ") })), totals: { required: value.totals.suppliedLines + value.totals.inspectFirstLines + value.totals.partialLines + value.totals.missingLines, supplied: value.totals.suppliedLines, inspectFirst: value.totals.inspectFirstLines, partial: value.totals.partialLines, missing: value.totals.missingLines } };
+function toMcpBomEvaluation(value: { revisionId: string; lines: readonly BomGap[]; totals: { requiredLines: number; suppliedLines: number; inspectFirstLines: number; partialLines: number; missingLines: number; optionalLines: number; readyLines?: number; checkLines?: number; decideLines?: number; sourceLines?: number } }, _input: BomEvaluationInput): BomEvaluation {
+  const decisionFor = (line: BomGap): NonNullable<BomGap["decision"]> => {
+    if (line.decision !== undefined) return line.decision;
+    if (line.status === "supplied") return "ready";
+    if (line.status === "inspect_first") return "check";
+    if (line.status === "partially_supplied") return line.inspectQuantity > 0 ? "check" : "source";
+    if (line.status === "specify_first") return "decide";
+    return "source";
+  };
+  return {
+    projectRevisionId: value.revisionId,
+    generatedAt: new Date().toISOString(),
+    lines: value.lines.map((line) => {
+      const decision = decisionFor(line);
+      const state = line.status === "partially_supplied" ? "partial" : line.status === "inspect_first" ? "inspect_first" : line.status;
+      const recommendedAction = decision === "ready" ? "reuse" : decision === "check" ? "inspect" : decision === "decide" ? "specify" : line.status === "optional" ? "none" : "buy";
+      return {
+        bomLineId: line.lineId,
+        description: line.name,
+        requested: { value: line.requiredQuantity, unit: fromApiUnit(line.unit) },
+        requirement: line.optional === true ? "optional" : "required",
+        state,
+        decision,
+        ...(line.missingDecisions === undefined ? {} : { missingDecisions: line.missingDecisions }),
+        supplied: { value: line.suppliedQuantity, unit: fromApiUnit(line.unit) },
+        matches: line.matchedItemIds.map((itemId) => toMcpBomMatch(line, itemId)),
+        recommendedAction,
+        explanation: line.reasons.join(" "),
+      };
+    }),
+    totals: {
+      required: value.totals.requiredLines,
+      optional: value.totals.optionalLines,
+      supplied: value.totals.suppliedLines,
+      inspectFirst: value.totals.inspectFirstLines,
+      partial: value.totals.partialLines,
+      missing: value.totals.missingLines,
+      ready: value.totals.readyLines ?? value.lines.filter((line) => line.optional !== true && decisionFor(line) === "ready").length,
+      check: value.totals.checkLines ?? value.lines.filter((line) => line.optional !== true && decisionFor(line) === "check").length,
+      decide: value.totals.decideLines ?? value.lines.filter((line) => line.optional !== true && decisionFor(line) === "decide").length,
+      source: value.totals.sourceLines ?? value.lines.filter((line) => line.optional !== true && decisionFor(line) === "source").length,
+    },
+  };
+}
+
+function projectBlockedFromBom(projectRevisionId: string, evaluation: { readonly lines: readonly BomGap[] }): ProjectBlocked {
+  const reasons = evaluation.lines.flatMap((line) => {
+    if (line.optional === true) return [];
+    const decision = line.decision ?? (
+      line.status === "supplied" ? "ready" :
+      line.status === "inspect_first" ? "check" :
+      line.status === "specify_first" ? "decide" :
+      line.status === "partially_supplied" && line.inspectQuantity > 0 ? "check" :
+      "source"
+    );
+    if (decision === "ready") return [];
+    const fallback = decision === "decide" && (line.missingDecisions?.length ?? 0) > 0
+      ? `Resolve: ${line.missingDecisions!.join(", ")}.`
+      : `${line.name} is not ready (${decision}).`;
+    return (line.reasons.length > 0 ? line.reasons : [fallback]).map((reason) => ({ source: "bom" as const, projectRevisionId, bomLineId: line.lineId, decision, reason }));
+  });
+  return { blocked: deriveProjectBlocked(reasons.map((reason) => reason.reason)).blocked, reasons };
 }
 
 function toApiReservation(input: ReservationInput): CreateReservation {

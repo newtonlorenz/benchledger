@@ -27,7 +27,7 @@ import type {
   reconciliationReservationChangeSchema,
   reconciliationDraftSchema, saveReconciliationDraftSchema, commitReconciliationSchema,
   reconciliationCommitSchema,
-  workspaceSecurityModeSchema, workspaceSecurityStatusSchema, workspaceSecurityMutationSchema
+  workspaceSecurityModeSchema, workspaceSecurityStatusSchema, workspaceSecurityMutationSchema, projectLifecycleSchema
 } from "./schemas.js";
 
 export type Dimension = z.infer<typeof dimensionSchema>;
@@ -48,6 +48,8 @@ export type InventoryBulkUpdate = z.infer<typeof inventoryBulkUpdateSchema>;
 export type StockEventInput = z.infer<typeof stockEventInputSchema>;
 export type StockEvent = z.infer<typeof stockEventSchema>;
 export type UsageInput = z.infer<typeof usageInputSchema>;
+export type ProjectLifecycle = z.infer<typeof projectLifecycleSchema>;
+export type ProjectStatus = ProjectLifecycle;
 export type Project = z.infer<typeof projectSchema>;
 export type CreateProject = z.infer<typeof createProjectSchema>;
 export type UpdateProject = z.infer<typeof updateProjectSchema>;

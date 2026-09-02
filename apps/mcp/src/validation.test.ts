@@ -14,6 +14,7 @@ import {
   bomLineUpdate,
   boundedJsonObject,
   contextRefresh,
+  bomLineList,
   dimensions,
   evidence,
   finalizeArtifactUpload,
@@ -80,6 +81,9 @@ describe("MCP validation boundary", () => {
     expect(retireProject({ projectId: "project-1" })).toEqual({ projectId: "project-1" });
     expect(retireProject({ projectId: "project-1", expectedVersion: 4 })).toEqual({ projectId: "project-1", expectedVersion: 4 });
     expect(retireBomLine({ bomLineId: "bom-1", expectedVersion: 2 })).toEqual({ bomLineId: "bom-1", expectedVersion: 2 });
+    expectInvalid(() => retireBomLine({ bomLineId: "bom-1" }));
+    expect(bomLineList({ projectRevisionId: "revision-1", includeRetired: true })).toEqual({ projectRevisionId: "revision-1", includeRetired: true, limit: 25 });
+    expectInvalid(() => bomLineList({ projectRevisionId: "revision-1", includeRetired: "yes" }));
     expectInvalid(() => retireProject({ projectId: "project-1", expectedVersion: -1 }));
     expectInvalid(() => retireBomLine({ bomLineId: "bom-1", expectedVersion: 1.5 }));
   });
@@ -225,7 +229,7 @@ describe("MCP validation boundary", () => {
   });
 
   it("validates project, work-item, and revision commands", () => {
-    expect(projectList({ query: "lamp", status: "paused", limit: 2 })).toMatchObject({ query: "lamp", status: "paused", limit: 2 });
+    expect(projectList({ query: "lamp", status: "validating", limit: 2 })).toMatchObject({ query: "lamp", status: "validating", limit: 2 });
     expect(projectCreate({ name: "Autonomous lamp", description: "A servo-driven light" })).toEqual({ name: "Autonomous lamp", description: "A servo-driven light" });
     expect(projectWithInitialRevisionCreate({ name: "Lamp", projectId: "lamp", revisionId: "lamp-r1", revisionSummary: "Initial concept" })).toMatchObject({ name: "Lamp", projectId: "lamp", revisionId: "lamp-r1", revisionSummary: "Initial concept" });
     expect(projectUpdate({ projectId: "lamp", expectedVersion: 2, status: "complete" })).toEqual({ projectId: "lamp", expectedVersion: 2, name: undefined, description: undefined, status: "complete" });
@@ -237,13 +241,14 @@ describe("MCP validation boundary", () => {
     expectInvalid(() => projectCreate({ name: "" }));
     expectInvalid(() => projectWithInitialRevisionCreate({ name: "Lamp", projectId: "bad/id" }));
     expectInvalid(() => workItemCreate({ projectId: "lamp", name: "Base", kind: "printer" }));
-    expectInvalid(() => projectUpdate({ projectId: "lamp", status: "idea" }));
+    expectInvalid(() => projectUpdate({ projectId: "lamp", expectedVersion: 2, status: "paused" }));
   });
 
   it("validates BOM, alternatives, constraints, reservations, and usage", () => {
     expect(bomLineList({ projectRevisionId: "lamp-r1", limit: 20 })).toMatchObject({ projectRevisionId: "lamp-r1", limit: 20 });
     const line = bomLineCreate({ projectRevisionId: "lamp-r1", description: "M3 screw", quantity: 4, unit: "piece", requirement: "required", itemId: "m3-screw", alternatives: [{ itemId: "m3-screw-2", compatible: "confirmed", reason: "same thread" }], constraints: { kind: "fastener", manufacturer: "Acme", model: "M3", sku: "M3-12", tag: "stainless", nameIncludes: "screw" }, notes: "Use button head" });
     expect(line).toMatchObject({ description: "M3 screw", alternatives: [{ itemId: "m3-screw-2", compatible: "confirmed", reason: "same thread" }], constraints: { kind: "fastener", nameIncludes: "screw" } });
+    expect(bomLineCreate({ projectRevisionId: "lamp-r1", description: "12 V power supply", quantity: 1, unit: "piece", constraints: { specification: { status: "insufficient", missingDecisions: ["current_or_load", "connector"] } } })).toMatchObject({ constraints: { specification: { status: "insufficient", missingDecisions: ["current_or_load", "connector"] } } });
     const legacyLine = bomLineCreate({ projectRevisionId: "lamp-r1", description: "Legacy screw", quantity: 1, unit: "piece", compatibleItemIds: ["m3-screw-3"] });
     expect(legacyLine).toMatchObject({ compatibleItemIds: ["m3-screw-3"] });
     expect(bomLineUpdate({ bomLineId: "bom-1", expectedVersion: 1, quantity: 2, unit: "set", requirement: "optional", constraints: {} })).toMatchObject({ bomLineId: "bom-1", quantity: 2, unit: "set", requirement: "optional" });
@@ -256,6 +261,7 @@ describe("MCP validation boundary", () => {
     expectInvalid(() => bomLineCreate({ projectRevisionId: "lamp-r1", description: "x", quantity: 1, unit: "piece", alternatives: [{ itemId: "alt", compatible: "maybe" }] }));
     expectInvalid(() => bomLineCreate({ projectRevisionId: "lamp-r1", description: "x", quantity: 1, unit: "piece", constraints: { invalid: "value" } }), /unsupported/);
     expectInvalid(() => bomLineCreate({ projectRevisionId: "lamp-r1", description: "x", quantity: 1, unit: "piece", constraints: { kind: ["electronic"] } }), /string/);
+    expectInvalid(() => bomLineCreate({ projectRevisionId: "lamp-r1", description: "x", quantity: 1, unit: "piece", constraints: { specification: { status: "sufficient" } } }), /invalid|specification/i);
     expectInvalid(() => bomLineUpdate({ bomLineId: "bom-1", quantity: 0 }));
     expectInvalid(() => reservation({ projectRevisionId: "lamp-r1", bomLineId: "bom-1", itemId: "m3", quantity: { value: 1, unit: "each" } }));
     expectInvalid(() => usage({ projectRevisionId: "lamp-r1", itemId: "m3", quantity: { value: 1, unit: "piece" }, extra: true }));

@@ -4,13 +4,18 @@ import { classifyAvailability } from "./stock.js";
 import type {
   AvailabilityClass,
   BomCandidate,
+  BomCompatibility,
   BomConstraints,
+  BomDecision,
+  BomAlternative,
   BomLine,
   BomLineEvaluation,
   BomEvaluation,
+  BomSpecificationDecision,
   BomSummary,
   InventoryItem,
   Project,
+  ProjectStatus,
   ProjectRevision,
   Reservation,
   RevisionStatus,
@@ -26,7 +31,7 @@ export interface NewProject {
   name: string;
   slug?: string;
   description?: string;
-  status?: Project["status"];
+  status?: ProjectStatus;
   visibility?: Project["visibility"];
   createdAt?: string;
   updatedAt?: string;
@@ -40,7 +45,7 @@ export function createProject(input: NewProject): Project {
     name: input.name.trim(),
     slug: input.slug ?? slugify(input.name),
     ...(input.description === undefined ? {} : { description: input.description }),
-    status: input.status ?? "active",
+    status: input.status ?? "idea",
     visibility: input.visibility ?? "private",
     createdAt,
     updatedAt: input.updatedAt ?? createdAt
@@ -144,6 +149,7 @@ export interface NewBomLine {
   optional?: boolean;
   itemId?: string;
   alternativeItemIds?: readonly string[];
+  alternatives?: readonly BomAlternative[];
   constraints?: BomConstraints;
   notes?: string;
 }
@@ -162,6 +168,7 @@ export function createBomLine(input: NewBomLine): BomLine {
     ...(input.optional === undefined ? {} : { optional: input.optional }),
     ...(input.itemId === undefined ? {} : { itemId: input.itemId }),
     ...(input.alternativeItemIds === undefined ? {} : { alternativeItemIds: input.alternativeItemIds.slice() }),
+    ...(input.alternatives === undefined ? {} : { alternatives: input.alternatives.map((alternative) => ({ ...alternative, ...(alternative.constraints === undefined ? {} : { constraints: { ...alternative.constraints, ...(alternative.constraints.tags === undefined ? {} : { tags: alternative.constraints.tags.slice() }) } }) })) }),
     ...(input.constraints === undefined ? {} : { constraints: { ...input.constraints, ...(input.constraints.tags === undefined ? {} : { tags: input.constraints.tags.slice() }) } }),
     ...(input.notes === undefined ? {} : { notes: input.notes })
   };
@@ -176,13 +183,15 @@ function textIncludes(value: string | undefined, expected: string): boolean {
   return value?.toLocaleLowerCase().includes(expected.toLocaleLowerCase()) ?? false;
 }
 
-const SUPPORTED_BOM_CONSTRAINT_KEYS = new Set(["category", "manufacturer", "model", "variantIncludes", "machineId", "dimensions", "tags"]);
+const SUPPORTED_BOM_CONSTRAINT_KEYS = new Set(["category", "manufacturer", "model", "variantIncludes", "machineId", "dimensions", "tags", "specification"]);
 const SUPPORTED_DIMENSION_CONSTRAINT_KEYS = new Set(["width", "height", "depth", "diameter", "unit", "kind", "uncertainty", "source"]);
 
 export function matchesConstraints(item: InventoryItem, constraints: BomConstraints | undefined): boolean {
   if (constraints === undefined) return true;
   if (constraints === null || typeof constraints !== "object" || Array.isArray(constraints)) return false;
   if (Object.keys(constraints).some((key) => !SUPPORTED_BOM_CONSTRAINT_KEYS.has(key))) return false;
+  // Specification decisions describe the requirement and are intentionally
+  // not treated as evidence that an inventory item matches it.
   if (constraints.category !== undefined && item.category !== constraints.category) return false;
   if (constraints.manufacturer !== undefined && !textIncludes(item.manufacturer, constraints.manufacturer)) return false;
   if (constraints.model !== undefined && !textIncludes(item.model, constraints.model)) return false;
@@ -210,8 +219,14 @@ export function matchesConstraints(item: InventoryItem, constraints: BomConstrai
 
 function candidateReason(line: BomLine, item: InventoryItem): string {
   if (line.itemId === item.id) return "Exact inventory item requested by the BOM.";
-  if (line.alternativeItemIds?.includes(item.id) === true) return "Explicit BOM alternative matches this inventory item.";
+  if (line.alternativeItemIds?.includes(item.id) === true || line.alternatives?.some((alternative) => alternative.itemId === item.id) === true) return "Explicit BOM alternative matches this inventory item.";
   return "Name/category and declared constraints match the BOM requirement.";
+}
+
+function candidateCompatibility(line: BomLine, itemId: string): BomCompatibility | undefined {
+  const alternatives = line.alternatives?.filter((alternative) => alternative.itemId === itemId) ?? [];
+  if (alternatives.some((alternative) => alternative.compatible === "conditional" || alternative.compatible === "unknown")) return "conditional";
+  return alternatives.some((alternative) => alternative.compatible === "confirmed") ? "confirmed" : undefined;
 }
 
 function candidatesForLine(line: BomLine, inventory: readonly InventorySnapshot[]): BomCandidate[] {
@@ -221,7 +236,8 @@ function candidatesForLine(line: BomLine, inventory: readonly InventorySnapshot[
   // BOM lines that intentionally specify only a name/category constraint.
   const explicitItemIds = new Set<string>([
     ...(line.itemId === undefined ? [] : [line.itemId]),
-    ...(line.alternativeItemIds ?? [])
+    ...(line.alternativeItemIds ?? []),
+    ...(line.alternatives ?? []).flatMap((alternative) => alternative.itemId === undefined ? [] : [alternative.itemId])
   ]);
   const hasExplicitItemIds = explicitItemIds.size > 0;
   return inventory
@@ -230,7 +246,15 @@ function candidatesForLine(line: BomLine, inventory: readonly InventorySnapshot[
       const descriptiveMatch = textIncludes(item.name, line.name) || textIncludes(line.name, item.name) || (line.constraints?.category !== undefined && item.category === line.constraints.category);
       return (hasExplicitItemIds ? explicitlyListed : descriptiveMatch) && matchesConstraints(item, line.constraints);
     })
-    .map(({ item, balance }) => ({ item, balance, reason: candidateReason(line, item) }));
+    .map(({ item, balance }): BomCandidate => {
+      const compatibility = candidateCompatibility(line, item.id);
+      return {
+        item,
+        balance,
+        reason: candidateReason(line, item),
+        ...(compatibility === undefined ? {} : { compatibility })
+      };
+    });
 }
 
 function chooseCandidate(line: BomLine, candidates: readonly BomCandidate[]): BomCandidate | undefined {
@@ -243,9 +267,13 @@ function chooseCandidate(line: BomLine, candidates: readonly BomCandidate[]): Bo
     })[0];
 }
 
+function candidateIsConfirmed(candidate: BomCandidate): boolean {
+  return candidate.balance.confidence === "confirmed" && (candidate.compatibility === undefined || candidate.compatibility === "confirmed");
+}
+
 function evaluateCandidates(line: BomLine, candidates: readonly BomCandidate[]): Pick<BomLineEvaluation, "status" | "supplied" | "shortfall" | "explanation" | "selected"> {
-  const confirmed = candidates.filter((candidate) => candidate.balance.confidence === "confirmed");
-  const uncertain = candidates.filter((candidate) => candidate.balance.confidence !== "confirmed");
+  const confirmed = candidates.filter(candidateIsConfirmed);
+  const uncertain = candidates.filter((candidate) => !candidateIsConfirmed(candidate));
   const confirmedQuantity = confirmed.reduce((total, candidate) => total + candidate.balance.available, 0);
   const reportedUncertain = uncertain.reduce((total, candidate) => total + (candidate.balance.reported ?? candidate.balance.available), 0);
   const selected = chooseCandidate(line, candidates);
@@ -285,9 +313,42 @@ function evaluateCandidates(line: BomLine, candidates: readonly BomCandidate[]):
   };
 }
 
+const POWER_SUPPLY_NAME = /\b(?:power\s+supply|power\s+adapter|dc\s+adapter|ac\s+adapter|wall\s+adapter|mains\s+adapter)\b/i;
+const POWER_SUPPLY_DECISIONS: readonly BomSpecificationDecision[] = ["current_or_load", "connector"];
+
+interface BomSpecificationResult {
+  sufficient: boolean;
+  missingDecisions: readonly BomSpecificationDecision[];
+}
+
+function specificationForLine(line: BomLine): BomSpecificationResult {
+  const specification = line.constraints?.specification;
+  if (specification !== undefined) {
+    const decisions = specification.decisions ?? {};
+    const mandatoryMissing = POWER_SUPPLY_NAME.test(line.name)
+      ? POWER_SUPPLY_DECISIONS.filter((decision) => {
+        const value = decisions[decision];
+        return typeof value !== "string" || value.trim().length === 0;
+      })
+      : [];
+    const missingDecisions = [...new Set([...(specification.missingDecisions ?? []), ...mandatoryMissing])];
+    return { sufficient: specification.status === "sufficient" && missingDecisions.length === 0, missingDecisions };
+  }
+  if (POWER_SUPPLY_NAME.test(line.name)) return { sufficient: false, missingDecisions: POWER_SUPPLY_DECISIONS };
+  return { sufficient: true, missingDecisions: [] };
+}
+
+function decisionForLine(line: BomLine, status: BomLineEvaluation["status"], sufficient: boolean, needsCheck: boolean): BomDecision {
+  if (status === "available") return "ready";
+  if (status === "inspect-first") return "check";
+  if (status === "partial") return needsCheck ? "check" : "source";
+  if (status === "specify-first") return "decide";
+  return sufficient ? "source" : "decide";
+}
+
 function shoppingLine(line: BomLineEvaluation): ShoppingListLine | undefined {
-  if (line.status === "available") return undefined;
-  if (line.status === "missing" && line.line.optional !== true && line.line.required !== false) {
+  if (line.line.optional === true || line.line.required === false || line.decision !== "source") return undefined;
+  if (line.status === "missing") {
     return {
       bomLineId: line.line.id,
       name: line.line.name,
@@ -307,26 +368,6 @@ function shoppingLine(line: BomLineEvaluation): ShoppingListLine | undefined {
       candidateItemIds: line.candidates.map((candidate) => candidate.item.id)
     };
   }
-  if (line.status === "inspect-first") {
-    return {
-      bomLineId: line.line.id,
-      name: line.line.name,
-      quantity: line.shortfall > 0 ? line.shortfall : line.line.quantity,
-      unit: line.line.unit,
-      reason: "inspect-first",
-      candidateItemIds: line.candidates.map((candidate) => candidate.item.id)
-    };
-  }
-  if (line.line.optional === true || line.line.required === false) {
-    return {
-      bomLineId: line.line.id,
-      name: line.line.name,
-      quantity: line.line.quantity,
-      unit: line.line.unit,
-      reason: "optional",
-      candidateItemIds: line.candidates.map((candidate) => candidate.item.id)
-    };
-  }
   return undefined;
 }
 
@@ -338,30 +379,60 @@ export function evaluateBom(
   const evaluations = lines.map((line): BomLineEvaluation => {
     const candidates = candidatesForLine(line, inventory);
     const selected = chooseCandidate(line, candidates);
+    const specification = specificationForLine(line);
     const availability: Pick<BomLineEvaluation, "status" | "supplied" | "shortfall" | "explanation" | "selected"> = selected === undefined
       ? (() => {
           const missing = classifyAvailability({ required: line.quantity, available: 0, confidence: "unknown", candidate: false });
           return { status: missing.status, supplied: missing.supplied, shortfall: missing.shortfall, explanation: missing.explanation };
         })()
       : evaluateCandidates(line, candidates);
+    const uncertainCandidate = candidates.some((candidate) => !candidateIsConfirmed(candidate));
+    const gatedAvailability = !specification.sufficient
+      ? uncertainCandidate
+        ? {
+            status: "inspect-first" as const,
+            supplied: 0,
+            shortfall: line.quantity,
+            ...(selected === undefined ? {} : { selected }),
+            explanation: "A matching item needs a physical or compatibility check before the requirement can proceed."
+          }
+        : {
+            status: "specify-first" as const,
+            supplied: 0,
+            shortfall: line.quantity,
+            ...(selected === undefined ? {} : { selected }),
+            explanation: "Resolve the requirement decisions before sourcing or reserving an item."
+          }
+      : availability;
+    const isOptional = line.optional === true || line.required === false;
+    const status = isOptional && (gatedAvailability.status === "missing" || gatedAvailability.status === "specify-first")
+      ? "optional" as const
+      : gatedAvailability.status;
     return {
       line,
-      status: availability.status,
-      supplied: availability.supplied,
-      shortfall: availability.shortfall,
+      status,
+      decision: decisionForLine(line, status, specification.sufficient, uncertainCandidate),
+      ...(specification.missingDecisions.length === 0 ? {} : { missingDecisions: specification.missingDecisions.slice() }),
+      supplied: status === "optional" ? availability.supplied : gatedAvailability.supplied,
+      shortfall: status === "optional" ? availability.shortfall : gatedAvailability.shortfall,
       candidates,
-      ...(availability.selected === undefined ? {} : { selected: availability.selected }),
-      explanation: availability.selected === undefined ? availability.explanation : `${availability.explanation} ${availability.selected.reason}`
+      ...(gatedAvailability.selected === undefined ? {} : { selected: gatedAvailability.selected }),
+      explanation: gatedAvailability.selected === undefined ? gatedAvailability.explanation : `${gatedAvailability.explanation} ${gatedAvailability.selected.reason}`
     };
   });
   const summary: BomSummary = {
     totalLines: evaluations.length,
-    availableLines: evaluations.filter((line) => line.status === "available").length,
-    inspectFirstLines: evaluations.filter((line) => line.status === "inspect-first").length,
-    partialLines: evaluations.filter((line) => line.status === "partial").length,
+    availableLines: evaluations.filter((line) => line.status === "available" && line.line.optional !== true && line.line.required !== false).length,
+    inspectFirstLines: evaluations.filter((line) => line.status === "inspect-first" && line.line.optional !== true && line.line.required !== false).length,
+    partialLines: evaluations.filter((line) => line.status === "partial" && line.line.optional !== true && line.line.required !== false).length,
     missingLines: evaluations.filter((line) => line.status === "missing" && line.line.optional !== true && line.line.required !== false).length,
-    optionalMissingLines: evaluations.filter((line) => line.status !== "available" && (line.line.optional === true || line.line.required === false)).length,
-    ...(estimatedMissingCostMinor === undefined ? {} : { estimatedMissingCostMinor: evaluations.reduce((total, line) => total + (estimatedMissingCostMinor.get(line.line.id) ?? 0), 0) })
+    optionalMissingLines: evaluations.filter((line) => line.status === "optional" && line.supplied < line.line.quantity).length,
+    optionalLines: evaluations.filter((line) => line.line.optional === true || line.line.required === false).length,
+    readyLines: evaluations.filter((line) => line.line.optional !== true && line.line.required !== false && line.decision === "ready").length,
+    checkLines: evaluations.filter((line) => line.line.optional !== true && line.line.required !== false && line.decision === "check").length,
+    decideLines: evaluations.filter((line) => line.line.optional !== true && line.line.required !== false && line.decision === "decide").length,
+    sourceLines: evaluations.filter((line) => line.decision === "source" && line.line.optional !== true && line.line.required !== false).length,
+    ...(estimatedMissingCostMinor === undefined ? {} : { estimatedMissingCostMinor: evaluations.reduce((total, line) => total + (line.line.optional === true || line.line.required === false ? 0 : (estimatedMissingCostMinor.get(line.line.id) ?? 0)), 0) })
   };
   return {
     revisionId: lines[0]?.revisionId ?? "",

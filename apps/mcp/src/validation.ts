@@ -10,6 +10,7 @@ import {
   updateInventoryProductProfileSchema,
   saveReconciliationDraftSchema,
   commitReconciliationSchema,
+  bomSpecificationSchema,
 } from "@benchledger/api-contract";
 import { BOM_CONSTRAINT_KEYS } from "./types.js";
 import type {
@@ -176,13 +177,10 @@ export function retireProject(value: unknown): { projectId: string; expectedVers
   return result;
 }
 
-export function retireBomLine(value: unknown): { bomLineId: string; expectedVersion?: number } {
+export function retireBomLine(value: unknown): { bomLineId: string; expectedVersion: number } {
   const input = record(value, "arguments");
   keys(input, ["bomLineId", "expectedVersion"], "arguments");
-  const result: { bomLineId: string; expectedVersion?: number } = { bomLineId: id(input.bomLineId, "arguments.bomLineId") };
-  const version = optionalInteger(input.expectedVersion, "arguments.expectedVersion");
-  if (version !== undefined) result.expectedVersion = version;
-  return result;
+  return { bomLineId: id(input.bomLineId, "arguments.bomLineId"), expectedVersion: integer(input.expectedVersion, "arguments.expectedVersion") };
 }
 
 export function optionalId(value: unknown, label: string): string | undefined {
@@ -586,7 +584,7 @@ export function projectList(value: unknown): ProjectListInput {
   return {
     ...parsePageInput({ limit: input.limit, cursor: input.cursor }),
     query: optionalString(input.query, "arguments.query", 256),
-    status: optionalEnum(input.status, "arguments.status", ["active", "paused", "complete", "retired"] as const),
+    status: optionalEnum(input.status, "arguments.status", ["idea", "planned", "ready", "building", "validating", "complete", "archived"] as const),
   };
 }
 
@@ -619,7 +617,7 @@ export function projectUpdate(value: unknown): ProjectUpdateInput {
   result.expectedVersion = optionalInteger(input.expectedVersion, "arguments.expectedVersion");
   result.name = optionalString(input.name, "arguments.name", 256);
   result.description = optionalString(input.description, "arguments.description");
-  result.status = optionalEnum(input.status, "arguments.status", ["active", "paused", "complete", "retired"] as const);
+  result.status = optionalEnum(input.status, "arguments.status", ["idea", "planned", "ready", "building", "validating", "complete", "archived"] as const);
   return result;
 }
 
@@ -660,8 +658,8 @@ export function revisionRead(value: unknown): { revisionId: string } {
 
 export function bomLineList(value: unknown): BomLineListInput {
   const input = record(value, "arguments");
-  keys(input, ["projectRevisionId", "limit", "cursor"], "arguments");
-  return { ...parsePageInput({ limit: input.limit, cursor: input.cursor }), projectRevisionId: id(input.projectRevisionId, "arguments.projectRevisionId") };
+  keys(input, ["projectRevisionId", "includeRetired", "limit", "cursor"], "arguments");
+  return { ...parsePageInput({ limit: input.limit, cursor: input.cursor }), projectRevisionId: id(input.projectRevisionId, "arguments.projectRevisionId"), ...(optionalBoolean(input.includeRetired, "arguments.includeRetired") === undefined ? {} : { includeRetired: optionalBoolean(input.includeRetired, "arguments.includeRetired") }) };
 }
 
 function optionalJsonObject(value: unknown, label: string): JsonObject | undefined {
@@ -695,6 +693,11 @@ function optionalBomConstraints(value: unknown, label: string): BomLineCreateInp
   const parsed = optionalJsonObject(value, label);
   if (parsed === undefined) return undefined;
   for (const [key, candidate] of Object.entries(parsed)) {
+    if (key === "specification") {
+      const specification = bomSpecificationSchema.safeParse(candidate);
+      if (!specification.success) fail(`${label}.specification is invalid.`);
+      continue;
+    }
     if (!(BOM_CONSTRAINT_KEYS as readonly string[]).includes(key)) fail(`${label}.${key} is unsupported; use one of: ${BOM_CONSTRAINT_KEYS.join(", ")}.`);
     if (typeof candidate !== "string") fail(`${label}.${key} must be a string.`);
   }

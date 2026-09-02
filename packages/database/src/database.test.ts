@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createAuditRecord, createBomLine, createOfferSnapshot, createProject, createProjectRevision, createStockEvent, createSupplier, createWorkItem, createWorkItemRevision } from "@benchledger/domain";
-import { AuditRepository, BomRepository, BenchDatabase, InventoryRepository, ProcurementRepository, ProjectRepository, ReservationRepository } from "./index.js";
+import { AuditRepository, BomRepository, BenchDatabase, InventoryRepository, ProcurementRepository, ProjectRepository, ReservationRepository, migrateProjectSchema } from "./index.js";
 import type { InventoryItem } from "@benchledger/domain";
 
 const item: InventoryItem = {
@@ -61,6 +61,87 @@ describe("SQLite repositories", () => {
     expect(projects.listRevisions(project.id)).toHaveLength(1);
     expect(projects.listWorkItemRevisions(work.id)).toHaveLength(1);
     expect(boms.listLines(projectRevision.id)[0]?.itemId).toBe(item.id);
+    database.close();
+  });
+
+  it("backfills durable retirement from trustworthy legacy runtime metadata", () => {
+    const database = new BenchDatabase(":memory:");
+    const projects = new ProjectRepository(database);
+    const boms = new BomRepository(database);
+    const project = createProject({ id: "legacy-retirement-project", name: "Legacy retirement" });
+    const revision = createProjectRevision({ id: "legacy-retirement-revision", projectId: project.id, number: 1 });
+    projects.create(project);
+    projects.createRevision(revision);
+    boms.createLine(createBomLine({ id: "legacy-retirement-line", revisionId: revision.id, name: "Legacy line", quantity: 1, unit: "piece", notes: "Historical note" }));
+    database.exec("CREATE TABLE forge_runtime_metadata (entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, payload_json TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (entity_type, entity_id))");
+    database.run("INSERT INTO forge_runtime_metadata (entity_type, entity_id, payload_json, updated_at) VALUES (?, ?, ?, ?)", ["bom_line", "legacy-retirement-line", JSON.stringify({ retired: true }), "2026-01-02T00:00:00.000Z"]);
+
+    migrateProjectSchema(database);
+    migrateProjectSchema(database);
+
+    expect(boms.listLines(revision.id)).toEqual([]);
+    expect(boms.listLines(revision.id, true)).toEqual([expect.objectContaining({ id: "legacy-retirement-line", notes: "Historical note", retiredAt: "2026-01-02T00:00:00.000Z" })]);
+    database.close();
+  });
+
+  it("migrates legacy project statuses to one lifecycle and keeps the source in audit history", () => {
+    const database = new BenchDatabase(":memory:");
+    for (const [id, status] of [["legacy-active", "active"], ["legacy-hold", "on_hold"], ["legacy-idea", "idea"], ["legacy-plan", "planning"], ["legacy-work", "in_progress"], ["legacy-validation", "validation"], ["legacy-done", "complete"], ["legacy-retired", "retired"]] as const) {
+      database.run("INSERT INTO projects (id, name, slug, status, visibility, created_at, updated_at, retired_at) VALUES (?, ?, ?, ?, 'private', ?, ?, ?)", [id, id, id, status, "2026-01-01T00:00:00.000Z", "2026-01-02T00:00:00.000Z", status === "retired" ? "2026-01-02T00:00:00.000Z" : null]);
+    }
+    migrateProjectSchema(database);
+    migrateProjectSchema(database);
+
+    expect(database.all<{ readonly status: string }>("SELECT status FROM projects ORDER BY id").map((row) => row.status)).toEqual(["idea", "complete", "idea", "idea", "planned", "archived", "validating", "building"]);
+    expect(database.all<{ readonly metadata_json: string }>("SELECT metadata_json FROM audit_log WHERE action = 'project.lifecycle.migrated' ORDER BY entity_id")).toHaveLength(6);
+    expect(database.get<{ readonly metadata_json: string }>("SELECT metadata_json FROM audit_log WHERE entity_id = ?", ["legacy-plan"])).toMatchObject({ metadata_json: expect.stringContaining("planning") });
+    database.close();
+  });
+
+  it("fails closed instead of inventing progress for an unknown legacy project status", () => {
+    const database = new BenchDatabase(":memory:");
+    database.run("INSERT INTO projects (id, name, slug, status, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, 'private', ?, ?)", ["legacy-unknown", "Unknown", "unknown", "mystery", "2026-01-01T00:00:00.000Z", "2026-01-02T00:00:00.000Z"]);
+
+    expect(() => migrateProjectSchema(database)).toThrow(/unsupported legacy status/);
+    expect(database.get<{ readonly status: string }>("SELECT status FROM projects WHERE id = ?", ["legacy-unknown"])).toEqual({ status: "mystery" });
+    expect(database.get("SELECT id FROM audit_log WHERE entity_id = ?", ["legacy-unknown"])).toBeUndefined();
+    database.close();
+  });
+
+  it("uses legacy project metadata as the effective source, preserves unrelated metadata, and audits both sources", () => {
+    const database = new BenchDatabase(":memory:");
+    database.exec("CREATE TABLE forge_runtime_metadata (entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, payload_json TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (entity_type, entity_id))");
+    database.run("INSERT INTO projects (id, name, slug, status, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, 'private', ?, ?)", ["metadata-project", "Metadata project", "metadata-project", "active", "2026-01-01T00:00:00.000Z", "2026-01-02T00:00:00.000Z"]);
+    database.run("INSERT INTO projects (id, name, slug, status, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, 'private', ?, ?)", ["metadata-only-revision", "Metadata only revision", "metadata-only-revision", "ready", "2026-01-01T00:00:00.000Z", "2026-01-02T00:00:00.000Z"]);
+    database.run("INSERT INTO forge_runtime_metadata (entity_type, entity_id, payload_json, updated_at) VALUES (?, ?, ?, ?)", ["project", "metadata-project", JSON.stringify({ status: "validation", currentRevisionId: "revision-1", note: "keep me" }), "2026-01-03T00:00:00.000Z"]);
+    database.run("INSERT INTO forge_runtime_metadata (entity_type, entity_id, payload_json, updated_at) VALUES (?, ?, ?, ?)", ["project", "metadata-only-revision", JSON.stringify({ currentRevisionId: "revision-2" }), "2026-01-03T00:00:00.000Z"]);
+
+    migrateProjectSchema(database);
+    migrateProjectSchema(database);
+
+    expect(database.get<{ readonly status: string; readonly retired_at: string | null }>("SELECT status, retired_at FROM projects WHERE id = ?", ["metadata-project"])).toEqual({ status: "validating", retired_at: null });
+    expect(JSON.parse(database.get<{ readonly payload_json: string }>("SELECT payload_json FROM forge_runtime_metadata WHERE entity_type = ? AND entity_id = ?", ["project", "metadata-project"])!.payload_json)).toEqual({ currentRevisionId: "revision-1", note: "keep me" });
+    expect(database.all("SELECT id FROM audit_log WHERE action = 'project.lifecycle.migrated' AND entity_id = ?", ["metadata-project"])).toHaveLength(1);
+    const audit = database.get<{ readonly metadata_json: string }>("SELECT metadata_json FROM audit_log WHERE action = 'project.lifecycle.migrated' AND entity_id = ?", ["metadata-project"]);
+    expect(JSON.parse(audit!.metadata_json)).toEqual({ legacyStatus: "validation", storedStatus: "active", metadataStatus: "validation", canonicalStatus: "validating" });
+    expect(database.all("SELECT id FROM audit_log WHERE action = 'project.lifecycle.migrated' AND entity_id = ?", ["metadata-only-revision"])).toHaveLength(0);
+    expect(JSON.parse(database.get<{ readonly payload_json: string }>("SELECT payload_json FROM forge_runtime_metadata WHERE entity_type = ? AND entity_id = ?", ["project", "metadata-only-revision"])!.payload_json)).toEqual({ currentRevisionId: "revision-2" });
+    database.close();
+  });
+
+  it("rolls back the whole project lifecycle migration when metadata contains an unknown status", () => {
+    const database = new BenchDatabase(":memory:");
+    database.exec("CREATE TABLE forge_runtime_metadata (entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, payload_json TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (entity_type, entity_id))");
+    for (const [id, status] of [["valid-project", "planning"], ["unknown-metadata-project", "active"]] as const) {
+      database.run("INSERT INTO projects (id, name, slug, status, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, 'private', ?, ?)", [id, id, id, status, "2026-01-01T00:00:00.000Z", "2026-01-02T00:00:00.000Z"]);
+    }
+    database.run("INSERT INTO forge_runtime_metadata (entity_type, entity_id, payload_json, updated_at) VALUES (?, ?, ?, ?)", ["project", "unknown-metadata-project", JSON.stringify({ status: "mystery", currentRevisionId: "revision-2" }), "2026-01-03T00:00:00.000Z"]);
+
+    expect(() => migrateProjectSchema(database)).toThrow(/unsupported legacy status/);
+    expect(database.all<{ readonly id: string; readonly status: string }>("SELECT id, status FROM projects ORDER BY id")).toEqual([{ id: "unknown-metadata-project", status: "active" }, { id: "valid-project", status: "planning" }]);
+    expect(database.get("SELECT id FROM audit_log WHERE action = 'project.lifecycle.migrated'")).toBeUndefined();
+    expect(JSON.parse(database.get<{ readonly payload_json: string }>("SELECT payload_json FROM forge_runtime_metadata WHERE entity_id = ?", ["unknown-metadata-project"])!.payload_json)).toEqual({ status: "mystery", currentRevisionId: "revision-2" });
+    expect(database.get("SELECT value FROM forge_meta WHERE key = ?", ["project_schema_version"])).toBeUndefined();
     database.close();
   });
 

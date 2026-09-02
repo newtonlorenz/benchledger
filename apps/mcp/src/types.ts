@@ -23,6 +23,7 @@ import type {
   InventoryCategory as ApiInventoryCategory,
   CreateInventoryCategory as ApiCreateInventoryCategory,
   UpdateInventoryCategory as ApiUpdateInventoryCategory,
+  ProjectLifecycle as ApiProjectLifecycle,
 } from "@benchledger/api-contract";
 
 export type JsonPrimitive = null | boolean | number | string;
@@ -127,6 +128,8 @@ export interface InventoryItem {
   /** Optional user-managed taxonomy assignment; semantic category remains `category`. */
   categoryNodeId?: string;
   quantity: Quantity;
+  availableQuantity?: Quantity;
+  allocatedQuantity?: Quantity;
   availability: Availability;
   evidence: EvidenceSummary;
   description?: string;
@@ -146,8 +149,21 @@ export interface InventorySummary {
   generatedAt: string;
   counts: {
     totalItems: number;
+    /** Confirmed records with no current allocation; mutually exclusive summary bucket. */
     confirmedItems: number;
+    /** All physically confirmed/commissioned records, including allocated and depleted records. */
+    confirmedEvidenceItems: number;
+    /** Confirmed records that still have usable unallocated stock, including partial allocations. */
+    availableConfirmedItems: number;
     inspectFirstItems: number;
+    allocatedItems: number;
+    /** Allocated on-hand quantities grouped by their canonical unit. */
+    allocatedQuantities: readonly Quantity[];
+    depletedItems: number;
+    /** Order or delivery evidence without a current physical count. */
+    unverifiedItems: number;
+    /** Retired records are retained for history but excluded from reuse. */
+    retiredItems: number;
     missingItems: number;
   };
   categories: readonly { category: string; itemCount: number }[];
@@ -339,7 +355,8 @@ export interface StockEventsInput extends PageInput {
 export interface Project {
   id: string;
   name: string;
-  status: "active" | "paused" | "complete" | "retired";
+  /** The project lifecycle is intentionally distinct from revision evidence. */
+  status: ApiProjectLifecycle;
   visibility: "private" | "public";
   description?: string;
   version: number;
@@ -429,8 +446,25 @@ export interface ProjectContext {
   projectId: string;
   generatedAt: string;
   text: string;
+  /** Same canonical lifecycle value returned by the project record. */
+  status: Project["status"];
+  /** Readiness is derived from the current BOM; it is never a lifecycle value. */
+  blocked: ProjectBlocked;
   currentRevisionId?: string;
   nextActions?: readonly string[];
+}
+
+export interface ProjectBlockedReason {
+  source: "bom";
+  projectRevisionId: string;
+  bomLineId: string;
+  decision: "check" | "decide" | "source";
+  reason: string;
+}
+
+export interface ProjectBlocked {
+  blocked: boolean;
+  reasons: readonly ProjectBlockedReason[];
 }
 
 export interface BomLine {
@@ -447,12 +481,20 @@ export interface BomLine {
   compatibleItemIds?: readonly string[];
   constraints?: BomConstraints;
   notes?: string;
+  retiredAt?: string;
   version?: number;
 }
 
 export const BOM_CONSTRAINT_KEYS = ["kind", "manufacturer", "model", "sku", "tag", "nameIncludes"] as const;
 export type BomConstraintKey = typeof BOM_CONSTRAINT_KEYS[number];
-export type BomConstraints = Readonly<Partial<Record<BomConstraintKey, string>>>;
+export type BomSpecificationDecision = "identity" | "purpose" | "voltage" | "current_or_load" | "connector" | "compatibility" | "dimensions";
+export type BomSpecificationDecisions = Readonly<Partial<Record<BomSpecificationDecision, string>>>;
+export interface BomSpecification {
+  status: "sufficient" | "insufficient";
+  decisions?: BomSpecificationDecisions;
+  missingDecisions?: readonly BomSpecificationDecision[];
+}
+export type BomConstraints = Readonly<Partial<Record<BomConstraintKey, string>> & { specification?: BomSpecification }>;
 export type BomCompatibility = "confirmed" | "conditional" | "unknown";
 
 export interface BomAlternative {
@@ -463,6 +505,7 @@ export interface BomAlternative {
 
 export interface BomLineListInput extends PageInput {
   projectRevisionId: string;
+  includeRetired?: boolean;
 }
 
 export interface BomLineCreateInput {
@@ -504,10 +547,15 @@ export interface BomEvaluation {
   lines: readonly BomEvaluationLine[];
   totals: {
     required: number;
+    optional: number;
     supplied: number;
     inspectFirst: number;
     partial: number;
     missing: number;
+    ready: number;
+    check: number;
+    decide: number;
+    source: number;
   };
 }
 
@@ -515,10 +563,13 @@ export interface BomEvaluationLine {
   bomLineId: string;
   description: string;
   requested: Quantity;
-  state: "supplied" | "inspect_first" | "partial" | "missing" | "optional";
+  requirement: "required" | "optional";
+  state: "supplied" | "inspect_first" | "specify_first" | "partial" | "missing" | "optional";
+  decision: "ready" | "check" | "decide" | "source";
+  missingDecisions?: readonly BomSpecificationDecision[];
   supplied: Quantity;
   matches: readonly BomMatch[];
-  recommendedAction: "reuse" | "inspect" | "buy" | "none";
+  recommendedAction: "reuse" | "inspect" | "specify" | "buy" | "none";
   explanation: string;
 }
 
@@ -790,7 +841,8 @@ export interface BomBackend {
   listProjectLines?(input: { projectId: string } & PageInput, context: McpRequestContext): Promise<Page<BomLine>>;
   createLine(input: BomLineCreateInput, context: McpRequestContext): Promise<WriteResult<BomLine>>;
   updateLine(input: BomLineUpdateInput, context: McpRequestContext): Promise<WriteResult<BomLine>>;
-  retireLine(input: { bomLineId: string; expectedVersion?: number }, context: McpRequestContext): Promise<WriteResult>;
+  retireLine(input: { bomLineId: string; expectedVersion: number }, context: McpRequestContext): Promise<WriteResult>;
+  restoreLine(input: { bomLineId: string; expectedVersion: number }, context: McpRequestContext): Promise<WriteResult>;
   evaluate(input: BomEvaluationInput, context: McpRequestContext): Promise<BomEvaluation>;
   reserve(input: ReservationInput, context: McpRequestContext): Promise<Reservation>;
   release(input: ReleaseReservationInput, context: McpRequestContext): Promise<Reservation>;

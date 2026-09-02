@@ -117,7 +117,8 @@ CREATE TABLE IF NOT EXISTS bom_lines (
   item_id TEXT REFERENCES inventory_items(id),
   alternative_item_ids_json TEXT,
   constraints_json TEXT,
-  notes TEXT
+  notes TEXT,
+  retired_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS bom_lines_revision_idx ON bom_lines(revision_id, id);

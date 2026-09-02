@@ -58,6 +58,15 @@ Then read `benchledger://inventory/summary` and use `list_inventory` with a
 small page (normally `limit: 25`). Use the exact item resource when a candidate
 needs dimensions, compatibility, provenance, or stock history.
 
+Inventory rows expose on-hand, available, and allocated quantities separately.
+A fully reserved counted item is `allocated`, not `depleted`; a partial
+reservation remains visible with both available and allocated quantities.
+Summary allocation counts include partial allocations, while the physically
+confirmed evidence and available-confirmed counts remain independent. Retired
+history is counted separately and never becomes reusable stock. Availability
+filters use these derived states rather than treating evidence labels as stock
+balances.
+
 For a printer or filament decision, keep the exact catalog product, owned
 physical item, product-profile link state, and project build configuration
 separate. Search/read catalog products, then read the physical item's profile;
@@ -82,12 +91,26 @@ edited or custom rows remain authoritative.
 The adapter exposes bounded pages. Continue with the returned cursor instead of
 requesting an unbounded dump. A project resource is similarly scoped:
 
+`list_bom_lines` returns active requirements by default. Pass
+`includeRetired: true` only when auditing history. Retiring a line preserves its
+requirement, optional flag, notes, and versioned evidence; `restore_bom_line`
+requires the current `expectedVersion`. Retired lines never participate in gap
+evaluation or accept new reservations.
+
 ```text
 benchledger://projects/{projectId}/context
 benchledger://projects/{projectId}/revisions/{revisionId}
 benchledger://projects/{projectId}/bom
 benchledger://projects/{projectId}/artifacts
 ```
+
+Every project list, detail, context and mutation uses the same lifecycle:
+`idea`, `planned`, `ready`, `building`, `validating`, `complete`, `archived`.
+Use `retire_project` to archive a project. Never send legacy values such as
+`active`, `planning`, `paused`, `validation` or `retired`; the public boundary
+rejects them. `blocked` is derived from actionable reasons and is not a lifecycle
+value. Project lifecycle changes do not advance or reset the separate revision
+evidence ladder from `concept` through `production approved`.
 
 ## 3. Ask the simple question first (minute 2–4)
 
@@ -97,14 +120,30 @@ For a beginner, use plain language and explain one next action:
 > I already have? Check the inventory, show what needs a physical count, and
 > list only the genuinely missing parts. Do not buy anything.”
 
-The agent should call `calculate_bom_gaps` and explain every result as one of:
+The agent should call `calculate_bom_gaps` and explain every required result as
+one of four decisions:
 
-- **Supplied:** physically confirmed or commissioned stock meets the line.
-- **Inspect first:** an item looks relevant, but quantity or condition is not
-  currently confirmed.
-- **Partial:** confirmed stock covers only part of the requirement.
-- **Missing:** no compatible stock is recorded.
-- **Optional:** useful but not required to complete the stated build.
+- **Ready:** physically confirmed or commissioned stock meets the line.
+- **Check:** a relevant item exists but its quantity, condition, identity, or
+  compatibility still needs inspection. Partial confirmed coverage is Check
+  only while an inspect-first candidate may cover the remaining quantity.
+- **Decide:** the requirement is under-specified. Resolve the returned
+  `missingDecisions` before searching suppliers.
+- **Source:** the requirement is sufficiently specified and confirmed stock
+  does not cover it, so a shopping proposal may be prepared. A confirmed
+  partial line is Source for its remaining quantity when no inspect-first
+  candidate could cover that shortfall.
+
+Optional lines remain separately identified and never authorize Source. A BOM
+line may record `constraints.specification` with a required `status`, resolved
+`decisions`, and exact `missingDecisions`. An insufficient power-supply line
+must resolve current/load and connector before it can become Source. An exact
+item ID does not override conditional compatibility, and ordered or otherwise
+unverified stock remains Check rather than a purchase recommendation.
+
+Each returned line also carries its required/optional flag. Ready, Check,
+Decide, and Source totals cover required lines only; `optional` is a separate
+total even when an optional line happens to be supplied or needs inspection.
 
 Never turn an order, delivery message, or old price into a present stock count.
 When a delivery or order has been physically checked, use

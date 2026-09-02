@@ -28,7 +28,7 @@ describe("BenchLedger HTTP API", () => {
     const runtime = createSyntheticRuntime();
     const projects = await runtime.ports.projects.listProjects({ limit: 50 });
     const project = projects.data.find((candidate) => candidate.id === "synthetic-project-lamp");
-    expect(project).toMatchObject({ currentRevisionId: "synthetic-revision-lamp-r01", status: "planning" });
+    expect(project).toMatchObject({ currentRevisionId: "synthetic-revision-lamp-r01", status: "planned" });
     const lines = await runtime.ports.projects.listBomLines(project?.currentRevisionId ?? "missing");
     expect(lines.map((line) => line.id).sort()).toEqual([
       "synthetic-bom-board",
@@ -300,14 +300,14 @@ describe("BenchLedger HTTP API", () => {
       logger: false
     });
     const sharedHeaders = { "idempotency-key": "shared-bearer-key" };
-    const first = await app.inject({ method: "POST", url: "/api/v1/projects", headers: { ...sharedHeaders, authorization: "Bearer actor-first-token" }, payload: { id: "token-project-first", name: "First token project", status: "planning" } });
-    const second = await app.inject({ method: "POST", url: "/api/v1/projects", headers: { ...sharedHeaders, authorization: "Bearer actor-second-token" }, payload: { id: "token-project-second", name: "Second token project", status: "planning" } });
+    const first = await app.inject({ method: "POST", url: "/api/v1/projects", headers: { ...sharedHeaders, authorization: "Bearer actor-first-token" }, payload: { id: "token-project-first", name: "First token project", status: "planned" } });
+    const second = await app.inject({ method: "POST", url: "/api/v1/projects", headers: { ...sharedHeaders, authorization: "Bearer actor-second-token" }, payload: { id: "token-project-second", name: "Second token project", status: "planned" } });
     expect(first.statusCode).toBe(201);
     expect(second.statusCode).toBe(201);
     expect(first.json()).toMatchObject({ replayed: false, data: { id: "token-project-first" } });
     expect(second.json()).toMatchObject({ replayed: false, data: { id: "token-project-second" } });
 
-    const replay = await app.inject({ method: "POST", url: "/api/v1/projects", headers: { ...sharedHeaders, authorization: "Bearer actor-first-token" }, payload: { id: "token-project-first", name: "First token project", status: "planning" } });
+    const replay = await app.inject({ method: "POST", url: "/api/v1/projects", headers: { ...sharedHeaders, authorization: "Bearer actor-first-token" }, payload: { id: "token-project-first", name: "First token project", status: "planned" } });
     expect(replay.statusCode).toBe(201);
     expect(replay.json()).toMatchObject({ replayed: true, data: { id: "token-project-first" } });
     const auditActors = (await runtime.ports.audit.list(50)).data.filter((event) => event.action === "project.create").map((event) => event.actor);
@@ -317,21 +317,57 @@ describe("BenchLedger HTTP API", () => {
 
   it("evaluates confirmed and inspect-first BOM stock", async () => {
     const { app, cookie, csrf } = await loggedIn();
-    const project = await app.inject({ method: "POST", url: "/api/v1/projects", headers: { cookie, "x-csrf-token": csrf }, payload: { name: "Demo build", status: "planning" } });
+    const project = await app.inject({ method: "POST", url: "/api/v1/projects", headers: { cookie, "x-csrf-token": csrf }, payload: { name: "Demo build", status: "planned" } });
     const projectId = project.json<{ data: { id: string } }>().data.id;
     const revision = await app.inject({ method: "POST", url: `/api/v1/projects/${projectId}/revisions`, headers: { cookie, "x-csrf-token": csrf }, payload: { name: "Initial", status: "concept" } });
     const revisionId = revision.json<{ data: { id: string } }>().data.id;
     const line = await app.inject({ method: "POST", url: `/api/v1/project-revisions/${revisionId}/bom`, headers: { cookie, "x-csrf-token": csrf }, payload: { name: "ESP32", itemId: "board-esp32", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} } });
     expect(line.statusCode).toBe(201);
+    const lineData = line.json<{ data: { id: string; version: number } }>().data;
+    const undecidedPower = await app.inject({
+      method: "POST",
+      url: `/api/v1/project-revisions/${revisionId}/bom`,
+      headers: { cookie, "x-csrf-token": csrf },
+      payload: {
+        name: "12 V power supply",
+        requiredQuantity: 1,
+        unit: "each",
+        optional: false,
+        alternatives: [],
+        constraints: { specification: { status: "insufficient", missingDecisions: ["current_or_load", "connector"] } },
+      },
+    });
+    expect(undecidedPower.statusCode).toBe(201);
+    const undecidedPowerId = undecidedPower.json<{ data: { id: string } }>().data.id;
     const gaps = await app.inject({ method: "GET", url: `/api/v1/project-revisions/${revisionId}/gaps`, headers: { cookie } });
     expect(gaps.statusCode).toBe(200);
-    expect(gaps.json<{ lines: Array<{ status: string }> }>().lines[0]?.status).toBe("supplied");
+    const gapBody = gaps.json<{ lines: Array<{ lineId: string; status: string; decision?: string; missingDecisions?: string[]; reasons: string[] }>; totals: Record<string, number> }>();
+    expect(gapBody.lines.find((gap) => gap.lineId === lineData.id)?.status).toBe("supplied");
+    expect(gapBody.lines.find((gap) => gap.lineId === undecidedPowerId)).toMatchObject({
+      status: "specify_first",
+      decision: "decide",
+      missingDecisions: ["current_or_load", "connector"],
+    });
+    expect(gapBody.lines.find((gap) => gap.lineId === undecidedPowerId)?.reasons).not.toContain("No confirmed stock covers the remaining quantity.");
+    expect(gapBody.totals).toMatchObject({ requiredLines: 2, readyLines: 1, checkLines: 0, decideLines: 1, sourceLines: 0, optionalLines: 0 });
+    const retired = await app.inject({ method: "DELETE", url: `/api/v1/bom-lines/${lineData.id}`, headers: { cookie, "x-csrf-token": csrf, "if-match": String(lineData.version) } });
+    expect(retired.statusCode).toBe(200);
+    expect(retired.json()).toMatchObject({ data: { id: lineData.id, optional: false, version: 2 }, audit: { action: "project.bom_line.retire" } });
+    expect(retired.json<{ data: { retiredAt?: string } }>().data.retiredAt).toBeDefined();
+    expect((await app.inject({ method: "GET", url: `/api/v1/project-revisions/${revisionId}/bom`, headers: { cookie } })).json()).toEqual([expect.objectContaining({ id: undecidedPowerId })]);
+    const allLines = (await app.inject({ method: "GET", url: `/api/v1/project-revisions/${revisionId}/bom?includeRetired=true`, headers: { cookie } })).json<unknown[]>();
+    expect(allLines).toHaveLength(2);
+    expect(allLines).toEqual(expect.arrayContaining([expect.objectContaining({ id: lineData.id, retiredAt: expect.any(String) }), expect.objectContaining({ id: undecidedPowerId })]));
+    const restored = await app.inject({ method: "POST", url: `/api/v1/bom-lines/${lineData.id}/restore`, headers: { cookie, "x-csrf-token": csrf, "if-match": "2" } });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json()).toMatchObject({ data: { id: lineData.id, optional: false, version: 3 }, audit: { action: "project.bom_line.restore" } });
+    expect(restored.json<{ data: Record<string, unknown> }>().data).not.toHaveProperty("retiredAt");
     await app.close();
   });
 
   it("records reviewed project usage through the project revision route", async () => {
     const { app, cookie, csrf } = await loggedIn();
-    const project = await app.inject({ method: "POST", url: "/api/v1/projects", headers: { cookie, "x-csrf-token": csrf }, payload: { name: "Usage review", status: "planning" } });
+    const project = await app.inject({ method: "POST", url: "/api/v1/projects", headers: { cookie, "x-csrf-token": csrf }, payload: { name: "Usage review", status: "planned" } });
     const projectId = project.json<{ data: { id: string } }>().data.id;
     const revision = await app.inject({ method: "POST", url: `/api/v1/projects/${projectId}/revisions`, headers: { cookie, "x-csrf-token": csrf }, payload: { name: "Closeout", status: "concept" } });
     const revisionId = revision.json<{ data: { id: string } }>().data.id;
@@ -360,11 +396,11 @@ describe("BenchLedger HTTP API", () => {
     const seedContext = { actor: "reconciliation-http-seed", source: "api" as const, correlationId: "reconciliation-http-seed", scopes: new Set(["read", "write"]) };
     const service = new ApplicationService(runtime.ports);
     const item = await service.createInventoryItem({ id: "reconciliation-http-item", name: "Reconciliation board", kind: "electronic", quantity: 4, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, seedContext);
-    const project = await service.createProject({ id: "reconciliation-http-project", name: "Reconciliation HTTP", status: "planning" }, seedContext);
+    const project = await service.createProject({ id: "reconciliation-http-project", name: "Reconciliation HTTP", status: "planned" }, seedContext);
     const revision = await service.createProjectRevision(project.data.id, { id: "reconciliation-http-revision", name: "Initial", status: "concept" }, seedContext);
     const line = await service.createBomLine(revision.data.id, { id: "reconciliation-http-line", name: "Reconciliation board", itemId: item.data.id, requiredQuantity: 2, unit: "each", optional: false, alternatives: [], constraints: {} }, seedContext);
     const reservation = await service.createReservation(revision.data.id, { id: "reconciliation-http-reservation", lineId: line.data.id, itemId: item.data.id, quantity: 2 }, seedContext);
-    const otherProject = await service.createProject({ id: "reconciliation-http-other", name: "Other project", status: "planning" }, seedContext);
+    const otherProject = await service.createProject({ id: "reconciliation-http-other", name: "Other project", status: "planned" }, seedContext);
     const otherRevision = await service.createProjectRevision(otherProject.data.id, { id: "reconciliation-http-other-revision", name: "Initial", status: "concept" }, seedContext);
     const app = await createApp({ demo: true, runtime, auth: { sessionSecret: "s".repeat(48), secureCookies: false, bearerTokens: [bearerRecord("reconciliation-http-token", ["read", "write"], [project.data.id])] }, logger: false });
     const headers = { authorization: "Bearer reconciliation-http-token" };
@@ -413,7 +449,7 @@ describe("BenchLedger HTTP API", () => {
     const runtime = await createProductionRuntime({ dataDir, maxUploadBytes: 1024 * 1024, maxStorageBytes: 4 * 1024 * 1024 });
     try {
       const seedContext = { actor: "test-agent", source: "api" as const, correlationId: "seed-correlation", scopes: new Set(["read", "write"]) };
-      const existing = await runtime.ports.projects.createProject({ id: "collision-project", name: "Collision project", status: "planning" }, seedContext);
+      const existing = await runtime.ports.projects.createProject({ id: "collision-project", name: "Collision project", status: "planned" }, seedContext);
       await runtime.ports.projects.createProjectRevision(existing.id, { id: "collision-revision", name: "Existing revision", status: "concept" }, seedContext);
       const app = await createApp({ demo: true, runtime, auth: { sessionSecret: "s".repeat(48), secureCookies: false }, logger: false });
       const login = await app.inject({ method: "POST", url: "/api/v1/auth/login", payload: { password: demoPassword } });
@@ -429,6 +465,8 @@ describe("BenchLedger HTTP API", () => {
       expect(document.components.schemas.UpdateInventoryCategory).toMatchObject({ minProperties: 1, additionalProperties: false });
       expect(JSON.stringify(document.paths["/inventory/categories"])).toContain('"maxLength":512');
       expect(document.paths["/inventory/categories/{id}"]).toMatchObject({ patch: { parameters: [{ name: "If-Match", in: "header", required: true }] } });
+      expect(document.paths["/bom-lines/{id}"]).toMatchObject({ delete: { parameters: [{ name: "If-Match", in: "header", required: true }], responses: { "400": expect.any(Object), "409": expect.any(Object) } } });
+      expect(document.paths["/bom-lines/{id}/restore"]).toMatchObject({ post: { parameters: [{ name: "If-Match", in: "header", required: true }], responses: { "400": expect.any(Object), "409": expect.any(Object) } } });
       const inventoryGet = (document.paths["/inventory"] as { get: { description?: string; parameters?: Array<{ name: string; in: string; required?: boolean; description?: string; schema: Record<string, unknown> }>; responses: Record<string, unknown> } }).get;
       expect(inventoryGet).toMatchObject({
         responses: { "200": { description: "Inventory page" } },
@@ -437,6 +475,7 @@ describe("BenchLedger HTTP API", () => {
           { name: "kind", in: "query", required: false, schema: { type: "string", enum: ["printer", "tool", "accessory", "consumable", "electronic", "fastener", "filament", "wire", "adhesive", "other"] } },
           { name: "evidence", in: "query", required: false, schema: { type: "string", enum: ["physically_counted", "commissioned", "delivered_uncounted", "ordered_unverified", "allocated", "consumed", "unknown"] } },
           { name: "available", in: "query", required: false, schema: { type: "boolean" } },
+          { name: "includeRetired", in: "query", required: false, schema: { type: "boolean", default: false } },
           { name: "categoryNodeId", in: "query", required: false, schema: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" } },
           { name: "unassigned", in: "query", required: false, schema: { type: "boolean" } },
           { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } },
@@ -477,7 +516,7 @@ describe("BenchLedger HTTP API", () => {
       });
       expect(document.paths["/auth/security"]).toMatchObject({ post: { security: [{ cookieAuth: [] }] } });
       const payload = {
-        project: { id: "atomic-project", name: "Atomic project", description: "One command", status: "planning" },
+        project: { id: "atomic-project", name: "Atomic project", description: "One command", status: "planned" },
         revision: { id: "atomic-revision", name: "Initial", notes: "Starting point", status: "concept" }
       };
       const first = await app.inject({ method: "POST", url: "/api/v1/projects/with-initial-revision", headers: { cookie, "x-csrf-token": csrf, "idempotency-key": "atomic-project-1" }, payload });
@@ -490,7 +529,7 @@ describe("BenchLedger HTTP API", () => {
       expect(audit.data.filter((event) => event.action === "project.create_with_initial_revision")).toHaveLength(1);
 
       const failed = await app.inject({ method: "POST", url: "/api/v1/projects/with-initial-revision", headers: { cookie, "x-csrf-token": csrf, "idempotency-key": "atomic-failure-1" }, payload: {
-        project: { id: "orphan-project", name: "Must not remain", status: "planning" },
+        project: { id: "orphan-project", name: "Must not remain", status: "planned" },
         revision: { id: "collision-revision", name: "Fails", status: "concept" }
       } });
       expect(failed.statusCode).toBe(409);
@@ -627,15 +666,15 @@ describe("BenchLedger HTTP API", () => {
     const workspace = await app.inject({ method: "GET", url: "/api/v1/workspace", headers: { cookie } });
     expect(workspace.statusCode).toBe(200);
     expect(workspace.json()).toMatchObject({ source: "api", inventory: expect.any(Array), projects: expect.any(Array), offers: expect.any(Array) });
-    const project = await app.inject({ method: "POST", url: "/api/v1/projects", headers: { cookie, "x-csrf-token": csrf }, payload: { name: "Workspace aggregate", status: "planning" } });
+    const project = await app.inject({ method: "POST", url: "/api/v1/projects", headers: { cookie, "x-csrf-token": csrf }, payload: { name: "Workspace aggregate", status: "planned" } });
     const projectId = project.json<{ data: { id: string } }>().data.id;
     const revision = await app.inject({ method: "POST", url: `/api/v1/projects/${projectId}/revisions`, headers: { cookie, "x-csrf-token": csrf }, payload: { name: "r01", status: "concept" } });
     const revisionId = revision.json<{ data: { id: string } }>().data.id;
     const line = await app.inject({ method: "POST", url: `/api/v1/project-revisions/${revisionId}/bom`, headers: { cookie, "x-csrf-token": csrf }, payload: { name: "ESP32", itemId: "board-esp32", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} } });
     expect(line.statusCode).toBe(201);
     const enriched = await app.inject({ method: "GET", url: "/api/v1/workspace", headers: { cookie } });
-    const aggregateProject = enriched.json<{ projects: Array<{ id: string; currentRevision?: { bom: Array<{ id: string }>; artifacts: unknown[] }; bom: unknown[]; artifacts: unknown[] }> }>().projects.find((entry) => entry.id === projectId);
-    expect(aggregateProject).toMatchObject({ currentRevision: { bom: [{ id: expect.any(String) }], artifacts: expect.any(Array) }, bom: expect.any(Array), artifacts: expect.any(Array) });
+    const aggregateProject = enriched.json<{ projects: Array<{ id: string; currentRevision?: { bom: Array<{ id: string }>; artifacts: unknown[]; gapEvaluation: { lines: Array<{ lineId: string; decision: string }>; totals: { readyLines: number } } }; bom: unknown[]; artifacts: unknown[] }> }>().projects.find((entry) => entry.id === projectId);
+    expect(aggregateProject).toMatchObject({ currentRevision: { bom: [{ id: expect.any(String) }], artifacts: expect.any(Array), gapEvaluation: { lines: [{ decision: "ready" }], totals: { readyLines: 1 } } }, bom: expect.any(Array), artifacts: expect.any(Array) });
     const count = await app.inject({ method: "POST", url: "/api/v1/inventory/wire-dupont/count", headers: { cookie, "x-csrf-token": csrf, "idempotency-key": "count-wire-dupont" }, payload: { quantity: 1, note: "Counted in parts drawer" } });
     expect(count.statusCode).toBe(201);
     expect(count.json()).toMatchObject({ data: { item: { id: "wire-dupont", quantity: 1, availableQuantity: 1, evidence: { state: "physically_counted" } } } });
@@ -836,7 +875,7 @@ describe("BenchLedger HTTP API", () => {
       explicitUnknowns: []
     });
     const service = new ApplicationService(runtime.ports);
-    await runtime.ports.projects.createProject({ id: "other-snapshot-project", name: "Other snapshot project", status: "planning" }, seedContext);
+    await runtime.ports.projects.createProject({ id: "other-snapshot-project", name: "Other snapshot project", status: "planned" }, seedContext);
     await runtime.ports.projects.createProjectRevision("other-snapshot-project", { id: "other-snapshot-revision", name: "Other snapshot revision", status: "concept" }, seedContext);
     await service.createBuildConfiguration("synthetic-revision-lamp-r01", createSnapshotInput("allowed-build-config", "synthetic-revision-lamp-r01"), seedContext);
     await service.createBuildConfiguration("other-snapshot-revision", createSnapshotInput("denied-build-config", "other-snapshot-revision"), seedContext);
@@ -869,7 +908,7 @@ describe("BenchLedger HTTP API", () => {
   it("normalizes missing and cross-project revisions before scoped route dispatch", async () => {
     const runtime = createSyntheticRuntime();
     const seedContext = { actor: "seed-agent", source: "api" as const, correlationId: "seed-revision-access", scopes: new Set(["read", "write"]) };
-    await runtime.ports.projects.createProject({ id: "other-revision-project", name: "Other revision project", status: "planning" }, seedContext);
+    await runtime.ports.projects.createProject({ id: "other-revision-project", name: "Other revision project", status: "planned" }, seedContext);
     await runtime.ports.projects.createProjectRevision("other-revision-project", { id: "other-revision", name: "Other revision", status: "concept" }, seedContext);
 
     const service = new ApplicationService(runtime.ports);
@@ -903,7 +942,7 @@ describe("BenchLedger HTTP API", () => {
     const runtime = createSyntheticRuntime();
     const seedContext = { actor: "seed-agent", source: "api" as const, correlationId: "seed-scoped-create", scopes: new Set(["read", "write"]) };
     const service = new ApplicationService(runtime.ports);
-    await runtime.ports.projects.createProject({ id: "other-create-project", name: "Other create project", status: "planning" }, seedContext);
+    await runtime.ports.projects.createProject({ id: "other-create-project", name: "Other create project", status: "planned" }, seedContext);
     await runtime.ports.projects.createProjectRevision("other-create-project", { id: "other-create-revision", name: "Other create revision", status: "concept" }, seedContext);
     await service.createBuildConfiguration("other-create-revision", {
       id: "cross-project-superseded-snapshot",
@@ -963,7 +1002,7 @@ describe("BenchLedger HTTP API", () => {
     const runtime = createSyntheticRuntime();
     const seedContext = { actor: "seed-agent", source: "api" as const, correlationId: "seed-scoped-upload", scopes: new Set(["read", "write"]) };
     const service = new ApplicationService(runtime.ports);
-    await runtime.ports.projects.createProject({ id: "other-upload-project", name: "Other upload project", status: "planning" }, seedContext);
+    await runtime.ports.projects.createProject({ id: "other-upload-project", name: "Other upload project", status: "planned" }, seedContext);
     await runtime.ports.projects.createProjectRevision("other-upload-project", { id: "other-upload-revision", name: "Other upload revision", status: "concept" }, seedContext);
     await service.createBuildConfiguration("other-upload-revision", {
       id: "cross-project-upload-snapshot",
@@ -1049,7 +1088,7 @@ describe("BenchLedger HTTP API", () => {
     expect(inventory.json<{ data: Array<Record<string, unknown>> }>().data[0]).not.toHaveProperty("productProfile");
     expect(inventory.json<{ data: Array<Record<string, unknown>> }>().data[0]).not.toHaveProperty("catalogProduct");
     expect((await app.inject({ method: "GET", url: "/api/v1/workspace", headers })).statusCode).toBe(403);
-    expect((await app.inject({ method: "POST", url: "/api/v1/projects", headers, payload: { name: "Must not create", status: "planning" } })).statusCode).toBe(403);
+    expect((await app.inject({ method: "POST", url: "/api/v1/projects", headers, payload: { name: "Must not create", status: "planned" } })).statusCode).toBe(403);
     expect((await app.inject({ method: "GET", url: "/api/v1/project-revisions/not-a-visible-revision", headers })).statusCode).toBe(403);
     expect((await app.inject({ method: "GET", url: "/api/v1/inventory", headers })).statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: "/api/v1/inventory/categories", headers })).statusCode).toBe(200);
@@ -1311,14 +1350,14 @@ describe("BenchLedger HTTP API", () => {
 
   it("filters scoped project pages and blocks indirect global and project access", async () => {
     const runtime = createSyntheticRuntime();
-    await runtime.projects.createProject({ id: "scoped-second", name: "Second project", description: "Another reference project", status: "planning" });
+    await runtime.projects.createProject({ id: "scoped-second", name: "Second project", description: "Another reference project", status: "planned" });
     const app = await createApp({ demo: true, runtime, auth: { sessionSecret: "s".repeat(48), secureCookies: false, bearerTokens: [bearerRecord("scoped-query-token", ["read"], ["synthetic-project-lamp", "scoped-second", "missing-project"])] }, logger: false });
     const headers = { authorization: "Bearer scoped-query-token" };
-    const descriptionMatch = await app.inject({ method: "GET", url: "/api/v1/projects?q=reference&status=planning&limit=1&cursor=bad", headers });
+    const descriptionMatch = await app.inject({ method: "GET", url: "/api/v1/projects?q=reference&status=planned&limit=1&cursor=bad", headers });
     expect(descriptionMatch.statusCode).toBe(200);
     expect(descriptionMatch.json<{ data: Array<{ id: string }>; total: number; nextCursor?: string }>().data.map((project) => project.id)).toEqual(["synthetic-project-lamp"]);
     expect(descriptionMatch.json()).toMatchObject({ total: 2, limit: 1, nextCursor: "1" });
-    const secondPage = await app.inject({ method: "GET", url: "/api/v1/projects?q=reference&status=planning&limit=1&cursor=1", headers });
+    const secondPage = await app.inject({ method: "GET", url: "/api/v1/projects?q=reference&status=planned&limit=1&cursor=1", headers });
     expect(secondPage.json<{ data: Array<{ id: string }> }>().data.map((project) => project.id)).toEqual(["scoped-second"]);
     const emptyPage = await app.inject({ method: "GET", url: "/api/v1/projects?cursor=999", headers });
     expect(emptyPage.statusCode).toBe(200);
