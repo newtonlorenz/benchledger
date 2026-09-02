@@ -1798,8 +1798,11 @@ function mapReconciliationDraft(value: ServerReconciliationDraft, project: Proje
   const basisById = new Map(value.basis.bomLines.map((line) => [line.bomLineId, line]));
   const previewById = new Map(value.preview.lines.map((line) => [line.bomLineId, line]));
   const submittedById = new Map(value.lines.map((line) => [line.bomLineId, line]));
-  const lineIds = [...new Set([...value.basis.bomLines.map((line) => line.bomLineId), ...project.bom.map((line) => line.id)])];
-  const lines = lineIds.map((lineId) => {
+  const activeReservationLineIds = new Set(value.basis.reservations.filter((reservation) => reservation.status === "active").map((reservation) => reservation.lineId));
+  const submittedLineIds = new Set(value.lines.map((line) => line.bomLineId));
+  const sourceLineIds = [...new Set([...value.basis.bomLines.map((line) => line.bomLineId), ...project.bom.map((line) => line.id), ...value.lines.map((line) => line.bomLineId)])];
+  const focusedLineIds = new Set([...activeReservationLineIds, ...submittedLineIds]);
+  const mapLine = (lineId: string): ReconciliationLineViewModel => {
     const bom = bomById.get(lineId);
     const basis = basisById.get(lineId);
     const submitted = submittedById.get(lineId);
@@ -1814,7 +1817,9 @@ function mapReconciliationDraft(value: ServerReconciliationDraft, project: Proje
       preview?.unit,
       inventory
     );
-  });
+  };
+  const lines = sourceLineIds.filter((lineId) => focusedLineIds.has(lineId)).map(mapLine);
+  const availableLines = sourceLineIds.filter((lineId) => !focusedLineIds.has(lineId)).map(mapLine);
   return {
     projectId: value.projectId,
     projectName: project.name,
@@ -1822,6 +1827,7 @@ function mapReconciliationDraft(value: ServerReconciliationDraft, project: Proje
     status: value.status,
     version: value.version,
     lines,
+    ...(availableLines.length > 0 ? { availableLines } : {}),
     preview: mapReconciliationPreview(value.preview, value.basis.hash, value.updatedAt, inventory),
     trace: { draftId: value.id, draftVersion: value.version, basisHash: value.basis.hash, ...(value.auditId ? { auditId: value.auditId } : {}) },
     ...(value.committedAt ? { committedAt: value.committedAt } : {})
@@ -1952,12 +1958,18 @@ function reconciliationInitialModel(project: Project, reservations: readonly Ser
     const current = reservationsByLine.get(reservation.lineId) ?? [];
     reservationsByLine.set(reservation.lineId, [...current, mapped]);
   }
+  const focusedLines = project.bom.filter((line) => (reservationsByLine.get(line.id) ?? []).some((reservation) => reservation.status === undefined || reservation.status === "active"));
+  const lines = focusedLines.map((line) => reconciliationLineFromParts({ id: line.id, label: line.label, required: line.required, unit: line.unit, ...(line.itemId ? { itemId: line.itemId } : {}) }, reservationsByLine.get(line.id) ?? [], [], undefined, undefined, undefined, inventory));
+  const availableLines = project.bom
+    .filter((line) => !focusedLines.some((focused) => focused.id === line.id))
+    .map((line) => reconciliationLineFromParts({ id: line.id, label: line.label, required: line.required, unit: line.unit, ...(line.itemId ? { itemId: line.itemId } : {}) }, reservationsByLine.get(line.id) ?? [], [], undefined, undefined, undefined, inventory));
   return {
     projectId: project.id,
     projectName: project.name,
     projectRevisionId: project.serverRevisionId ?? "",
     status: "draft",
-    lines: project.bom.map((line) => reconciliationLineFromParts({ id: line.id, label: line.label, required: line.required, unit: line.unit, ...(line.itemId ? { itemId: line.itemId } : {}) }, reservationsByLine.get(line.id) ?? [], [], undefined, undefined, undefined, inventory))
+    lines,
+    ...(availableLines.length > 0 ? { availableLines } : {})
   };
 }
 

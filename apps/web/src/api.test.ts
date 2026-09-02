@@ -1269,9 +1269,134 @@ describe("web data mappers", () => {
     const initial = await adapter.readReconciliation(project.id, revisionId);
 
     expect(initial.lines).toMatchObject([
-      { bomLineId: "bom-set-initial", plannedQuantity: 10, plannedUnit: "each", reservedQuantity: 1, unit: "set" },
+      { bomLineId: "bom-set-initial", plannedQuantity: 10, plannedUnit: "each", reservedQuantity: 1, unit: "set" }
+    ]);
+    expect(initial.availableLines).toMatchObject([
       { bomLineId: "bom-empty-initial", plannedQuantity: 1, plannedUnit: "each", reservedQuantity: 0, unit: "each" }
     ]);
+  });
+
+  it("starts close-out with only active-reservation lines, even for a large BOM", async () => {
+    const revisionId = "revision-reservation-focused";
+    const bom = Array.from({ length: 22 }, (_, index) => ({
+      id: `bom-focused-${index + 1}`,
+      revisionId,
+      name: `Requirement ${index + 1}`,
+      requiredQuantity: 1,
+      unit: "each",
+      optional: false,
+      constraints: {},
+      alternatives: [],
+      createdAt: "2026-08-30T10:00:00.000Z",
+      updatedAt: "2026-08-30T10:00:00.000Z",
+      version: index + 1
+    }));
+    const project = serverProject({
+      id: "project-reservation-focused",
+      currentRevisionId: revisionId,
+      currentRevision: serverRevision({ id: revisionId, projectId: "project-reservation-focused", bom })
+    });
+    const activeReservations = [0, 7, 14].map((lineIndex) => ({
+      id: `reservation-focused-${lineIndex + 1}`,
+      lineId: `bom-focused-${lineIndex + 1}`,
+      itemId: `item-focused-${lineIndex + 1}`,
+      quantity: 1,
+      unit: "each",
+      status: "active",
+      version: 2
+    }));
+    const settledReservation = {
+      id: "reservation-settled-only",
+      lineId: "bom-focused-22",
+      itemId: "item-focused-settled",
+      quantity: 1,
+      unit: "each",
+      status: "settled",
+      version: 3
+    };
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "test", demo: false, now: "2026-08-30T10:00:00.000Z" }))
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", scopes: ["read"] }))
+      .mockResolvedValueOnce(jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00.000Z", inventory: activeReservations.concat(settledReservation).map((reservation) => serverItem({ id: reservation.itemId, name: reservation.itemId })), projects: [project], offers: [] }))
+      .mockResolvedValueOnce(jsonResponse(null))
+      .mockResolvedValueOnce(jsonResponse([...activeReservations, settledReservation]));
+
+    const adapter = createWorkspaceAdapter();
+    await adapter.loadWorkspace();
+    const initial = await adapter.readReconciliation(project.id, revisionId);
+
+    expect(initial.lines).toHaveLength(3);
+    expect(initial.lines.map((line) => line.bomLineId)).toEqual(["bom-focused-1", "bom-focused-8", "bom-focused-15"]);
+    expect(initial.availableLines).toHaveLength(19);
+    expect(initial.availableLines?.map((line) => line.bomLineId)).toContain("bom-focused-22");
+    expect(initial.availableLines?.every((line) => line.reservedQuantity === 0)).toBe(true);
+  });
+
+  it("maps a draft as active reservations plus explicitly submitted legacy lines", async () => {
+    const revisionId = "revision-submitted-legacy";
+    const project = serverProject({
+      id: "project-submitted-legacy",
+      currentRevisionId: revisionId,
+      currentRevision: serverRevision({
+        id: revisionId,
+        projectId: "project-submitted-legacy",
+        bom: [
+          { id: "bom-active", revisionId, name: "Reserved part", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 4 },
+          { id: "bom-legacy", revisionId, name: "Legacy reviewed part", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 5 },
+          { id: "bom-unreserved", revisionId, name: "Unreserved part", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 6 }
+        ]
+      })
+    });
+    const draft = {
+      id: "draft-submitted-legacy",
+      projectId: project.id,
+      projectRevisionId: revisionId,
+      status: "draft",
+      version: 3,
+      basis: {
+        hash: "c".repeat(64),
+        bomLines: [
+          { bomLineId: "bom-active", version: 4, requiredQuantity: 1, unit: "each" },
+          { bomLineId: "bom-legacy", version: 5, requiredQuantity: 1, unit: "each" },
+          { bomLineId: "bom-unreserved", version: 6, requiredQuantity: 1, unit: "each" }
+        ],
+        reservations: [{ reservationId: "reservation-active", lineId: "bom-active", itemId: "item-active", quantity: 1, unit: "each", status: "active", version: 2 }],
+        items: [{ itemId: "item-active", version: 2, onHand: 1, allocated: 1, available: 0, unit: "each" }]
+      },
+      lines: [{ bomLineId: "bom-legacy", outcomes: [{ kind: "reviewed_no_change", quantity: 0, unit: "each", evidence: { state: "physically_counted" } }] }],
+      preview: {
+        lines: [
+          { bomLineId: "bom-active", reservedQuantity: 1, accountedQuantity: 0, unaccountedQuantity: 1, outcomeCount: 0, unit: "each" },
+          { bomLineId: "bom-legacy", reservedQuantity: 0, accountedQuantity: 0, unaccountedQuantity: 0, outcomeCount: 1, unit: "each" },
+          { bomLineId: "bom-unreserved", reservedQuantity: 0, accountedQuantity: 0, unaccountedQuantity: 0, outcomeCount: 0, unit: "each" }
+        ],
+        reservationChanges: [],
+        stockChanges: [],
+        createdAssets: []
+      },
+      createdAt: "2026-08-30T10:00:00.000Z",
+      updatedAt: "2026-08-30T10:00:00.000Z"
+    };
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-submitted-legacy" });
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "test", demo: false, now: "2026-08-30T10:00:00.000Z" }))
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", scopes: ["read", "write"] }))
+      .mockResolvedValueOnce(jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00.000Z", inventory: [serverItem({ id: "item-active", name: "Reserved part", availableQuantity: 0 })], projects: [project], offers: [] }))
+      .mockResolvedValueOnce(jsonResponse({ data: draft }))
+      .mockResolvedValueOnce(jsonResponse({ data: draft }));
+
+    const adapter = createWorkspaceAdapter();
+    await adapter.loadWorkspace();
+    const mapped = await adapter.readReconciliation(project.id, revisionId);
+
+    expect(mapped.lines.map((line) => line.bomLineId)).toEqual(["bom-active", "bom-legacy"]);
+    expect(mapped.lines.find((line) => line.bomLineId === "bom-legacy")?.outcomes[0]?.kind).toBe("reviewed_no_change");
+    expect(mapped.availableLines?.map((line) => line.bomLineId)).toEqual(["bom-unreserved"]);
+
+    await adapter.saveReconciliationDraft(project.id, revisionId, mapped);
+    const body = JSON.parse(String(fetchMock.mock.calls.at(-1)?.[1]?.body));
+    expect(body.lines.map((line: { bomLineId: string }) => line.bomLineId)).toEqual(["bom-active", "bom-legacy"]);
+    expect(body.lines).not.toEqual(expect.arrayContaining([expect.objectContaining({ bomLineId: "bom-unreserved" })]));
   });
 });
 

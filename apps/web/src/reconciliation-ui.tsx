@@ -164,6 +164,12 @@ export interface ReconciliationViewModel {
   status: "draft" | "committed";
   version?: number;
   lines: readonly ReconciliationLineViewModel[];
+  /**
+   * Unreserved BOM lines kept outside the submitted close-out payload. They
+   * are available for optional context only and become reviewable when the
+   * user explicitly records an outcome.
+   */
+  availableLines?: readonly ReconciliationLineViewModel[];
   preview?: ReconciliationPreviewViewModel;
   trace?: ReconciliationTraceViewModel;
   committedAt?: string;
@@ -282,7 +288,13 @@ export function summarizeReconciliationLine(line: ReconciliationLineViewModel): 
 export function reconciliationCanCommit(model: ReconciliationViewModel): boolean {
   if (model.status !== "draft" || !model.preview) return false;
   if (model.preview.basisHash && model.trace?.basisHash && model.preview.basisHash !== model.trace.basisHash) return false;
-  return model.lines.length > 0 && model.lines.every((line) => summarizeReconciliationLine(line).complete);
+  // An empty queue is a valid close-out: there are no reservations or
+  // outcomes to settle, so a fresh empty server preview is sufficient.
+  return model.lines.every((line) => summarizeReconciliationLine(line).complete);
+}
+
+export function reconciliationCanRequestPreview(model: ReconciliationViewModel): boolean {
+  return model.status === "draft" && model.lines.every((line) => summarizeReconciliationLine(line).complete);
 }
 
 function nextOutcomeId(lineId: string, counter: { current: number }): string {
@@ -290,9 +302,13 @@ function nextOutcomeId(lineId: string, counter: { current: number }): string {
   return `${lineId}-outcome-${counter.current}`;
 }
 
-function clearPreview(model: ReconciliationViewModel, lines: readonly ReconciliationLineViewModel[]): ReconciliationViewModel {
+function clearPreview(model: ReconciliationViewModel, lines: readonly ReconciliationLineViewModel[], availableLines = model.availableLines): ReconciliationViewModel {
   const { preview: _preview, error: _error, ...withoutTransientState } = model;
-  return { ...withoutTransientState, lines };
+  return {
+    ...withoutTransientState,
+    lines,
+    ...(availableLines === undefined ? {} : { availableLines })
+  };
 }
 
 function formatQuantity(value: number, unit: string): string {
@@ -341,14 +357,19 @@ export function ReconciliationUI({ model, expert = false, onExpertChange, confir
   const outcomeIdPrefix = useId();
   const outcomeCounter = useRef(0);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [showAllRequirements, setShowAllRequirements] = useState(false);
   const [previewPending, setPreviewPending] = useState(false);
   const [localConfirmationOpen, setLocalConfirmationOpen] = useState(false);
   const [commitPending, setCommitPending] = useState(false);
   const [localError, setLocalError] = useState<string>();
-  const safeIndex = model.lines.length ? Math.min(activeIndex, model.lines.length - 1) : 0;
-  const activeLine = model.lines[safeIndex];
+  const availableLines = model.availableLines ?? [];
+  const displayLines = showAllRequirements ? [...model.lines, ...availableLines] : model.lines;
+  const safeIndex = displayLines.length ? Math.min(activeIndex, displayLines.length - 1) : 0;
+  const activeLine = displayLines[safeIndex];
+  const activeLineInQueue = activeLine ? model.lines.some((line) => line.id === activeLine.id) : false;
+  const activeQueueIndex = activeLine ? model.lines.findIndex((line) => line.id === activeLine.id) : -1;
   const activeSummary = activeLine ? summarizeReconciliationLine(activeLine) : undefined;
-  const allLinesComplete = model.lines.length > 0 && model.lines.every((line) => summarizeReconciliationLine(line).complete);
+  const allLinesComplete = model.lines.every((line) => summarizeReconciliationLine(line).complete);
   const previewCurrent = Boolean(model.preview && (!model.preview.basisHash || !model.trace?.basisHash || model.preview.basisHash === model.trace.basisHash));
   const canCommit = reconciliationCanCommit(model) && previewCurrent && !commitPending;
   const confirmationOpen = confirmationOpenProp ?? localConfirmationOpen;
@@ -364,7 +385,18 @@ export function ReconciliationUI({ model, expert = false, onExpertChange, confir
   };
 
   const updateLine = (lineId: string, update: (line: ReconciliationLineViewModel) => ReconciliationLineViewModel) => {
-    changeLines(model.lines.map((line) => line.id === lineId ? update(line) : line));
+    if (model.lines.some((line) => line.id === lineId)) {
+      changeLines(model.lines.map((line) => line.id === lineId ? update(line) : line));
+      return;
+    }
+    const available = availableLines.find((line) => line.id === lineId);
+    if (available === undefined) return;
+    const updated = update(available);
+    const remainingAvailable = availableLines.filter((line) => line.id !== lineId);
+    // An unreserved line is display-only until an explicit outcome is added.
+    // Once edited, promote just that line into the submitted close-out model.
+    setLocalError(undefined);
+    onChange(clearPreview(model, [...model.lines, updated], remainingAvailable));
   };
 
   const addOutcome = () => {
@@ -391,11 +423,19 @@ export function ReconciliationUI({ model, expert = false, onExpertChange, confir
 
   const removeOutcome = (outcomeId: string) => {
     if (!activeLine) return;
-    updateLine(activeLine.id, (line) => ({ ...line, outcomes: line.outcomes.filter((outcome) => outcome.id !== outcomeId) }));
+    const updated = { ...activeLine, outcomes: activeLine.outcomes.filter((outcome) => outcome.id !== outcomeId) };
+    if (activeLineInQueue && activeReservations(activeLine).length === 0 && updated.outcomes.length === 0) {
+      const remainingLines = model.lines.filter((line) => line.id !== activeLine.id);
+      const nextAvailable = [...availableLines, updated];
+      setLocalError(undefined);
+      onChange(clearPreview(model, remainingLines, nextAvailable));
+      return;
+    }
+    updateLine(activeLine.id, () => updated);
   };
 
   const requestPreview = async () => {
-    if (!allLinesComplete || previewPending || model.status !== "draft") return;
+    if (!reconciliationCanRequestPreview(model) || previewPending) return;
     setPreviewPending(true);
     setLocalError(undefined);
     try {
@@ -441,26 +481,28 @@ export function ReconciliationUI({ model, expert = false, onExpertChange, confir
     {model.error && <p className="reconciliation-error" role="alert"><Icon name="warning" size={16} />{model.error}</p>}
 
     <div className="reconciliation-progress" aria-label="Reconciliation progress">
-      <div className="reconciliation-progress-copy"><span className="eyebrow">Requirement review</span><strong>{activeLine ? `Line ${safeIndex + 1} of ${model.lines.length}` : "No reserved lines"}</strong><span>{allLinesComplete ? "Every line is accounted for" : "One line at a time"}</span></div>
+      <div className="reconciliation-progress-copy"><span className="eyebrow">Reserved requirement review</span><strong>{activeLine ? activeLineInQueue ? `Reserved requirement ${(activeQueueIndex + 1)} of ${model.lines.length}` : "Unreserved requirement (optional context)" : "No reserved requirements"}</strong><span>{allLinesComplete ? "Every reserved requirement is accounted for" : "Review reserved requirements; unreserved requirements need no review."}</span></div>
       <div className="reconciliation-progress-track" aria-hidden="true"><span style={{ width: model.lines.length ? `${((model.lines.filter((line) => summarizeReconciliationLine(line).complete).length / model.lines.length) * 100).toFixed(2)}%` : "0%" }} /></div>
       <span className="reconciliation-progress-count">{model.lines.filter((line) => summarizeReconciliationLine(line).complete).length}/{model.lines.length} complete</span>
+      {availableLines.length > 0 && <button type="button" className="button button-quiet" aria-pressed={showAllRequirements} onClick={() => { setShowAllRequirements((current) => !current); setActiveIndex(0); }}>{showAllRequirements ? "Show reserved only" : "Show all requirements"}</button>}
     </div>
 
     {activeLine && activeSummary ? <>
       <div className="reconciliation-line-nav">
         <button type="button" className="button button-quiet" onClick={() => setActiveIndex((current) => Math.max(current - 1, 0))} disabled={safeIndex === 0}><Icon name="arrow-left" size={16} />Previous</button>
         <div className="reconciliation-line-dots" aria-label="Choose requirement line">
-          {model.lines.map((line, index) => {
+          {displayLines.map((line, index) => {
             const summary = summarizeReconciliationLine(line);
-            return <button type="button" key={line.id} className={`reconciliation-line-dot ${index === safeIndex ? "is-current" : ""} ${summary.complete ? "is-complete" : ""}`} aria-label={`Review ${line.name}, line ${index + 1}${summary.complete ? ", complete" : ""}`} aria-current={index === safeIndex ? "step" : undefined} onClick={() => setActiveIndex(index)}><span>{summary.complete ? <Icon name="check" size={13} /> : index + 1}</span></button>;
+            const inQueue = model.lines.some((candidate) => candidate.id === line.id);
+            return <button type="button" key={line.id} className={`reconciliation-line-dot ${index === safeIndex ? "is-current" : ""} ${summary.complete ? "is-complete" : ""}`} aria-label={`${inQueue ? "Review" : "View"} ${line.name}, line ${index + 1}${summary.complete ? ", complete" : inQueue ? "" : ", no review needed"}`} aria-current={index === safeIndex ? "step" : undefined} onClick={() => setActiveIndex(index)}><span>{summary.complete ? <Icon name="check" size={13} /> : index + 1}</span></button>;
           })}
         </div>
-        <button type="button" className="button button-quiet" onClick={() => setActiveIndex((current) => Math.min(current + 1, model.lines.length - 1))} disabled={safeIndex === model.lines.length - 1}>Next<Icon name="arrow-right" size={16} /></button>
+        <button type="button" className="button button-quiet" onClick={() => setActiveIndex((current) => Math.min(current + 1, displayLines.length - 1))} disabled={safeIndex === displayLines.length - 1}>Next<Icon name="arrow-right" size={16} /></button>
       </div>
 
       <article className="reconciliation-line" aria-labelledby={lineHeadingId}>
         <div className="reconciliation-line-heading">
-          <div><span className="eyebrow">Requirement {safeIndex + 1}</span><h2 id={lineHeadingId}>{activeLine.name}</h2><p>{activeLine.itemLabel}{activeLine.itemKind ? ` · ${activeLine.itemKind}` : ""}</p></div>
+          <div><span className="eyebrow">{activeLineInQueue ? "Reserved requirement" : "Unreserved requirement · optional context"}</span><h2 id={lineHeadingId}>{activeLine.name}</h2><p>{activeLine.itemLabel}{activeLine.itemKind ? ` · ${activeLine.itemKind}` : ""}</p></div>
           <span className={`reconciliation-line-state ${outcomeTone(activeSummary)}`}>{outcomeSummary(activeSummary, activeLine.unit)}</span>
         </div>
 
@@ -475,29 +517,29 @@ export function ReconciliationUI({ model, expert = false, onExpertChange, confir
         <div className="reconciliation-outcomes-heading"><div><span className="eyebrow">What happened?</span><p>Split this reservation across as many explicit outcomes as needed.</p></div><button type="button" className="button button-secondary" onClick={addOutcome} disabled={model.status !== "draft"}><Icon name="plus" size={16} />Add outcome</button></div>
 
         <div className="reconciliation-outcomes">
-          {activeLine.outcomes.length === 0 && <div className="reconciliation-no-outcome"><Icon name="clipboard" size={21} /><div><strong>No outcome selected yet</strong><span>Choose what happened before moving to the next line. Only a line with zero active reservations can use “Reviewed — no change”. Active reservations need an explicit outcome.</span></div></div>}
+          {activeLine.outcomes.length === 0 && <div className="reconciliation-no-outcome"><Icon name="clipboard" size={21} /><div><strong>{activeLineInQueue ? "No outcome selected yet" : "No review needed"}</strong><span>{activeLineInQueue ? "Choose what happened before moving to the next line. Only a line with zero active reservations can use “Reviewed — no change”. Active reservations need an explicit outcome." : "This requirement has no active reservation, so it is not part of close-out. Record an outcome only if you want to keep an explicit review in the draft."}</span></div></div>}
           {activeLine.outcomes.map((outcome, outcomeIndex) => <OutcomeEditor key={outcome.id} outcome={outcome} index={outcomeIndex} line={activeLine} expert={expert} onChange={(update) => updateOutcome(outcome.id, update)} onRemove={() => removeOutcome(outcome.id)} />)}
         </div>
 
         {activeSummary.overageQuantity > EPSILON && <p className="reconciliation-inline-warning" role="alert"><Icon name="warning" size={16} />This line is over-accounted. Reduce an outcome quantity before requesting a preview.</p>}
       </article>
-    </> : <div className="reconciliation-empty"><Icon name="clipboard" size={23} /><h2>Nothing reserved for close-out</h2><p>This revision has no active reservations to reconcile.</p></div>}
+    </> : <div className="reconciliation-empty"><Icon name="clipboard" size={23} /><h2>Nothing reserved for close-out</h2><p>This revision has no active reservations to reconcile. Unreserved requirements do not need review.</p></div>}
 
     <section className="reconciliation-preview" aria-labelledby={`${headingId}-preview`}>
       <div className="reconciliation-section-heading"><div><span className="eyebrow">Before anything changes</span><h2 id={`${headingId}-preview`}>Server preview</h2><p>The server calculates the exact reservation, stock, and asset changes from this review.</p></div>{allLinesComplete && model.status === "draft" && <button type="button" className="button button-secondary" onClick={() => { void requestPreview(); }} disabled={previewPending}>{previewPending ? "Preparing preview…" : model.preview ? "Refresh preview" : "Preview changes"}<Icon name="arrow-right" size={16} /></button>}</div>
-      {!allLinesComplete && <div className="reconciliation-preview-empty"><Icon name="info" size={17} /><span>Finish every line, including evidence for each outcome, to request a server preview.</span></div>}
-      {allLinesComplete && !model.preview && <div className="reconciliation-preview-empty"><Icon name="clock" size={17} /><span>No preview yet. Request one when the review above is complete.</span></div>}
+      {!allLinesComplete && <div className="reconciliation-preview-empty"><Icon name="info" size={17} /><span>Finish every reserved requirement, including evidence for each outcome, to request a server preview. Unreserved requirements shown for context need no review.</span></div>}
+      {allLinesComplete && !model.preview && <div className="reconciliation-preview-empty"><Icon name="clock" size={17} /><span>{model.lines.length === 0 ? "No reserved requirements need review. Request a server preview to confirm there are no inventory changes." : "No preview yet. Request one when the reserved requirement review is complete."}</span></div>}
       {model.preview && <PreviewDetails preview={model.preview} expert={expert} />}
     </section>
 
     <footer className="reconciliation-footer">
-      <div><span className="eyebrow">Final step</span><strong>{model.status === "committed" ? "This close-out is complete" : canCommit ? "Ready to close the project" : "Review and preview before closing"}</strong><p>{model.status === "committed" ? "The committed receipt remains available in the project history." : canCommit ? "Check the server preview, then confirm the inventory changes." : "Commit stays locked until every reserved quantity is explicitly accounted for and a fresh server preview is present."}</p></div>
+      <div><span className="eyebrow">Final step</span><strong>{model.status === "committed" ? "This close-out is complete" : canCommit ? model.lines.length === 0 ? "Ready to close — no reserved changes" : "Ready to close the project" : "Review and preview before closing"}</strong><p>{model.status === "committed" ? "The committed receipt remains available in the project history." : canCommit ? model.lines.length === 0 ? "The server preview confirms that no active reservations need settlement." : "Check the server preview, then confirm the inventory changes." : "Commit stays locked until every reserved quantity is explicitly accounted for and a fresh server preview is present. Unreserved requirements do not block close-out."}</p></div>
       <div className="reconciliation-footer-actions"><span className="reconciliation-lock-note" aria-live="polite"><Icon name={canCommit ? "check-circle" : "info"} size={15} />{canCommit ? "Preview checked" : previewCurrent && model.preview ? "Review incomplete" : "Preview required"}</span><button type="button" className="button button-primary" onClick={() => setConfirmationOpen(true)} disabled={!canCommit || model.status !== "draft"}>{model.status === "committed" ? "Committed" : "Confirm close-out"}<Icon name="arrow-right" size={16} /></button></div>
     </footer>
 
     {expert && <details className="reconciliation-expert reconciliation-global-expert" open><summary><span>Project-level evidence and replay</span><Icon name="chevron-down" size={15} /></summary><div className="reconciliation-expert-grid"><div><span>Project revision</span><code>{model.projectRevisionId}</code></div><div><span>Draft</span><code>{model.trace?.draftId ?? "Not recorded"} {model.trace?.draftVersion !== undefined ? `v${model.trace.draftVersion}` : ""}</code></div><div><span>Basis hash</span><code>{model.trace?.basisHash ?? "Not recorded"}</code></div><div><span>Audit ID</span><code>{model.trace?.auditId ?? "Not recorded"}</code></div><div><span>Replay state</span><code>{model.trace?.replayed === true ? "Replayed idempotently" : model.trace?.replayed === false ? "First commit" : "Not recorded"}</code></div><div><span>Deterministic event IDs</span><code>{model.trace?.deterministicEventIds?.join(" · ") || "Shown in preview"}</code></div></div></details>}
 
-      {confirmationOpen && <div className="reconciliation-confirm-scrim" role="presentation"><form className="reconciliation-confirm" role="dialog" aria-modal="true" aria-labelledby={`${headingId}-confirm`} onSubmit={(event) => { void commit(event); }}><div className="reconciliation-confirm-icon"><Icon name="warning" size={21} /></div><span className="eyebrow">One explicit commit</span><h2 id={`${headingId}-confirm`}>Commit this close-out?</h2><p>This will settle the reviewed reservations and apply the server preview to inventory. It can’t be edited as a draft afterward.</p><div className="reconciliation-confirm-summary"><strong>{model.lines.length} requirement{model.lines.length === 1 ? "" : "s"} reviewed</strong><span>{model.preview?.stockChanges.length ?? 0} stock changes · {model.preview?.createdAssets.length ?? 0} reusable assets</span></div><div className="dialog-actions"><button type="button" className="button button-quiet" onClick={() => setConfirmationOpen(false)} disabled={commitPending}>Go back</button><button type="submit" className="button button-primary" disabled={commitPending}>{commitPending ? "Committing…" : "Yes, commit close-out"}<Icon name="check" size={16} /></button></div></form></div>}
+    {confirmationOpen && <div className="reconciliation-confirm-scrim" role="presentation"><form className="reconciliation-confirm" role="dialog" aria-modal="true" aria-labelledby={`${headingId}-confirm`} onSubmit={(event) => { void commit(event); }}><div className="reconciliation-confirm-icon"><Icon name="warning" size={21} /></div><span className="eyebrow">One explicit commit</span><h2 id={`${headingId}-confirm`}>Commit this close-out?</h2><p>This will settle the reviewed reservations and apply the server preview to inventory. It can’t be edited as a draft afterward.</p><div className="reconciliation-confirm-summary"><strong>{model.lines.length === 0 ? "No reserved requirements reviewed" : `${model.lines.length} requirement${model.lines.length === 1 ? "" : "s"} reviewed`}</strong><span>{model.preview?.stockChanges.length ?? 0} stock changes · {model.preview?.createdAssets.length ?? 0} reusable assets</span></div><div className="dialog-actions"><button type="button" className="button button-quiet" onClick={() => setConfirmationOpen(false)} disabled={commitPending}>Go back</button><button type="submit" className="button button-primary" disabled={commitPending}>{commitPending ? "Committing…" : "Yes, commit close-out"}<Icon name="check" size={16} /></button></div></form></div>}
   </section>;
 }
 

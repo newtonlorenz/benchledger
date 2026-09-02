@@ -114,7 +114,9 @@ function outcomeStockKind(kind: ReconciliationOutcomeKind): Extract<StockEventKi
 }
 
 /**
- * Validate and plan a complete close-out without mutating any state.
+ * Validate and plan a complete close-out without mutating any state. Complete
+ * means every active reservation is accounted for; BOM lines with no active
+ * reservation may be omitted from the submitted review.
  *
  * The planner is shared by memory and durable adapters conceptually: it
  * treats reservations as the accounting boundary, releases allocation once,
@@ -218,14 +220,6 @@ export function planReconciliation(
     if (activeReservations.length > 0 && !lineHasReservedOutcome.value && options.requireComplete === true) {
       fail("reconciliation_unaccounted_reservation", `BOM line ${line.id} has active reserved stock with no disposition`);
     }
-    if (activeReservations.length === 0 && options.requireComplete === true && !lineInput.outcomes.some((outcome) => outcome.kind === "reviewed_no_change")) {
-      fail("reconciliation_unreviewed_line", `BOM line ${line.id} must be explicitly marked reviewed_no_change`);
-    }
-  }
-
-  if (options.requireComplete === true) {
-    const missingLines = source.lines.filter((line) => !seenLines.has(line.id));
-    if (missingLines.length > 0) fail("reconciliation_incomplete", `BOM line ${missingLines[0]!.id} has not been reviewed`);
   }
 
   for (const reservation of source.reservations.filter((candidate) => candidate.status === "active")) {

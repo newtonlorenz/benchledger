@@ -330,16 +330,25 @@ URLs and has no cart, purchase, print, shell, SQL, or credential tool.
 
 ## 8. Close the project without guessing
 
-Reconciliation starts as a draft and changes no inventory. Account for each
-active reservation with explicit consumed, returned, damaged/lost, usable-
-leftover, or converted-asset outcomes and per-outcome evidence. Split quantities
-when needed. `reviewed_no_change` is only valid as the sole outcome for a line
-with zero active reservations.
+Reconciliation starts as a draft and changes no inventory. First call
+`list_reservations` and identify the reservations whose status is `active`.
+Submit and account for every active reservation with explicit consumed,
+returned, damaged/lost, usable-leftover, or converted-asset outcomes and
+per-outcome evidence. Split quantities when needed; every active reservation
+must be fully and exactly accounted before commit. BOM lines with zero active
+reservations may be omitted from the draft. If a zero-reservation line is
+submitted, `reviewed_no_change` remains an optional, explicit sole outcome for
+that line, and no other outcome is selected by default.
 
 Save the draft, show the server-calculated stock/reservation/asset preview, and
 obtain explicit confirmation before commit. A stale basis must be re-read and
 reviewed; it is never forced. After a successful commit, report it as committed
 even if the subsequent context refresh fails.
+
+The server preview and staleness basis still include every BOM line, reservation,
+and source inventory item, including omitted zero-reservation lines and
+historical reservation states. Omission reduces review input; it never removes
+history or weakens stale-basis protection.
 
 Each active reservation is released as it is settled. `consumed` and
 `converted_asset` then remove source stock, `damaged_lost` removes it as loss,

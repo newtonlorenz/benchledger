@@ -240,6 +240,14 @@ Each web BOM line also retains its server version and canonical unit; the
 expert-only line disclosure shows the line ID, version, and canonical unit
 without changing the beginner markup.
 
+Close-out starts with a bounded queue of BOM lines that have active
+reservations. A saved draft maps the union of those lines and any explicitly
+submitted lines (including legacy `reviewed_no_change` entries); released,
+settled, and consumed reservations do not create new required review rows.
+The web offers **Show all requirements** as an optional display-only expansion
+for unreserved BOM context. Untouched context lines do not block preview or
+commit and are not serialized until an explicit outcome is recorded.
+
 Commissioning is deliberately separate from generic PATCH. It requires an
 observed quantity, commissioned evidence with a source and timestamp, and the
 current item version. REST callers must also send `If-Match` and

@@ -143,10 +143,11 @@ normal post-project settlement.
 
 ## 8. Atomic post-project reconciliation
 
-1. `read_reconciliation` for the active project revision. No draft is a normal
-   starting state.
-2. Review every BOM line and every active reservation. Split a reservation when
-   quantities had different outcomes.
+1. `list_reservations` for the active project revision and identify every
+   reservation whose status is `active`, then call `read_reconciliation`. No
+   draft is a normal starting state.
+2. Review each BOM line with an active reservation and account for every active
+   reservation. Split a reservation when quantities had different outcomes.
 3. Choose explicit outcomes: `consumed`, `returned`, `damaged_lost`,
    `usable_leftover`, or `converted_asset`. Each outcome needs quantity, unit,
    reservation/item identity, and evidence. A converted asset also needs the
@@ -155,10 +156,14 @@ normal post-project settlement.
    enclosing BOM-line, reservation, and source-item references are the source
    lineage retained in the reconciliation; use the evidence source/source ID
    when an additional build-log or artifact reference matters.
-4. Use `reviewed_no_change` only as the sole outcome for a line with zero active
-   reservations. It is invalid for an untouched active reservation.
+4. BOM lines with zero active reservations may be omitted from the submitted
+   draft. If one is submitted, `reviewed_no_change` is an optional explicit
+   sole outcome for that line; it is invalid for an untouched active
+   reservation.
 5. `save_reconciliation_draft` to obtain the server-calculated preview. This
-   changes no stock or reservations.
+   changes no stock or reservations. The preview and staleness basis still
+   retain every BOM line, reservation, and source inventory item, including
+   omitted zero-reservation lines and historical reservation states.
 6. Present the exact reservation settlements, stock deltas, created assets, and
    remaining uncertainty. Ask for explicit confirmation.
 7. Only after confirmation, call `commit_reconciliation` with the returned

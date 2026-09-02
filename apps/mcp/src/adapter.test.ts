@@ -440,6 +440,8 @@ describe("McpAdapter", () => {
     expect(JSON.stringify(adapter.capabilityDocument())).toContain("power_rating");
     expect(JSON.stringify(adapter.capabilityDocument())).toContain("quantityConversions");
     expect(JSON.stringify(adapter.capabilityDocument())).toContain("piece");
+    expect(JSON.stringify(adapter.capabilityDocument())).toContain("zero-reservation lines may be omitted");
+    expect(JSON.stringify(adapter.capabilityDocument())).toContain("every active reservation must be fully and exactly accounted");
 
     const reconciliation = adapter.listTools().find((tool) => tool.name === "save_reconciliation_draft");
     expect(reconciliation?.inputSchema).toMatchObject({

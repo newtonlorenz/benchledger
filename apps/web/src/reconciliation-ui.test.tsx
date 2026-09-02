@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ReconciliationUI,
   reconciliationCanCommit,
+  reconciliationCanRequestPreview,
   summarizeReconciliationLine
 } from "./reconciliation-ui";
 import type { ReconciliationViewModel } from "./reconciliation-ui";
@@ -35,7 +36,7 @@ describe("reconciliation close-out flow", () => {
     expect(reviewMarkup).toContain("Choose what happened");
     expect(reviewMarkup).toContain("Only a line with zero active reservations can use");
     expect(reviewMarkup).not.toContain("An untouched reservation still needs");
-    expect(reviewMarkup).toContain("Finish every line, including evidence");
+    expect(reviewMarkup).toContain("Finish every reserved requirement, including evidence");
     expect(reviewMarkup).toContain("disabled=\"\">Confirm close-out");
 
     const reviewed: ReconciliationViewModel = {
@@ -112,5 +113,105 @@ describe("reconciliation close-out flow", () => {
     expect(markup).toContain("1 set");
     expect(markup).not.toContain("10 set");
     expect(summarizeReconciliationLine(model.lines[0]!).complete).toBe(true);
+  });
+
+  it("keeps unreserved requirements out of the default queue while offering optional context", () => {
+    const model: ReconciliationViewModel = {
+      projectId: "project-focused",
+      projectName: "Focused close-out",
+      projectRevisionId: "revision-focused",
+      status: "draft",
+      lines: [{
+        id: "line-reserved",
+        bomLineId: "bom-reserved",
+        name: "Reserved component",
+        itemLabel: "Component",
+        plannedQuantity: 1,
+        plannedUnit: "each",
+        reservedQuantity: 1,
+        unit: "each",
+        reservations: [{ id: "reservation-1", itemId: "item-1", quantity: 1, unit: "each", status: "active" }],
+        outcomes: []
+      }],
+      availableLines: [{
+        id: "line-unreserved",
+        bomLineId: "bom-unreserved",
+        name: "Optional context component",
+        itemLabel: "Unreserved component",
+        plannedQuantity: 1,
+        plannedUnit: "each",
+        reservedQuantity: 0,
+        unit: "each",
+        outcomes: []
+      }]
+    };
+    const markup = renderToStaticMarkup(<ReconciliationUI model={model} confirmationOpen={false} onChange={() => undefined} onRequestPreview={() => undefined} onConfirmCommit={() => undefined} />);
+    expect(markup).toContain("Show all requirements");
+    expect(markup).toContain("Review reserved requirements; unreserved requirements need no review.");
+    expect(markup).not.toContain("Optional context component");
+  });
+
+  it("allows an empty reservation queue to request a preview and commit without inventing review work", () => {
+    const model: ReconciliationViewModel = {
+      projectId: "project-empty-close-out",
+      projectName: "Empty close-out",
+      projectRevisionId: "revision-empty-close-out",
+      status: "draft",
+      lines: [],
+      availableLines: [{
+        id: "line-unreserved",
+        bomLineId: "bom-unreserved",
+        name: "Unreserved component",
+        itemLabel: "Component",
+        plannedQuantity: 1,
+        plannedUnit: "each",
+        reservedQuantity: 0,
+        unit: "each",
+        outcomes: []
+      }]
+    };
+    expect(reconciliationCanRequestPreview(model)).toBe(true);
+    expect(reconciliationCanCommit(model)).toBe(false);
+
+    const previewed: ReconciliationViewModel = {
+      ...model,
+      preview: { lines: [], reservationChanges: [], stockChanges: [], createdAssets: [] }
+    };
+    expect(reconciliationCanCommit(previewed)).toBe(true);
+
+    const pendingMarkup = renderToStaticMarkup(<ReconciliationUI model={model} confirmationOpen={false} onChange={() => undefined} onRequestPreview={() => undefined} onConfirmCommit={() => undefined} />);
+    expect(pendingMarkup).toContain("Preview changes");
+    expect(pendingMarkup).toContain("No reserved requirements need review. Request a server preview");
+    expect(pendingMarkup).toContain("disabled=\"\">Confirm close-out");
+
+    const readyMarkup = renderToStaticMarkup(<ReconciliationUI model={previewed} confirmationOpen onChange={() => undefined} onRequestPreview={() => undefined} onConfirmCommit={() => undefined} />);
+    expect(readyMarkup).toContain("Ready to close — no reserved changes");
+    expect(readyMarkup).toContain("No reserved requirements reviewed");
+    expect(readyMarkup).toContain("Yes, commit close-out");
+    expect(readyMarkup).not.toContain("disabled=\"\">Confirm close-out");
+  });
+
+  it("keeps an incomplete active reservation blocked from preview and commit", () => {
+    const model: ReconciliationViewModel = {
+      projectId: "project-active-blocked",
+      projectName: "Active reservation",
+      projectRevisionId: "revision-active-blocked",
+      status: "draft",
+      lines: [{
+        id: "line-active",
+        bomLineId: "bom-active",
+        name: "Reserved component",
+        itemLabel: "Component",
+        plannedQuantity: 1,
+        plannedUnit: "each",
+        reservedQuantity: 1,
+        unit: "each",
+        reservations: [{ id: "reservation-active", itemId: "item-1", quantity: 1, unit: "each", status: "active" }],
+        outcomes: []
+      }],
+      preview: { lines: [], reservationChanges: [], stockChanges: [], createdAssets: [] }
+    };
+    expect(reconciliationCanRequestPreview(model)).toBe(false);
+    expect(reconciliationCanCommit(model)).toBe(false);
   });
 });

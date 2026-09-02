@@ -1947,6 +1947,66 @@ describe("ApplicationService", () => {
     expect(() => buildReconciliationDocument(reservedSource, [{ ...noChange, outcomes: [noChange.outcomes[0]!, consumed] }], false)).toThrow(/sole outcome.*zero active reserved quantity/i);
   });
 
+  it("completes close-out from active reservations without reviewing every zero-reservation BOM line", () => {
+    const lines: BomLine[] = Array.from({ length: 22 }, (_, index) => ({
+      id: `bom-closeout-${index + 1}`,
+      revisionId: "rev-closeout",
+      name: `Fitzroy Cafe part ${index + 1}`,
+      requiredQuantity: 1,
+      unit: index < 3 ? "each" : "gram",
+      optional: false,
+      constraints: {},
+      alternatives: [],
+      createdAt: "2026-09-02T00:00:00.000Z",
+      updatedAt: "2026-09-02T00:00:00.000Z",
+      version: 1
+    }));
+    const reservedItems = [1, 2, 3].map((index) => item({
+      id: `closeout-item-${index}`,
+      unit: "each",
+      quantity: 1,
+      availableQuantity: 0
+    }));
+    const reservations = reservedItems.map((reservedItem, index) => ({
+      id: `closeout-reservation-${index + 1}`,
+      lineId: lines[index]!.id,
+      itemId: reservedItem.id,
+      quantity: 1,
+      status: "active" as const,
+      unit: "each" as const,
+      version: 1
+    }));
+    const source: ReconciliationSourceSnapshot = {
+      projectId: "project-closeout",
+      projectRevisionId: "rev-closeout",
+      lines,
+      reservations,
+      items: reservedItems
+    };
+    const outcomes = reservations.map((reservation) => ({
+      bomLineId: reservation.lineId,
+      outcomes: [{
+        kind: "consumed" as const,
+        reservationId: reservation.id,
+        itemId: reservation.itemId,
+        quantity: 1,
+        unit: "each" as const,
+        evidence: { state: "physically_counted" as const }
+      }]
+    }));
+
+    const document = buildReconciliationDocument(source, outcomes, true);
+    expect(document.preview.lines).toHaveLength(22);
+    expect(document.preview.lines.filter((line) => line.outcomeCount === 0)).toHaveLength(19);
+    expect(document.preview.reservationChanges).toHaveLength(3);
+    expect(document.preview.stockChanges.filter((change) => change.kind === "release")).toHaveLength(3);
+    expect(document.basis.bomLines).toHaveLength(22);
+    expect(document.basis.reservations).toHaveLength(3);
+    expect(document.basis.items).toHaveLength(3);
+
+    expect(() => buildReconciliationDocument(source, outcomes.slice(0, 2), true)).toThrow(/unaccounted reserved quantity/i);
+  });
+
   it("labels reconciliation preview totals in the active reservation unit and fails closed on mixed units", () => {
     const line: BomLine = {
       id: "bom-reconcile-units", revisionId: "rev-1", name: "LED package", requiredQuantity: 10, unit: "each", optional: false,
