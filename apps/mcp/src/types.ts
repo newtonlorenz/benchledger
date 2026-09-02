@@ -735,31 +735,46 @@ export interface Artifact {
   createdAt?: string;
 }
 
-export interface ArtifactListInput extends PageInput {
+/**
+ * Artifact ancestry is intentionally a closed union.  A project artifact is
+ * addressed by its exact project revision; a work-item artifact is addressed
+ * by both the work item and its exact revision.  The all-project branch is
+ * read-only list access and carries no revision filter.
+ */
+export type ArtifactScope =
+  | { projectRevisionId: string }
+  | { workItemId: string; workItemRevisionId: string };
+
+export type ArtifactListScope = ArtifactScope | {
+  projectRevisionId?: never;
+  workItemId?: never;
+  workItemRevisionId?: never;
+};
+
+export type ArtifactListInput = PageInput & {
   projectId: string;
-  workItemId?: string;
-  revisionId?: string;
   role?: Artifact["role"];
-}
+} & ArtifactListScope;
 
 export interface ArtifactMetadataInput {
   artifactId: string;
   revisionId?: string;
 }
 
-export interface BeginArtifactUploadInput {
+export type BeginArtifactUploadInput = {
   projectId: string;
-  projectRevisionId?: string;
-  /** Optional immutable build-configuration snapshot to bind at finalize. */
-  buildConfigurationSnapshotId?: string;
-  workItemId?: string;
-  workItemRevisionId?: string;
   filename: string;
   role: Artifact["role"];
   mediaType: string;
   byteLength: number;
-  sha256?: string;
-}
+  sha256: string;
+} & (
+  | (Extract<ArtifactScope, { projectRevisionId: string }> & {
+      /** Optional immutable build-configuration snapshot to bind at finalize. */
+      buildConfigurationSnapshotId?: string;
+    })
+  | Extract<ArtifactScope, { workItemId: string }>
+);
 
 export interface ArtifactUploadTicket {
   uploadId: string;

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { InventoryItem, InventoryCategory, StockEvent, BomLine, Reservation, Project, Offer, Artifact, UploadSession, ProjectRevision, WorkItem, WorkItemRevision, ReconciliationLine, ProjectTombstone, ProjectSetupProposal, ProjectSetupPreview, ProjectSetupCommitResult } from "@benchledger/api-contract";
+import type { BeginUpload, InventoryItem, InventoryCategory, StockEvent, BomLine, Reservation, Project, Offer, Artifact, UploadSession, ProjectRevision, WorkItem, WorkItemRevision, ReconciliationLine, ProjectTombstone, ProjectSetupProposal, ProjectSetupPreview, ProjectSetupCommitResult } from "@benchledger/api-contract";
 import { ApplicationError } from "./errors.js";
 import { ApplicationService, matchesBomConstraints, unsupportedBomConstraintKeys } from "./service.js";
 import { buildReconciliationDocument, type ReconciliationSourceSnapshot } from "./reconciliation.js";
-import type { ApplicationPorts, AuditEvent, AuditInput, EventBusEvent, InventoryCategoryPort, InventoryListOptions, Page, RequestContext, StockMutation, UpdateInventoryInput } from "./ports.js";
+import type { ApplicationPorts, AuditEvent, AuditInput, BeginUploadInput, EventBusEvent, InventoryCategoryPort, InventoryListOptions, Page, RequestContext, StockMutation, UpdateInventoryInput } from "./ports.js";
 
 const context: RequestContext = { actor: "test", source: "api", correlationId: "corr-1", scopes: new Set(["read", "write"]) };
 const item = (overrides: Partial<InventoryItem> = {}): InventoryItem => ({
@@ -985,7 +985,7 @@ describe("ApplicationService", () => {
     const artifact: Artifact = {
       id: "artifact-flow",
       projectId: "project-1",
-      revisionId: "rev-1",
+      revisionId: "work-rev-1",
       role: "step",
       filename: "enclosure.step",
       mediaType: "model/step",
@@ -1014,15 +1014,17 @@ describe("ApplicationService", () => {
     };
     ports.artifacts.readArtifact = async (id) => ({ artifact: { ...artifact, id }, body: new Uint8Array([1, 2, 3, 4]) });
     ports.artifacts.retireArtifact = async (id, _version, _ctx) => ({ ...artifact, id, retired: true, currentCandidate: false, version: 2 });
+    ports.projects.getProjectRevision = async (id) => id === "rev-1" ? { id, projectId: "project-1", number: 1, name: "Project revision", status: "concept", createdAt: "2026-08-30T00:00:00.000Z", version: 1 } : null;
+    ports.projects.getWorkItemRevision = async (id) => id === "work-rev-1" ? { id, workItemId: "work-1", projectId: "project-1", number: 1, name: "Enclosure revision", status: "concept", createdAt: "2026-08-30T00:00:00.000Z", version: 1 } : null;
     const service = new ApplicationService(ports);
 
-    await expect(service.listArtifacts("project-1", "work-1", "rev-1")).resolves.toEqual([artifact]);
-    expect(listedArgs).toEqual(["project-1", "work-1", "rev-1"]);
+    await expect(service.listArtifacts("project-1", { workItemId: "work-1", workItemRevisionId: "work-rev-1" })).resolves.toEqual([artifact]);
+    expect(listedArgs).toEqual(["project-1", "work-1", "work-rev-1"]);
     await expect(service.getArtifact(artifact.id)).resolves.toEqual(artifact);
     await expect(service.getArtifact("missing-artifact")).rejects.toMatchObject({ code: "not_found" });
     await expect(service.getArtifact("bad/id")).rejects.toMatchObject({ code: "validation" });
 
-    const upload = await service.beginArtifactUpload({ projectId: "project-1", role: "text", filename: "  notes.txt  ", mediaType: "text/plain", byteSize: 4, sha256: "b".repeat(64) }, context);
+    const upload = await service.beginArtifactUpload({ projectId: "project-1", projectRevisionId: "rev-1", role: "text", filename: "  notes.txt  ", mediaType: "text/plain", byteSize: 4, sha256: "b".repeat(64) }, context);
     expect(upload.data).toMatchObject({ id: "session-flow", status: "pending" });
     expect(begunFilename).toBe("notes.txt");
     await expect(service.writeArtifactUpload("session-flow", new Uint8Array([1, 2, 3]))).resolves.toEqual({ receivedBytes: 3 });
@@ -1034,10 +1036,10 @@ describe("ApplicationService", () => {
     const retired = await service.retireArtifact(artifact.id, 1, context);
     expect(retired).toMatchObject({ data: { retired: true }, audit: { action: "artifact.retire" } });
     await expect(service.listArtifacts("bad/id")).rejects.toMatchObject({ code: "validation" });
-    await expect(service.beginArtifactUpload({ projectId: "project-1", role: "other", filename: "archive.svg", mediaType: "image/svg+xml", byteSize: 1, sha256: "c".repeat(64) }, context)).rejects.toMatchObject({ code: "unsupported_media" });
-    await expect(service.beginArtifactUpload({ projectId: "project-1", role: "other", filename: "archive.zip", mediaType: "application/octet-stream", byteSize: 1, sha256: "c".repeat(64) }, context)).rejects.toMatchObject({ code: "unsupported_media" });
-    await expect(service.beginArtifactUpload({ projectId: "project-1", role: "other", filename: "part.step", mediaType: "model/step", byteSize: 0, sha256: "c".repeat(64) }, context)).rejects.toMatchObject({ code: "quota_exceeded" });
-    await expect(service.beginArtifactUpload({ projectId: "project-1", role: "other", filename: "part.step", mediaType: "model/step", byteSize: 100 * 1024 * 1024 + 1, sha256: "c".repeat(64) }, context)).rejects.toMatchObject({ code: "quota_exceeded" });
+    await expect(service.beginArtifactUpload({ projectId: "project-1", projectRevisionId: "rev-1", role: "other", filename: "archive.svg", mediaType: "image/svg+xml", byteSize: 1, sha256: "c".repeat(64) }, context)).rejects.toMatchObject({ code: "unsupported_media" });
+    await expect(service.beginArtifactUpload({ projectId: "project-1", projectRevisionId: "rev-1", role: "other", filename: "archive.zip", mediaType: "application/octet-stream", byteSize: 1, sha256: "c".repeat(64) }, context)).rejects.toMatchObject({ code: "unsupported_media" });
+    await expect(service.beginArtifactUpload({ projectId: "project-1", projectRevisionId: "rev-1", role: "other", filename: "part.step", mediaType: "model/step", byteSize: 0, sha256: "c".repeat(64) }, context)).rejects.toMatchObject({ code: "validation" });
+    await expect(service.beginArtifactUpload({ projectId: "project-1", projectRevisionId: "rev-1", role: "other", filename: "part.step", mediaType: "model/step", byteSize: 100 * 1024 * 1024 + 1, sha256: "c".repeat(64) }, context)).rejects.toMatchObject({ code: "validation" });
   });
 
   it("resolves valid project and work-item upload ancestry before creating a session", async () => {
@@ -1051,11 +1053,11 @@ describe("ApplicationService", () => {
     const service = new ApplicationService(ports);
     const base = { role: "step" as const, filename: "housing.step", mediaType: "model/step", byteSize: 1, sha256: "d".repeat(64) };
 
-    await expect(service.beginArtifactUpload({ ...base, projectId: "project-1" }, context)).resolves.toMatchObject({ data: { id: "session-1" } });
-    await expect(service.beginArtifactUpload({ ...base, projectId: "project-1", revisionId: projectRevision.id }, context)).resolves.toMatchObject({ data: { id: "session-1" } });
-    await expect(service.beginArtifactUpload({ ...base, projectId: "project-1", workItemId: workItem.id }, context)).resolves.toMatchObject({ data: { id: "session-1" } });
-    await expect(service.beginArtifactUpload({ ...base, projectId: "project-1", workItemId: workItem.id, revisionId: workRevision.id }, context)).resolves.toMatchObject({ data: { id: "session-1" } });
-    await expect(service.beginArtifactUpload({ ...base, projectId: "project-1", filename: "housing.bin", mediaType: "application/x-private-format" }, context)).rejects.toMatchObject({ code: "unsupported_media" });
+    await expect(service.beginArtifactUpload({ ...base, projectId: "project-1", projectRevisionId: projectRevision.id }, context)).resolves.toMatchObject({ data: { id: "session-1" } });
+    await expect(service.beginArtifactUpload({ ...base, projectId: "project-1", workItemId: workItem.id, workItemRevisionId: workRevision.id }, context)).resolves.toMatchObject({ data: { id: "session-1" } });
+    await expect(service.beginArtifactUpload({ ...base, projectId: "project-1", projectRevisionId: workRevision.id }, context)).rejects.toMatchObject({ code: "not_found" });
+    await expect(service.beginArtifactUpload({ ...base, projectId: "project-1", workItemId: workItem.id, workItemRevisionId: projectRevision.id }, context)).rejects.toMatchObject({ code: "not_found" });
+    await expect(service.beginArtifactUpload({ ...base, projectId: "project-1", projectRevisionId: projectRevision.id, filename: "housing.bin", mediaType: "application/x-private-format" }, context)).rejects.toMatchObject({ code: "unsupported_media" });
   });
 
   it("surfaces missing upload-session details and health degradation", async () => {
@@ -1564,7 +1566,7 @@ describe("ApplicationService", () => {
   it("rejects unsafe artifact filenames before reaching the artifact port", async () => {
     const ports = fakePorts();
     const service = new ApplicationService(ports);
-    await expect(service.beginArtifactUpload({ projectId: "project-1", role: "cad_source", filename: "../secret.step", mediaType: "model/step", byteSize: 5, sha256: "a".repeat(64) }, context)).rejects.toMatchObject({ code: "validation" });
+    await expect(service.beginArtifactUpload({ projectId: "project-1", projectRevisionId: "rev-1", role: "cad_source", filename: "../secret.step", mediaType: "model/step", byteSize: 5, sha256: "a".repeat(64) }, context)).rejects.toMatchObject({ code: "validation" });
   });
 
   it("validates project, work-item, and revision ancestry before opening an upload", async () => {
@@ -1578,12 +1580,93 @@ describe("ApplicationService", () => {
     const service = new ApplicationService(ports);
     const input = { role: "step" as const, filename: "enclosure.step", mediaType: "model/step", byteSize: 1, sha256: "a".repeat(64) };
 
-    await expect(service.beginArtifactUpload({ ...input, projectId: "missing-project", revisionId: projectRevision.id }, context)).rejects.toMatchObject({ code: "not_found" });
-    await expect(service.beginArtifactUpload({ ...input, projectId: "project-1", workItemId: "missing-work-item", revisionId: workItemRevision.id }, context)).rejects.toMatchObject({ code: "not_found" });
-    await expect(service.beginArtifactUpload({ ...input, projectId: "project-1", revisionId: "missing-revision" }, context)).rejects.toMatchObject({ code: "not_found" });
-    await expect(service.beginArtifactUpload({ ...input, projectId: "project-1", workItemId: workItem.id, revisionId: projectRevision.id }, context)).rejects.toMatchObject({ code: "not_found" });
-    await expect(service.beginArtifactUpload({ ...input, projectId: "project-1", revisionId: workItemRevision.id }, context)).rejects.toMatchObject({ code: "not_found" });
-    await expect(service.beginArtifactUpload({ ...input, projectId: "project-1", workItemId: workItem.id, revisionId: workItemRevision.id }, context)).resolves.toMatchObject({ data: { id: "session-1" } });
+    await expect(service.beginArtifactUpload({ ...input, projectId: "missing-project", projectRevisionId: projectRevision.id }, context)).rejects.toMatchObject({ code: "not_found" });
+    await expect(service.beginArtifactUpload({ ...input, projectId: "project-1", workItemId: "missing-work-item", workItemRevisionId: workItemRevision.id }, context)).rejects.toMatchObject({ code: "not_found" });
+    await expect(service.beginArtifactUpload({ ...input, projectId: "project-1", projectRevisionId: "missing-revision" }, context)).rejects.toMatchObject({ code: "not_found" });
+    await expect(service.beginArtifactUpload({ ...input, projectId: "project-1", workItemId: workItem.id, workItemRevisionId: projectRevision.id }, context)).rejects.toMatchObject({ code: "not_found" });
+    await expect(service.beginArtifactUpload({ ...input, projectId: "project-1", projectRevisionId: workItemRevision.id }, context)).rejects.toMatchObject({ code: "not_found" });
+    await expect(service.beginArtifactUpload({ ...input, projectId: "project-1", workItemId: workItem.id, workItemRevisionId: workItemRevision.id }, context)).resolves.toMatchObject({ data: { id: "session-1" } });
+  });
+
+  it("rejects legacy and unscoped uploads at the application boundary before session or audit", async () => {
+    const ports = fakePorts();
+    let began = 0;
+    let audited = 0;
+    ports.artifacts.beginUpload = async (input) => {
+      began += 1;
+      return { id: "unexpected-session", artifactId: "unexpected-artifact", expiresAt: "2026-08-30T01:00:00.000Z", maxBytes: input.byteSize, uploadUrl: "/uploads/unexpected-session", status: "pending" };
+    };
+    ports.audit.append = async (input) => {
+      audited += 1;
+      return { id: `unexpected-audit-${audited}`, ...input, createdAt: "2026-08-30T00:00:00.000Z" };
+    };
+    const service = new ApplicationService(ports);
+    const common = { projectId: "project-1", role: "step" as const, filename: "part.step", mediaType: "model/step", byteSize: 1, sha256: "a".repeat(64) };
+    const legacy = { ...common, revisionId: "rev-1" } as unknown as BeginUpload;
+    const unscoped = { ...common } as unknown as BeginUpload;
+
+    await expect(service.beginArtifactUpload(legacy, context)).rejects.toMatchObject({ code: "validation" });
+    await expect(service.beginArtifactUpload(unscoped, context)).rejects.toMatchObject({ code: "validation" });
+    expect({ began, audited }).toEqual({ began: 0, audited: 0 });
+  });
+
+  it("normalizes each strict artifact scope before persistence and rejects cross-project scope before audit/session", async () => {
+    const ports = fakePorts();
+    const projectRevision: ProjectRevision = { id: "strict-project-revision", projectId: "project-1", number: 1, name: "Project", status: "concept", createdAt: "2026-08-30T00:00:00.000Z", version: 1 };
+    const workItem: WorkItem = { id: "strict-work-item", projectId: "project-1", name: "Housing", kind: "part", createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1 };
+    const workItemRevision: WorkItemRevision = { id: "strict-work-revision", workItemId: workItem.id, projectId: workItem.projectId, number: 1, name: "Housing", status: "concept", createdAt: "2026-08-30T00:00:00.000Z", version: 1 };
+    ports.projects.getProjectRevision = async (id) => id === projectRevision.id ? projectRevision : null;
+    ports.projects.getWorkItem = async (id) => id === workItem.id ? workItem : null;
+    ports.projects.getWorkItemRevision = async (id) => id === workItemRevision.id ? workItemRevision : null;
+    const begun: BeginUploadInput[] = [];
+    ports.artifacts.beginUpload = async (input) => {
+      begun.push(input);
+      return { id: "strict-session", artifactId: "strict-artifact", expiresAt: "2026-08-30T01:00:00.000Z", maxBytes: input.byteSize, uploadUrl: "/uploads/strict-session", status: "pending" };
+    };
+    let auditCalls = 0;
+    ports.audit.append = async (input) => {
+      auditCalls += 1;
+      return { id: `strict-audit-${auditCalls}`, ...input, createdAt: "2026-08-30T00:00:00.000Z" };
+    };
+    const service = new ApplicationService(ports);
+    const common = { role: "step" as const, filename: "housing.step", mediaType: "model/step", byteSize: 1, sha256: "a".repeat(64) };
+
+    await expect(service.beginArtifactUpload({ ...common, projectId: "project-1", projectRevisionId: projectRevision.id }, context)).resolves.toMatchObject({ data: { id: "strict-session" } });
+    await expect(service.beginArtifactUpload({ ...common, projectId: "project-1", workItemId: workItem.id, workItemRevisionId: workItemRevision.id }, context)).resolves.toMatchObject({ data: { id: "strict-session" } });
+    expect(begun).toEqual([
+      expect.objectContaining({ projectId: "project-1", revisionId: projectRevision.id }),
+      expect.objectContaining({ projectId: "project-1", workItemId: workItem.id, revisionId: workItemRevision.id }),
+    ]);
+    expect(begun[0]).not.toHaveProperty("projectRevisionId");
+    expect(begun[1]).not.toHaveProperty("workItemRevisionId");
+
+    ports.projects.getProjectRevision = async () => ({ ...projectRevision, projectId: "other-project" });
+    await expect(service.beginArtifactUpload({ ...common, projectId: "project-1", projectRevisionId: projectRevision.id }, { ...context, idempotencyKey: "cross-project-strict" })).rejects.toMatchObject({ code: "not_found" });
+    expect(begun).toHaveLength(2);
+    expect(auditCalls).toBe(2);
+  });
+
+  it("lists all project artifacts or one exact revision scope", async () => {
+    const ports = fakePorts();
+    const projectRevision: ProjectRevision = { id: "list-project-revision", projectId: "project-1", number: 1, name: "Project", status: "concept", createdAt: "2026-08-30T00:00:00.000Z", version: 1 };
+    const workItem: WorkItem = { id: "list-work-item", projectId: "project-1", name: "Housing", kind: "part", createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1 };
+    const workItemRevision: WorkItemRevision = { id: "list-work-revision", workItemId: workItem.id, projectId: workItem.projectId, number: 1, name: "Housing", status: "concept", createdAt: "2026-08-30T00:00:00.000Z", version: 1 };
+    ports.projects.getProjectRevision = async (id) => id === projectRevision.id ? projectRevision : null;
+    ports.projects.getWorkItem = async (id) => id === workItem.id ? workItem : null;
+    ports.projects.getWorkItemRevision = async (id) => id === workItemRevision.id ? workItemRevision : null;
+    const artifact = { id: "list-artifact", projectId: "project-1", revisionId: projectRevision.id, role: "step" as const, filename: "housing.step", mediaType: "model/step", byteSize: 1, sha256: "a".repeat(64), currentCandidate: true, retired: false, createdAt: "2026-08-30T00:00:00.000Z", version: 1 };
+    const calls: unknown[][] = [];
+    ports.artifacts.listArtifacts = async (...args) => { calls.push(args); return [artifact]; };
+    const service = new ApplicationService(ports);
+
+    await expect(service.listArtifacts("project-1", {})).resolves.toEqual([artifact]);
+    await expect(service.listArtifacts("project-1", { projectRevisionId: projectRevision.id })).resolves.toEqual([artifact]);
+    await expect(service.listArtifacts("project-1", { workItemId: workItem.id, workItemRevisionId: workItemRevision.id })).resolves.toEqual([artifact]);
+    expect(calls).toEqual([
+      ["project-1", undefined, undefined],
+      ["project-1", undefined, projectRevision.id],
+      ["project-1", workItem.id, workItemRevision.id],
+    ]);
   });
 
   it("exposes direct durable lookups for indirect MCP identifiers", async () => {
@@ -1630,7 +1713,7 @@ describe("ApplicationService", () => {
     ports.audit.append = async () => { throw new Error("audit store unavailable"); };
     const service = new ApplicationService(ports);
 
-    await expect(service.beginArtifactUpload({ projectId: "project-1", role: "step", filename: "part.step", mediaType: "model/step", byteSize: 1, sha256: "a".repeat(64) }, context)).rejects.toThrow("audit store unavailable");
+    await expect(service.beginArtifactUpload({ projectId: "project-1", projectRevisionId: "rev-1", role: "step", filename: "part.step", mediaType: "model/step", byteSize: 1, sha256: "a".repeat(64) }, context)).rejects.toThrow("audit store unavailable");
     expect(abortCalls).toEqual(["session-1"]);
     expect(filesystemSessionVisible).toBe(false);
   });
@@ -1661,7 +1744,7 @@ describe("ApplicationService", () => {
     }
     const service = new ApplicationService(ports);
 
-    await expect(service.beginArtifactUpload({ projectId: "project-1", role: "step", filename: "part.step", mediaType: "model/step", byteSize: 1, sha256: "a".repeat(64) }, failureContext)).rejects.toThrow(/unavailable/u);
+    await expect(service.beginArtifactUpload({ projectId: "project-1", projectRevisionId: "rev-1", role: "step", filename: "part.step", mediaType: "model/step", byteSize: 1, sha256: "a".repeat(64) }, failureContext)).rejects.toThrow(/unavailable/u);
     expect(abortCalls).toBe(1);
     expect(filesystemSessionVisible).toBe(false);
   });

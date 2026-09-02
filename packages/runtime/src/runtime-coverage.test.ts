@@ -620,6 +620,64 @@ describe("production project adapter", () => {
 });
 
 describe("production artifact adapter", () => {
+  it("keeps project and work-item revision scopes exact while retaining legacy artifacts in all-project reads", async () => {
+    const runtime = await makeRuntime();
+    const projectId = "artifact-scope-project";
+    const projectRevisionId = "artifact-scope-project-revision";
+    const workItemId = "artifact-scope-work-item";
+    const workItemRevisionId = "artifact-scope-work-revision";
+    const created: Array<{ readonly id: string; readonly body: Buffer }> = [];
+
+    const finalize = async (
+      suffix: string,
+      input: { readonly workItemId?: string; readonly revisionId?: string },
+      body: Buffer
+    ) => {
+      const session = await runtime.ports.artifacts.beginUpload({
+        projectId,
+        ...(input.workItemId === undefined ? {} : { workItemId: input.workItemId }),
+        ...(input.revisionId === undefined ? {} : { revisionId: input.revisionId }),
+        role: "step",
+        filename: `${suffix}.step`,
+        mediaType: "model/step",
+        byteSize: body.length,
+        sha256: createHash("sha256").update(body).digest("hex"),
+      }, context());
+      await runtime.ports.artifacts.writeUpload(session.id, body);
+      const artifact = await runtime.ports.artifacts.finalizeUpload(session.id, context());
+      created.push({ id: artifact.id, body });
+      return artifact;
+    };
+
+    const projectArtifact = await finalize("project", { revisionId: projectRevisionId }, Buffer.from("project artifact bytes\n"));
+    const workArtifact = await finalize("work", { workItemId, revisionId: projectRevisionId }, Buffer.from("work artifact bytes\n"));
+    const laterWorkArtifact = await finalize("later-work", { workItemId, revisionId: workItemRevisionId }, Buffer.from("later work artifact bytes\n"));
+    await finalize("legacy", {}, Buffer.from("legacy artifact bytes\n"));
+
+    const ids = async (requestedWorkItemId?: string, requestedRevisionId?: string) => new Set(
+      (await runtime.ports.artifacts.listArtifacts(projectId, requestedWorkItemId, requestedRevisionId)).map((artifact) => artifact.id)
+    );
+    // A project-revision read is distinct from a work-item-revision read even
+    // when an older artifact happens to carry the same revision ID.
+    expect(await ids(undefined, projectRevisionId)).toEqual(new Set([projectArtifact.id]));
+    expect(await ids(workItemId, workItemRevisionId)).toEqual(new Set([laterWorkArtifact.id]));
+    expect(await ids(workItemId, projectRevisionId)).toEqual(new Set([workArtifact.id]));
+    expect(await ids(workItemId)).toEqual(new Set([workArtifact.id, laterWorkArtifact.id]));
+    // No ancestry filter means the historical project view, including
+    // artifacts written before revision binding existed, remains readable.
+    expect(await ids()).toEqual(new Set(created.map((artifact) => artifact.id)));
+
+    const before = await runtime.artifacts.listArtifactRevisions();
+    await runtime.ports.artifacts.listArtifacts(projectId);
+    const after = await runtime.artifacts.listArtifactRevisions();
+    expect(after).toEqual(before);
+    for (const artifact of created) {
+      const downloaded = await runtime.ports.artifacts.readArtifact(artifact.id);
+      expect(downloaded.artifact.sha256).toBe(createHash("sha256").update(artifact.body).digest("hex"));
+      expect(Buffer.from(downloaded.body)).toEqual(artifact.body);
+    }
+  });
+
   it("filters, finalizes, downloads, retires, and compensates versioned artifacts", async () => {
     const runtime = await makeRuntime();
     const body = Buffer.from("artifact adapter coverage\n");

@@ -128,8 +128,13 @@ output; package/unit migrations precede reliable component reservations.
   planning, and material-role completeness remain proposed.**
 - [ ] `BL-AW-010` → `REQ-010`: host-mediated batch artifact staging and
   finalization without base64 MCP payloads, arbitrary paths, or executable
-  handling. **Partial foundation only:** secure artifact sessions exist, but
-  the approved batch host-transfer workflow does not.
+  handling. **Partial foundation implemented:** secure artifact sessions now
+  require one validated project-revision or work-item-revision scope across
+  HTTP, MCP, persistence, and web. Exact filters do not mix project files with
+  work-item files; the all-project view preserves legacy/unbound visibility;
+  and the UI no longer infers ownership from the first work item. Generic MCP
+  remains fail-closed. The approved transactional batch host-transfer workflow
+  and inspection-queue handoff are still separate work.
 
 Dependency gate: bind build-plan files only to the secure staging boundary and
 retain human approval for physical statuses; never imply that a print occurred.

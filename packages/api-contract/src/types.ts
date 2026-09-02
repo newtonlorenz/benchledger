@@ -7,7 +7,7 @@ import type {
   inventoryListQuerySchema, inventoryCategoryListQuerySchema, inventoryCategorySchema, createInventoryCategorySchema, updateInventoryCategorySchema, offerSchema, projectRevisionSchema, projectSchema, projectWithInitialRevisionSchema,
   readinessSchema, reservationSchema, stockEventInputSchema, stockEventSchema,
   updateBomLineSchema, updateInventoryItemSchema, updateProjectSchema, usageInputSchema,
-  uploadSessionSchema, workItemRevisionSchema, workItemSchema,
+  uploadSessionSchema, workItemRevisionSchema, workItemSchema, artifactScopeSchema, artifactListQuerySchema,
   artifactBuildConfigurationBindingSchema, bomSpecificationDecisionSchema, bomSpecificationSchema, buildConfigurationSnapshotSchema, catalogProductSchema,
   catalogProductFilamentSchema, catalogProductPrinterSchema, createArtifactBuildConfigurationBindingSchema,
   buildConfigurationSnapshotStorageInputSchema, createBuildConfigurationSnapshotSchema, createCatalogProductSchema, createInventoryProductProfileSchema,
@@ -87,7 +87,9 @@ export type CreateReservation = z.infer<typeof createReservationSchema>;
 export type Offer = z.infer<typeof offerSchema>;
 export type CreateOffer = z.infer<typeof createOfferSchema>;
 export type Artifact = z.infer<typeof artifactSchema>;
+export type ArtifactScope = z.infer<typeof artifactScopeSchema>;
 export type BeginUpload = z.infer<typeof beginUploadSchema>;
+export type ArtifactListQuery = z.infer<typeof artifactListQuerySchema>;
 export type UploadSession = z.infer<typeof uploadSessionSchema>;
 export type AuditEvent = z.infer<typeof auditEventSchema>;
 export type Health = z.infer<typeof healthSchema>;

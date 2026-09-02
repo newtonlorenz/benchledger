@@ -21,8 +21,12 @@ import type {
   ProjectGapEvaluation,
   QuantityConversion,
   QuantityDisplayUnit,
-  SnapshotDescriptor
+  SnapshotDescriptor,
+  ProjectRevisionReference,
+  ProjectWorkItem
 } from "./domain";
+import { filterArtifactsForScope } from "./artifact-scope";
+import type { ArtifactUploadTarget } from "./artifact-scope";
 import type {
   ReconciliationEvidenceState,
   ReconciliationEvidenceViewModel,
@@ -53,15 +57,28 @@ type ServerInventoryItem = {
   linkState?: string;
   createdAt: string; updatedAt: string; version: number;
 };
-type ServerWorkItem = { id: string; projectId: string; name: string; kind: string; description?: string; currentRevisionId?: string; createdAt: string; updatedAt: string; version: number };
+type ServerWorkItem = {
+  id: string;
+  projectId: string;
+  name: string;
+  kind: string;
+  description?: string;
+  currentRevisionId?: string;
+  /** Some service versions include the bounded current revision inline. */
+  currentRevision?: ServerRevision;
+  workItemRevision?: ServerRevision;
+  createdAt: string;
+  updatedAt: string;
+  version: number;
+};
 type ServerBomAlternative = { itemId: string; reason?: string; compatible?: string; quantityConversion?: unknown };
 type ServerBomLine = { id: string; revisionId: string; name: string; itemId?: string; requiredQuantity: number; unit: string; optional: boolean; constraints?: Record<string, unknown>; alternatives?: ServerBomAlternative[]; notes?: string; createdAt: string; updatedAt: string; version: number };
 type ServerGapCandidate = { itemId: string; relationship: string; compatibility: string; availableQuantity: number; suppliedQuantity: number; inspectQuantity: number; reason: string };
 type ServerGapLine = { lineId: string; name?: string; optional?: boolean; status: string; decision?: string; missingDecisions?: string[]; requiredQuantity?: number; unit?: string; suppliedQuantity: number; inspectQuantity: number; missingQuantity: number; matchedItemIds: string[]; reasons: string[]; alternatives?: ServerBomAlternative[]; candidates?: ServerGapCandidate[] };
 type ServerGapEvaluation = { lines: ServerGapLine[]; totals: { requiredLines: number; optionalLines: number; readyLines?: number; checkLines?: number; decideLines?: number; sourceLines?: number; partialLines: number; missingLines: number } };
-type ServerArtifact = { id: string; projectId: string; workItemId?: string; revisionId?: string; role: string; filename: string; mediaType: string; byteSize: number; sha256: string; author?: string; source?: string; machineBinding?: Record<string, string>; currentCandidate: boolean; retired: boolean; createdAt: string; version: number };
-type ServerRevision = { id: string; projectId: string; number: number; name: string; notes?: string; status: string; createdAt: string; version: number; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; gapEvaluation?: ServerGapEvaluation; buildConfigSnapshot?: unknown; buildConfiguration?: unknown };
-type ServerProject = { id: string; name: string; description?: string; status: string; currentRevisionId?: string; createdAt: string; updatedAt: string; version: number; removedAt?: string; removedBy?: string; lastLifecycleStatus?: string; workItems?: ServerWorkItem[]; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; currentRevision?: ServerRevision };
+type ServerArtifact = { id: string; projectId: string; workItemId?: string; revisionId?: string; projectRevisionId?: string; workItemRevisionId?: string; role: string; filename: string; mediaType: string; byteSize: number; sha256: string; author?: string; source?: string; machineBinding?: Record<string, string>; currentCandidate: boolean; retired: boolean; createdAt: string; version: number };
+type ServerRevision = { id: string; projectId: string; number: number; name: string; notes?: string; status: string; createdAt: string; version: number; workItemId?: string; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; gapEvaluation?: ServerGapEvaluation; buildConfigSnapshot?: unknown; buildConfiguration?: unknown };
+type ServerProject = { id: string; name: string; description?: string; status: string; currentRevisionId?: string; createdAt: string; updatedAt: string; version: number; removedAt?: string; removedBy?: string; lastLifecycleStatus?: string; workItems?: ServerWorkItem[]; projectRevisions?: ServerRevision[]; revisions?: ServerRevision[]; workItemRevisions?: ServerRevision[]; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; currentRevision?: ServerRevision };
 type ServerProjectTombstone = { id: string; name: string; removedAt: string; removedBy: string; lastLifecycleStatus: string; releasedReservationIds: string[]; version: number; auditId?: string };
 type ServerOffer = { id: string; itemId?: string; name: string; supplier: string; url: string; priceMinor: number; currency: CurrencyCode; packageQuantity?: number; observedAt: string; staleAfterDays?: number; version: number };
 type ServerWorkspace = { inventory: ServerInventoryItem[]; projects: ServerProject[]; offers: ServerOffer[]; source: "api"; fetchedAt: string };
@@ -254,7 +271,9 @@ export interface WorkspaceAdapter {
   createRevision(projectId: string, input: RevisionInput): Promise<Project>;
   createBuildConfigSnapshot(projectId: string, revisionId: string, input: BuildConfigInput): Promise<BuildConfigSnapshot>;
   createBomLine(projectId: string, input: BomInput): Promise<Project>;
-  uploadArtifact(projectId: string, file: File, role: string): Promise<Project>;
+  /** Read one exact scope, or all project artifacts when scope is omitted. */
+  listArtifacts(projectId: string, scope?: ArtifactUploadTarget): Promise<Artifact[]>;
+  uploadArtifact(projectId: string, file: File, role: string, target?: ArtifactUploadTarget): Promise<Project>;
   readReconciliation(projectId: string, revisionId: string): Promise<ReconciliationViewModel>;
   saveReconciliationDraft(projectId: string, revisionId: string, model: ReconciliationViewModel): Promise<ReconciliationViewModel>;
   commitReconciliation(projectId: string, revisionId: string, model: ReconciliationViewModel): Promise<ReconciliationViewModel>;
@@ -1183,9 +1202,20 @@ function mapGapEvaluation(value: ServerGapEvaluation | undefined, bom: readonly 
   };
 }
 
-function mapArtifact(artifact: ServerArtifact, revision?: ServerRevision): Artifact {
+type ArtifactScopeHint = { readonly projectRevisionId?: string; readonly workItemId?: string; readonly workItemRevisionId?: string };
+
+function mapArtifact(artifact: ServerArtifact, revision?: ServerRevision, hint?: ArtifactScopeHint): Artifact {
   const role: Artifact["role"] = artifact.role === "step" ? "STEP" : artifact.role === "stl" ? "STL" : artifact.role === "three_mf" || artifact.role === "slicer_project" || artifact.role === "gcode" ? "Build plate" : artifact.role === "cad_source" ? "Editable CAD" : artifact.role === "text" || artifact.role === "brief" ? "Notes" : "Validation";
-  const revisionLabel = revision && artifact.revisionId === revision.id ? `r${String(revision.number).padStart(2, "0")}` : artifact.revisionId ?? "Unbound";
+  const workItemId = artifact.workItemId ?? hint?.workItemId;
+  const projectRevisionId = artifact.projectRevisionId
+    ?? (workItemId === undefined ? artifact.revisionId : undefined)
+    ?? (workItemId === undefined ? hint?.projectRevisionId : undefined);
+  const workItemRevisionId = artifact.workItemRevisionId
+    ?? (artifact.workItemId === undefined ? undefined : artifact.revisionId)
+    ?? (workItemId === undefined ? undefined : hint?.workItemRevisionId);
+  const revisionLabel = revision && projectRevisionId === revision.id
+    ? `r${String(revision.number).padStart(2, "0")}`
+    : workItemRevisionId ?? projectRevisionId ?? "Unbound";
   const machine = artifact.machineBinding?.machine ?? artifact.machineBinding?.printer;
   const material = artifact.machineBinding?.material;
   return {
@@ -1198,7 +1228,10 @@ function mapArtifact(artifact: ServerArtifact, revision?: ServerRevision): Artif
     updated: artifact.createdAt.slice(0, 10),
     status: artifact.retired ? "superseded" : artifact.currentCandidate ? "candidate" : "validated",
     ...(machine ? { machine } : {}),
-    ...(material ? { material } : {})
+    ...(material ? { material } : {}),
+    ...(projectRevisionId === undefined ? {} : { projectRevisionId }),
+    ...(workItemId === undefined ? {} : { workItemId }),
+    ...(workItemRevisionId === undefined ? {} : { workItemRevisionId })
   };
 }
 
@@ -1233,12 +1266,50 @@ function canonicalProjectLifecycle(status: string): Project["status"] {
   }
 }
 
+function mapRevisionReference(revision: ServerRevision): ProjectRevisionReference {
+  return { id: revision.id, number: revision.number, name: revision.name, status: revision.status };
+}
+
+function mapProjectWorkItem(item: ServerWorkItem, workItemRevisions: readonly ServerRevision[]): ProjectWorkItem {
+  const currentRevision = item.currentRevision
+    ?? item.workItemRevision
+    ?? workItemRevisions.find((revision) => revision.id === item.currentRevisionId);
+  const currentRevisionId = item.currentRevisionId ?? currentRevision?.id;
+  return {
+    id: item.id,
+    name: item.name,
+    kind: item.kind,
+    ...(item.description === undefined ? {} : { description: item.description }),
+    ...(currentRevisionId === undefined ? {} : { currentRevisionId }),
+    ...(currentRevision === undefined ? {} : { currentRevision: mapRevisionReference(currentRevision) })
+  };
+}
+
 function mapProject(project: ServerProject): Project {
   const status = canonicalProjectLifecycle(project.status);
   const revision = project.currentRevision;
-  const workItem = project.workItems?.[0];
   const bom = revision?.bom ?? project.bom ?? [];
-  const artifacts = revision?.artifacts ?? project.artifacts ?? [];
+  const projectRevisionId = revision?.id ?? project.currentRevisionId;
+  const rawProjectArtifacts = project.artifacts ?? [];
+  const currentRawArtifacts = revision?.artifacts ?? rawProjectArtifacts.filter((artifact) => {
+    const artifactProjectRevisionId = artifact.projectRevisionId ?? (artifact.workItemId === undefined ? artifact.revisionId : undefined);
+    return projectRevisionId !== undefined && artifactProjectRevisionId === projectRevisionId;
+  });
+  const currentArtifacts = currentRawArtifacts.map((artifact) => mapArtifact(
+    artifact,
+    revision,
+    artifact.workItemId === undefined && projectRevisionId !== undefined ? { projectRevisionId } : undefined
+  ));
+  const allArtifactMap = new Map<string, Artifact>();
+  rawProjectArtifacts.map((artifact) => mapArtifact(artifact)).forEach((artifact) => allArtifactMap.set(artifact.id, artifact));
+  currentArtifacts.forEach((artifact) => allArtifactMap.set(artifact.id, artifact));
+  const allArtifacts = [...allArtifactMap.values()];
+  const workItemRevisions = project.workItemRevisions ?? [];
+  const workItems = (project.workItems ?? []).map((item) => mapProjectWorkItem(item, workItemRevisions));
+  const projectRevisions = [...(project.projectRevisions ?? []), ...(project.revisions ?? []), ...(revision ? [revision] : [])]
+    .map(mapRevisionReference)
+    .filter((candidate, index, values) => values.findIndex((value) => value.id === candidate.id) === index);
+  const workItem = workItems[0];
   const currentRevision = revision ? `r${String(revision.number).padStart(2, "0")}` : project.currentRevisionId ?? "No revision";
   const rawBuildConfig = revision?.buildConfigSnapshot ?? revision?.buildConfiguration;
   const buildConfigSnapshot = revision && rawBuildConfig !== undefined
@@ -1258,10 +1329,13 @@ function mapProject(project: ServerProject): Project {
     workItem: workItem?.name ?? "Project setup",
     railStep: railStepFor(revision?.status),
     bom: mappedBom,
-    artifacts: artifacts.map((artifact) => mapArtifact(artifact, revision)),
+    artifacts: currentArtifacts,
     notes: revision?.notes ? [revision.notes] : [],
     accent: status === "complete" ? "blue" : "orange",
     ...(revision?.id ?? project.currentRevisionId ? { serverRevisionId: revision?.id ?? project.currentRevisionId } : {}),
+    ...(projectRevisions.length === 0 ? {} : { projectRevisions }),
+    ...(workItems.length === 0 ? {} : { workItems }),
+    ...(allArtifacts.length === 0 ? {} : { allArtifacts }),
     ...(gapEvaluation === undefined ? {} : { gapEvaluation }),
     ...(buildConfigSnapshot ? { buildConfigSnapshot } : {}),
     ...(project.removedAt === undefined ? {} : { removedAt: project.removedAt }),
@@ -2284,10 +2358,28 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
       state.projects = state.projects.map((candidate) => candidate.id === projectId ? updated : candidate);
       return updated;
     },
-    async uploadArtifact(projectId, file, role) {
+    async listArtifacts(projectId, scope) {
       const project = state.projects.find((candidate) => candidate.id === projectId);
       if (!project) throw new ApiError("Project not found", { kind: "validation", status: 404 });
-      const artifact: Artifact = { id: `sample-artifact-${Date.now()}`, name: file.name, role: role === "STEP" ? "STEP" : role === "STL" ? "STL" : role === "Build plate" ? "Build plate" : role === "Editable CAD" ? "Editable CAD" : role === "Notes" ? "Notes" : "Validation", revision: project.currentRevision, size: formatBytes(file.size), hash: "sample-hash", updated: "Just now", status: "candidate" };
+      const artifacts = project.allArtifacts ?? project.artifacts;
+      return structuredClone(scope === undefined ? artifacts : filterArtifactsForScope(artifacts, scope));
+    },
+    async uploadArtifact(projectId, file, role, target) {
+      const project = state.projects.find((candidate) => candidate.id === projectId);
+      if (!project) throw new ApiError("Project not found", { kind: "validation", status: 404 });
+      const selectedTarget = target ?? (project.serverRevisionId === undefined ? undefined : { kind: "project" as const, projectRevisionId: project.serverRevisionId });
+      if (selectedTarget === undefined) throw new ApiError("Choose a revision before uploading a file", { kind: "validation", status: 409 });
+      const artifact: Artifact = {
+        id: `sample-artifact-${Date.now()}`,
+        name: file.name,
+        role: role === "STEP" ? "STEP" : role === "STL" ? "STL" : role === "Build plate" ? "Build plate" : role === "Editable CAD" ? "Editable CAD" : role === "Notes" ? "Notes" : "Validation",
+        revision: project.currentRevision,
+        size: formatBytes(file.size),
+        hash: "sample-hash",
+        updated: "Just now",
+        status: "candidate",
+        ...(selectedTarget.kind === "project" ? { projectRevisionId: selectedTarget.projectRevisionId } : { workItemId: selectedTarget.workItemId, workItemRevisionId: selectedTarget.workItemRevisionId })
+      };
       const updated = { ...project, artifacts: [artifact, ...project.artifacts] };
       state.projects = state.projects.map((candidate) => candidate.id === projectId ? updated : candidate);
       return updated;
@@ -2894,16 +2986,28 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       projectCache.set(projectId, project);
       return project;
     },
-    async uploadArtifact(projectId, file, role) {
+    async listArtifacts(projectId, scope) {
+      const params = new URLSearchParams();
+      if (scope?.kind === "project") params.set("projectRevisionId", scope.projectRevisionId);
+      if (scope?.kind === "work-item") {
+        params.set("workItemId", scope.workItemId);
+        params.set("workItemRevisionId", scope.workItemRevisionId);
+      }
+      const query = params.toString();
+      const payload = await request<unknown>(`/projects/${encodeURIComponent(projectId)}/artifacts${query ? `?${query}` : ""}`);
+      return responseList(payload).map((value) => mapArtifact(value as ServerArtifact));
+    },
+    async uploadArtifact(projectId, file, role, target) {
       const token = csrfToken ?? cookieValue("forge_csrf");
       if (!token) throw new ApiError("Your session needs a fresh CSRF token before uploading a file", { kind: "csrf", status: 403 });
       const current = projectCache.get(projectId);
-      const revisionId = current?.serverRevisionId;
-      if (!revisionId) throw new ApiError("Create a project revision before uploading a file", { kind: "validation", status: 409 });
+      const selectedTarget = target ?? (current?.serverRevisionId === undefined ? undefined : { kind: "project" as const, projectRevisionId: current.serverRevisionId });
+      if (selectedTarget === undefined) throw new ApiError("Create a project revision before uploading a file", { kind: "validation", status: 409 });
       const bytes = await file.arrayBuffer();
       const sha256 = await sha256Hex(file);
-      const buildConfigurationSnapshotId = current.buildConfigSnapshot
-        && (current.buildConfigSnapshot.revisionId === revisionId || current.buildConfigSnapshot.projectRevisionId === revisionId)
+      const projectRevisionId = selectedTarget.kind === "project" ? selectedTarget.projectRevisionId : undefined;
+      const buildConfigurationSnapshotId = projectRevisionId !== undefined && current?.buildConfigSnapshot
+        && (current.buildConfigSnapshot.revisionId === projectRevisionId || current.buildConfigSnapshot.projectRevisionId === projectRevisionId)
         ? current.buildConfigSnapshot.id
         : undefined;
       const beginPayload = await request<{ data: ServerUploadSession }>("/artifacts/uploads", {
@@ -2911,7 +3015,9 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         headers: { "Idempotency-Key": idempotencyKey("upload-begin") },
         body: JSON.stringify({
           projectId,
-          revisionId,
+          ...(selectedTarget.kind === "project"
+            ? { projectRevisionId: selectedTarget.projectRevisionId }
+            : { workItemId: selectedTarget.workItemId, workItemRevisionId: selectedTarget.workItemRevisionId }),
           role: serverArtifactRole(role),
           filename: file.name,
           mediaType: file.type || "application/octet-stream",
@@ -2927,7 +3033,9 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       const finalizePayload = await request<{ data: ServerArtifact }>(`/artifacts/uploads/${encodeURIComponent(session.id)}/finalize`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey("upload-finalize") } }, token);
       const artifact = mutationData(finalizePayload);
       if (!current) throw new ApiError("The project is not available in this workspace snapshot", { kind: "validation", status: 409 });
-      const project = { ...current, artifacts: [mapArtifact(artifact, { id: revisionId, projectId, number: Number.parseInt(current.currentRevision.replace(/\D/gu, ""), 10) || 1, name: current.currentRevision, status: "concept", createdAt: new Date().toISOString(), version: 1 }), ...current.artifacts] };
+      const currentRevision = { id: current.serverRevisionId ?? "", projectId, number: Number.parseInt(current.currentRevision.replace(/\D/gu, ""), 10) || 1, name: current.currentRevision, status: "concept", createdAt: new Date().toISOString(), version: 1 };
+      const mappedArtifact = mapArtifact(artifact, selectedTarget.kind === "project" ? currentRevision : undefined, selectedTarget.kind === "project" ? { projectRevisionId: selectedTarget.projectRevisionId } : { workItemId: selectedTarget.workItemId, workItemRevisionId: selectedTarget.workItemRevisionId });
+      const project = { ...current, artifacts: selectedTarget.kind === "project" ? [mappedArtifact, ...current.artifacts] : current.artifacts, allArtifacts: [mappedArtifact, ...(current.allArtifacts ?? current.artifacts)] };
       projectCache.set(projectId, project);
       return project;
     }

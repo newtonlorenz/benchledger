@@ -403,6 +403,12 @@ test("keeps the physical-count field aligned after commissioning delivered stock
 
 test("creates a project atomically and finalizes a revisioned artifact", async ({ page }) => {
   await signIn(page);
+  const uploadBodies: Record<string, unknown>[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/artifacts/uploads") {
+      uploadBodies.push(request.postDataJSON() as Record<string, unknown>);
+    }
+  });
   await page.getByRole("button", { name: "New project" }).click();
 
   const appBackground = page.locator(".app-background");
@@ -426,6 +432,98 @@ test("creates a project atomically and finalizes a revisioned artifact", async (
   await expect(page.getByRole("cell", { name: /e2e-enclosure\.step/u })).toBeVisible();
   await expect(page.getByRole("cell", { name: "STEP", exact: true })).toBeVisible();
   await expect(page.getByRole("cell", { name: "r01", exact: true })).toBeVisible();
+  expect(uploadBodies).toHaveLength(1);
+  expect(uploadBodies[0]).toHaveProperty("projectRevisionId");
+  expect(uploadBodies[0]).not.toHaveProperty("revisionId");
+  expect(uploadBodies[0]).not.toHaveProperty("workItemId");
+  expect(uploadBodies[0]).not.toHaveProperty("workItemRevisionId");
+});
+
+test("offers exact work-item scopes, keeps legacy files in All, and freezes upload targets", async ({ page }) => {
+  let projectId = "";
+  let projectRevisionId = "";
+  const workItemId = "e2e-work-body";
+  const workItemRevisionId = "e2e-work-revision-1";
+  await page.route("**/api/v1/workspace", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json() as { projects?: Array<Record<string, any>> };
+    const project = body.projects?.[0];
+    if (!project || !project.currentRevision) {
+      await route.fulfill({ response, body: JSON.stringify(body) });
+      return;
+    }
+    projectId = String(project.id);
+    projectRevisionId = String(project.currentRevision.id);
+    project.workItems = [
+      { id: workItemId, projectId, name: "Body", kind: "part", currentRevisionId: workItemRevisionId, createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 },
+      { id: "e2e-work-unbound", projectId, name: "Unbound notes", kind: "document", createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 }
+    ];
+    project.workItemRevisions = [{ id: workItemRevisionId, projectId, workItemId, number: 1, name: "Body baseline", status: "concept", createdAt: "2026-08-30T10:00:00.000Z", version: 1 }];
+    project.artifacts = [
+      ...(project.artifacts ?? []),
+      { id: "e2e-legacy-artifact", projectId, role: "text", filename: "legacy-scope-note.md", mediaType: "text/markdown", byteSize: 12, sha256: "l".repeat(64), currentCandidate: false, retired: false, createdAt: "2026-08-30T10:00:00.000Z", version: 1 },
+      { id: "e2e-work-artifact", projectId, workItemId, workItemRevisionId, role: "step", filename: "body-existing.step", mediaType: "model/step", byteSize: 12, sha256: "w".repeat(64), currentCandidate: true, retired: false, createdAt: "2026-08-30T10:00:00.000Z", version: 1 }
+    ];
+    await route.fulfill({ response, body: JSON.stringify(body) });
+  });
+  await signIn(page);
+  await page.getByRole("button", { name: /^Projects/ }).click();
+  await page.getByRole("combobox", { name: "Choose project" }).selectOption(projectId);
+  await page.getByRole("tab", { name: /Files/ }).click();
+
+  const scope = page.getByLabel("Choose file scope");
+  await expect(scope).toHaveValue(`project:${projectRevisionId}`);
+  await expect(scope.locator("option")).toContainText(["Project", "Body", "Unbound notes", "All files (read-only)"]);
+  await expect(scope.locator("option").filter({ hasText: "Unbound notes" })).toHaveAttribute("disabled", "");
+  await expect(page.locator(".file-scope-identity")).toContainText(`Project · ${projectRevisionId}`);
+
+  await scope.selectOption("all");
+  await expect(page.locator(".file-scope-identity")).toContainText("All files · read-only");
+  await expect(page.getByRole("cell", { name: /legacy-scope-note\.md/u })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Choose a revision to upload" })).toBeDisabled();
+
+  await scope.selectOption(`work-item:${workItemId}:${workItemRevisionId}`);
+  await expect(page.locator(".file-scope-identity")).toContainText(`Work item · ${workItemId} · ${workItemRevisionId}`);
+  await expect(page.getByRole("cell", { name: /body-existing\.step/u })).toBeVisible();
+  await expect(page.getByRole("cell", { name: /legacy-scope-note\.md/u })).toHaveCount(0);
+
+  const beginBodies: Record<string, unknown>[] = [];
+  let releaseFirstBegin: (() => void) | undefined;
+  await page.route("**/api/v1/artifacts/uploads", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    beginBodies.push(body);
+    if (beginBodies.length === 1) await new Promise<void>((resolve) => { releaseFirstBegin = resolve; });
+    const sessionId = `e2e-work-upload-${beginBodies.length}`;
+    await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ data: { id: sessionId, artifactId: `${sessionId}-artifact`, expiresAt: "2026-09-02T11:00:00.000Z", maxBytes: 1000, uploadUrl: `/api/v1/artifacts/uploads/${sessionId}`, status: "pending" } }) });
+  });
+  await page.route("**/api/v1/artifacts/uploads/**", async (route) => {
+    if (route.request().method() === "PUT") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ receivedBytes: 3 }) });
+      return;
+    }
+    if (route.request().method() === "POST") {
+      const sessionId = route.request().url().split("/").at(-2) ?? "e2e-work-upload";
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: { id: `${sessionId}-artifact`, projectId, workItemId, workItemRevisionId, role: "step", filename: "upload.step", mediaType: "model/step", byteSize: 5, sha256: "b".repeat(64), currentCandidate: true, retired: false, createdAt: "2026-09-02T10:00:00.000Z", version: 1 } }) });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.getByLabel("Choose files to upload").setInputFiles([
+    { name: "upload-one.step", mimeType: "model/step", buffer: Buffer.from("one") },
+    { name: "upload-two.step", mimeType: "model/step", buffer: Buffer.from("two") }
+  ]);
+  await expect(scope).toBeDisabled();
+  expect(releaseFirstBegin).toBeDefined();
+  releaseFirstBegin?.();
+  await expect(page.getByText("2 of 2 files uploaded", { exact: true })).toBeVisible();
+  expect(beginBodies).toHaveLength(2);
+  for (const body of beginBodies) {
+    expect(body).toMatchObject({ projectId, workItemId, workItemRevisionId });
+    expect(body).not.toHaveProperty("projectRevisionId");
+    expect(body).not.toHaveProperty("revisionId");
+  }
 });
 
 test("archives a project into the explicit Archived view and restores it", async ({ page }) => {

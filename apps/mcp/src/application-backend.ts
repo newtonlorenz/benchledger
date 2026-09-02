@@ -3,6 +3,7 @@ import { Buffer } from "node:buffer";
 import { ApplicationError, inventoryBulkUpdateFingerprint, type ApplicationService, type Mutation, type Page as AppPage, type RequestContext } from "@benchledger/application";
 import type {
   Artifact as ApiArtifact,
+  ArtifactListQuery as ApiArtifactListQuery,
   BomGap,
   BomLine as ApiBomLine,
   CreateBomLine,
@@ -583,7 +584,12 @@ export function createApplicationBackend(service: ApplicationService, options: P
     },
     artifacts: {
       list: async (input) => {
-        const artifacts = await service.listArtifacts(input.projectId, input.workItemId, input.revisionId);
+        const query: ApiArtifactListQuery = "projectRevisionId" in input && input.projectRevisionId !== undefined
+          ? { projectRevisionId: input.projectRevisionId }
+          : "workItemId" in input && "workItemRevisionId" in input && input.workItemId !== undefined && input.workItemRevisionId !== undefined
+            ? { workItemId: input.workItemId, workItemRevisionId: input.workItemRevisionId }
+            : {};
+        const artifacts = await service.listArtifacts(input.projectId, query);
         const filtered = input.role === undefined ? artifacts : artifacts.filter((artifact) => toMcpArtifactRole(artifact.role) === input.role);
         return slicePage(filtered.map(toMcpArtifact), input.limit ?? 25, input.cursor);
       },

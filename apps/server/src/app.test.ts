@@ -528,6 +528,13 @@ describe("BenchLedger HTTP API", () => {
         additionalProperties: false
       });
       expect(document.paths["/inventory/with-product-profile"]).toMatchObject({ post: { requestBody: { content: { "application/json": { schema: { $ref: "#/components/schemas/CreateInventoryWithProductProfile" } } } } } });
+      expect(document.components.schemas.ArtifactScope).toMatchObject({ oneOf: expect.arrayContaining([
+        expect.objectContaining({ required: ["projectRevisionId"], additionalProperties: false }),
+        expect.objectContaining({ required: ["workItemId", "workItemRevisionId"], additionalProperties: false })
+      ]) });
+      expect(document.components.schemas.BeginUpload).toMatchObject({ oneOf: expect.any(Array) });
+      expect(document.paths["/projects/{id}/artifacts"]).toMatchObject({ get: { parameters: expect.arrayContaining([expect.objectContaining({ name: "projectRevisionId", in: "query" }), expect.objectContaining({ name: "workItemRevisionId", in: "query" })]) } });
+      expect(document.paths["/artifacts/uploads"]).toMatchObject({ post: { requestBody: { content: { "application/json": { schema: { $ref: "#/components/schemas/BeginUpload" } } } } } });
       expect(document.components.schemas.CreateInventoryWithProductProfile).toMatchObject({ required: ["item", "profile"], additionalProperties: false });
       expect(document.components.schemas.CreateInventoryCategory).toMatchObject({ required: ["name"], additionalProperties: false });
       expect(document.components.schemas.UpdateInventoryCategory).toMatchObject({ minProperties: 1, additionalProperties: false });
@@ -612,8 +619,27 @@ describe("BenchLedger HTTP API", () => {
 
   it("rejects traversal and disallowed artifact uploads", async () => {
     const { app, cookie, csrf } = await loggedIn();
-    const response = await app.inject({ method: "POST", url: "/api/v1/artifacts/uploads", headers: { cookie, "x-csrf-token": csrf }, payload: { projectId: "project-1", role: "cad_source", filename: "../secret.step", mediaType: "model/step", byteSize: 1, sha256: createHash("sha256").update("x").digest("hex") } });
+    const response = await app.inject({ method: "POST", url: "/api/v1/artifacts/uploads", headers: { cookie, "x-csrf-token": csrf }, payload: { projectId: "synthetic-project-lamp", projectRevisionId: "synthetic-revision-lamp-r01", role: "cad_source", filename: "../secret.step", mediaType: "model/step", byteSize: 1, sha256: createHash("sha256").update("x").digest("hex") } });
     expect(response.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("requires one exact revision scope for every HTTP artifact upload", async () => {
+    const { app, cookie, csrf } = await loggedIn();
+    const headers = { cookie, "x-csrf-token": csrf };
+    const common = { projectId: "synthetic-project-lamp", role: "step", filename: "strict.step", mediaType: "model/step", byteSize: 1, sha256: "a".repeat(64) };
+    for (const payload of [
+      common,
+      { ...common, revisionId: "synthetic-revision-lamp-r01" },
+      { ...common, projectRevisionId: "synthetic-revision-lamp-r01", workItemId: "work-1", workItemRevisionId: "work-revision-1" },
+      { ...common, workItemId: "work-1" },
+      { ...common, projectRevisionId: "synthetic-revision-lamp-r01", workItemId: "work-1" },
+    ]) {
+      const response = await app.inject({ method: "POST", url: "/api/v1/artifacts/uploads", headers, payload });
+      expect(response.statusCode).toBe(400);
+    }
+    const valid = await app.inject({ method: "POST", url: "/api/v1/artifacts/uploads", headers, payload: { ...common, projectRevisionId: "synthetic-revision-lamp-r01" } });
+    expect(valid.statusCode).toBe(201);
     await app.close();
   });
 
@@ -623,7 +649,7 @@ describe("BenchLedger HTTP API", () => {
     const sha256 = createHash("sha256").update(body).digest("hex");
     const input = {
       projectId: "synthetic-project-lamp",
-      revisionId: "synthetic-revision-lamp-r01",
+      projectRevisionId: "synthetic-revision-lamp-r01",
       role: "step",
       filename: "browser-source.step",
       mediaType: "model/step",
@@ -660,7 +686,7 @@ describe("BenchLedger HTTP API", () => {
     const headers = { authorization: "Bearer artifact-agent-token" };
     const body = Buffer.from("step-data");
     const sha256 = createHash("sha256").update(body).digest("hex");
-    const mcp = await app.inject({ method: "POST", url: "/api/v1/mcp", headers, payload: { jsonrpc: "2.0", id: "begin", method: "tools/call", params: { name: "begin_artifact_upload", arguments: { projectId: "synthetic-project-lamp", filename: "source.step", role: "step", mediaType: "model/step", byteLength: body.byteLength, sha256 } } } });
+    const mcp = await app.inject({ method: "POST", url: "/api/v1/mcp", headers, payload: { jsonrpc: "2.0", id: "begin", method: "tools/call", params: { name: "begin_artifact_upload", arguments: { projectId: "synthetic-project-lamp", projectRevisionId: "synthetic-revision-lamp-r01", filename: "source.step", role: "step", mediaType: "model/step", byteLength: body.byteLength, sha256 } } } });
     expect(mcp.statusCode).toBe(200);
     expect(mcp.json()).toMatchObject({ result: { isError: true, structuredContent: { error: { code: "HOST_TRANSFER_UNAVAILABLE" } } } });
     const metadata = await app.inject({ method: "POST", url: "/api/v1/mcp", headers, payload: { jsonrpc: "2.0", id: "metadata", method: "tools/call", params: { name: "read_artifact_download_metadata", arguments: { artifactId: "synthetic-artifact-source" } } } });
@@ -689,7 +715,7 @@ describe("BenchLedger HTTP API", () => {
       const bearerHeaders = { authorization: "Bearer actor-bound-token" };
       const body = Buffer.from("actor-bound-transfer");
       const sha256 = createHash("sha256").update(body).digest("hex");
-      const begin = await app.inject({ method: "POST", url: "/api/v1/mcp", headers: bearerHeaders, payload: { jsonrpc: "2.0", id: "begin-actor-bound", method: "tools/call", params: { name: "begin_artifact_upload", arguments: { projectId: "synthetic-project-lamp", filename: "actor-bound.step", role: "step", mediaType: "model/step", byteLength: body.byteLength, sha256 } } } });
+      const begin = await app.inject({ method: "POST", url: "/api/v1/mcp", headers: bearerHeaders, payload: { jsonrpc: "2.0", id: "begin-actor-bound", method: "tools/call", params: { name: "begin_artifact_upload", arguments: { projectId: "synthetic-project-lamp", projectRevisionId: "synthetic-revision-lamp-r01", filename: "actor-bound.step", role: "step", mediaType: "model/step", byteLength: body.byteLength, sha256 } } } });
       expect(begin.statusCode).toBe(200);
       expect(begin.json()).toMatchObject({ result: { isError: true, structuredContent: { error: { code: "HOST_TRANSFER_UNAVAILABLE" } } } });
 
@@ -701,7 +727,7 @@ describe("BenchLedger HTTP API", () => {
       const login = await app.inject({ method: "POST", url: "/api/v1/auth/login", payload: { password: demoPassword } });
       const cookie = cookieHeader(login.headers["set-cookie"]);
       const csrf = login.json<{ csrfToken: string }>().csrfToken;
-      const uiBegin = await app.inject({ method: "POST", url: "/api/v1/artifacts/uploads", headers: { cookie, "x-csrf-token": csrf }, payload: { projectId: "synthetic-project-lamp", filename: "ui-source.step", role: "step", mediaType: "model/step", byteSize: body.byteLength, sha256 } });
+      const uiBegin = await app.inject({ method: "POST", url: "/api/v1/artifacts/uploads", headers: { cookie, "x-csrf-token": csrf }, payload: { projectId: "synthetic-project-lamp", projectRevisionId: "synthetic-revision-lamp-r01", filename: "ui-source.step", role: "step", mediaType: "model/step", byteSize: body.byteLength, sha256 } });
       expect(uiBegin.statusCode).toBe(201);
       const afterUiAudit = await runtime.ports.audit.list(100);
       expect(afterUiAudit.data.filter((event) => event.action === "artifact.upload.begin").slice(-1)[0]).toMatchObject({ actor: "workspace-admin", source: "ui" });
@@ -1091,7 +1117,7 @@ describe("BenchLedger HTTP API", () => {
       const headers = { authorization: "Bearer scoped-upload-token" };
       const beginUpload = (buildConfigurationSnapshotId: string) => ({
         projectId: "synthetic-project-lamp",
-        revisionId: "synthetic-revision-lamp-r01",
+        projectRevisionId: "synthetic-revision-lamp-r01",
         buildConfigurationSnapshotId,
         role: "step",
         filename: `scoped-${buildConfigurationSnapshotId}.step`,
@@ -1100,8 +1126,8 @@ describe("BenchLedger HTTP API", () => {
         sha256: "a".repeat(64)
       });
 
-      const crossProject = await app.inject({ method: "POST", url: "/api/v1/artifacts/uploads", headers, payload: beginUpload("cross-project-upload-snapshot") });
-      const missing = await app.inject({ method: "POST", url: "/api/v1/artifacts/uploads", headers, payload: beginUpload("missing-upload-snapshot") });
+      const crossProject = await app.inject({ method: "POST", url: "/api/v1/artifacts/uploads", headers, payload: { ...beginUpload("cross-project-upload-snapshot"), projectRevisionId: "synthetic-revision-lamp-r01" } });
+      const missing = await app.inject({ method: "POST", url: "/api/v1/artifacts/uploads", headers, payload: { ...beginUpload("missing-upload-snapshot"), projectRevisionId: "synthetic-revision-lamp-r01" } });
       expect(crossProject.statusCode).toBe(403);
       expect(missing.statusCode).toBe(403);
       expect(crossProject.json<{ error: { code: string; message: string } }>().error).toMatchObject({ code: "forbidden" });
@@ -1344,7 +1370,7 @@ describe("BenchLedger HTTP API", () => {
     expect(invalidQuery.statusCode).toBe(400);
     expect(invalidQuery.json()).toMatchObject({ error: { code: "validation" } });
     expect((await app.inject({ method: "GET", url: "/api/v1/inventory/missing-item", headers: { cookie } })).statusCode).toBe(404);
-    const unsupported = await app.inject({ method: "POST", url: "/api/v1/artifacts/uploads", headers: { cookie, "x-csrf-token": csrf }, payload: { projectId: "synthetic-project-lamp", filename: "bad.bin", role: "other", mediaType: "application/x-unknown", byteSize: 1, sha256: "a".repeat(64) } });
+    const unsupported = await app.inject({ method: "POST", url: "/api/v1/artifacts/uploads", headers: { cookie, "x-csrf-token": csrf }, payload: { projectId: "synthetic-project-lamp", projectRevisionId: "synthetic-revision-lamp-r01", filename: "bad.bin", role: "other", mediaType: "application/x-unknown", byteSize: 1, sha256: "a".repeat(64) } });
     expect(unsupported.statusCode).toBe(415);
     const badVersion = await app.inject({ method: "PATCH", url: "/api/v1/inventory/wire-dupont", headers: { cookie, "x-csrf-token": csrf, "if-match": "not-a-version" }, payload: { name: "Updated wire" } });
     expect(badVersion.statusCode).toBe(400);
@@ -1421,7 +1447,10 @@ describe("BenchLedger HTTP API", () => {
     expect((await app.inject({ method: "GET", url: "/api/v1/projects/synthetic-project-lamp", headers })).statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: "/api/v1/projects/other-project", headers })).statusCode).toBe(403);
     expect((await app.inject({ method: "GET", url: "/api/v1/projects/synthetic-project-lamp/artifacts", headers })).statusCode).toBe(200);
-    expect((await app.inject({ method: "POST", url: "/api/v1/artifacts/uploads", headers, payload: { projectId: "other-project", filename: "x.step", role: "step", mediaType: "model/step", byteSize: 1, sha256: "a".repeat(64) } })).statusCode).toBe(403);
+    expect((await app.inject({ method: "GET", url: "/api/v1/projects/synthetic-project-lamp/artifacts?projectRevisionId=synthetic-revision-lamp-r01", headers })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/v1/projects/synthetic-project-lamp/artifacts?workItemId=work-1", headers })).statusCode).toBe(400);
+    expect((await app.inject({ method: "GET", url: "/api/v1/projects/synthetic-project-lamp/artifacts?revisionId=synthetic-revision-lamp-r01", headers })).statusCode).toBe(400);
+    expect((await app.inject({ method: "POST", url: "/api/v1/artifacts/uploads", headers, payload: { projectId: "other-project", projectRevisionId: "synthetic-revision-lamp-r01", filename: "x.step", role: "step", mediaType: "model/step", byteSize: 1, sha256: "a".repeat(64) } })).statusCode).toBe(403);
     await app.close();
   });
 
@@ -1504,7 +1533,7 @@ describe("BenchLedger HTTP API", () => {
       const csrf = login.json<{ csrfToken: string }>().csrfToken;
       const body = Buffer.from("route-level-download");
       const sha256 = createHash("sha256").update(body).digest("hex");
-      const begin = await app.inject({ method: "POST", url: "/api/v1/artifacts/uploads", headers: { cookie, "x-csrf-token": csrf }, payload: { projectId: "synthetic-project-lamp", revisionId: "synthetic-revision-lamp-r01", role: "step", filename: "route-level.step", mediaType: "model/step", byteSize: body.byteLength, sha256 } });
+      const begin = await app.inject({ method: "POST", url: "/api/v1/artifacts/uploads", headers: { cookie, "x-csrf-token": csrf }, payload: { projectId: "synthetic-project-lamp", projectRevisionId: "synthetic-revision-lamp-r01", role: "step", filename: "route-level.step", mediaType: "model/step", byteSize: body.byteLength, sha256 } });
       expect(begin.statusCode).toBe(201);
       const uploadId = begin.json<{ data: { id: string } }>().data.id;
       const write = await app.inject({ method: "PUT", url: `/api/v1/artifacts/uploads/${uploadId}`, headers: { cookie, "x-csrf-token": csrf, "content-type": "application/octet-stream" }, payload: body });

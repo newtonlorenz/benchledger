@@ -11,6 +11,26 @@ import { attempt, clone, nowIso, page, resultValue } from "./utils.js";
 const ARTIFACT = "artifact";
 const UPLOAD = "upload_session";
 
+function matchesArtifactScope(
+  artifact: Pick<ArtifactRevision, "projectId" | "workItemId" | "revisionId">,
+  projectId: string,
+  workItemId: string | undefined,
+  revisionId: string | undefined,
+): boolean {
+  if (artifact.projectId !== projectId) return false;
+  if (workItemId !== undefined) {
+    return artifact.workItemId === workItemId && (revisionId === undefined || artifact.revisionId === revisionId);
+  }
+  if (revisionId !== undefined) {
+    // A revision-only query names a project revision. Work-item artifacts are
+    // a separate namespace even if they carry the same revision string.
+    return artifact.workItemId === undefined && artifact.revisionId === revisionId;
+  }
+  // With no ancestry filter, retain the historical all-project view,
+  // including records created before revision/work-item binding existed.
+  return true;
+}
+
 function metadataFor(state: RuntimeState, artifact: ArtifactRevision): { readonly author?: string; readonly machineBinding?: Readonly<Record<string, string>>; readonly retired?: boolean } {
   const value = state.getMetadata(ARTIFACT, artifact.artifactId);
   const machineBindingValue = value.machineBinding;
@@ -35,7 +55,7 @@ export class ProductionArtifactAdapter implements ArtifactPort {
   async listArtifacts(projectId: string, workItemId?: string, revisionId?: string): Promise<readonly ApiArtifact[]> {
     return this.unitOfWork.exclusive(() => attempt(async () => {
       const listed = resultValue(await this.store.listArtifactRevisions());
-      return listed.filter((artifact) => artifact.projectId === projectId && (workItemId === undefined || artifact.workItemId === workItemId) && (revisionId === undefined || artifact.revisionId === revisionId)).map((artifact) => this.toApi(artifact));
+      return listed.filter((artifact) => matchesArtifactScope(artifact, projectId, workItemId, revisionId)).map((artifact) => this.toApi(artifact));
     }));
   }
 

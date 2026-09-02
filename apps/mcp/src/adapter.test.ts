@@ -344,7 +344,7 @@ describe("McpAdapter", () => {
 
   it("rejects credential-bearing transfer payloads", async () => {
     const adapter = new McpAdapter(backend());
-    const result = await adapter.callTool("begin_artifact_upload", { projectId: "project-1", filename: "source.step", role: "source", mediaType: "model/step", byteLength: 12, sha256: "a".repeat(64) }, context);
+    const result = await adapter.callTool("begin_artifact_upload", { projectId: "project-1", projectRevisionId: "project-revision-1", filename: "source.step", role: "source", mediaType: "model/step", byteLength: 12, sha256: "a".repeat(64) }, context);
 
     expect(result.isError).toBe(true);
     expect(result.structuredContent).toMatchObject({ error: { code: "UNSAFE_LINK" } });
@@ -352,7 +352,7 @@ describe("McpAdapter", () => {
 
     const unsafeBackend = backend();
     unsafeBackend.artifacts.beginUpload = async () => ({ uploadId: "upload-2", uploadUrl: "data:application/octet-stream;base64,AAAA", expiresAt: "2026-08-30T10:15:00.000Z", maxBytes: 100, method: "PUT" });
-    const unsafeResult = await new McpAdapter(unsafeBackend).callTool("begin_artifact_upload", { projectId: "project-1", filename: "source.step", role: "source", mediaType: "model/step", byteLength: 12, sha256: "a".repeat(64) }, context);
+    const unsafeResult = await new McpAdapter(unsafeBackend).callTool("begin_artifact_upload", { projectId: "project-1", projectRevisionId: "project-revision-1", filename: "source.step", role: "source", mediaType: "model/step", byteLength: 12, sha256: "a".repeat(64) }, context);
     expect(unsafeResult.isError).toBe(true);
     expect(unsafeResult.structuredContent).toMatchObject({ error: { code: "UNSAFE_LINK" } });
 
@@ -380,6 +380,18 @@ describe("McpAdapter", () => {
     expect(inventoryList?.inputSchema.properties.cursor).toMatchObject({ description: expect.stringContaining("512") });
     expect(inventoryList?.inputSchema.properties.categoryNodeId).toMatchObject({ type: "string", maxLength: 160 });
     expect(inventoryList?.inputSchema.properties.unassigned).toMatchObject({ type: "boolean" });
+    const artifactList = adapter.listTools().find((tool) => tool.name === "list_artifacts");
+    expect(artifactList?.inputSchema).toMatchObject({ oneOf: expect.arrayContaining([
+      expect.objectContaining({ required: ["projectId"] }),
+      expect.objectContaining({ required: expect.arrayContaining(["projectId", "projectRevisionId"]) }),
+      expect.objectContaining({ required: expect.arrayContaining(["projectId", "workItemId", "workItemRevisionId"]) }),
+    ]) });
+    expect(artifactList?.inputSchema).not.toHaveProperty("properties.revisionId");
+    const artifactBegin = adapter.listTools().find((tool) => tool.name === "begin_artifact_upload");
+    expect(artifactBegin?.inputSchema).toMatchObject({ oneOf: expect.arrayContaining([
+      expect.objectContaining({ required: expect.arrayContaining(["projectId", "projectRevisionId"]) }),
+      expect.objectContaining({ required: expect.arrayContaining(["projectId", "workItemId", "workItemRevisionId"]) }),
+    ]) });
     const offerList = adapter.listTools().find((tool) => tool.name === "list_offers");
     expect(offerList?.inputSchema.properties.cursor).toMatchObject({ description: expect.stringContaining("512") });
     const categoryRead = adapter.listTools().find((tool) => tool.name === "read_inventory_category");
@@ -402,7 +414,7 @@ describe("McpAdapter", () => {
         sessionInvalidation: expect.stringContaining("invalidates existing browser sessions"),
         mcpBoundary: expect.stringContaining("always requires a scoped bearer token"),
       },
-      scopeBehavior: { inventory: expect.stringContaining("shared"), offers: expect.stringContaining("itemId") },
+      scopeBehavior: { artifacts: expect.stringContaining("closed union"), inventory: expect.stringContaining("shared"), offers: expect.stringContaining("itemId") },
     });
 
     const bomCreate = adapter.listTools().find((tool) => tool.name === "create_bom_line");
@@ -464,6 +476,27 @@ describe("McpAdapter", () => {
     await expect(adapter.callTool("finalize_artifact_upload", { uploadId: "upload-1", expectedFilename: "renamed.step" }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
     await expect(adapter.callTool("begin_artifact_upload", { projectId: "project-1", workItemRevisionId: "work-revision-1", filename: "source.step", role: "step", mediaType: "model/step", byteLength: 12, sha256: "a".repeat(64) }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
     await expect(adapter.callTool("begin_artifact_upload", { projectId: "project-1", projectRevisionId: "project-revision-1", workItemId: "work-1", filename: "source.step", role: "step", mediaType: "model/step", byteLength: 12, sha256: "a".repeat(64) }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
+  });
+
+  it("rejects ambiguous artifact scopes before project ancestry lookups", async () => {
+    let resolverCalls = 0;
+    const scopedBackend = backend();
+    scopedBackend.projectScope = {
+      projectForProjectRevision: async () => { resolverCalls += 1; return "project-1"; },
+      projectForWorkItem: async () => { resolverCalls += 1; return "project-1"; },
+      projectForWorkItemRevision: async () => { resolverCalls += 1; return "project-1"; },
+    };
+    const adapter = new McpAdapter(scopedBackend);
+    const scoped = { ...context, projectIds: ["project-1"] as const };
+    const invalidScopes = [
+      ["list_artifacts", { projectId: "project-1", workItemId: "work-1" }],
+      ["list_artifacts", { projectId: "project-1", projectRevisionId: "project-revision-1", workItemId: "work-1", workItemRevisionId: "work-revision-1" }],
+      ["begin_artifact_upload", { projectId: "project-1", filename: "source.step", role: "step", mediaType: "model/step", byteLength: 12, sha256: "a".repeat(64) }],
+    ] as const;
+    for (const [name, input] of invalidScopes) {
+      await expect(adapter.callTool(name, input, scoped)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
+    }
+    expect(resolverCalls).toBe(0);
   });
 
   it("keeps indirect ancestry available across separate adapter instances", async () => {
@@ -717,7 +750,7 @@ describe("McpAdapter", () => {
       ["read_build_configuration", { buildConfigurationId: "build-config-1" }],
       ["list_artifacts", { projectId: "project-1", limit: 5 }],
       ["read_artifact_metadata", { artifactId: "artifact-1" }],
-      ["begin_artifact_upload", { projectId: "project-1", filename: "source.step", role: "source", mediaType: "model/step", byteLength: 12, sha256: "a".repeat(64) }],
+      ["begin_artifact_upload", { projectId: "project-1", projectRevisionId: "project-revision-1", filename: "source.step", role: "source", mediaType: "model/step", byteLength: 12, sha256: "a".repeat(64) }],
       ["finalize_artifact_upload", { uploadId: "upload-1" }],
       ["read_artifact_download_metadata", { artifactId: "artifact-1" }],
       ["download_artifact", { artifactId: "artifact-1" }],
@@ -857,7 +890,7 @@ describe("McpAdapter", () => {
     };
     const adapter = new McpAdapter(scopedBackend);
     const requests: Array<[string, unknown, unknown]> = [
-      ["list_artifacts", { projectId: "project-1", revisionId: "existing-denied-revision" }, { projectId: "project-1", revisionId: "missing-revision" }],
+      ["list_artifacts", { projectId: "project-1", projectRevisionId: "existing-denied-revision" }, { projectId: "project-1", projectRevisionId: "missing-revision" }],
       ["read_artifact_metadata", { artifactId: "artifact-1", revisionId: "existing-denied-revision" }, { artifactId: "artifact-1", revisionId: "missing-revision" }],
       ["read_artifact_download_metadata", { artifactId: "artifact-1", revisionId: "existing-denied-revision" }, { artifactId: "artifact-1", revisionId: "missing-revision" }],
       ["download_artifact", { artifactId: "artifact-1", revisionId: "existing-denied-revision" }, { artifactId: "artifact-1", revisionId: "missing-revision" }],

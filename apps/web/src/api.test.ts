@@ -837,10 +837,56 @@ describe("authenticated BenchLedger API adapter", () => {
       "/api/v1/artifacts/uploads/upload-1/finalize"
     ]);
     const beginBody = JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body));
-    expect(beginBody).toMatchObject({ projectId: "project-upload", revisionId: "revision-upload", role: "step", filename: "body.step", byteSize: 5, mediaType: "model/step" });
+    expect(beginBody).toMatchObject({ projectId: "project-upload", projectRevisionId: "revision-upload", role: "step", filename: "body.step", byteSize: 5, mediaType: "model/step" });
+    expect(beginBody).not.toHaveProperty("revisionId");
     expect(beginBody).toMatchObject({ buildConfigurationSnapshotId: "build-config-upload" });
     expect(beginBody.sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(fetchMock.mock.calls[3]?.[1]).toMatchObject({ method: "PUT", credentials: "include" });
+  });
+
+  it("sends only the exact work-item scope when a work-item revision is selected", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-work-item" });
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", csrfToken: "csrf-work-item", expiresAt: "2026-08-31T10:00:00.000Z" }))
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "test", demo: false, now: "2026-08-30T10:00:00.000Z" }))
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", scopes: ["read", "write"] }))
+      .mockResolvedValueOnce(jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00.000Z", inventory: [], projects: [{
+        ...serverProject({ id: "project-work-item", currentRevisionId: "project-revision-4", workItems: [
+          { id: "work-body", projectId: "project-work-item", name: "Body", kind: "part", currentRevisionId: "work-revision-2", createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 },
+          { id: "work-not-ready", projectId: "project-work-item", name: "Notes", kind: "notes", createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 }
+        ], workItemRevisions: [{ ...serverRevision({ id: "work-revision-2", projectId: "project-work-item", number: 2 }), workItemId: "work-body" }]
+        }),
+        currentRevision: serverRevision({ id: "project-revision-4", projectId: "project-work-item", number: 4 })
+      }], offers: [] }))
+      .mockResolvedValueOnce(jsonResponse({ data: { id: "upload-work-item", artifactId: "artifact-work-item", expiresAt: "2026-08-30T11:00:00.000Z", maxBytes: 5, uploadUrl: "/api/v1/artifacts/uploads/upload-work-item", status: "pending" } }))
+      .mockResolvedValueOnce(jsonResponse({ receivedBytes: 5 }))
+      .mockResolvedValueOnce(jsonResponse({ data: { id: "artifact-work-item", projectId: "project-work-item", workItemId: "work-body", workItemRevisionId: "work-revision-2", role: "step", filename: "body.step", mediaType: "model/step", byteSize: 5, sha256: "b".repeat(64), currentCandidate: true, retired: false, createdAt: "2026-08-30T10:00:00.000Z", version: 1 } }));
+
+    const adapter = createWorkspaceAdapter();
+    await adapter.login("correct-password");
+    await adapter.loadWorkspace();
+    const file = new File(["solid"], "body.step", { type: "model/step" });
+    const updated = await adapter.uploadArtifact("project-work-item", file, "STEP", { kind: "work-item", workItemId: "work-body", workItemRevisionId: "work-revision-2" });
+    expect(updated.allArtifacts?.[0]).toMatchObject({ workItemId: "work-body", workItemRevisionId: "work-revision-2" });
+    const beginBody = JSON.parse(String(fetchMock.mock.calls[4]?.[1]?.body)) as Record<string, unknown>;
+    expect(Object.keys(beginBody).sort()).toEqual(["byteSize", "filename", "mediaType", "projectId", "role", "sha256", "source", "workItemId", "workItemRevisionId"].sort());
+    expect(beginBody).toMatchObject({ projectId: "project-work-item", workItemId: "work-body", workItemRevisionId: "work-revision-2", role: "step" });
+    expect(beginBody).not.toHaveProperty("projectRevisionId");
+    expect(beginBody).not.toHaveProperty("revisionId");
+  });
+
+  it("lists exact artifact scopes and leaves All files unscoped for legacy visibility", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ data: [serverArtifact({ id: "project-artifact", projectRevisionId: "project-revision-1", revisionId: undefined })], limit: 50 }))
+      .mockResolvedValueOnce(jsonResponse({ data: [serverArtifact({ id: "work-artifact", workItemId: "work-body", workItemRevisionId: "work-revision-1", revisionId: undefined })], limit: 50 }))
+      .mockResolvedValueOnce(jsonResponse({ data: [serverArtifact({ id: "legacy-artifact", revisionId: undefined })], limit: 50 }));
+    const adapter = createWorkspaceAdapter();
+    await expect(adapter.listArtifacts("project-1", { kind: "project", projectRevisionId: "project-revision-1" })).resolves.toMatchObject([{ id: "project-artifact", projectRevisionId: "project-revision-1" }]);
+    await expect(adapter.listArtifacts("project-1", { kind: "work-item", workItemId: "work-body", workItemRevisionId: "work-revision-1" })).resolves.toMatchObject([{ id: "work-artifact", workItemId: "work-body", workItemRevisionId: "work-revision-1" }]);
+    await expect(adapter.listArtifacts("project-1")).resolves.toMatchObject([{ id: "legacy-artifact" }]);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/v1/projects/project-1/artifacts?projectRevisionId=project-revision-1");
+    expect(String(fetchMock.mock.calls[1]?.[0])).toBe("/api/v1/projects/project-1/artifacts?workItemId=work-body&workItemRevisionId=work-revision-1");
+    expect(String(fetchMock.mock.calls[2]?.[0])).toBe("/api/v1/projects/project-1/artifacts");
   });
 });
 

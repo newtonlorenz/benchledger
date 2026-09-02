@@ -1229,11 +1229,32 @@ class MemoryBuildConfigurations implements BuildConfigurationPort {
 }
 
 interface UploadState { readonly input: BeginUploadInput; readonly session: UploadSession; readonly body: Uint8Array; }
+
+function matchesArtifactScope(
+  artifact: Pick<Artifact, "projectId" | "workItemId" | "revisionId">,
+  projectId: string,
+  workItemId: string | undefined,
+  revisionId: string | undefined,
+): boolean {
+  if (artifact.projectId !== projectId) return false;
+  if (workItemId !== undefined) {
+    return artifact.workItemId === workItemId && (revisionId === undefined || artifact.revisionId === revisionId);
+  }
+  if (revisionId !== undefined) {
+    // A revision-only query names a project revision. Work-item artifacts are
+    // a separate namespace even if they carry the same revision string.
+    return artifact.workItemId === undefined && artifact.revisionId === revisionId;
+  }
+  // With no ancestry filter, retain the historical all-project view,
+  // including records created before revision/work-item binding existed.
+  return true;
+}
+
 class MemoryArtifacts implements ArtifactPort {
   readonly artifacts = new Map<string, Artifact>();
   readonly bindings = new Map<string, ArtifactBuildConfigurationBinding>();
   private readonly uploads = new Map<string, UploadState>(); private sequence = 400;
-  listArtifacts(projectId: string, workItemId?: string, revisionId?: string): Promise<readonly Artifact[]> { return Promise.resolve(clone([...this.artifacts.values()].filter((artifact) => artifact.projectId === projectId && (!workItemId || artifact.workItemId === workItemId) && (!revisionId || artifact.revisionId === revisionId)))); }
+  listArtifacts(projectId: string, workItemId?: string, revisionId?: string): Promise<readonly Artifact[]> { return Promise.resolve(clone([...this.artifacts.values()].filter((artifact) => matchesArtifactScope(artifact, projectId, workItemId, revisionId)))); }
   getArtifact(idValue: string): Promise<Artifact | null> { const artifact = this.artifacts.get(idValue); return Promise.resolve(artifact ? clone(artifact) : null); }
   getUploadSessionDetails(idValue: string): Promise<UploadSessionDetails | null> { const upload = this.uploads.get(idValue); return Promise.resolve(upload ? clone({ session: upload.session, projectId: upload.input.projectId, ...(upload.input.workItemId === undefined ? {} : { workItemId: upload.input.workItemId }), ...(upload.input.revisionId === undefined ? {} : { revisionId: upload.input.revisionId }), ...(upload.input.buildConfigurationSnapshotId === undefined ? {} : { buildConfigurationSnapshotId: upload.input.buildConfigurationSnapshotId }) }) : null); }
   beginUpload(input: BeginUploadInput): Promise<UploadSession> { const artifactId = id("artifact", ++this.sequence); const sessionId = id("upload", ++this.sequence); const session: UploadSession = { id: sessionId, artifactId, expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(), maxBytes: input.byteSize, uploadUrl: `/api/v1/artifacts/uploads/${sessionId}`, status: "pending" }; this.uploads.set(sessionId, { input: clone(input), session, body: new Uint8Array() }); return Promise.resolve(clone(session)); }

@@ -195,7 +195,7 @@ describe("createApplicationBackend", () => {
   it("fails closed for artifact upload before the legacy URL issuer or service are called", async () => {
     const service = serviceStub();
     const backend = createApplicationBackend(service, { publicBaseUrl: "http://maker.local:8792", artifactTransfer: transferProvider });
-    await expect(backend.artifacts.beginUpload({ projectId: "project-1", filename: "part.step", role: "step", mediaType: "model/step", byteLength: 100, sha256: "a".repeat(64) }, context)).rejects.toMatchObject({ code: "HOST_TRANSFER_UNAVAILABLE" });
+    await expect(backend.artifacts.beginUpload({ projectId: "project-1", projectRevisionId: "revision-1", filename: "part.step", role: "step", mediaType: "model/step", byteLength: 100, sha256: "a".repeat(64) }, context)).rejects.toMatchObject({ code: "HOST_TRANSFER_UNAVAILABLE" });
     expect(service.beginArtifactUpload).not.toHaveBeenCalled();
   });
 

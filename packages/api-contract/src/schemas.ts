@@ -816,6 +816,41 @@ export const artifactRoleSchema = z.enum([
   "gcode", "firmware", "drawing", "validation", "photo", "text", "other"
 ]);
 
+/**
+ * A new artifact must be anchored to exactly one revision kind.  The public
+ * contract deliberately uses the descriptive projectRevisionId and
+ * workItemRevisionId fields; persistence adapters may continue to store the
+ * older generic revisionId field after the application has resolved ancestry.
+ */
+export const artifactScopeSchema = z.union([
+  z.object({ projectRevisionId: idSchema }).strict(),
+  z.object({ workItemId: idSchema, workItemRevisionId: idSchema }).strict(),
+]);
+
+const artifactUploadCommonShape = {
+  projectId: idSchema,
+  role: artifactRoleSchema,
+  filename: z.string().min(1).max(255),
+  mediaType: z.string().min(1).max(200),
+  byteSize: z.number().int().positive().max(100 * 1024 * 1024),
+  sha256: z.string().length(64).regex(/^[a-f0-9]+$/),
+  author: z.string().max(200).optional(),
+  source: z.string().max(500).optional(),
+};
+
+const projectRevisionUploadSchema = z.object({
+  ...artifactUploadCommonShape,
+  projectRevisionId: idSchema,
+  /** Build configuration snapshots are owned by project revisions only. */
+  buildConfigurationSnapshotId: idSchema.optional(),
+}).strict();
+
+const workItemRevisionUploadSchema = z.object({
+  ...artifactUploadCommonShape,
+  workItemId: idSchema,
+  workItemRevisionId: idSchema,
+}).strict();
+
 export const artifactSchema = z.object({
   id: idSchema,
   projectId: idSchema,
@@ -835,20 +870,17 @@ export const artifactSchema = z.object({
   version: z.number().int().positive()
 }).strict();
 
-export const beginUploadSchema = z.object({
-  projectId: idSchema,
-  workItemId: idSchema.optional(),
-  revisionId: idSchema.optional(),
-  /** Optional immutable build setup to bind when the artifact is finalized. */
-  buildConfigurationSnapshotId: idSchema.optional(),
-  role: artifactRoleSchema,
-  filename: z.string().min(1).max(255),
-  mediaType: z.string().min(1).max(200),
-  byteSize: z.number().int().positive().max(100 * 1024 * 1024),
-  sha256: z.string().length(64).regex(/^[a-f0-9]+$/),
-  author: z.string().max(200).optional(),
-  source: z.string().max(500).optional()
-}).strict();
+export const beginUploadSchema = z.union([projectRevisionUploadSchema, workItemRevisionUploadSchema]);
+
+/**
+ * Listing is read-only and may address one exact revision or the whole
+ * project. A work-item ID without its revision is intentionally ambiguous.
+ */
+export const artifactListQuerySchema = z.union([
+  z.object({ role: artifactRoleSchema.optional(), projectRevisionId: idSchema }).strict(),
+  z.object({ role: artifactRoleSchema.optional(), workItemId: idSchema, workItemRevisionId: idSchema }).strict(),
+  z.object({ role: artifactRoleSchema.optional() }).strict(),
+]);
 
 export const uploadSessionSchema = z.object({
   id: idSchema,

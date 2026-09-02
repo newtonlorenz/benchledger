@@ -367,6 +367,27 @@ export interface Artifact {
   status: "candidate" | "validated" | "superseded";
   machine?: string;
   material?: string;
+  /** Exact artifact ancestry. Legacy/unbound files intentionally omit all
+   * three IDs and are shown only in the read-only All files view. */
+  projectRevisionId?: string;
+  workItemId?: string;
+  workItemRevisionId?: string;
+}
+
+export interface ProjectRevisionReference {
+  id: string;
+  number?: number;
+  name?: string;
+  status?: string;
+}
+
+export interface ProjectWorkItem {
+  id: string;
+  name: string;
+  kind: string;
+  description?: string;
+  currentRevisionId?: string;
+  currentRevision?: ProjectRevisionReference;
 }
 
 export interface Project {
@@ -392,6 +413,12 @@ export interface Project {
   accent: "orange" | "teal" | "blue";
   /** API revision identifier retained for revision, BOM, and artifact writes. */
   serverRevisionId?: string;
+  /** Bounded revision references used by the artifact scope picker. */
+  projectRevisions?: ProjectRevisionReference[];
+  /** Every real work item is offered independently; no item is inferred. */
+  workItems?: ProjectWorkItem[];
+  /** All project artifacts, including historical and legacy/unbound files. */
+  allArtifacts?: Artifact[];
   /** Canonical application-service readiness returned by the workspace API. */
   gapEvaluation?: ProjectGapEvaluation;
   /** Connected readiness was invalidated and could not be reloaded. Source

@@ -6,7 +6,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import cookie from "@fastify/cookie";
 import swagger from "@fastify/swagger";
 import {
-  beginUploadSchema, commissionInventoryItemSchema, createBomLineSchema, createInventoryCategorySchema, createInventoryItemSchema, createOfferSchema,
+  beginUploadSchema, artifactListQuerySchema, commissionInventoryItemSchema, createBomLineSchema, createInventoryCategorySchema, createInventoryItemSchema, createOfferSchema,
   createProjectRevisionSchema, createProjectSchema, createReservationSchema,
   createProjectWithInitialRevisionSchema, createWorkItemRevisionSchema, createWorkItemSchema, healthSchema,
   inventoryBulkUpdateSchema, inventoryCategoryListQuerySchema, inventoryListQuerySchema, stockEventInputSchema, updateBomLineSchema,
@@ -18,7 +18,7 @@ import {
   removeProjectSchema, projectSetupProposalSchema, commitProjectSetupSchema, commitProjectSetupBodySchema
 } from "@benchledger/api-contract";
 import { ApplicationError, ApplicationService } from "@benchledger/application";
-import type { ApplicationPorts, BeginUploadInput, BuildConfigurationListOptions, CatalogProductListOptions, GapEvaluation, Mutation, Page, ProjectListOptions, RequestContext } from "@benchledger/application";
+import type { ApplicationPorts, BuildConfigurationListOptions, CatalogProductListOptions, GapEvaluation, Mutation, Page, ProjectListOptions, RequestContext } from "@benchledger/application";
 import { createProductionRuntime } from "@benchledger/runtime";
 import { createApplicationMcpProtocol, createMcpHttpHandler } from "@benchledger/mcp";
 import type { McpRequestContext, Scope as McpScope } from "@benchledger/mcp";
@@ -722,6 +722,67 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       plannedReservations: { type: "array", maxItems: 48 }, affectedInventory: { type: "array", maxItems: 48 }, correlationId: { type: "string" }
     }
   };
+  const artifactIdSchema = { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" };
+  const artifactRoleSchema = {
+    type: "string",
+    enum: ["source", "cad", "document", "brief", "design_record", "cad_source", "step", "stl", "three_mf", "slicer_project", "gcode", "firmware", "drawing", "validation", "photo", "text", "other"]
+  };
+  const artifactScopeSchema = {
+    oneOf: [
+      { type: "object", additionalProperties: false, required: ["projectRevisionId"], properties: { projectRevisionId: artifactIdSchema } },
+      { type: "object", additionalProperties: false, required: ["workItemId", "workItemRevisionId"], properties: { workItemId: artifactIdSchema, workItemRevisionId: artifactIdSchema } }
+    ],
+    description: "Exactly one revisioned scope: a project revision or a work-item revision."
+  };
+  const artifactUploadCommonProperties = {
+    projectId: artifactIdSchema,
+    role: artifactRoleSchema,
+    filename: { type: "string", minLength: 1, maxLength: 255 },
+    mediaType: { type: "string", minLength: 1, maxLength: 200 },
+    byteSize: { type: "integer", exclusiveMinimum: 0, maximum: 104857600 },
+    sha256: { type: "string", minLength: 64, maxLength: 64, pattern: "^[a-f0-9]{64}$" },
+    author: { type: "string", maxLength: 200 },
+    source: { type: "string", maxLength: 500 }
+  };
+  const beginUploadSchema = {
+    oneOf: [
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["projectId", "projectRevisionId", "role", "filename", "mediaType", "byteSize", "sha256"],
+        properties: { ...artifactUploadCommonProperties, projectRevisionId: artifactIdSchema, buildConfigurationSnapshotId: artifactIdSchema }
+      },
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["projectId", "workItemId", "workItemRevisionId", "role", "filename", "mediaType", "byteSize", "sha256"],
+        properties: { ...artifactUploadCommonProperties, workItemId: artifactIdSchema, workItemRevisionId: artifactIdSchema }
+      }
+    ],
+    description: "Every new upload must contain exactly one revisioned scope and its owning projectId. Legacy revisionId and ambiguous scopes are rejected."
+  };
+  const artifactListQuerySchema = {
+    oneOf: [
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["projectRevisionId"],
+        properties: { projectRevisionId: artifactIdSchema, role: artifactRoleSchema }
+      },
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["workItemId", "workItemRevisionId"],
+        properties: { workItemId: artifactIdSchema, workItemRevisionId: artifactIdSchema, role: artifactRoleSchema }
+      },
+      {
+        type: "object",
+        additionalProperties: false,
+        properties: { role: artifactRoleSchema }
+      }
+    ],
+    description: "Read-only listing supports one exact project revision, one exact work-item revision, or all artifacts in the project."
+  };
   return {
     openapi: "3.1.0",
     info: { title: "BenchLedger API", version, description: "Evidence-based maker inventory and project workspace API." },
@@ -745,6 +806,9 @@ function jsonOpenApi(version: string): Record<string, unknown> {
         CommitProjectSetup: { type: "object", additionalProperties: false, required: ["expectedPreviewVersion", "contentSha256", "confirmReservations"], properties: { expectedPreviewVersion: { type: "integer", minimum: 1 }, contentSha256: { type: "string", pattern: "^[a-f0-9]{64}$" }, confirmReservations: { type: "boolean" } } },
         ProjectCreationConflictDetails: projectCreationConflictDetailsSchema,
         ErrorResponse: errorResponseSchema,
+        ArtifactScope: artifactScopeSchema,
+        BeginUpload: beginUploadSchema,
+        ArtifactListQuery: artifactListQuerySchema,
         InventoryCategory: inventoryCategorySchema,
         CreateInventoryCategory: createInventoryCategorySchema,
         UpdateInventoryCategory: updateInventoryCategorySchema,
@@ -887,7 +951,27 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       },
       "/project-revisions/{id}/reconciliation/commit": { post: { summary: "Commit a reviewed reconciliation atomically", responses: { "200": { description: "Committed reconciliation mutation" }, "409": { description: "Stale basis, version, or replay conflict" } } } },
       "/project-revisions/{id}/usage": { post: { responses: { "201": { description: "Recorded reviewed project usage" } } } },
-      "/artifacts/uploads": { post: { responses: { "201": { description: "Upload session" } } } },
+      "/projects/{id}/artifacts": {
+        get: {
+          summary: "List artifacts by exact revision scope or all project artifacts",
+          description: "Read-only listing. Supply projectRevisionId for one exact project revision, workItemId plus workItemRevisionId for one exact work-item revision, or neither for all project artifacts. A work-item ID without its revision and legacy revisionId are rejected.",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: artifactIdSchema },
+            { name: "projectRevisionId", in: "query", required: false, schema: artifactIdSchema },
+            { name: "workItemId", in: "query", required: false, schema: artifactIdSchema },
+            { name: "workItemRevisionId", in: "query", required: false, schema: artifactIdSchema },
+            { name: "role", in: "query", required: false, schema: artifactRoleSchema }
+          ],
+          responses: { "200": { description: "Artifact list" }, "400": { description: "Invalid or ambiguous scope" }, "404": { description: "Revision scope not found in the project" } }
+        }
+      },
+      "/artifacts/uploads": {
+        post: {
+          summary: "Begin a revision-scoped artifact upload",
+          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/BeginUpload" } } } },
+          responses: { "201": { description: "Upload session" }, "400": { description: "Invalid, ambiguous, legacy, or unrevisioned scope" }, "403": { description: "Project-scoped access denied" }, "404": { description: "Revision scope not found in the project" } }
+        }
+      },
       "/transfers/uploads/{id}": { put: { security: [{ transferAuth: [] }], responses: { "200": { description: "Uploaded bytes" }, "403": { description: "Invalid or expired transfer capability" }, "410": { description: "Expired transfer capability" } } } },
       "/transfers/uploads/{id}/finalize": { post: { security: [{ transferAuth: [] }], responses: { "200": { description: "Finalized artifact" }, "403": { description: "Invalid or expired transfer capability" }, "410": { description: "Expired transfer capability" } } } },
       "/transfers/artifacts/{id}/download": { get: { security: [{ transferAuth: [] }], responses: { "200": { description: "Artifact bytes" }, "403": { description: "Invalid or expired transfer capability" }, "410": { description: "Expired transfer capability" } } } },
@@ -983,7 +1067,7 @@ async function workspaceSnapshot(service: ApplicationService): Promise<Workspace
     const revision = await service.getProjectRevision(project.currentRevisionId);
     const [bom, revisionArtifacts, gapEvaluation] = await Promise.all([
       service.listBomLines(revision.id),
-      service.listArtifacts(project.id, undefined, revision.id),
+      service.listArtifacts(project.id, { projectRevisionId: revision.id }),
       service.evaluateBomGaps(revision.id),
     ]);
     const latestConfiguration = await service.getLatestBuildConfiguration(revision.id);
@@ -1589,12 +1673,18 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   });
   app.post(route("/offers"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const mutation = await service.createOffer(parseBody(createOfferSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });
 
-  app.get(route("/projects/:id/artifacts"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); const query = request.query as { workItemId?: string; revisionId?: string }; return service.listArtifacts(params.id, query.workItemId, query.revisionId); });
+  app.get(route("/projects/:id/artifacts"), async (request) => {
+    requireScope(request, "read", auth);
+    const params = request.params as { id: string };
+    requireProjectScope(request, params.id);
+    const query = parseBody(artifactListQuerySchema, request.query);
+    return service.listArtifacts(params.id, query);
+  });
   app.post(route("/artifacts/uploads"), async (request, reply) => {
     requireScope(request, "write", auth);
-    const input = parseBody(beginArtifactUploadRequestSchema, request.body) as unknown as BeginUploadInput;
+    const input = parseBody(beginArtifactUploadRequestSchema, request.body);
     requireProjectScope(request, input.projectId);
-    if (input.buildConfigurationSnapshotId !== undefined) {
+    if ("buildConfigurationSnapshotId" in input && input.buildConfigurationSnapshotId !== undefined) {
       await authorizeScopedBuildConfigurationReference(request, service, input.buildConfigurationSnapshotId);
     }
     const mutation = await service.beginArtifactUpload(input, requestContext(request));

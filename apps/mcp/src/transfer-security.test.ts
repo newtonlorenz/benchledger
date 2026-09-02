@@ -29,6 +29,7 @@ function serviceFixture(): ApplicationService & {
 
 const uploadInput = {
   projectId: "project-1",
+  projectRevisionId: "project-revision-1",
   filename: "part.step",
   role: "step",
   mediaType: "model/step",

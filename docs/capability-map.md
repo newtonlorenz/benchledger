@@ -93,8 +93,8 @@ and invalid hashes. Mutating tools use optimistic versions where applicable.
 | Reconciliation | `save_reconciliation_draft`, `commit_reconciliation` | `bom:write` | Draft save / commit |
 | Build setup | `list_build_configurations`, `read_build_configuration` | `projects:read` | No |
 | Build setup | `create_build_configuration` | `projects:write` | Yes, immutable create |
-| Artifacts | `list_artifacts`, `read_artifact_metadata`, `read_artifact_download_metadata` / `download_artifact` | `artifacts:read` | No |
-| Artifacts | `begin_artifact_upload`, `finalize_artifact_upload`, `retire_artifact` | `artifacts:write` | Yes |
+| Artifacts | `list_artifacts`, `read_artifact_metadata`, `read_artifact_download_metadata` / `download_artifact` | `artifacts:read` | No; list one exact project revision, one exact work-item revision, or the read-only all-project view |
+| Artifacts | `begin_artifact_upload`, `finalize_artifact_upload`, `retire_artifact` | `artifacts:write` | Yes; a new upload requires exactly one explicit revision scope |
 | Offers | `list_offers` | `offers:read` | No |
 | Offers | `record_offer_snapshot` | `offers:write` | Yes |
 | Context | `refresh_context`, `get_capabilities` | `context:read` | No |
@@ -222,7 +222,7 @@ profiles when present.
 | Archive or restore a project | Project Archive action and explicit Archived view | `archive_project` / `restore_project`; archive hides default lists, releases active reservations with evidence, retains history, and restore never recreates reservations |
 | Understand a build gap | BOM editor and gap panel | `list_bom_lines` → `calculate_bom_gaps`; Decide before supplier lookup, inspect candidate diagnostics and conversion capacity/overage reasons in Check results, and shop only Source lines |
 | Hold confirmed parts | Reservation panel | `create_reservation` → `list_reservations` / `read_reservation` → read BOM/gaps again |
-| Add a CAD revision | Artifact upload flow | Authenticated browser/HTTP upload → `finalize_artifact_upload`; generic MCP remains unavailable until a transactional trusted-host bridge exists |
+| Add a CAD revision | Files scope selector defaults to the exact project revision and offers named work-item revisions; All files is read-only | Authenticated browser/HTTP upload → `finalize_artifact_upload`; generic MCP remains unavailable until a transactional trusted-host bridge exists |
 | Record exact build setup | Project build-configuration form | catalog/profile reads → `create_build_configuration` |
 | Compare buying options | Offers and shopping-list view | `list_offers` → `record_offer_snapshot` (observation only) |
 | Close and learn from a build | Project **Close out** review | `read_reconciliation` → `save_reconciliation_draft` → explicit `commit_reconciliation` |
@@ -267,8 +267,15 @@ transfer routes retain short-lived, action-, actor-, project-, byte-length-, and
 SHA-256-bound header capabilities. Download capabilities are one-use after a
 successful read.
 
-`begin_artifact_upload` requires the caller's SHA-256 and accepts either a
-project revision or a work-item revision (not both). The typed finalize tool
+`begin_artifact_upload` requires the caller's SHA-256 and exactly one explicit
+scope: `projectRevisionId`, or `workItemId` plus `workItemRevisionId`. Mixed,
+missing, unrevisioned, and cross-project scopes fail before an upload session,
+audit event, or capability is created. `list_artifacts` accepts either exact
+scope or a project-only read-only view that includes retained legacy/unbound
+records. Exact project-revision results exclude work-item artifacts. The web
+defaults to the exact current project revision, exposes each work item by its
+real name/ID/current revision, and freezes one chosen scope for an upload run.
+The typed finalize tool
 uses the durable upload declaration. Finalization trusts the durable upload
 session's project ancestry, resolved by
 the application service or an optional host resolver before a scoped request is

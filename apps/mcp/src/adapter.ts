@@ -354,17 +354,17 @@ async function authorizeProjectScope(adapter: McpAdapter, name: string, input: u
 
   const projectRevisionId = inputString(input, "projectRevisionId");
   if (projectRevisionId !== undefined) {
-    await assertResolvedProjectAccess(context, adapter.backend.projectScope?.projectForProjectRevision === undefined ? undefined : () => adapter.backend.projectScope!.projectForProjectRevision!(projectRevisionId), "project revision");
+    await assertResolvedProjectAccess(context, adapter.backend.projectScope?.projectForProjectRevision === undefined ? undefined : () => adapter.backend.projectScope!.projectForProjectRevision!(projectRevisionId), "project revision", directProjectId);
   }
 
   const workItemId = inputString(input, "workItemId");
   if (workItemId !== undefined) {
-    await assertResolvedProjectAccess(context, adapter.backend.projectScope?.projectForWorkItem === undefined ? undefined : () => adapter.backend.projectScope!.projectForWorkItem!(workItemId), "work item");
+    await assertResolvedProjectAccess(context, adapter.backend.projectScope?.projectForWorkItem === undefined ? undefined : () => adapter.backend.projectScope!.projectForWorkItem!(workItemId), "work item", directProjectId);
   }
 
   const workItemRevisionId = inputString(input, "workItemRevisionId");
   if (workItemRevisionId !== undefined) {
-    await assertResolvedProjectAccess(context, adapter.backend.projectScope?.projectForWorkItemRevision === undefined ? undefined : () => adapter.backend.projectScope!.projectForWorkItemRevision!(workItemRevisionId), "work-item revision");
+    await assertResolvedProjectAccess(context, adapter.backend.projectScope?.projectForWorkItemRevision === undefined ? undefined : () => adapter.backend.projectScope!.projectForWorkItemRevision!(workItemRevisionId), "work-item revision", directProjectId);
   }
 
   const bomLineId = inputString(input, "bomLineId");
@@ -599,6 +599,11 @@ export class McpAdapter {
       assertScope(context.scopes, definition.requiredScope);
       if (name === "create_inventory_with_product_profile") assertScope(context.scopes, "catalog:write");
       const input = rawInput ?? {};
+      // Validate the closed artifact scope before project ancestry lookups.
+      // This keeps malformed/mixed scopes side-effect free and makes the same
+      // parser the source of truth for both authorization and dispatch.
+      if (name === "list_artifacts") artifactList(input);
+      if (name === "begin_artifact_upload") beginArtifactUpload(input);
       await authorizeProjectScope(this, name, input, context);
       let value = await handler(input, context);
       // Filter generic project pages as a second line of defence for custom
