@@ -74,6 +74,90 @@ describe("MCP error boundary", () => {
     expect(mapBackendError(unsafe).details).toBeUndefined();
   });
 
+  it("preserves bounded actionable project setup conflict details", () => {
+    const setupConflicts = [
+      {
+        reason: "stale_basis",
+        commitState: "not_committed",
+        recoveryAction: "preview_project_setup",
+        staleItems: ["stock-1", "stock-2"],
+      },
+      {
+        reason: "preview_expired",
+        commitState: "not_committed",
+        recoveryAction: "preview_project_setup",
+      },
+      {
+        reason: "preview_ownership",
+        commitState: "not_committed",
+      },
+      {
+        reason: "already_committed",
+        commitState: "committed",
+      },
+      {
+        reason: "stale_preview",
+        commitState: "not_committed",
+        recoveryAction: "preview_project_setup",
+      },
+    ] as const;
+
+    for (const details of setupConflicts) {
+      const error = new Error("backend detail");
+      Object.assign(error, {
+        code: "conflict",
+        details: { ...details, retryable: false, internal: "do not expose this" },
+      });
+      const mapped = mapBackendError(error);
+      expect(mapped).toMatchObject({ code: "CONFLICT", details });
+      expect(mapped.details).not.toHaveProperty("internal");
+    }
+  });
+
+  it("preserves an empty staleItems list when a matching candidate disappears", () => {
+    const error = new Error("Project setup inventory candidate basis is stale");
+    Object.assign(error, {
+      code: "conflict",
+      details: {
+        reason: "stale_basis",
+        staleItems: [],
+        recoveryAction: "preview_project_setup",
+        retryable: false,
+        commitState: "not_committed",
+      },
+    });
+
+    expect(mapBackendError(error)).toMatchObject({
+      code: "CONFLICT",
+      details: {
+        reason: "stale_basis",
+        staleItems: [],
+        recoveryAction: "preview_project_setup",
+        retryable: false,
+        commitState: "not_committed",
+      },
+    });
+  });
+
+  it("rejects unsafe project setup conflict details without leaking arbitrary fields", () => {
+    const unsafeDetails = [
+      { reason: "stale_basis", commitState: "not_committed", recoveryAction: "delete_project", staleItems: ["stock-1"] },
+      { reason: "stale_basis", commitState: "not_committed", recoveryAction: "preview_project_setup", staleItems: ["stock-1", "\u0000unsafe"] },
+      { reason: "preview_expired", commitState: "committed", recoveryAction: "preview_project_setup" },
+      { reason: "already_committed", commitState: "not_committed" },
+      { reason: "stale_preview", commitState: "not_committed", recoveryAction: "preview_project_setup", staleItems: ["unexpected"] },
+    ];
+
+    for (const details of unsafeDetails) {
+      const error = new Error("backend detail");
+      Object.assign(error, { code: "conflict", details: { ...details, retryable: false, internalDetail: "do not expose this" } });
+      const mapped = mapBackendError(error);
+      expect(mapped).toMatchObject({ code: "CONFLICT" });
+      expect(mapped.details).toBeUndefined();
+      expect(mapped.message).not.toContain("do not expose this");
+    }
+  });
+
   it("maps validation and storage failures without leaking backend detail", () => {
     for (const code of ["validation", "invalid_cursor", "quota_exceeded", "unsupported_media"]) {
       expect(mapBackendError(codedError(code))).toMatchObject({ code: "INVALID_ARGUMENT", message: "The request arguments are invalid." });

@@ -236,6 +236,24 @@ CREATE INDEX IF NOT EXISTS inventory_item_category_assignments_category_idx
   ON inventory_item_category_assignments(category_node_id, item_id);
 `;
 
+/** Review-only project setup payloads. This table is additive and intentionally
+ * has no foreign keys: previews must not create graph or stock state. */
+export const PROJECT_SETUP_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS project_setup_previews (
+  id TEXT PRIMARY KEY NOT NULL,
+  actor TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  status TEXT NOT NULL CHECK (status IN ('active', 'committed', 'expired')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  correlation_id TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS project_setup_previews_actor_idx ON project_setup_previews(actor, updated_at, id);
+`;
+
 /**
  * Additive v2 exact-product storage. These tables intentionally reference,
  * but never rewrite, the legacy inventory and revision tables. JSON payloads

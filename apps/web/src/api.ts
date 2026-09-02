@@ -206,6 +206,10 @@ export interface InventoryBulkUpdateResult {
   correlationId: string;
   replayed: boolean;
 }
+export type ProjectSetupProposalInput = Record<string, unknown>;
+export type ProjectSetupPreviewResult = Record<string, unknown>;
+export type ProjectSetupCommitInput = { previewId: string; expectedPreviewVersion: number; contentSha256: string; confirmReservations: boolean; idempotencyKey?: string };
+export type ProjectSetupCommitResult = Record<string, unknown>;
 export interface WorkspaceAdapter {
   clearAuthenticatedState(): void;
   checkHealth(): Promise<ServerHealth>;
@@ -236,6 +240,8 @@ export interface WorkspaceAdapter {
   createCatalogProduct(input: CatalogProductDraft): Promise<CatalogProduct>;
   createExactInventoryItem(input: ExactInventoryInput): Promise<InventoryItem>;
   createProject(input: Pick<Project, "name" | "description">): Promise<Project>;
+  previewProjectSetup(input: ProjectSetupProposalInput): Promise<ProjectSetupPreviewResult>;
+  commitProjectSetup(input: ProjectSetupCommitInput): Promise<ProjectSetupCommitResult>;
   archiveProject(projectId: string, expectedVersion?: number): Promise<Project>;
   restoreProject(projectId: string, expectedVersion?: number): Promise<Project>;
   removeProject(projectId: string, expectedVersion?: number): Promise<Project>;
@@ -2090,6 +2096,12 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
       state.projects = [project, ...state.projects];
       return project;
     },
+    async previewProjectSetup() {
+      throw new ApiError("Project setup previews require a connected workspace.", { kind: "validation", status: 409 });
+    },
+    async commitProjectSetup() {
+      throw new ApiError("Project setup commits require a connected workspace.", { kind: "validation", status: 409 });
+    },
     async archiveProject(projectId, expectedVersion) {
       const current = state.projects.find((candidate) => candidate.id === projectId);
       if (!current) throw new ApiError("Project not found", { kind: "validation", status: 404 });
@@ -2220,6 +2232,17 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         if (!mutationFailureIsAmbiguous(error)) clearWorkspaceAccessRetryRecord();
         throw error;
       }
+    },
+    async previewProjectSetup(input) {
+      const token = csrfToken ?? cookieValue("forge_csrf");
+      if (!token) throw new ApiError("Your session needs a fresh CSRF token before previewing project setup", { kind: "csrf", status: 403 });
+      return request<ProjectSetupPreviewResult>("/project-setup/previews", { method: "POST", body: JSON.stringify(input) }, token);
+    },
+    async commitProjectSetup(input) {
+      const token = csrfToken ?? cookieValue("forge_csrf");
+      if (!token) throw new ApiError("Your session needs a fresh CSRF token before committing project setup", { kind: "csrf", status: 403 });
+      const { previewId, idempotencyKey: requestedKey, ...body } = input;
+      return request<ProjectSetupCommitResult>(`/project-setup/previews/${encodeURIComponent(previewId)}/commit`, { method: "POST", headers: { "Idempotency-Key": requestedKey ?? idempotencyKey("project-setup-commit") }, body: JSON.stringify(body) }, token);
     },
     hasPendingWorkspaceAccessRetry() { return readWorkspaceAccessRetry() !== undefined; },
     getWorkspaceAccessRetry() { return getWorkspaceAccessRetry(); },

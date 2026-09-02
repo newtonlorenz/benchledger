@@ -25,6 +25,26 @@ async function loggedIn() {
 }
 
 describe("BenchLedger HTTP API", () => {
+  it("exposes project setup preview and commit through the same application service", async () => {
+    const { app, cookie, csrf } = await loggedIn();
+    const proposal = {
+      project: { id: "http-setup-project", name: "HTTP setup project", status: "planned" },
+      revision: { id: "http-setup-revision", name: "Initial", status: "concept" },
+      workItems: [],
+      bomLines: [{ localRef: "requirement", id: "http-setup-line", name: "Unresolved requirement", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }],
+      reservations: []
+    };
+    const previewResponse = await app.inject({ method: "POST", url: "/api/v1/project-setup/previews", headers: { cookie, "x-csrf-token": csrf }, payload: proposal });
+    expect(previewResponse.statusCode).toBe(201);
+    const preview = previewResponse.json<{ id: string; version: number; contentSha256: string }>();
+    const bodyWithPathIdentity = await app.inject({ method: "POST", url: `/api/v1/project-setup/previews/${preview.id}/commit`, headers: { cookie, "x-csrf-token": csrf, "idempotency-key": "http-setup-body-id" }, payload: { previewId: "wrong-preview", expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmReservations: false } });
+    expect(bodyWithPathIdentity.statusCode).toBe(400);
+    const commitResponse = await app.inject({ method: "POST", url: `/api/v1/project-setup/previews/${preview.id}/commit`, headers: { cookie, "x-csrf-token": csrf, "idempotency-key": "http-setup-commit" }, payload: { expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmReservations: false } });
+    expect(commitResponse.statusCode).toBe(200);
+    expect(commitResponse.json()).toMatchObject({ data: { project: { id: "http-setup-project" }, auditIds: [expect.any(String)] } });
+    await app.close();
+  });
+
   it("seeds the synthetic runtime with a project, revision, and planning BOM", async () => {
     const runtime = createSyntheticRuntime();
     const projects = await runtime.ports.projects.listProjects({ limit: 50 });
@@ -495,6 +515,14 @@ describe("BenchLedger HTTP API", () => {
           responses: { "409": { description: expect.stringMatching(/project ID|revision ID|name|idempotency/i), content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } } }
         }
       });
+      expect(document.paths["/project-setup/previews/{id}/commit"]).toMatchObject({
+        post: {
+          parameters: expect.arrayContaining([expect.objectContaining({ name: "id", in: "path", required: true })]),
+          requestBody: { content: { "application/json": { schema: { $ref: "#/components/schemas/CommitProjectSetup" } } } }
+        }
+      });
+      expect(document.components.schemas.CommitProjectSetup).toMatchObject({ required: ["expectedPreviewVersion", "contentSha256", "confirmReservations"], additionalProperties: false });
+      expect((document.components.schemas.CommitProjectSetup as { properties?: Record<string, unknown> }).properties?.previewId).toBeUndefined();
       expect(document.components.schemas.ProjectCreationConflictDetails).toMatchObject({
         required: ["reason", "field", "id", "retryable", "commitState"],
         additionalProperties: false

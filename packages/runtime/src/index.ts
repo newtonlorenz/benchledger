@@ -6,7 +6,7 @@ import {
   AuditRepository, BomRepository, BenchDatabase, InventoryRepository, ProcurementRepository,
   ProjectRepository, ReservationRepository, CanonicalCatalogRepository,
   ReconciliationRepository, migrateCatalogSchema, migrateProjectSchema, migrateWorkspaceSecuritySchema,
-  WorkspaceSecurityRepository
+  WorkspaceSecurityRepository, ProjectSetupRepository, migrateProjectSetupSchema
 } from "@benchledger/database";
 import type { WorkspacePasswordHasher, WorkspacePasswordVerifier } from "./workspace-security-adapter.js";
 import { ProductionWorkspaceSecurityAdapter } from "./workspace-security-adapter.js";
@@ -15,6 +15,7 @@ import { ProductionAuditAdapter } from "./audit-adapter.js";
 import { ProductionInventoryAdapter } from "./inventory-adapter.js";
 import { ProductionOfferAdapter } from "./offer-adapter.js";
 import { ProductionProjectAdapter } from "./project-adapter.js";
+import { ProductionProjectSetupAdapter } from "./project-setup-adapter.js";
 import { migrateRuntimeSchema, RuntimeState } from "./persistence.js";
 import { ProductionEventBus, ProductionHealth, ProductionIdempotency } from "./runtime-ports.js";
 import { ExclusiveBarrier } from "./barrier.js";
@@ -100,6 +101,7 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
     migrateRuntimeSchema(database);
     migrateCatalogSchema(database);
     migrateProjectSchema(database);
+    migrateProjectSetupSchema(database);
     migrateWorkspaceSecuritySchema(database);
     seedStarterCatalog(database);
     const artifacts = new ArtifactStore({ root: artifactDir, maxUploadBytes, maxStorageBytes });
@@ -123,10 +125,13 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
     const canonicalCatalog = new CanonicalCatalogRepository(database);
     const reconciliationRepository = new ReconciliationRepository(database);
     const projectAdapter = new ProductionProjectAdapter(database, projectRepository, bomRepository, reservationRepository, inventory, state);
+    const projectSetupRepository = new ProjectSetupRepository(database);
+    const projectSetup = new ProductionProjectSetupAdapter(projectSetupRepository, projectAdapter, inventory);
     const ports: ApplicationPorts = {
       inventory,
       inventoryCategories,
       projects: projectAdapter,
+      projectSetups: projectSetup,
       offers: new ProductionOfferAdapter(database, procurementRepository, inventoryRepository, state),
       artifacts: new ProductionArtifactAdapter(artifacts, state, unitOfWork, canonicalCatalog.bindings),
       catalog: new ProductionCatalogAdapter(database, state, unitOfWork, canonicalCatalog.products, canonicalCatalog.profiles),
@@ -177,3 +182,4 @@ export * from "./category-adapter.js";
 export * from "./starter-catalog-data.js";
 export * from "./starter-catalog.js";
 export * from "./workspace-security-adapter.js";
+export * from "./project-setup-adapter.js";

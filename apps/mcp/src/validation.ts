@@ -11,6 +11,8 @@ import {
   saveReconciliationDraftSchema,
   commitReconciliationSchema,
   bomSpecificationSchema,
+  projectSetupProposalSchema,
+  commitProjectSetupSchema,
 } from "@benchledger/api-contract";
 import { BOM_CONSTRAINT_KEYS } from "./types.js";
 import type {
@@ -208,6 +210,14 @@ export function archiveProject(value: unknown): { projectId: string; expectedVer
 
 export function restoreProject(value: unknown): { projectId: string; expectedVersion?: number } {
   return retireProject(value);
+}
+
+export function projectSetupProposal(value: unknown): import("./types.js").ProjectSetupProposal {
+  return canonicalSchema(projectSetupProposalSchema, record(value, "arguments"), "arguments");
+}
+
+export function projectSetupCommit(value: unknown): import("./types.js").CommitProjectSetupInput {
+  return canonicalSchema(commitProjectSetupSchema, record(value, "arguments"), "arguments");
 }
 
 export function retireBomLine(value: unknown): { bomLineId: string; expectedVersion: number } {

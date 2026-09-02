@@ -42,6 +42,8 @@ import {
   parsePageInput,
   projectCreate,
   projectWithInitialRevisionCreate,
+  projectSetupProposal,
+  projectSetupCommit,
   projectList,
   removeProject,
   removedProjectList,
@@ -492,6 +494,19 @@ export class McpAdapter {
       ["read_project", (input, context) => this.backend.projects.get({ projectId: singleId(input, "projectId") }, context)],
       ["create_project", (input, context) => this.backend.projects.create(projectCreate(input), context)],
       ["create_project_with_initial_revision", (input, context) => this.backend.projects.createWithInitialRevision(projectWithInitialRevisionCreate(input), context)],
+      ["preview_project_setup", (input, context) => {
+        if (context.projectIds !== undefined) throw new McpAdapterError("FORBIDDEN", "Project setup previews require an unscoped token.");
+        assertScope(context.scopes, "bom:write");
+        if (this.backend.projects.previewSetup === undefined) throw new McpAdapterError("BACKEND_ERROR", "This project backend does not support project setup previews.");
+        return this.backend.projects.previewSetup(projectSetupProposal(input), context);
+      }],
+      ["commit_project_setup", (input, context) => {
+        if (context.projectIds !== undefined) throw new McpAdapterError("FORBIDDEN", "Project setup commits require an unscoped token.");
+        assertScope(context.scopes, "projects:write");
+        if (this.backend.projects.commitSetup === undefined) throw new McpAdapterError("BACKEND_ERROR", "This project backend does not support project setup commits.");
+        if (context.idempotencyKey === undefined || context.idempotencyKey.length < 8 || context.idempotencyKey.length > 200) throw new McpAdapterError("INVALID_ARGUMENT", "An 8-200 character idempotency key is required for project setup commit.");
+        return this.backend.projects.commitSetup(projectSetupCommit(input), context);
+      }],
       ["update_project", (input, context) => this.backend.projects.update(projectUpdate(input), context)],
       ["archive_project", (input, context) => {
         const parsed = archiveProject(input);

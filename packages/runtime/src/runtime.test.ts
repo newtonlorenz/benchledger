@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApplicationService } from "@benchledger/application";
 import type { RequestContext } from "@benchledger/application";
 import { ArtifactStore } from "@benchledger/artifacts";
@@ -36,6 +36,215 @@ afterEach(async () => {
 });
 
 describe("production runtime mappings", () => {
+  it("previews setup without graph or ledger mutation and commits the exact preview", async () => {
+    const runtime = await makeRuntime();
+    const service = new ApplicationService(runtime.ports);
+    await runtime.ports.inventory.createItem({ id: "setup-stock", name: "M3 screw", kind: "fastener", quantity: 4, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
+    const proposal = {
+      project: { id: "setup-project", name: "Atomic setup", status: "planned" as const },
+      revision: { id: "setup-revision", name: "Initial", status: "concept" as const },
+      workItems: [{ localRef: "body", id: "setup-work", name: "Body", kind: "part" as const, revision: { id: "setup-work-revision", name: "Initial body", status: "concept" as const } }],
+      bomLines: [{ localRef: "screw", revisionLocalRef: "project", id: "setup-bom", name: "M3 screw", itemId: "setup-stock", requiredQuantity: 2, unit: "each" as const, optional: false, constraints: {}, alternatives: [] }],
+      reservations: [{ localRef: "reserve-screw", bomLineLocalRef: "screw", id: "setup-reservation", itemId: "setup-stock", quantity: 2, unit: "each" as const }]
+    };
+    const beforeProjects = runtime.database.get("SELECT COUNT(*) AS count FROM projects")?.count;
+    const beforeEvents = runtime.database.get("SELECT COUNT(*) AS count FROM stock_events")?.count;
+    const beforeAudits = runtime.database.get("SELECT COUNT(*) AS count FROM audit_log")?.count;
+    const preview = await service.previewProjectSetup(proposal, context({ actor: "setup-agent" }));
+    expect(preview).toMatchObject({ status: "active", version: 1, proposal: { project: { id: "setup-project" }, workItems: [{ id: "setup-work" }], bomLines: [{ id: "setup-bom" }], reservations: [{ id: "setup-reservation" }] } });
+    expect(preview.contentSha256).toHaveLength(64);
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM projects")?.count).toBe(beforeProjects);
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM stock_events")?.count).toBe(beforeEvents);
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM audit_log")?.count).toBe(beforeAudits);
+    const committed = await service.commitProjectSetup({ previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmReservations: true }, context({ actor: "setup-agent", idempotencyKey: "setup-commit-1" }));
+    expect(committed.data).toMatchObject({ project: { id: "setup-project" }, revision: { id: "setup-revision" }, workItems: [{ id: "setup-work" }], bomLines: [{ id: "setup-bom" }], reservations: [{ id: "setup-reservation" }], auditIds: [committed.audit.id] });
+    await expect(service.evaluateBomGaps("setup-revision")).resolves.toEqual(committed.data.gaps);
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM projects")?.count).toBe((Number(beforeProjects) || 0) + 1);
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM stock_events")?.count).toBe((Number(beforeEvents) || 0) + 1);
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM audit_log")?.count).toBe((Number(beforeAudits) || 0) + 1);
+    await expect(service.commitProjectSetup({ previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmReservations: true }, context({ actor: "setup-agent", idempotencyKey: "setup-commit-1", fingerprint: "different-transport-envelope" }))).resolves.toMatchObject({ replayed: true, data: committed.data });
+    await expect(service.commitProjectSetup({ previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: "b".repeat(64), confirmReservations: true }, context({ actor: "setup-agent", idempotencyKey: "setup-commit-1", fingerprint: "changed-transport-envelope" }))).rejects.toMatchObject({ code: "idempotency_conflict", details: { reason: "idempotency_key_reused", retryable: false, commitState: "not_committed" } });
+  });
+
+  it("rolls back the complete setup when a reservation, audit, or replay write fails", async () => {
+    for (const stage of ["reservation", "audit", "idempotency"] as const) {
+      const runtime = await makeRuntime();
+      const service = new ApplicationService(runtime.ports);
+      const suffix = `setup-${stage}`;
+      await runtime.ports.inventory.createItem({
+        id: `${suffix}-stock`, name: "Rollback screw", kind: "fastener", quantity: 2,
+        unit: "each", tags: [], links: [], evidence: { state: "physically_counted" }
+      }, context());
+      const preview = await service.previewProjectSetup({
+        project: { id: `${suffix}-project`, name: `Rollback ${stage} project`, status: "planned" },
+        revision: { id: `${suffix}-revision`, name: "Initial", status: "concept" },
+        workItems: [],
+        bomLines: [{ localRef: "screw", id: `${suffix}-line`, name: "Rollback screw", itemId: `${suffix}-stock`, requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }],
+        reservations: [{ localRef: "reservation", bomLineLocalRef: "screw", id: `${suffix}-reservation`, itemId: `${suffix}-stock`, quantity: 1, unit: "each" }]
+      }, context({ actor: suffix }));
+
+      const failure = new Error(`injected ${stage} failure`);
+      const spy = stage === "reservation"
+        ? vi.spyOn(runtime.ports.projects, "createReservation").mockRejectedValueOnce(failure)
+        : stage === "audit"
+          ? vi.spyOn(runtime.ports.audit, "append").mockRejectedValueOnce(failure)
+          : vi.spyOn(runtime.ports.idempotency, "set").mockRejectedValueOnce(failure);
+      await expect(service.commitProjectSetup({
+        previewId: preview.id,
+        expectedPreviewVersion: preview.version,
+        contentSha256: preview.contentSha256,
+        confirmReservations: true
+      }, context({ actor: suffix, idempotencyKey: `${suffix}-commit` }))).rejects.toThrow(failure.message);
+      spy.mockRestore();
+
+      await expect(runtime.ports.projects.getProject(`${suffix}-project`)).resolves.toBeNull();
+      await expect(runtime.ports.inventory.getItem(`${suffix}-stock`)).resolves.toMatchObject({ availableQuantity: 2, version: 1 });
+      expect(runtime.database.get("SELECT id FROM reservations WHERE id = ?", [`${suffix}-reservation`])).toBeUndefined();
+      expect(runtime.database.get("SELECT id FROM stock_events WHERE id = ?", [`reservation-${suffix}-reservation-allocate`])).toBeUndefined();
+      expect(runtime.database.get("SELECT id FROM audit_log WHERE action = ? AND entity_id = ?", ["project.setup.commit", `${suffix}-project`])).toBeUndefined();
+      expect(runtime.database.get("SELECT payload_json FROM forge_runtime_idempotency WHERE actor = ? AND idempotency_key = ?", [suffix, `${suffix}-commit`])).toBeUndefined();
+      const previewRow = runtime.database.get<{ readonly status: unknown; readonly payload_json: unknown }>("SELECT status, payload_json FROM project_setup_previews WHERE id = ?", [preview.id]);
+      expect(previewRow?.status).toBe("active");
+      expect(JSON.parse(String(previewRow?.payload_json))).toMatchObject({ status: "active", version: preview.version });
+    }
+  });
+
+  it("rejects every setup identity collision before creating graph rows", async () => {
+    const stages = [
+      ["project", "getProject", "project_id_exists"],
+      ["revision", "getProjectRevision", "revision_id_exists"],
+      ["work", "getWorkItem", "work_item_id_exists"],
+      ["work-revision", "getWorkItemRevision", "work_item_revision_id_exists"],
+      ["bom", "getBomLine", "bom_line_id_exists"],
+      ["reservation", "getReservationDetails", "reservation_id_exists"],
+    ] as const;
+    for (const [stage, method, reason] of stages) {
+      const runtime = await makeRuntime();
+      const service = new ApplicationService(runtime.ports);
+      await runtime.ports.inventory.createItem({
+        id: `${stage}-identity-stock`, name: "Identity stock", kind: "fastener", quantity: 1,
+        unit: "each", tags: [], links: [], evidence: { state: "physically_counted" }
+      }, context());
+      const preview = await service.previewProjectSetup({
+        project: { id: `${stage}-identity-project`, name: `${stage} identity project`, status: "planned" },
+        revision: { id: `${stage}-identity-revision`, name: "Initial", status: "concept" },
+        workItems: [{ localRef: "part", id: `${stage}-identity-work`, name: "Part", kind: "part", revision: { id: `${stage}-identity-work-revision`, name: "Initial part", status: "concept" } }],
+        bomLines: [{ localRef: "line", id: `${stage}-identity-line`, name: "Identity stock", itemId: `${stage}-identity-stock`, requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }],
+        reservations: [{ localRef: "reservation", bomLineLocalRef: "line", id: `${stage}-identity-reservation`, itemId: `${stage}-identity-stock`, quantity: 1, unit: "each" }]
+      }, context({ actor: `${stage}-identity-agent` }));
+      const spy = vi.spyOn(runtime.ports.projects, method as "getProject").mockResolvedValueOnce({ id: `existing-${stage}` } as never);
+      await expect(service.commitProjectSetup({
+        previewId: preview.id,
+        expectedPreviewVersion: preview.version,
+        contentSha256: preview.contentSha256,
+        confirmReservations: true
+      }, context({ actor: `${stage}-identity-agent`, idempotencyKey: `${stage}-identity-key` }))).rejects.toMatchObject({
+        code: "conflict",
+        details: { reason, retryable: false, commitState: "not_committed" }
+      });
+      spy.mockRestore();
+      await expect(runtime.ports.projects.getProject(`${stage}-identity-project`)).resolves.toBeNull();
+    }
+  });
+
+  it("covers production setup semantic, stale-basis, and read-back defenses", async () => {
+    {
+      const runtime = await makeRuntime();
+      const service = new ApplicationService(runtime.ports);
+      await runtime.ports.inventory.createItem({ id: "setup-defence-stock", name: "Defence stock", kind: "fastener", quantity: 2, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
+      const invalid = await service.previewProjectSetup({
+        project: { id: "setup-invalid-project", name: "Invalid setup", status: "planned" },
+        revision: { id: "setup-invalid-revision", name: "Initial", status: "concept" },
+        workItems: [],
+        bomLines: [{ localRef: "line", id: "setup-invalid-line", name: "Exact requirement", itemId: "setup-defence-stock", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }],
+        reservations: [{ localRef: "bad", bomLineLocalRef: "line", itemId: "missing-setup-item", quantity: 1, unit: "each" }]
+      }, context({ actor: "setup-invalid-agent" }));
+      expect(invalid.fieldErrors).not.toHaveLength(0);
+      await expect(service.commitProjectSetup({ previewId: invalid.id, expectedPreviewVersion: invalid.version, contentSha256: invalid.contentSha256, confirmReservations: false }, context({ actor: "setup-invalid-agent", idempotencyKey: "setup-invalid-key" }))).rejects.toMatchObject({ code: "validation" });
+
+      const stale = await service.previewProjectSetup({
+        project: { id: "setup-stale-project", name: "Stale setup", status: "planned" },
+        revision: { id: "setup-stale-revision", name: "Initial", status: "concept" },
+        workItems: [],
+        bomLines: [{ localRef: "line", id: "setup-stale-line", name: "Constraint match", requiredQuantity: 1, unit: "each", optional: false, constraints: { kind: "fastener" }, alternatives: [] }],
+        reservations: []
+      }, context({ actor: "setup-stale-agent" }));
+      await runtime.ports.inventory.updateItem("setup-defence-stock", { location: "Moved" }, 1, context());
+      await expect(service.commitProjectSetup({ previewId: stale.id, expectedPreviewVersion: stale.version, contentSha256: stale.contentSha256, confirmReservations: false }, context({ actor: "setup-stale-agent", idempotencyKey: "setup-stale-key" }))).rejects.toMatchObject({ code: "conflict", details: { reason: "stale_basis" } });
+    }
+
+    {
+      const runtime = await makeRuntime();
+      const service = new ApplicationService(runtime.ports);
+      await runtime.ports.inventory.createItem({ id: "setup-optional-stock", name: "Optional stock", kind: "fastener", quantity: 1, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
+      const preview = await service.previewProjectSetup({
+        project: { id: "setup-optional-project", name: "Optional fields setup", status: "planned" },
+        revision: { id: "setup-optional-revision", name: "Initial", status: "concept" },
+        workItems: [{ localRef: "part", id: "setup-optional-work", name: "Part", kind: "part", description: "A described work item", revision: { id: "setup-optional-work-revision", name: "Initial part", status: "concept" } }],
+        bomLines: [{ localRef: "line", id: "setup-optional-line", name: "Constraint-selected stock", requiredQuantity: 1, unit: "each", optional: false, constraints: { kind: "fastener" }, alternatives: [], notes: "Preserved setup note" }],
+        reservations: []
+      }, context({ actor: "setup-optional-agent" }));
+      await expect(service.commitProjectSetup({ previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmReservations: false }, context({ actor: "setup-optional-agent", idempotencyKey: "setup-optional-key" }))).resolves.toMatchObject({ data: { workItems: [{ description: "A described work item" }], bomLines: [{ notes: "Preserved setup note" }] } });
+    }
+
+    {
+      const runtime = await makeRuntime();
+      const service = new ApplicationService(runtime.ports);
+      const preview = await service.previewProjectSetup({
+        project: { id: "setup-readback-project", name: "Read-back setup", status: "planned" },
+        revision: { id: "setup-readback-revision", name: "Initial", status: "concept" },
+        workItems: [],
+        bomLines: [{ localRef: "line", id: "setup-readback-line", name: "Unowned requirement", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }],
+        reservations: []
+      }, context({ actor: "setup-readback-agent" }));
+      const readBack = vi.spyOn(runtime.ports.projects, "getProject").mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+      await expect(service.commitProjectSetup({ previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmReservations: false }, context({ actor: "setup-readback-agent", idempotencyKey: "setup-readback-key" }))).rejects.toMatchObject({ code: "integrity_error" });
+      readBack.mockRestore();
+      await expect(runtime.ports.projects.getProject("setup-readback-project")).resolves.toBeNull();
+    }
+  });
+
+  it("rejects every inventory field drift covered by the setup basis", async () => {
+    const runtime = await makeRuntime();
+    const service = new ApplicationService(runtime.ports);
+    await runtime.ports.inventory.createItem({
+      id: "setup-basis-stock", name: "Basis stock", kind: "fastener", quantity: 2,
+      unit: "each", tags: [], links: [], evidence: { state: "physically_counted" }
+    }, context());
+    const preview = await service.previewProjectSetup({
+      project: { id: "setup-basis-project", name: "Basis comparison", status: "planned" },
+      revision: { id: "setup-basis-revision", name: "Initial", status: "concept" },
+      workItems: [],
+      bomLines: [{ localRef: "line", id: "setup-basis-line", name: "Basis stock", itemId: "setup-basis-stock", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }],
+      reservations: []
+    }, context({ actor: "setup-basis-agent" }));
+    const current = await runtime.ports.inventory.getItem("setup-basis-stock");
+    if (current === null) throw new Error("expected setup basis stock");
+    const variants = [
+      null,
+      { ...current, version: current.version + 1 },
+      { ...current, quantity: current.quantity + 1 },
+      { ...current, availableQuantity: current.availableQuantity - 1 },
+      { ...current, allocatedQuantity: 1 },
+      { ...current, unit: "set" as const },
+      { ...current, evidence: { state: "commissioned" as const } },
+    ];
+    for (const [index, drifted] of variants.entries()) {
+      const getItem = vi.spyOn(runtime.ports.inventory, "getItem").mockResolvedValueOnce(drifted);
+      await expect(service.commitProjectSetup({
+        previewId: preview.id,
+        expectedPreviewVersion: preview.version,
+        contentSha256: preview.contentSha256,
+        confirmReservations: false
+      }, context({ actor: "setup-basis-agent", idempotencyKey: `setup-basis-key-${index}` }))).rejects.toMatchObject({
+        code: "conflict",
+        details: { reason: "stale_basis", staleItems: ["setup-basis-stock"], commitState: "not_committed" }
+      });
+      getItem.mockRestore();
+    }
+    await expect(runtime.ports.projects.getProject("setup-basis-project")).resolves.toBeNull();
+  });
+
   it("replays stable atomic project IDs exactly and rejects a changed payload", async () => {
     const runtime = await makeRuntime();
     const service = new ApplicationService(runtime.ports);

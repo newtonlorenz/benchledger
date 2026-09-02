@@ -30,6 +30,8 @@ import type {
   BuildConfigurationSnapshot as ApiBuildConfigurationSnapshot,
   CatalogProduct as ApiCatalogProduct,
   InventoryProductProfile as ApiInventoryProductProfile,
+  ProjectSetupProposal as ApiProjectSetupProposal,
+  CommitProjectSetup as ApiCommitProjectSetup,
 } from "@benchledger/api-contract";
 import { canonicalProjectLifecycle } from "@benchledger/api-contract";
 import { bomSpecificationSchema } from "@benchledger/api-contract";
@@ -123,6 +125,10 @@ import type {
   ReconciliationReadInput,
   ReconciliationDraftSaveInput,
   ReconciliationCommitInput,
+  ProjectSetupProposal,
+  CommitProjectSetupInput,
+  ProjectSetupPreview,
+  ProjectSetupCommitResult,
 } from "./types.js";
 
 export interface ApplicationBackendOptions {
@@ -444,6 +450,11 @@ export function createApplicationBackend(service: ApplicationService, options: P
           correlationId: mutation.correlationId,
           replayed: mutation.replayed,
         } satisfies ProjectWithInitialRevisionResult;
+      },
+      previewSetup: async (input: ProjectSetupProposal, context): Promise<ProjectSetupPreview> => service.previewProjectSetup(input as ApiProjectSetupProposal, appContext(context)),
+      commitSetup: async (input: CommitProjectSetupInput, context): Promise<ProjectSetupCommitResult & { auditId?: string; correlationId?: string; replayed?: boolean }> => {
+        const mutation = await service.commitProjectSetup(input as ApiCommitProjectSetup, appContext(context));
+        return { ...mutation.data, auditId: mutation.audit.id, correlationId: mutation.correlationId, replayed: mutation.replayed };
       },
       update: async (input, context) => {
         const { projectId, expectedVersion, ...changes } = input;

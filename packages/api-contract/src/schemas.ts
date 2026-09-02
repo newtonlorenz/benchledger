@@ -536,6 +536,178 @@ export const createBomLineSchema = bomLineSchema.pick({
 }).extend({ id: idSchema.optional() }).strict();
 export const updateBomLineSchema = createBomLineSchema.omit({ id: true }).partial().strict();
 
+/**
+ * Bounded, review-first project graph setup. The local references are
+ * proposal-scoped identities; the application resolves them to stable record
+ * IDs once during preview and carries those IDs into commit.
+ */
+const projectSetupWorkItemSchema = z.object({
+  localRef: idSchema,
+  id: idSchema.optional(),
+  name: z.string().trim().min(1).max(240),
+  kind: workItemKindSchema,
+  description: z.string().max(5000).optional(),
+  revision: createWorkItemRevisionSchema
+}).strict();
+
+const projectSetupBomLineSchema = z.object({
+  localRef: idSchema,
+  revisionLocalRef: idSchema.optional(),
+  id: idSchema.optional(),
+  name: z.string().trim().min(1).max(240),
+  itemId: idSchema.optional(),
+  requiredQuantity: z.number().finite().positive(),
+  unit: quantityUnitSchema,
+  optional: z.boolean().default(false),
+  constraints: bomConstraintsSchema.default({}),
+  alternatives: z.array(bomAlternativeSchema).max(20).default([]),
+  notes: z.string().max(2000).optional()
+}).strict();
+
+const projectSetupReservationSchema = z.object({
+  localRef: idSchema,
+  bomLineLocalRef: idSchema,
+  id: idSchema.optional(),
+  itemId: idSchema,
+  quantity: z.number().finite().positive(),
+  unit: quantityUnitSchema.optional()
+}).strict();
+
+export const projectSetupProposalSchema = z.object({
+  project: createProjectSchema,
+  revision: createProjectRevisionSchema,
+  workItems: z.array(projectSetupWorkItemSchema).max(6).default([]),
+  bomLines: z.array(projectSetupBomLineSchema).min(1).max(24),
+  reservations: z.array(projectSetupReservationSchema).max(48).default([])
+}).strict().superRefine((value, ctx) => {
+  const refs = new Map<string, string>();
+  const addRefs = (entries: readonly { readonly localRef: string }[], label: string) => {
+    entries.forEach((entry, index) => {
+      const prior = refs.get(entry.localRef);
+      if (prior !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [label, index, "localRef"], message: `localRef '${entry.localRef}' is already used by ${prior}` });
+      else refs.set(entry.localRef, `${label}[${index}]`);
+    });
+  };
+  addRefs(value.workItems, "workItems");
+  addRefs(value.bomLines, "bomLines");
+  addRefs(value.reservations, "reservations");
+  const workRefs = new Set(value.workItems.map((item) => item.localRef));
+  value.bomLines.forEach((line, index) => {
+    if (line.revisionLocalRef !== undefined && line.revisionLocalRef !== "project" && !workRefs.has(line.revisionLocalRef)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["bomLines", index, "revisionLocalRef"], message: `Unknown revision localRef '${line.revisionLocalRef}'` });
+    }
+  });
+  const bomRefs = new Set(value.bomLines.map((line) => line.localRef));
+  value.reservations.forEach((reservation, index) => {
+    if (!bomRefs.has(reservation.bomLineLocalRef)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["reservations", index, "bomLineLocalRef"], message: `Unknown BOM line localRef '${reservation.bomLineLocalRef}'` });
+  });
+  const ids = new Map<string, string>();
+  const addId = (id: string | undefined, path: (string | number)[], label: string) => {
+    if (id === undefined) return;
+    const prior = ids.get(id);
+    if (prior !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path, message: `id '${id}' is already used by ${prior}` });
+    else ids.set(id, label);
+  };
+  addId(value.project.id, ["project", "id"], "project");
+  addId(value.revision.id, ["revision", "id"], "revision");
+  value.workItems.forEach((item, index) => {
+    addId(item.id, ["workItems", index, "id"], `workItems[${index}]`);
+    addId(item.revision.id, ["workItems", index, "revision", "id"], `workItems[${index}].revision`);
+  });
+  value.bomLines.forEach((line, index) => addId(line.id, ["bomLines", index, "id"], `bomLines[${index}]`));
+  value.reservations.forEach((reservation, index) => addId(reservation.id, ["reservations", index, "id"], `reservations[${index}]`));
+  try {
+    const encoded = new TextEncoder().encode(JSON.stringify(value));
+    if (encoded.byteLength > 256 * 1024) ctx.addIssue({ code: z.ZodIssueCode.too_big, maximum: 256 * 1024, type: "string", inclusive: true, path: [], message: "Project setup proposal exceeds the 256 KiB limit" });
+  } catch {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: [], message: "Project setup proposal cannot be encoded" });
+  }
+});
+
+export const projectSetupFieldErrorSchema = z.object({
+  path: z.string().min(1).max(240),
+  code: z.string().min(1).max(80),
+  message: z.string().min(1).max(1000)
+}).strict();
+
+export const projectSetupInventoryBasisSchema = z.object({
+  itemId: idSchema,
+  unit: quantityUnitSchema,
+  evidenceBasis: evidenceSchema,
+  before: z.object({
+    version: z.number().int().positive(),
+    quantity: z.number().finite().nonnegative(),
+    availableQuantity: z.number().finite().nonnegative(),
+    allocatedQuantity: z.number().finite().nonnegative()
+  }).strict(),
+  after: z.object({
+    version: z.number().int().positive(),
+    quantity: z.number().finite().nonnegative(),
+    availableQuantity: z.number().finite().nonnegative(),
+    allocatedQuantity: z.number().finite().nonnegative()
+  }).strict()
+}).strict();
+
+export const projectSetupPlannedReservationSchema = z.object({
+  localRef: idSchema,
+  bomLineLocalRef: idSchema,
+  reservationId: idSchema,
+  itemId: idSchema,
+  quantity: z.number().finite().positive(),
+  unit: quantityUnitSchema,
+  before: z.object({ version: z.number().int().positive(), availableQuantity: z.number().finite().nonnegative(), allocatedQuantity: z.number().finite().nonnegative() }).strict(),
+  after: z.object({ version: z.number().int().positive(), availableQuantity: z.number().finite().nonnegative(), allocatedQuantity: z.number().finite().nonnegative() }).strict()
+}).strict();
+
+export const projectSetupPreviewSchema = z.object({
+  id: idSchema,
+  version: z.number().int().positive(),
+  status: z.enum(["active", "committed", "expired"]),
+  createdAt: isoDateSchema,
+  updatedAt: isoDateSchema,
+  expiresAt: isoDateSchema,
+  contentSha256: z.string().length(64).regex(/^[a-f0-9]+$/),
+  proposal: projectSetupProposalSchema,
+  fieldErrors: z.array(projectSetupFieldErrorSchema).max(100),
+  unresolvedSpecifications: z.array(z.object({ bomLineLocalRef: idSchema, missingDecisions: z.array(bomSpecificationDecisionSchema).max(7) }).strict()).max(24),
+  gaps: z.object({ revisionId: idSchema, lines: z.array(z.lazy(() => bomGapSchema)).max(24), totals: z.record(z.string(), z.number().int().nonnegative()) }).strict(),
+  plannedReservations: z.array(projectSetupPlannedReservationSchema).max(48),
+  // Candidate matching may legitimately involve more rows than the bounded
+  // reservation list. Keep the review document bounded without truncating a
+  // workspace-scale inventory basis.
+  affectedInventory: z.array(projectSetupInventoryBasisSchema).max(10_000),
+  correlationId: correlationIdSchema
+}).strict();
+
+export const commitProjectSetupSchema = z.object({
+  previewId: idSchema,
+  expectedPreviewVersion: z.number().int().positive(),
+  contentSha256: z.string().length(64).regex(/^[a-f0-9]+$/),
+  confirmReservations: z.boolean()
+}).strict();
+
+/** HTTP request body for a path-addressed setup commit. The preview identity
+ * is carried by `/project-setup/previews/{id}/commit`, never duplicated in the
+ * JSON body. MCP keeps using commitProjectSetupSchema with its explicit ID. */
+export const commitProjectSetupBodySchema = commitProjectSetupSchema.omit({ previewId: true }).strict();
+
+export const projectSetupCommitResultSchema = z.object({
+  project: projectSchema,
+  revision: projectRevisionSchema,
+  workItems: z.array(workItemSchema).max(6),
+  workItemRevisions: z.array(workItemRevisionSchema).max(6),
+  bomLines: z.array(bomLineSchema).max(24),
+  reservations: z.array(z.lazy(() => reservationSchema)).max(48),
+  auditIds: z.array(idSchema).max(4),
+  context: z.record(z.string(), z.unknown()),
+  gaps: z.object({
+    revisionId: idSchema,
+    lines: z.array(z.lazy(() => bomGapSchema)).max(24),
+    totals: z.record(z.string(), z.number().int().nonnegative())
+  }).strict(),
+  nextAction: z.string().min(1).max(1000)
+}).strict();
+
 export const gapStatusSchema = z.enum(["supplied", "inspect_first", "specify_first", "partially_supplied", "missing", "optional"]);
 export const bomDecisionSchema = z.enum(["ready", "check", "decide", "source"]);
 export const bomGapCandidateSchema = z.object({

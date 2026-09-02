@@ -27,7 +27,10 @@ import type {
   reconciliationReservationChangeSchema,
   reconciliationDraftSchema, saveReconciliationDraftSchema, commitReconciliationSchema,
   reconciliationCommitSchema,
-  workspaceSecurityModeSchema, workspaceSecurityStatusSchema, workspaceSecurityMutationSchema, projectLifecycleSchema
+  workspaceSecurityModeSchema, workspaceSecurityStatusSchema, workspaceSecurityMutationSchema, projectLifecycleSchema,
+  projectSetupProposalSchema, projectSetupFieldErrorSchema, projectSetupInventoryBasisSchema,
+  projectSetupPlannedReservationSchema, projectSetupPreviewSchema, commitProjectSetupSchema, commitProjectSetupBodySchema,
+  projectSetupCommitResultSchema
 } from "./schemas.js";
 
 export type Dimension = z.infer<typeof dimensionSchema>;
@@ -121,3 +124,11 @@ export type CreateArtifactBuildConfigurationBinding = z.infer<typeof createArtif
 export type WorkspaceSecurityMode = z.infer<typeof workspaceSecurityModeSchema>;
 export type WorkspaceSecurityStatus = z.infer<typeof workspaceSecurityStatusSchema>;
 export type WorkspaceSecurityMutation = z.infer<typeof workspaceSecurityMutationSchema>;
+export type ProjectSetupProposal = z.infer<typeof projectSetupProposalSchema>;
+export type ProjectSetupFieldError = z.infer<typeof projectSetupFieldErrorSchema>;
+export type ProjectSetupInventoryBasis = z.infer<typeof projectSetupInventoryBasisSchema>;
+export type ProjectSetupPlannedReservation = z.infer<typeof projectSetupPlannedReservationSchema>;
+export type ProjectSetupPreview = z.infer<typeof projectSetupPreviewSchema>;
+export type CommitProjectSetup = z.infer<typeof commitProjectSetupSchema>;
+export type CommitProjectSetupBody = z.infer<typeof commitProjectSetupBodySchema>;
+export type ProjectSetupCommitResult = z.infer<typeof projectSetupCommitResultSchema>;

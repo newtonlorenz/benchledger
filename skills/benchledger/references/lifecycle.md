@@ -58,6 +58,21 @@ polarity, connector, dimensions, and condition meet that line's constraints.
 - For a new project, retain the project and initial revision returned by the
   atomic create operation. For an existing project, read its current revision
   before deciding whether a later planning baseline is needed.
+
+For a complete graph, prefer the review-first atomic setup pair:
+
+1. `preview_project_setup` with one project/initial revision, 0–6 work items,
+   1–24 BOM lines, and 0–48 reservations (unique local references; 256 KiB
+   payload limit)
+2. Inspect normalized IDs, semantic errors, unresolved specifications, gap
+   candidates/totals, inventory basis, and planned reservations
+3. `commit_project_setup` with the same preview ID/version/hash and
+   `confirmReservations: true` when reservations are planned; use a distinct
+   8–200 character idempotency key
+
+Preview persists only actor-owned bounded metadata for 30 minutes. Commit
+rechecks identity and inventory basis in one transaction; a stale 409 requires
+a fresh preview. Identical same-actor retries replay safely.
 - Create work items and their revisions only for independently versioned
   deliverables. Do not create a new project revision merely to edit an
   unchanged draft.

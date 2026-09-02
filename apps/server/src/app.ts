@@ -14,8 +14,8 @@ import {
   createCatalogProductSchema, updateCatalogProductSchema,
   createInventoryProductProfileSchema, createInventoryWithProductProfileSchema, updateInventoryProductProfileSchema,
   createBuildConfigurationSnapshotSchema, saveReconciliationDraftSchema, commitReconciliationSchema,
-  workspaceSecurityMutationSchema, projectStatusSchema
-  , removeProjectSchema
+  workspaceSecurityMutationSchema, projectStatusSchema,
+  removeProjectSchema, projectSetupProposalSchema, commitProjectSetupSchema, commitProjectSetupBodySchema
 } from "@benchledger/api-contract";
 import { ApplicationError, ApplicationService } from "@benchledger/application";
 import type { ApplicationPorts, BeginUploadInput, BuildConfigurationListOptions, CatalogProductListOptions, GapEvaluation, Mutation, Page, ProjectListOptions, RequestContext } from "@benchledger/application";
@@ -702,6 +702,26 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       }
     }
   };
+  const setupProposalSchema = {
+    type: "object", additionalProperties: false, required: ["project", "revision", "bomLines"],
+    properties: {
+      project: { type: "object", additionalProperties: false, required: ["name", "status"], properties: { id: { type: "string", minLength: 1, maxLength: 160 }, name: { type: "string", minLength: 1, maxLength: 240 }, description: { type: "string", maxLength: 5000 }, status: { $ref: "#/components/schemas/ProjectLifecycle" } } },
+      revision: { type: "object", additionalProperties: false, required: ["name", "status"], properties: { id: { type: "string", minLength: 1, maxLength: 160 }, name: { type: "string", minLength: 1, maxLength: 240 }, notes: { type: "string", maxLength: 10000 }, status: { type: "string" } } },
+      workItems: { type: "array", maxItems: 6, default: [], items: { type: "object", additionalProperties: false, required: ["localRef", "name", "kind", "revision"], properties: { localRef: { type: "string", minLength: 1, maxLength: 160 }, id: { type: "string", minLength: 1, maxLength: 160 }, name: { type: "string", minLength: 1, maxLength: 240 }, kind: { type: "string" }, description: { type: "string", maxLength: 5000 }, revision: { type: "object", additionalProperties: false, required: ["name", "status"], properties: { id: { type: "string", minLength: 1, maxLength: 160 }, name: { type: "string", minLength: 1, maxLength: 240 }, notes: { type: "string", maxLength: 10000 }, status: { type: "string" } } } } } },
+      bomLines: { type: "array", minItems: 1, maxItems: 24, items: { type: "object", additionalProperties: false, required: ["localRef", "name", "requiredQuantity", "unit"], properties: { localRef: { type: "string", minLength: 1, maxLength: 160 }, revisionLocalRef: { type: "string", minLength: 1, maxLength: 160 }, id: { type: "string", minLength: 1, maxLength: 160 }, name: { type: "string", minLength: 1, maxLength: 240 }, itemId: { type: "string", minLength: 1, maxLength: 160 }, requiredQuantity: { type: "number", exclusiveMinimum: 0 }, unit: { type: "string" }, optional: { type: "boolean", default: false }, constraints: { type: "object", additionalProperties: false, properties: { kind: { type: "string" }, manufacturer: { type: "string" }, model: { type: "string" }, sku: { type: "string" }, tag: { type: "string" }, nameIncludes: { type: "string" }, specification: { type: "object", additionalProperties: true } } }, alternatives: { type: "array", maxItems: 20, items: { type: "object", additionalProperties: false, required: ["itemId"], properties: { itemId: { type: "string", minLength: 1, maxLength: 160 }, reason: { type: "string", maxLength: 1000 }, compatible: { type: "string", enum: ["confirmed", "conditional", "unknown"] } } } }, notes: { type: "string", maxLength: 2000 } } } },
+      reservations: { type: "array", maxItems: 48, default: [], items: { type: "object", additionalProperties: false, required: ["localRef", "bomLineLocalRef", "itemId", "quantity"], properties: { localRef: { type: "string", minLength: 1, maxLength: 160 }, bomLineLocalRef: { type: "string", minLength: 1, maxLength: 160 }, id: { type: "string", minLength: 1, maxLength: 160 }, itemId: { type: "string", minLength: 1, maxLength: 160 }, quantity: { type: "number", exclusiveMinimum: 0 }, unit: { type: "string" } } } }
+    }
+  };
+  const setupPreviewSchema = {
+    type: "object", additionalProperties: false, required: ["id", "version", "status", "createdAt", "updatedAt", "expiresAt", "contentSha256", "proposal", "fieldErrors", "unresolvedSpecifications", "gaps", "plannedReservations", "affectedInventory", "correlationId"],
+    properties: {
+      id: { type: "string" }, version: { type: "integer", minimum: 1 }, status: { type: "string", enum: ["active", "committed", "expired"] }, createdAt: { type: "string", format: "date-time" }, updatedAt: { type: "string", format: "date-time" }, expiresAt: { type: "string", format: "date-time" }, contentSha256: { type: "string", pattern: "^[a-f0-9]{64}$" }, proposal: setupProposalSchema,
+      fieldErrors: { type: "array", maxItems: 100, items: { type: "object", additionalProperties: false, required: ["path", "code", "message"], properties: { path: { type: "string" }, code: { type: "string" }, message: { type: "string" } } } },
+      unresolvedSpecifications: { type: "array", maxItems: 24, items: { type: "object", additionalProperties: false, required: ["bomLineLocalRef", "missingDecisions"], properties: { bomLineLocalRef: { type: "string" }, missingDecisions: { type: "array", items: { type: "string" } } } } },
+      gaps: { type: "object", additionalProperties: false, required: ["revisionId", "lines", "totals"], properties: { revisionId: { type: "string" }, lines: { type: "array", maxItems: 24 }, totals: { type: "object", additionalProperties: true } } },
+      plannedReservations: { type: "array", maxItems: 48 }, affectedInventory: { type: "array", maxItems: 48 }, correlationId: { type: "string" }
+    }
+  };
   return {
     openapi: "3.1.0",
     info: { title: "BenchLedger API", version, description: "Evidence-based maker inventory and project workspace API." },
@@ -720,6 +740,9 @@ function jsonOpenApi(version: string): Record<string, unknown> {
         CreateInventoryProductProfileWithoutItem: createInventoryProductProfileWithoutItemSchema,
         CreateInventoryWithProductProfile: inventoryWithProductProfileSchema,
         CreateProjectWithInitialRevision: createProjectWithInitialRevisionSchema,
+        ProjectSetupProposal: { ...setupProposalSchema, description: "Strict bounded project setup proposal (maximum 6 work items, 24 BOM lines, 48 reservations, 256 KiB)." },
+        ProjectSetupPreview: { ...setupPreviewSchema, description: "Strict actor-owned 30-minute project setup preview." },
+        CommitProjectSetup: { type: "object", additionalProperties: false, required: ["expectedPreviewVersion", "contentSha256", "confirmReservations"], properties: { expectedPreviewVersion: { type: "integer", minimum: 1 }, contentSha256: { type: "string", pattern: "^[a-f0-9]{64}$" }, confirmReservations: { type: "boolean" } } },
         ProjectCreationConflictDetails: projectCreationConflictDetailsSchema,
         ErrorResponse: errorResponseSchema,
         InventoryCategory: inventoryCategorySchema,
@@ -844,6 +867,8 @@ function jsonOpenApi(version: string): Record<string, unknown> {
           }
         }
       },
+      "/project-setup/previews": { post: { summary: "Preview a bounded project graph setup", requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectSetupProposal" } } } }, responses: { "201": { description: "Actor-owned project setup preview" }, "400": { description: "Invalid proposal or semantic field errors" }, "403": { description: "Project-scoped token denied" } } } },
+      "/project-setup/previews/{id}/commit": { post: { summary: "Commit an exact project setup preview atomically", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", minLength: 1, maxLength: 160 } }, { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 8, maxLength: 200 } }], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CommitProjectSetup" } } } }, responses: { "200": { description: "Complete project graph, one aggregate audit, and context" }, "400": { description: "Invalid commit or missing reservation confirmation" }, "403": { description: "Project-scoped or insufficient scope" }, "409": { description: "Stale basis, identity, reservation, or idempotency conflict" } } } },
       "/projects/{id}/revisions": { post: { responses: { "201": { description: "Project revision" } } } },
       "/projects/{id}/restore": { post: { description: "Restore an archived project to idea; retained history stays in place and released reservations are not recreated.", responses: { "200": { description: "Restored project" }, "400": { description: "Invalid version precondition" }, "409": { description: "Version or project lifecycle conflict" } } } },
       "/projects/{id}": { delete: { description: "Irreversibly remove an archived or active project from ordinary workspace views. Requires exact name confirmation, If-Match, and Idempotency-Key; retained history remains discoverable and no purge is available.", parameters: [{ in: "header", name: "If-Match", required: true, schema: { type: "string" } }, { in: "header", name: "Idempotency-Key", required: true, schema: { type: "string", minLength: 8, maxLength: 200 } }], requestBody: { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: false, required: ["name"], properties: { name: { type: "string", minLength: 1, maxLength: 240 } } } } } }, responses: { "200": { description: "Project tombstone and released reservation IDs" }, "400": { description: "Missing preconditions or invalid confirmation" }, "409": { description: "Version, confirmation, or idempotency conflict" }, "410": { description: "Project was already removed" } } } },
@@ -1459,6 +1484,8 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   });
   app.post(route("/projects"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const mutation = await service.createProject(parseBody(createProjectSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });
   app.post(route("/projects/with-initial-revision"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const mutation = await service.createProjectWithInitialRevision(parseBody(createProjectWithInitialRevisionSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });
+  app.post(route("/project-setup/previews"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const preview = await service.previewProjectSetup(parseBody(projectSetupProposalSchema, request.body), requestContext(request)); return reply.code(201).send(preview); });
+  app.post(route("/project-setup/previews/:id/commit"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); if (requestIdempotencyKey(request) === undefined) throw new ApplicationError("validation", "Idempotency-Key is required for project setup commit"); const params = request.params as { id: string }; const body = parseBody(commitProjectSetupBodySchema, request.body); const command = { ...body, previewId: params.id }; return service.commitProjectSetup(command, requestContext(request, command)); });
   app.get(route("/projects/:id/removed-history"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); const query = request.query as { limit?: string; cursor?: string }; return service.readRemovedProjectHistory(params.id, Number(query.limit ?? 50), query.cursor); });
   app.get(route("/projects/:id"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); const project = await service.getProject(params.id); return { project, workItems: await service.listWorkItems(params.id) }; });
   app.patch(route("/projects/:id"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); return service.updateProject(params.id, parseBody(updateProjectSchema, request.body) as never, parseExpectedVersion(request), requestContext(request)); });

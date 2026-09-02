@@ -1,11 +1,26 @@
 import type { BenchDatabase, SqliteRow } from "./sqlite.js";
-import { CATALOG_SCHEMA_SQL, INVENTORY_CATEGORY_SCHEMA_SQL, WORKSPACE_SECURITY_SCHEMA_SQL } from "./schema.js";
+import { CATALOG_SCHEMA_SQL, INVENTORY_CATEGORY_SCHEMA_SQL, PROJECT_SETUP_SCHEMA_SQL, WORKSPACE_SECURITY_SCHEMA_SQL } from "./schema.js";
 import { BUILTIN_INVENTORY_CATEGORIES, isProjectLifecycle, normalizeInventoryCategoryKey, normalizeProjectLifecycle } from "@benchledger/domain";
 
 export const WORKSPACE_SECURITY_SCHEMA_VERSION = 1;
 export const WORKSPACE_SECURITY_SCHEMA_MIGRATION_SQL = WORKSPACE_SECURITY_SCHEMA_SQL;
 
 export const PROJECT_SCHEMA_VERSION = 3;
+
+export const PROJECT_SETUP_SCHEMA_VERSION = 1;
+export const PROJECT_SETUP_SCHEMA_MIGRATION_SQL = PROJECT_SETUP_SCHEMA_SQL;
+
+/** Additive preview storage. Older binaries can safely ignore this table. */
+export function migrateProjectSetupSchema(database: BenchDatabase): void {
+  database.transaction(() => {
+    const current = database.get<{ readonly value: unknown }>("SELECT value FROM forge_meta WHERE key = ?", ["project_setup_schema_version"]);
+    const currentVersion = current === undefined ? 0 : Number(current.value);
+    if (!Number.isInteger(currentVersion) || currentVersion < 0) throw new Error("BenchLedger project setup schema version is invalid");
+    if (currentVersion > PROJECT_SETUP_SCHEMA_VERSION) throw new Error(`BenchLedger project setup schema ${currentVersion} is newer than supported version ${PROJECT_SETUP_SCHEMA_VERSION}`);
+    database.exec(PROJECT_SETUP_SCHEMA_MIGRATION_SQL);
+    database.run("INSERT INTO forge_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", ["project_setup_schema_version", String(PROJECT_SETUP_SCHEMA_VERSION)]);
+  });
+}
 
 /** Add durable, reversible BOM retirement without rewriting requirement data. */
 export function migrateProjectSchema(database: BenchDatabase): void {
