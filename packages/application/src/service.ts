@@ -314,6 +314,16 @@ function commandContext(ctx: RequestContext, scope: string, input: unknown): Req
 }
 
 /**
+ * Project setup is a structured command whose parsed payload is the replay
+ * identity. Transport envelopes may reorder fields or carry an unrelated
+ * request fingerprint, so this command must always replace that fingerprint
+ * with the canonical payload digest.
+ */
+function canonicalProjectSetupContext(ctx: RequestContext, input: CreateProjectWithInitialRevision): RequestContext {
+  return { ...ctx, fingerprint: createHash("sha256").update(JSON.stringify(canonicalize({ scope: "project.create_with_initial_revision", input }))).digest("hex") };
+}
+
+/**
  * Password commands must not derive idempotency data from plaintext or an
  * encoded credential. Hosts must provide an opaque, secret-keyed request
  * fingerprint (for example, a transport-level HMAC digest).
@@ -1212,8 +1222,14 @@ export class ApplicationService {
     const parsed = createProjectWithInitialRevisionSchema.parse(input);
     const createAtomic = this.ports.projects.createProjectWithInitialRevision;
     if (createAtomic === undefined) throw new ApplicationError("integrity_error", "This project adapter does not support atomic project creation");
-    return this.mutate(ctx, "project.create_with_initial_revision", "project", parsed.project.id ?? "pending", async () => {
-      const created = await createAtomic.call(this.ports.projects, parsed, ctx);
+    const action = "project.create_with_initial_revision";
+    // The atomic command is also used by MCP hosts without an HTTP request
+    // fingerprint. Always derive the digest from the parsed, canonical
+    // payload so transport envelope differences cannot change replay
+    // semantics and a reused key cannot replay changed command fields.
+    const commandCtx = canonicalProjectSetupContext(ctx, parsed);
+    return this.mutate(commandCtx, action, "project", parsed.project.id ?? "pending", async () => {
+      const created = await createAtomic.call(this.ports.projects, parsed, commandCtx);
       return { value: created, entityId: created.project.id, version: created.project.version };
     });
   }
@@ -1953,7 +1969,14 @@ export class ApplicationService {
             const stored = prior as { readonly action?: string; readonly fingerprint?: string; readonly mutation?: Mutation<T> };
             if (stored.mutation) {
               if (stored.action !== action || (stored.fingerprint !== undefined && stored.fingerprint !== fingerprint)) {
-                throw new ApplicationError("idempotency_conflict", "Idempotency key was already used for a different command");
+                throw new ApplicationError("idempotency_conflict", "Idempotency key was already used for a different command", {
+                  reason: "idempotency_key_reused",
+                  field: "idempotencyKey",
+                  id: ctx.idempotencyKey,
+                  retryable: false,
+                  commitState: "not_committed",
+                  commandId: ctx.idempotencyKey,
+                });
               }
               return { mutation: { ...stored.mutation, replayed: true }, event: undefined };
             }

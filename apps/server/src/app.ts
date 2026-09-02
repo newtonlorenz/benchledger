@@ -652,6 +652,56 @@ function jsonOpenApi(version: string): Record<string, unknown> {
     { name: "cursor", in: "query", required: false, schema: { type: "string", maxLength: 200 } }
   ];
   const projectLifecycleValues = ["idea", "planned", "ready", "building", "validating", "complete", "archived"];
+  const createProjectWithInitialRevisionSchema = {
+    type: "object", additionalProperties: false, required: ["project", "revision"],
+    properties: {
+      project: {
+        type: "object", additionalProperties: false, required: ["name", "status"],
+        properties: {
+          id: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$", description: "Optional caller-provided stable project identifier. It is never regenerated or reclaimed after removal." },
+          name: { type: "string", minLength: 1, maxLength: 240 },
+          description: { type: "string", maxLength: 5000 },
+          status: { type: "string", enum: projectLifecycleValues }
+        }
+      },
+      revision: {
+        type: "object", additionalProperties: false, required: ["name", "status"],
+        properties: {
+          id: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$", description: "Optional caller-provided stable initial revision identifier. It must not already exist." },
+          name: { type: "string", minLength: 1, maxLength: 240 },
+          notes: { type: "string", maxLength: 10000 },
+          status: { type: "string", enum: ["concept", "CAD complete", "DFAM reviewed", "mesh validated", "slicer validated", "test printed", "fit/function verified", "production approved"] }
+        }
+      }
+    }
+  };
+  const projectCreationConflictDetailsSchema = {
+    type: "object", additionalProperties: false,
+    required: ["reason", "field", "id", "retryable", "commitState"],
+    description: "Safe conflict details identify only the requested target. No project, revision, record, SQL, or backend details are exposed.",
+    properties: {
+      reason: { type: "string", enum: ["project_id_exists", "revision_id_exists", "project_name_exists", "idempotency_key_reused"] },
+      field: { type: "string", enum: ["projectId", "revisionId", "projectName", "idempotencyKey"] },
+      id: { type: "string", minLength: 1, maxLength: 240 },
+      retryable: { const: false },
+      commitState: { const: "not_committed" },
+      commandId: { type: "string", minLength: 1, maxLength: 200 }
+    }
+  };
+  const errorResponseSchema = {
+    type: "object", additionalProperties: false, required: ["error"],
+    properties: {
+      error: {
+        type: "object", additionalProperties: false, required: ["code", "message"],
+        properties: {
+          code: { type: "string", minLength: 1, maxLength: 80 },
+          message: { type: "string", minLength: 1, maxLength: 1000 },
+          details: { $ref: "#/components/schemas/ProjectCreationConflictDetails" },
+          correlationId: { type: "string", minLength: 1, maxLength: 160 }
+        }
+      }
+    }
+  };
   return {
     openapi: "3.1.0",
     info: { title: "BenchLedger API", version, description: "Evidence-based maker inventory and project workspace API." },
@@ -669,6 +719,9 @@ function jsonOpenApi(version: string): Record<string, unknown> {
         InventoryBulkUpdate: inventoryBulkUpdateSchema,
         CreateInventoryProductProfileWithoutItem: createInventoryProductProfileWithoutItemSchema,
         CreateInventoryWithProductProfile: inventoryWithProductProfileSchema,
+        CreateProjectWithInitialRevision: createProjectWithInitialRevisionSchema,
+        ProjectCreationConflictDetails: projectCreationConflictDetailsSchema,
+        ErrorResponse: errorResponseSchema,
         InventoryCategory: inventoryCategorySchema,
         CreateInventoryCategory: createInventoryCategorySchema,
         UpdateInventoryCategory: updateInventoryCategorySchema,
@@ -779,7 +832,18 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       "/inventory/{id}/stock-events": { get: { responses: { "200": { description: "Stock event page" } } }, post: { responses: { "201": { description: "Stock mutation" } } } },
       "/projects": { get: { description: "Returns a bounded project page. Archived and removed projects are hidden by default; status=archived is the explicit reversible Archived view.", parameters: [{ name: "status", in: "query", required: false, schema: { $ref: "#/components/schemas/ProjectLifecycle" } }], responses: { "200": { description: "Project page" } } }, post: { responses: { "201": { description: "Project" } } } },
       "/projects/removed": { get: { description: "List retained project removal tombstones as a bounded page. Removed projects cannot be restored or purged.", parameters: [{ name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } }, { name: "cursor", in: "query", required: false, schema: { type: "string", maxLength: 200 }, description: "Opaque continuation cursor from the preceding page." }], responses: { "200": { description: "Removed project tombstone page" } } } },
-      "/projects/with-initial-revision": { post: { responses: { "201": { description: "Project and initial revision mutation" } } } },
+      "/projects/with-initial-revision": {
+        post: {
+          summary: "Create a project and its first planning revision atomically",
+          description: "Accepts optional caller-provided stable project and revision IDs. An identical retry with the same Idempotency-Key replays exactly once. A 409 identifies a project ID, revision ID, generated project name/slug, or reused idempotency key; read the existing project, choose a different ID, or choose a different project name as directed. No records are committed on conflict.",
+          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CreateProjectWithInitialRevision" } } } },
+          responses: {
+            "201": { description: "Project and initial revision mutation" },
+            "400": { description: "Invalid project, revision, or stable identifier" },
+            "409": { description: "Project ID, revision ID, generated project name/slug, or idempotency-key conflict; no records were committed.", content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+          }
+        }
+      },
       "/projects/{id}/revisions": { post: { responses: { "201": { description: "Project revision" } } } },
       "/projects/{id}/restore": { post: { description: "Restore an archived project to idea; retained history stays in place and released reservations are not recreated.", responses: { "200": { description: "Restored project" }, "400": { description: "Invalid version precondition" }, "409": { description: "Version or project lifecycle conflict" } } } },
       "/projects/{id}": { delete: { description: "Irreversibly remove an archived or active project from ordinary workspace views. Requires exact name confirmation, If-Match, and Idempotency-Key; retained history remains discoverable and no purge is available.", parameters: [{ in: "header", name: "If-Match", required: true, schema: { type: "string" } }, { in: "header", name: "Idempotency-Key", required: true, schema: { type: "string", minLength: 8, maxLength: 200 } }], requestBody: { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: false, required: ["name"], properties: { name: { type: "string", minLength: 1, maxLength: 240 } } } } } }, responses: { "200": { description: "Project tombstone and released reservation IDs" }, "400": { description: "Missing preconditions or invalid confirmation" }, "409": { description: "Version, confirmation, or idempotency conflict" }, "410": { description: "Project was already removed" } } } },

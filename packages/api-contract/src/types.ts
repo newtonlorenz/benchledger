@@ -2,7 +2,7 @@ import type { z } from "zod";
 import type {
   artifactSchema, auditEventSchema, beginUploadSchema, bomGapCandidateSchema, bomGapSchema, bomLineSchema, createBomLineSchema,
   commissionInventoryItemSchema, createInventoryItemSchema, createOfferSchema, createProjectRevisionSchema,
-  createProjectSchema, createProjectWithInitialRevisionSchema, createReservationSchema, createWorkItemRevisionSchema, removeProjectSchema, projectTombstoneSchema,
+  createProjectSchema, createProjectWithInitialRevisionSchema, projectCreationConflictDetailsSchema, createReservationSchema, createWorkItemRevisionSchema, removeProjectSchema, projectTombstoneSchema,
   createWorkItemSchema, dimensionSchema, healthSchema, inventoryItemSchema,
   inventoryListQuerySchema, inventoryCategoryListQuerySchema, inventoryCategorySchema, createInventoryCategorySchema, updateInventoryCategorySchema, offerSchema, projectRevisionSchema, projectSchema, projectWithInitialRevisionSchema,
   readinessSchema, reservationSchema, stockEventInputSchema, stockEventSchema,
@@ -60,6 +60,7 @@ export type CreateWorkItem = z.infer<typeof createWorkItemSchema>;
 export type ProjectRevision = z.infer<typeof projectRevisionSchema>;
 export type CreateProjectRevision = z.infer<typeof createProjectRevisionSchema>;
 export type CreateProjectWithInitialRevision = z.infer<typeof createProjectWithInitialRevisionSchema>;
+export type ProjectCreationConflictDetails = z.infer<typeof projectCreationConflictDetailsSchema>;
 export type ProjectWithInitialRevision = z.infer<typeof projectWithInitialRevisionSchema>;
 export type WorkItemRevision = z.infer<typeof workItemRevisionSchema>;
 export type CreateWorkItemRevision = z.infer<typeof createWorkItemRevisionSchema>;

@@ -36,6 +36,93 @@ afterEach(async () => {
 });
 
 describe("production runtime mappings", () => {
+  it("replays stable atomic project IDs exactly and rejects a changed payload", async () => {
+    const runtime = await makeRuntime();
+    const service = new ApplicationService(runtime.ports);
+    const input = {
+      project: { id: "stable-atomic-project", name: "Stable atomic project", description: "Initial description", status: "planned" as const },
+      revision: { id: "stable-atomic-revision", name: "Initial", notes: "First baseline", status: "concept" as const },
+    };
+    const command = context({ actor: "stable-agent", idempotencyKey: "stable-atomic-key" });
+
+    const first = await service.createProjectWithInitialRevision(input, command);
+    const replay = await service.createProjectWithInitialRevision(input, command);
+
+    expect(replay).toMatchObject({ replayed: true, data: first.data, audit: first.audit });
+    expect(runtime.database.all("SELECT id FROM projects WHERE id = ?", [input.project.id])).toHaveLength(1);
+    expect(runtime.database.all("SELECT id FROM project_revisions WHERE id = ?", [input.revision.id])).toHaveLength(1);
+    expect(runtime.database.all("SELECT id FROM audit_log WHERE action = 'project.create_with_initial_revision'", [])).toHaveLength(1);
+    expect(runtime.database.all("SELECT actor, idempotency_key FROM forge_runtime_idempotency WHERE actor = ? AND idempotency_key = ?", [command.actor, command.idempotencyKey!])).toHaveLength(1);
+
+    await expect(service.createProjectWithInitialRevision({
+      project: { ...input.project, description: "Changed description" },
+      revision: input.revision,
+    }, command)).rejects.toMatchObject({ code: "idempotency_conflict", details: { reason: "idempotency_key_reused", retryable: false, commitState: "not_committed" } });
+  });
+
+  it("replays an atomic create when transport fingerprints differ but parsed payload is identical", async () => {
+    const runtime = await makeRuntime();
+    const service = new ApplicationService(runtime.ports);
+    const input = {
+      project: { id: "transport-stable-project", name: "Transport stable project", description: "Canonical payload", status: "planned" as const },
+      revision: { id: "transport-stable-revision", name: "Initial", notes: "Canonical notes", status: "concept" as const },
+    };
+    const first = await service.createProjectWithInitialRevision(input, context({ idempotencyKey: "transport-fingerprint-key", fingerprint: "raw-body-a" }));
+    const replay = await service.createProjectWithInitialRevision({
+      revision: input.revision,
+      project: { status: input.project.status, description: input.project.description, name: input.project.name, id: input.project.id },
+    }, context({ idempotencyKey: "transport-fingerprint-key", fingerprint: "raw-body-b-with-reordered-fields" }));
+
+    expect(replay).toMatchObject({ replayed: true, data: first.data, audit: first.audit });
+    await expect(service.createProjectWithInitialRevision({
+      project: { ...input.project, description: "Changed canonical payload" },
+      revision: input.revision,
+    }, context({ idempotencyKey: "transport-fingerprint-key", fingerprint: "raw-body-c" }))).rejects.toMatchObject({
+      code: "idempotency_conflict",
+      details: { reason: "idempotency_key_reused", field: "idempotencyKey", retryable: false, commitState: "not_committed" },
+    });
+  });
+
+  it("reports stable project, revision, and generated slug collisions without partial records", async () => {
+    const runtime = await makeRuntime();
+    const service = new ApplicationService(runtime.ports);
+    const first = await service.createProjectWithInitialRevision({
+      project: { id: "existing-project-id", name: "Existing project", status: "planned" },
+      revision: { id: "existing-revision-id", name: "Initial", status: "concept" },
+    }, context({ idempotencyKey: "collision-seed-1" }));
+    expect(first.data.project.id).toBe("existing-project-id");
+
+    await expect(service.createProjectWithInitialRevision({
+      project: { id: "existing-project-id", name: "Different project", status: "planned" },
+      revision: { id: "new-revision-id", name: "Initial", status: "concept" },
+    }, context({ idempotencyKey: "collision-project-id" }))).rejects.toMatchObject({
+      code: "conflict",
+      details: { reason: "project_id_exists", field: "projectId", id: "existing-project-id", retryable: false, commitState: "not_committed" },
+    });
+    await expect(runtime.ports.projects.getProject("existing-project-id")).resolves.toMatchObject({ name: "Existing project" });
+    await expect(runtime.ports.projects.getProjectRevision("new-revision-id")).resolves.toBeNull();
+
+    await expect(service.createProjectWithInitialRevision({
+      project: { id: "new-project-id", name: "Different project", status: "planned" },
+      revision: { id: "existing-revision-id", name: "Initial", status: "concept" },
+    }, context({ idempotencyKey: "collision-revision-id" }))).rejects.toMatchObject({
+      code: "conflict",
+      details: { reason: "revision_id_exists", field: "revisionId", id: "existing-revision-id", retryable: false, commitState: "not_committed" },
+    });
+    await expect(runtime.ports.projects.getProject("new-project-id")).resolves.toBeNull();
+
+    await expect(service.createProjectWithInitialRevision({
+      project: { id: "slug-project-id", name: " existing   project ", status: "planned" },
+      revision: { id: "slug-revision-id", name: "Initial", status: "concept" },
+    }, context({ idempotencyKey: "collision-slug" }))).rejects.toMatchObject({
+      code: "conflict",
+      details: { reason: "project_name_exists", field: "projectName", id: "existing-project", retryable: false, commitState: "not_committed" },
+    });
+    await expect(runtime.ports.projects.getProject("slug-project-id")).resolves.toBeNull();
+    await expect(runtime.ports.projects.getProjectRevision("slug-revision-id")).resolves.toBeNull();
+    expect(runtime.database.all("SELECT id FROM audit_log WHERE action = 'project.create_with_initial_revision'", [])).toHaveLength(1);
+  });
+
   it("atomically tombstones a project and releases reservations across revisions", async () => {
     const runtime = await makeRuntime();
     const service = new ApplicationService(runtime.ports);

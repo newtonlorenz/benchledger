@@ -28,6 +28,44 @@ export function isMcpAdapterError(error: unknown): error is McpAdapterError {
   return error instanceof McpAdapterError;
 }
 
+const SAFE_CONFLICT_REASONS = new Set([
+  "project_id_exists",
+  "revision_id_exists",
+  "project_name_exists",
+  "idempotency_key_reused",
+]);
+const SAFE_CONFLICT_FIELDS = new Set(["projectId", "revisionId", "projectName", "idempotencyKey"]);
+const MAX_SAFE_CONFLICT_ID_LENGTH = 240;
+
+function safeConflictDetails(error: Error): JsonObject | undefined {
+  const candidate = error as Error & { details?: unknown };
+  const details = candidate.details;
+  if (details === null || typeof details !== "object" || Array.isArray(details)) return undefined;
+  const raw = details as Record<string, unknown>;
+  if (typeof raw.reason !== "string" || !SAFE_CONFLICT_REASONS.has(raw.reason)) return undefined;
+  if (typeof raw.field !== "string" || !SAFE_CONFLICT_FIELDS.has(raw.field)) return undefined;
+  if (typeof raw.id !== "string" || raw.id.length === 0 || raw.id.length > MAX_SAFE_CONFLICT_ID_LENGTH || /[\u0000-\u001f\u007f]/u.test(raw.id)) return undefined;
+  if (raw.retryable !== false || raw.commitState !== "not_committed") return undefined;
+  return {
+    reason: raw.reason,
+    field: raw.field,
+    id: raw.id,
+    retryable: false,
+    commitState: "not_committed",
+    ...(typeof raw.commandId === "string" && raw.commandId.length > 0 && raw.commandId.length <= 200 ? { commandId: raw.commandId } : {}),
+  };
+}
+
+function conflictMessage(reason: string | undefined): string {
+  switch (reason) {
+    case "project_id_exists": return "The project ID is already in use; read the existing project or choose a different project ID.";
+    case "revision_id_exists": return "The revision ID is already in use; choose a different revision ID.";
+    case "project_name_exists": return "A project with this name already exists; read the existing project or choose a different project name.";
+    case "idempotency_key_reused": return "The idempotency key was already used for a different command; retry only with the identical payload or choose a new key.";
+    default: return "The record changed; read it again and retry with its current version.";
+  }
+}
+
 export function mapBackendError(error: unknown): McpAdapterError {
   if (isMcpAdapterError(error)) return error;
 
@@ -41,7 +79,9 @@ export function mapBackendError(error: unknown): McpAdapterError {
       return new McpAdapterError("NOT_FOUND", "The requested record was not found.");
     }
     if (candidate.code === "CONFLICT" || candidate.code === "conflict" || candidate.code === "idempotency_conflict" || candidate.statusCode === 409) {
-      return new McpAdapterError("CONFLICT", "The record changed; read it again and retry with its current version.");
+      const details = safeConflictDetails(candidate);
+      const reason = details?.reason;
+      return new McpAdapterError("CONFLICT", conflictMessage(typeof reason === "string" ? reason : undefined), details);
     }
     if (candidate.code === "FORBIDDEN" || candidate.code === "forbidden" || candidate.statusCode === 403) {
       return new McpAdapterError("FORBIDDEN", "The current token is not allowed to perform this action.");

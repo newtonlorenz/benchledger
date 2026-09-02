@@ -9,7 +9,7 @@ import type {
   UpdateInventoryProductProfile, BuildConfigurationSnapshot, CreateBuildConfigurationSnapshot, ProjectTombstone,
   ArtifactBuildConfigurationBinding, CommissionInventoryItem, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory
 } from "@benchledger/api-contract";
-import { ApplicationError, applyInventoryBulkChanges, normalizeInventoryBulkChanges, parseInventoryCursor } from "@benchledger/application";
+import { ApplicationError, applyInventoryBulkChanges, normalizeInventoryBulkChanges, parseInventoryCursor, stableCreateConflict } from "@benchledger/application";
 import type {
   ApplicationPorts, ArtifactDownload, ArtifactPort, AuditEvent, AuditInput, AuditPort,
   BeginUploadInput, EventBusEvent, EventBusPort, HealthPort, IdempotencyPort,
@@ -17,7 +17,7 @@ import type {
   InventoryCategoryListOptions, InventoryCategoryPort, InventoryListOptions, InventoryPort, OfferPort, Page, ProjectListOptions, ProjectPort, RequestContext,
   InventoryBulkUpdate, InventoryBulkUpdateResult, ReservationDetails, StockMutation, UnitOfWorkOperation, UnitOfWorkPort, UpdateInventoryInput, UploadSessionDetails, UsageInput
 } from "@benchledger/application";
-import { BUILTIN_INVENTORY_CATEGORIES, canonicalProjectStatus, compareInventoryCategoryKeys, normalizeInventoryCategoryKey, normalizeInventoryCategoryName } from "@benchledger/domain";
+import { BUILTIN_INVENTORY_CATEGORIES, canonicalProjectStatus, compareInventoryCategoryKeys, normalizeInventoryCategoryKey, normalizeInventoryCategoryName, slugify } from "@benchledger/domain";
 
 const clone = <T>(value: T): T => structuredClone(value);
 
@@ -503,6 +503,8 @@ class MemoryInventoryCategories implements InventoryCategoryPort {
 
 class MemoryProjects implements ProjectPort {
   readonly projects = new Map<string, Project>();
+  /** Original generated slugs are immutable identities, even after rename. */
+  private readonly projectSlugs = new Map<string, string>();
   readonly workItems = new Map<string, WorkItem>();
   readonly projectRevisions = new Map<string, ProjectRevision>();
   readonly workItemRevisions = new Map<string, WorkItemRevision>();
@@ -542,12 +544,32 @@ class MemoryProjects implements ProjectPort {
     if (this.projects.has(projectId)) throw new ApplicationError("conflict", `Project '${projectId}' already exists`);
     const createdAt = iso();
     const project: Project = { id: projectId, name: input.name.trim(), ...(input.description === undefined ? {} : { description: input.description }), status: canonicalProjectStatus(input.status), createdAt, updatedAt: createdAt, version: 1 };
-    this.projects.set(projectId, project); return Promise.resolve(clone(project));
+    this.projects.set(projectId, project);
+    this.projectSlugs.set(projectId, slugify(project.name));
+    return Promise.resolve(clone(project));
   }
-  async createProjectWithInitialRevision(input: CreateProjectWithInitialRevision): Promise<ProjectWithInitialRevision> {
+  /** Seed synthetic fixtures while keeping the same immutable slug index. */
+  seedProject(project: Project): void {
+    this.projects.set(project.id, clone(project));
+    this.projectSlugs.set(project.id, slugify(project.name));
+  }
+  async createProjectWithInitialRevision(input: CreateProjectWithInitialRevision, ctx?: RequestContext): Promise<ProjectWithInitialRevision> {
     const projects = new Map([...this.projects].map(([key, value]) => [key, clone(value)] as const));
+    const projectSlugs = new Map(this.projectSlugs);
     const revisions = new Map([...this.projectRevisions].map(([key, value]) => [key, clone(value)] as const));
     try {
+      const projectId = input.project.id;
+      const revisionId = input.revision.id;
+      if (projectId !== undefined && this.projects.has(projectId)) {
+        throw stableCreateConflict("project_id_exists", "projectId", projectId, "The project ID is already in use; read the existing project or choose a different project ID.", ctx?.idempotencyKey);
+      }
+      if (revisionId !== undefined && this.projectRevisions.has(revisionId)) {
+        throw stableCreateConflict("revision_id_exists", "revisionId", revisionId, "The revision ID is already in use; choose a different revision ID.", ctx?.idempotencyKey);
+      }
+      const projectSlug = slugify(input.project.name);
+      if ([...this.projectSlugs.values()].some((slug) => slug === projectSlug)) {
+        throw stableCreateConflict("project_name_exists", "projectName", projectSlug, "A project with this name already exists; read the existing project or choose a different project name.", ctx?.idempotencyKey);
+      }
       const project = await this.createProject(input.project);
       const revision = await this.createProjectRevision(project.id, input.revision);
       const currentProject = this.projects.get(project.id);
@@ -556,6 +578,8 @@ class MemoryProjects implements ProjectPort {
     } catch (error: unknown) {
       this.projects.clear();
       for (const [key, value] of projects) this.projects.set(key, value);
+      this.projectSlugs.clear();
+      for (const [key, value] of projectSlugs) this.projectSlugs.set(key, value);
       this.projectRevisions.clear();
       for (const [key, value] of revisions) this.projectRevisions.set(key, value);
       throw error;
@@ -1054,7 +1078,7 @@ function seedSyntheticProject(runtime: MemoryRuntime): void {
     { id: "synthetic-bom-wire", revisionId: revision.id, name: "Dupont jumper wire assortment", itemId: "wire-dupont", requiredQuantity: 1, unit: "set", optional: false, constraints: {}, alternatives: [], notes: "Delivery is recorded; physical count is still required.", createdAt: timestamp, updatedAt: timestamp, version: 1 },
     { id: "synthetic-bom-fasteners", revisionId: revision.id, name: "M3 mounting screws", requiredQuantity: 4, unit: "each", optional: false, constraints: { kind: "fastener" }, alternatives: [], notes: "Synthetic missing line to exercise shopping guidance.", createdAt: timestamp, updatedAt: timestamp, version: 1 }
   ];
-  runtime.projects.projects.set(project.id, clone(project));
+  runtime.projects.seedProject(project);
   runtime.projects.projectRevisions.set(revision.id, clone(revision));
   for (const line of lines) runtime.projects.bomLines.set(line.id, clone(line));
 }

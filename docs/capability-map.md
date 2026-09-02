@@ -84,7 +84,7 @@ and invalid hashes. Mutating tools use optimistic versions where applicable.
 | Catalog | `search_catalog_products`, `read_catalog_product`, `read_inventory_product_profile` | `catalog:read` | No |
 | Catalog | `create_catalog_product`, `update_catalog_product`, `link_inventory_product_profile` | `catalog:write` | Yes |
 | Projects | `list_projects`, `list_removed_projects`, `read_removed_project_history`, `read_project`, `read_work_item`, `read_project_revision`, `read_work_item_revision` | `projects:read` | No |
-| Projects | `create_project`, `create_project_with_initial_revision`, `update_project`, `archive_project`, `restore_project`, `remove_project`, `retire_project` (compatibility alias), `create_work_item`, `create_project_revision`, `create_work_item_revision` | `projects:write` | Yes |
+| Projects | `create_project`, `create_project_with_initial_revision`, `update_project`, `archive_project`, `restore_project`, `remove_project`, `retire_project` (compatibility alias), `create_work_item`, `create_project_revision`, `create_work_item_revision` | `projects:write` | Yes; atomic initial setup accepts stable caller IDs |
 | BOM | `list_bom_lines`, `list_reservations`, `read_reservation`, `calculate_bom_gaps` (Ready/Check/Decide/Source plus exact missing specification decisions) | `bom:read` | No |
 | BOM | `create_bom_line`, `update_bom_line`, `retire_bom_line`, `restore_bom_line`, `create_reservation`, `release_reservation`, `record_usage` | `bom:write` | Yes |
 | Reconciliation | `read_reconciliation` | `bom:read` | No |
@@ -119,6 +119,20 @@ Project context returns the canonical lifecycle plus structured BOM blocker
 reasons containing the revision, line, decision and explanation. The separate
 revision evidence ladder (`concept` through `production
 approved`) does not move when the project lifecycle changes.
+
+`create_project_with_initial_revision` accepts optional caller-provided stable
+project and revision IDs. Those IDs identify records and never act as replay
+keys. An identical retry requires the same idempotency key and complete
+canonical payload and replays exactly once; a changed payload with that key is
+an idempotency conflict. Project-ID, revision-ID, generated project-name/slug,
+and reused-key conflicts return sanitized, machine-readable details with
+`reason`, `field`, `id`, `retryable: false`, and `commitState: "not_committed"`.
+The agent should read the existing project, choose a different project or
+revision ID, or choose a different project name according to the reason. No
+project, revision, audit, or idempotency record is committed on conflict, and
+removed identities are not reclaimed. Bulk project-graph setup and
+preview/commit remain pending; this capability is limited to the project and
+its first revision.
 
 The server's `tools/list` response contains only MCP's public fields (`name`,
 `description`, and `inputSchema`). Scope and mutation metadata are intentionally
@@ -156,7 +170,7 @@ profiles when present.
 | Count uncertain stock | Item count form and stock timeline | `read_inventory_item` → `record_stock_event(kind=count_correction)` |
 | Commission delivered or ordered stock | Item commissioning action with observed quantity and provenance | `read_inventory_item` → `commission_inventory_item` |
 | Add an exact printer or spool | Exact-product guided add; reported printers remain inspect-first until explicitly commissioned | catalog search/read → `create_inventory_with_product_profile` |
-| Start a project | Guided project setup | `create_project_with_initial_revision` → `create_work_item`; use `create_project_revision` for later planning baselines |
+| Start a project | Guided project setup | `create_project_with_initial_revision` → `create_work_item`; optional stable `projectId`/`revisionId` identify records; use `create_project_revision` for later planning baselines |
 | Archive or restore a project | Project Archive action and explicit Archived view | `archive_project` / `restore_project`; archive hides default lists, releases active reservations with evidence, retains history, and restore never recreates reservations |
 | Understand a build gap | BOM editor and gap panel | `list_bom_lines` → `calculate_bom_gaps`; Decide before supplier lookup, Check recorded candidates, and shop only Source lines |
 | Hold confirmed parts | Reservation panel | `create_reservation` → `list_reservations` / `read_reservation` → read BOM/gaps again |

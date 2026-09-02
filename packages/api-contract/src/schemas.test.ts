@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bomSpecificationSchema, commissionInventoryItemSchema, createBomLineSchema, createInventoryItemSchema, createProjectSchema, inventoryBulkUpdateSchema, inventoryItemSchema, inventoryListQuerySchema, projectSchema, projectStatusSchema, updateBomLineSchema, updateInventoryItemSchema, updateProjectSchema } from "./schemas.js";
+import { bomSpecificationSchema, commissionInventoryItemSchema, createBomLineSchema, createInventoryItemSchema, createProjectSchema, createProjectWithInitialRevisionSchema, inventoryBulkUpdateSchema, inventoryItemSchema, inventoryListQuerySchema, projectCreationConflictDetailsSchema, projectSchema, projectStatusSchema, updateBomLineSchema, updateInventoryItemSchema, updateProjectSchema } from "./schemas.js";
 
 const constraints = {
   kind: "electronic",
@@ -70,6 +70,41 @@ describe("REST project lifecycle schema", () => {
       expect(() => createProjectSchema.parse({ name: "Legacy status", status })).toThrow();
       expect(() => updateProjectSchema.parse({ status })).toThrow();
     }
+  });
+});
+
+describe("REST atomic project setup schema", () => {
+  it("accepts stable project and revision IDs and rejects unsafe IDs", () => {
+    expect(createProjectWithInitialRevisionSchema.parse({
+      project: { id: "stable-project-01", name: "Stable project", status: "planned" },
+      revision: { id: "stable-revision-01", name: "Initial", status: "concept" },
+    })).toMatchObject({ project: { id: "stable-project-01" }, revision: { id: "stable-revision-01" } });
+    expect(() => createProjectWithInitialRevisionSchema.parse({
+      project: { id: "../unsafe", name: "Unsafe project", status: "planned" },
+      revision: { id: "stable-revision-02", name: "Initial", status: "concept" },
+    })).toThrow();
+    expect(() => createProjectWithInitialRevisionSchema.parse({
+      project: { id: "stable-project-02", name: "Unsafe revision", status: "planned" },
+      revision: { id: "bad/id", name: "Initial", status: "concept" },
+    })).toThrow();
+  });
+
+  it("defines a closed safe conflict-details contract", () => {
+    expect(projectCreationConflictDetailsSchema.parse({
+      reason: "project_id_exists",
+      field: "projectId",
+      id: "project-1",
+      retryable: false,
+      commitState: "not_committed",
+      commandId: "atomic-project-1"
+    })).toMatchObject({ reason: "project_id_exists", commitState: "not_committed" });
+    expect(() => projectCreationConflictDetailsSchema.parse({
+      reason: "project_id_exists",
+      field: "projectId",
+      id: "project-1",
+      retryable: true,
+      commitState: "not_committed"
+    })).toThrow();
   });
 });
 

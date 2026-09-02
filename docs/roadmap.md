@@ -48,6 +48,9 @@ purchasing, credential changes, destructive cleanup, or merging.
   foundation only:** project creation already has an atomic application path,
   and some web writes retain idempotency keys, but the shared HTTP/MCP error
   contract and complete ambiguous-command replay contract are not delivered.
+  The stable caller-provided project/revision identity slice now distinguishes
+  identical replay from changed-payload idempotency conflicts and exposes safe
+  collision details; the broader cross-command contract remains open.
 - [ ] `BL-AW-002` → `REQ-002`: compact, cacheable capability discovery and
   bounded named-schema lookup. **Proposed.**
 - [ ] `BL-AW-003` → `REQ-004`: truthful inventory/BOM summaries that reconcile
@@ -71,9 +74,10 @@ error/idempotency language before changing setup or shopping behavior.
 - [ ] `BL-AW-005` → `REQ-003`: preview and commit a complete conflict-checked
   project graph. **Partial foundation only:**
   `create_project_with_initial_revision` is atomic for its existing scope and
-  the web uses that existing atomic project-plus-initial-revision endpoint, but
-  ambiguous project-create replay and the full previewable graph workflow and
-  five-call success contract remain proposed. Depends on Tranche A.
+  the web uses that existing atomic project-plus-initial-revision endpoint. It
+  now accepts stable caller IDs with sanitized project/revision/name collision
+  responses, but the bulk/previewable graph workflow and five-call success
+  contract remain proposed. Depends on Tranche A.
 
 Dependency gate: reuse the existing unit-of-work and reconciliation
 preview/commit patterns; do not create a parallel MCP or web implementation.

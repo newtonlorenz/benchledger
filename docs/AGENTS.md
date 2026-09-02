@@ -145,6 +145,20 @@ checks. Updates pass the returned version; a conflict means “read again,” no
 “overwrite.” Reservations reduce available confirmed stock but are not
 consumption. Corrections and usage are append-only events.
 
+`create_project_with_initial_revision` accepts optional caller-provided
+`projectId` and `revisionId` values as stable record identities. They are not
+idempotency or replay keys: an ambiguous retry replays exactly once only when
+the idempotency key and the complete canonical project/revision payload are
+identical; reusing the key with a changed payload returns an idempotency
+conflict. A 409 for this command has sanitized details with `reason`, `field`,
+`id`, `retryable: false`, and `commitState: "not_committed"`. Reasons are
+`project_id_exists`, `revision_id_exists`, `project_name_exists`, or
+`idempotency_key_reused`; read the existing project, choose a different project
+or revision ID, or choose a different project name as directed. Removed
+projects retain their IDs and generated names/slugs, so those identities are
+never reclaimed. Bulk project-graph setup and preview/commit remain pending;
+use this command only for the project and its first revision.
+
 Projects use one lifecycle on every surface: `idea`, `planned`, `ready`,
 `building`, `validating`, `complete`, `archived`. Treat `blocked` as a derived
 condition with reasons, not a status. Keep this lifecycle separate from the

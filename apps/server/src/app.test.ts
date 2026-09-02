@@ -489,6 +489,16 @@ describe("BenchLedger HTTP API", () => {
       expect(openapi.statusCode).toBe(200);
       const document = openapi.json<{ paths: Record<string, unknown>; components: { schemas: Record<string, unknown> } }>();
       expect(document.paths["/projects/with-initial-revision"]).toBeDefined();
+      expect(document.paths["/projects/with-initial-revision"]).toMatchObject({
+        post: {
+          requestBody: { content: { "application/json": { schema: { $ref: "#/components/schemas/CreateProjectWithInitialRevision" } } } },
+          responses: { "409": { description: expect.stringMatching(/project ID|revision ID|name|idempotency/i), content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } } }
+        }
+      });
+      expect(document.components.schemas.ProjectCreationConflictDetails).toMatchObject({
+        required: ["reason", "field", "id", "retryable", "commitState"],
+        additionalProperties: false
+      });
       expect(document.paths["/inventory/with-product-profile"]).toMatchObject({ post: { requestBody: { content: { "application/json": { schema: { $ref: "#/components/schemas/CreateInventoryWithProductProfile" } } } } } });
       expect(document.components.schemas.CreateInventoryWithProductProfile).toMatchObject({ required: ["item", "profile"], additionalProperties: false });
       expect(document.components.schemas.CreateInventoryCategory).toMatchObject({ required: ["name"], additionalProperties: false });
