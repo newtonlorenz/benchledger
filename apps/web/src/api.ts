@@ -1070,11 +1070,12 @@ function mapBomAlternative(value: unknown): BomAlternative | undefined {
   };
 }
 
-function mapBomLine(line: ServerBomLine): BomLine {
+export function mapBomLine(line: ServerBomLine): BomLine {
   const constraints = mapBomConstraints(line.constraints);
   const alternatives = (line.alternatives ?? []).map(mapBomAlternative).filter((alternative): alternative is BomAlternative => alternative !== undefined);
   return {
     id: line.id,
+    version: line.version,
     label: line.name,
     ...(line.itemId ? { itemId: line.itemId } : {}),
     required: line.requiredQuantity,
@@ -2353,7 +2354,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     async createBomLine(projectId, input) {
       const project = state.projects.find((candidate) => candidate.id === projectId);
       if (!project) throw new ApiError("Project not found", { kind: "validation", status: 404 });
-      const line: BomLine = { id: `sample-bom-${Date.now()}`, label: input.name, required: input.requiredQuantity, unit: input.unit, optional: input.optional ?? false, ...(input.itemId ? { itemId: input.itemId } : {}), ...(input.note ? { note: input.note } : {}) };
+      const line: BomLine = { id: `sample-bom-${Date.now()}`, version: 1, label: input.name, required: input.requiredQuantity, unit: input.unit, optional: input.optional ?? false, ...(input.itemId ? { itemId: input.itemId } : {}), ...(input.note ? { note: input.note } : {}) };
       const updated = { ...project, bom: [...project.bom, line] };
       state.projects = state.projects.map((candidate) => candidate.id === projectId ? updated : candidate);
       return updated;

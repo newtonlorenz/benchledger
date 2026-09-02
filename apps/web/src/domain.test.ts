@@ -140,13 +140,13 @@ describe("BenchLedger beginner-friendly domain language", () => {
       evidence: state === "available" ? "counted" : "delivered"
     });
     const lines: BomLine[] = [
-      { id: "ready", label: "ready", itemId: "ready-item", required: 2, unit: "each" },
-      { id: "partial", label: "partial", itemId: "partial-item", required: 3, unit: "each" },
-      { id: "inspect", label: "inspect", itemId: "inspect-item", required: 1, unit: "each" },
-      { id: "depleted", label: "depleted", itemId: "depleted-item", required: 1, unit: "each" },
-      { id: "ordered", label: "ordered", itemId: "ordered-item", required: 1, unit: "each" },
-      { id: "missing", label: "missing", itemId: "not-in-stock", required: 1, unit: "each" },
-      { id: "optional", label: "optional", itemId: "optional-not-in-stock", required: 1, unit: "each", optional: true }
+      { version: 1, id: "ready", label: "ready", itemId: "ready-item", required: 2, unit: "each" },
+      { version: 1, id: "partial", label: "partial", itemId: "partial-item", required: 3, unit: "each" },
+      { version: 1, id: "inspect", label: "inspect", itemId: "inspect-item", required: 1, unit: "each" },
+      { version: 1, id: "depleted", label: "depleted", itemId: "depleted-item", required: 1, unit: "each" },
+      { version: 1, id: "ordered", label: "ordered", itemId: "ordered-item", required: 1, unit: "each" },
+      { version: 1, id: "missing", label: "missing", itemId: "not-in-stock", required: 1, unit: "each" },
+      { version: 1, id: "optional", label: "optional", itemId: "optional-not-in-stock", required: 1, unit: "each", optional: true }
     ];
     const project: Project = { ...projects[0]!, id: "summary-project", bom: lines };
     const summary = calculateProjectSummary(project, [
@@ -179,11 +179,11 @@ describe("BenchLedger beginner-friendly domain language", () => {
       ...projects[0]!,
       id: "decision-project",
       bom: [
-        { id: "power", label: "12 V power supply", required: 1, unit: "each", constraints: { specification: { status: "insufficient", decisions: { current_or_load: "5 A" }, missingDecisions: ["voltage"] } } },
-        { id: "missing", label: "Controller", required: 1, unit: "each", constraints: { specification: { status: "sufficient", decisions: { identity: "CTRL-1" } } } },
-        { id: "optional", label: "Optional cover", required: 1, unit: "each", optional: true },
-        { id: "inspect", label: "Delivered board", itemId: "inspect", required: 1, unit: "each", constraints: { specification: { status: "sufficient", decisions: { identity: "BOARD-1" } } } },
-        { id: "conditional", label: "Conditional board", itemId: "conditional", required: 1, unit: "each", alternatives: [{ itemId: "conditional", compatible: "conditional" }] }
+        { version: 1, id: "power", label: "12 V power supply", required: 1, unit: "each", constraints: { specification: { status: "insufficient", decisions: { current_or_load: "5 A" }, missingDecisions: ["voltage"] } } },
+        { version: 1, id: "missing", label: "Controller", required: 1, unit: "each", constraints: { specification: { status: "sufficient", decisions: { identity: "CTRL-1" } } } },
+        { version: 1, id: "optional", label: "Optional cover", required: 1, unit: "each", optional: true },
+        { version: 1, id: "inspect", label: "Delivered board", itemId: "inspect", required: 1, unit: "each", constraints: { specification: { status: "sufficient", decisions: { identity: "BOARD-1" } } } },
+        { version: 1, id: "conditional", label: "Conditional board", itemId: "conditional", required: 1, unit: "each", alternatives: [{ itemId: "conditional", compatible: "conditional" }] }
       ]
     };
     const summary = calculateProjectSummary(project, [
@@ -208,9 +208,9 @@ describe("BenchLedger beginner-friendly domain language", () => {
       ...projects[0]!,
       id: "resistor-project",
       bom: [
-        { id: "resistor", label: "LED resistor", itemId: "resistor-stock", required: 1, unit: "each" },
-        { id: "board", label: "LED board resistor bracket", required: 1, unit: "each" },
-        { id: "complete", label: "LED resistor", required: 1, unit: "each", constraints: { specification: { status: "sufficient", decisions: { resistance: "330 ohm", power_rating: "0.25 W" } } } },
+        { version: 1, id: "resistor", label: "LED resistor", itemId: "resistor-stock", required: 1, unit: "each" },
+        { version: 1, id: "board", label: "LED board resistor bracket", required: 1, unit: "each" },
+        { version: 1, id: "complete", label: "LED resistor", required: 1, unit: "each", constraints: { specification: { status: "sufficient", decisions: { resistance: "330 ohm", power_rating: "0.25 W" } } } },
       ],
     };
 
@@ -238,6 +238,7 @@ describe("BenchLedger beginner-friendly domain language", () => {
     });
     const converted: BomLine = {
       id: "converted",
+      version: 1,
       label: "LED pack",
       required: 15,
       unit: "each",
@@ -254,6 +255,7 @@ describe("BenchLedger beginner-friendly domain language", () => {
     };
     const mismatch: BomLine = {
       id: "mismatch",
+      version: 1,
       label: "Unverified set",
       required: 3,
       unit: "each",
@@ -270,6 +272,7 @@ describe("BenchLedger beginner-friendly domain language", () => {
   it("reports canonical unit diagnostics for connected candidates", () => {
     const line: BomLine = {
       id: "diagnostic",
+      version: 1,
       label: "LED pack",
       required: 8,
       unit: "each",
@@ -311,10 +314,10 @@ describe("BenchLedger beginner-friendly domain language", () => {
 
   it("keeps shopping proposals limited to required Source lines and explains blocked proposals", () => {
     const source: BomLineStatus[] = [
-      { line: { id: "source", label: "Insert", required: 1, unit: "each" }, supplied: 0, remaining: 1, state: "missing", decision: "source" },
-      { line: { id: "decide", label: "LED resistor", required: 1, unit: "each" }, supplied: 0, remaining: 1, state: "specify-first", decision: "decide", missingDecisions: ["resistance", "power_rating"] },
-      { line: { id: "check", label: "Delivered board", required: 1, unit: "each" }, supplied: 0, remaining: 1, state: "inspect-first", decision: "check" },
-      { line: { id: "optional", label: "Optional cover", required: 1, unit: "each", optional: true }, supplied: 0, remaining: 1, state: "optional", decision: "source" },
+      { line: { version: 1, id: "source", label: "Insert", required: 1, unit: "each" }, supplied: 0, remaining: 1, state: "missing", decision: "source" },
+      { line: { version: 1, id: "decide", label: "LED resistor", required: 1, unit: "each" }, supplied: 0, remaining: 1, state: "specify-first", decision: "decide", missingDecisions: ["resistance", "power_rating"] },
+      { line: { version: 1, id: "check", label: "Delivered board", required: 1, unit: "each" }, supplied: 0, remaining: 1, state: "inspect-first", decision: "check" },
+      { line: { version: 1, id: "optional", label: "Optional cover", required: 1, unit: "each", optional: true }, supplied: 0, remaining: 1, state: "optional", decision: "source" },
     ];
     const summary: ReturnType<typeof calculateProjectSummary> = {
       totalLines: source.length,
@@ -363,8 +366,8 @@ describe("BenchLedger beginner-friendly domain language", () => {
       ...projects[0]!,
       id: "candidate-project",
       bom: [
-        { id: "combined", label: "Controller pair", itemId: "controller-a", required: 2, unit: "each", alternatives: [{ itemId: "controller-b", compatible: "confirmed" }] },
-        { id: "stocked-optional", label: "Optional cover", itemId: "cover", required: 2, unit: "each", optional: true },
+        { version: 1, id: "combined", label: "Controller pair", itemId: "controller-a", required: 2, unit: "each", alternatives: [{ itemId: "controller-b", compatible: "confirmed" }] },
+        { version: 1, id: "stocked-optional", label: "Optional cover", itemId: "cover", required: 2, unit: "each", optional: true },
       ],
     };
     const counted = (id: string): InventoryItem => ({ ...inventory[0]!, id, name: id, quantity: 1, availableQuantity: 1, reserved: 0, state: "available", evidence: "counted" });
@@ -380,7 +383,7 @@ describe("BenchLedger beginner-friendly domain language", () => {
       ...projects[0]!,
       id: "unavailable-readiness",
       readinessUnavailable: true,
-      bom: [{ id: "missing", label: "Controller", required: 1, unit: "each", constraints: { specification: { status: "sufficient", decisions: { identity: "CTRL-1" } } } }],
+      bom: [{ version: 1, id: "missing", label: "Controller", required: 1, unit: "each", constraints: { specification: { status: "sufficient", decisions: { identity: "CTRL-1" } } } }],
     };
 
     const summary = calculateProjectSummary(project, []);
@@ -393,9 +396,9 @@ describe("BenchLedger beginner-friendly domain language", () => {
     const project: Project = {
       ...projects[0]!,
       bom: [
-        { id: "power", label: "12 V power supply", itemId: "misleading-stock", required: 1, unit: "each" },
-        { id: "controller", label: "Controller", required: 1, unit: "each" },
-        { id: "optional", label: "Optional cover", required: 1, unit: "each", optional: true },
+        { version: 1, id: "power", label: "12 V power supply", itemId: "misleading-stock", required: 1, unit: "each" },
+        { version: 1, id: "controller", label: "Controller", required: 1, unit: "each" },
+        { version: 1, id: "optional", label: "Optional cover", required: 1, unit: "each", optional: true },
       ],
       gapEvaluation: {
         lines: [
@@ -415,7 +418,7 @@ describe("BenchLedger beginner-friendly domain language", () => {
   });
 
   it("subtracts reserved stock before declaring a BOM line ready", () => {
-    const project: Project = { ...projects[0]!, bom: [{ id: "reserved", label: "reserved", itemId: "reserved-item", required: 2, unit: "each" }] };
+    const project: Project = { ...projects[0]!, bom: [{ version: 1, id: "reserved", label: "reserved", itemId: "reserved-item", required: 2, unit: "each" }] };
     const source = { ...inventory[0]!, id: "reserved-item", quantity: 3, reserved: 2, state: "available" as const };
     const summary = calculateProjectSummary(project, [source]);
     expect(summary.lineStatuses[0]).toMatchObject({ supplied: 1, remaining: 1, state: "partial" });

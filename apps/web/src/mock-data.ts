@@ -295,12 +295,12 @@ export const projects: Project[] = [
     workItem: "H2D robot enclosure",
     railStep: 3,
     bom: [
-      { id: "bom-h2d", label: "H2D printer", itemId: "eq-h2d", required: 1, unit: "each", note: "Single-nozzle print · 0.4 mm" },
-      { id: "bom-petg", label: "PETG HF · Black", itemId: "mat-petg-black", required: 400, unit: "g", note: "Estimated from r03 plate" },
-      { id: "bom-inserts", label: "M3 heat-set inserts", itemId: "fast-m3-inserts", required: 8, unit: "each", note: "Physical count needed before allocation" },
-      { id: "bom-servo", label: "STS3215 smart servo", required: 1, unit: "each", note: "Requires 6 V supply and serial control" },
-      { id: "bom-led-resistor", label: "LED resistor", required: 1, unit: "each", note: "Resolve resistance and power rating before sourcing" },
-      { id: "bom-bearing", label: "608-2RS bearing", required: 2, unit: "each", note: "8 × 22 × 7 mm" }
+      { version: 1, id: "bom-h2d", label: "H2D printer", itemId: "eq-h2d", required: 1, unit: "each", note: "Single-nozzle print · 0.4 mm" },
+      { version: 1, id: "bom-petg", label: "PETG HF · Black", itemId: "mat-petg-black", required: 400, unit: "g", note: "Estimated from r03 plate" },
+      { version: 1, id: "bom-inserts", label: "M3 heat-set inserts", itemId: "fast-m3-inserts", required: 8, unit: "each", note: "Physical count needed before allocation" },
+      { version: 1, id: "bom-servo", label: "STS3215 smart servo", required: 1, unit: "each", note: "Requires 6 V supply and serial control" },
+      { version: 1, id: "bom-led-resistor", label: "LED resistor", required: 1, unit: "each", note: "Resolve resistance and power rating before sourcing" },
+      { version: 1, id: "bom-bearing", label: "608-2RS bearing", required: 2, unit: "each", note: "8 × 22 × 7 mm" }
     ],
     artifacts: lampArtifacts,
     notes: ["r03 moved the service hatch away from the support face.", "Need a measured 608 bearing before freezing the axis clearance."],
@@ -317,11 +317,11 @@ export const projects: Project[] = [
     workItem: "Wallwash body",
     railStep: 4,
     bom: [
-      { id: "bom-wall-h2d", label: "H2D printer", itemId: "eq-h2d", required: 1, unit: "each" },
-      { id: "bom-wall-petg", label: "PETG HF · Black", itemId: "mat-petg-black", required: 220, unit: "g" },
-      { id: "bom-wall-esp", label: "ESP32 DevKitC", itemId: "elec-esp32", required: 1, unit: "each" },
-      { id: "bom-wall-wire", label: "Silicone hookup wire", itemId: "elec-wire", required: 2, unit: "m" },
-      { id: "bom-wall-diffuser", label: "Opal diffuser sheet", required: 1, unit: "each", optional: true }
+      { version: 1, id: "bom-wall-h2d", label: "H2D printer", itemId: "eq-h2d", required: 1, unit: "each" },
+      { version: 1, id: "bom-wall-petg", label: "PETG HF · Black", itemId: "mat-petg-black", required: 220, unit: "g" },
+      { version: 1, id: "bom-wall-esp", label: "ESP32 DevKitC", itemId: "elec-esp32", required: 1, unit: "each" },
+      { version: 1, id: "bom-wall-wire", label: "Silicone hookup wire", itemId: "elec-wire", required: 2, unit: "m" },
+      { version: 1, id: "bom-wall-diffuser", label: "Opal diffuser sheet", required: 1, unit: "each", optional: true }
     ],
     artifacts: [
       { id: "a-wall-cad", name: "horizon-wallwash.scad", role: "Editable CAD", revision: "r09", size: "36 KB", hash: "sha256: 82ca…11d0", updated: "Yesterday", status: "candidate" },
@@ -342,10 +342,10 @@ export const projects: Project[] = [
     workItem: "Shell assembly",
     railStep: 5,
     bom: [
-      { id: "bom-battery-ender", label: "Ender-3 V3 SE", itemId: "eq-ender", required: 1, unit: "each" },
-      { id: "bom-battery-pla", label: "PLA Basic · Sage", itemId: "mat-pla-sage", required: 560, unit: "g" },
-      { id: "bom-battery-wire", label: "Silicone hookup wire", itemId: "elec-wire", required: 1, unit: "m" },
-      { id: "bom-battery-esp", label: "ESP32 DevKitC", itemId: "elec-esp32", required: 1, unit: "each" }
+      { version: 1, id: "bom-battery-ender", label: "Ender-3 V3 SE", itemId: "eq-ender", required: 1, unit: "each" },
+      { version: 1, id: "bom-battery-pla", label: "PLA Basic · Sage", itemId: "mat-pla-sage", required: 560, unit: "g" },
+      { version: 1, id: "bom-battery-wire", label: "Silicone hookup wire", itemId: "elec-wire", required: 1, unit: "m" },
+      { version: 1, id: "bom-battery-esp", label: "ESP32 DevKitC", itemId: "elec-esp32", required: 1, unit: "each" }
     ],
     artifacts: [
       { id: "a-battery-cad", name: "memory_loop_v2.scad", role: "Editable CAD", revision: "r02", size: "28 KB", hash: "sha256: 8c07…a022", updated: "12 Aug 2026", status: "validated" },

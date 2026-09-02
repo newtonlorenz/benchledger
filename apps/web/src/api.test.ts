@@ -1043,9 +1043,9 @@ describe("web data mappers", () => {
       currentRevision: serverRevision({ id: `revision-${index}`, projectId: `project-${index}`, number: index + 1, status, notes: index === 0 ? "Record a measurement" : undefined }),
       currentRevisionId: `revision-${index}`,
       ...(index === 1 ? { workItems: [{ id: "work-1", projectId: `project-${index}`, name: "Body", kind: "part", description: "Body work item", createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 }] } : {}),
-      ...(index === 8 ? { bom: [{ id: "fallback-bom", revisionId: "revision-8", name: "Fallback requirement", requiredQuantity: 2, unit: "gram", optional: true, notes: "Use black PETG" }] } : {}),
+      ...(index === 8 ? { bom: [{ id: "fallback-bom", revisionId: "revision-8", name: "Fallback requirement", requiredQuantity: 2, unit: "gram", optional: true, notes: "Use black PETG", version: 1 }] } : {}),
       ...(index === 8 ? { artifacts: [serverArtifact({ id: "fallback-artifact", revisionId: undefined, role: "other", filename: "notes.txt", byteSize: 0 })] } : {}),
-      ...(index === 0 ? { currentRevision: serverRevision({ id: "revision-0", projectId: "project-0", number: 1, status, notes: "Record a measurement", bom: [{ id: "bom-0", revisionId: "revision-0", name: "Insert", requiredQuantity: 1, unit: "each", optional: false, notes: "M3" }], artifacts: [
+      ...(index === 0 ? { currentRevision: serverRevision({ id: "revision-0", projectId: "project-0", number: 1, status, notes: "Record a measurement", bom: [{ id: "bom-0", revisionId: "revision-0", name: "Insert", requiredQuantity: 1, unit: "each", optional: false, notes: "M3", version: 1 }], artifacts: [
         serverArtifact({ id: "artifact-step", revisionId: "revision-0", role: "step", filename: "model.step", byteSize: 2048 }),
         serverArtifact({ id: "artifact-stl", role: "stl", filename: "model.stl", byteSize: 1023 }),
         serverArtifact({ id: "artifact-3mf", role: "three_mf", filename: "plate.3mf", byteSize: 1024, machineBinding: { machine: "H2D", material: "PETG" }, currentCandidate: true }),

@@ -236,6 +236,9 @@ collapses a package into pieces. Unit mismatches and invalid conversions remain
 explicit Check diagnostics, and a failed readiness load disables sourcing until
 canonical gaps reload. Shopping includes alternative-linked offers only for
 exact or confirmed-alternative candidates from that canonical read.
+Each web BOM line also retains its server version and canonical unit; the
+expert-only line disclosure shows the line ID, version, and canonical unit
+without changing the beginner markup.
 
 Commissioning is deliberately separate from generic PATCH. It requires an
 observed quantity, commissioned evidence with a source and timestamp, and the
