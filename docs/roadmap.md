@@ -143,8 +143,16 @@ retain human approval for physical statuses; never imply that a print occurred.
 
 #### Tranche E — Guided experience (P2)
 
-- [ ] `BL-AW-011` → `REQ-011`: derived physical-inspection queue that routes
-  weak evidence to human review without automatic promotion. **Proposed.**
+- [x] `BL-AW-011` → `REQ-011`: derived physical-inspection queue that routes
+  weak evidence to human review without automatic promotion. **Complete for
+  the shared application, HTTP, web, and MCP surfaces:** the connected Project
+  Plan Checks panel lists and reads canonical revision-scoped actions, shows
+  three concrete beginner checks (with View all), exposes full expert
+  traceability, and requires a server completion preview followed by explicit
+  commit confirmation. Compatibility and unit-conversion observations require
+  explicit confirmed values and evidence; the preview shows exact per-line
+  changes. MCP parity tests cover nested each↔piece units/conversions and
+  project-scoped non-oracle authorization.
 - [ ] `BL-AW-012` → `REQ-012`: safe maker project templates that preview intent
   and never auto-commit, reserve, purchase, or approve. **Proposed.**
 

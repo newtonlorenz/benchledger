@@ -8,7 +8,7 @@ import type {
   UpdateCatalogProduct, InventoryProductProfile, CreateInventoryProductProfile,
   UpdateInventoryProductProfile, BuildConfigurationSnapshot, CreateBuildConfigurationSnapshot, ProjectTombstone,
   ArtifactBuildConfigurationBinding, CommissionInventoryItem, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory,
-  CommitProjectSetup, ProjectSetupCommitResult, ProjectSetupPreview, BomAlternative
+  CommitProjectSetup, ProjectSetupCommitResult, ProjectSetupPreview, BomAlternative, InspectionCompletionPreview, InspectionEvidence, InspectionObservation
 } from "@benchledger/api-contract";
 import { bomAlternativeSchema, buildConfigurationSnapshotSchema, buildConfigurationSnapshotStorageInputSchema } from "@benchledger/api-contract";
 import { ApplicationError, applyInventoryBulkChanges, bomSpecification, conflict, matchesBomConstraints, normalizeInventoryBulkChanges, parseInventoryCursor, stableCreateConflict } from "@benchledger/application";
@@ -17,6 +17,7 @@ import type {
   BeginUploadInput, EventBusEvent, EventBusPort, HealthPort, IdempotencyPort,
   BuildConfigurationListOptions, BuildConfigurationPort, CatalogPort, CatalogProductListOptions,
   InventoryCategoryListOptions, InventoryCategoryPort, InventoryListOptions, InventoryPort, OfferPort, Page, ProjectListOptions, ProjectPort, ProjectSetupPort, RequestContext,
+  InspectionCommitInput, InspectionCommitReceipt, InspectionPort,
   InventoryBulkUpdate, InventoryBulkUpdateResult, ReservationDetails, StockMutation, UnitOfWorkOperation, UnitOfWorkPort, UpdateInventoryInput, UploadSessionDetails, UsageInput
 } from "@benchledger/application";
 import { BUILTIN_INVENTORY_CATEGORIES, canonicalProjectStatus, compareInventoryCategoryKeys, normalizeInventoryCategoryKey, normalizeInventoryCategoryName, slugify } from "@benchledger/domain";
@@ -360,6 +361,18 @@ class MemoryInventory implements InventoryPort {
     return this.recordCount(itemId, quantity, ctx, undefined, "physically_counted", undefined, note);
   }
 
+  /** Internal inspection path that preserves the observation's provenance in
+   * both the current item evidence and its append-only count event. */
+  async recordPhysicalInspection(itemId: string, quantity: number, observation: InspectionObservation, ctx: RequestContext): Promise<StockMutation> {
+    return this.recordCount(itemId, quantity, ctx, undefined, "physically_counted", undefined, observation.note, {
+      state: "physically_counted",
+      source: observation.source,
+      ...(observation.sourceId === undefined ? {} : { sourceId: observation.sourceId }),
+      observedAt: observation.observedAt,
+      ...(observation.note === undefined ? {} : { note: observation.note })
+    });
+  }
+
   async commissionItem(itemId: string, input: CommissionInventoryItem, expectedVersion: number | undefined, ctx: RequestContext): Promise<StockMutation> {
     return this.recordCount(itemId, input.quantity, ctx, input, "commissioned", expectedVersion);
   }
@@ -371,7 +384,8 @@ class MemoryInventory implements InventoryPort {
     commissioning: CommissionInventoryItem | undefined,
     evidenceState: "physically_counted" | "commissioned",
     expectedVersion?: number,
-    note?: string
+    note?: string,
+    observedEvidence?: InventoryItem["evidence"]
   ): Promise<StockMutation> {
     const current = this.items.get(itemId);
     if (!current) throw new ApplicationError("not_found", `Inventory item '${itemId}' was not found`);
@@ -384,7 +398,7 @@ class MemoryInventory implements InventoryPort {
     const allocated = canCount(current.evidence.state) ? current.quantity - current.availableQuantity : 0;
     if (quantity < allocated) throw new ApplicationError("conflict", "Physical count cannot be below allocated quantity");
     const now = iso();
-    const evidence = commissioning?.evidence ?? { ...current.evidence, state: "physically_counted" as const, observedAt: now };
+    const evidence = commissioning?.evidence ?? observedEvidence ?? { ...current.evidence, state: "physically_counted" as const, observedAt: now };
     const updated: InventoryItem = {
       ...current,
       quantity,
@@ -398,13 +412,13 @@ class MemoryInventory implements InventoryPort {
       type: "count",
       quantity,
       unit: current.unit,
-      note: commissioning?.evidence.note ?? note,
+      note: evidence.note ?? note,
       evidence: {
         state: evidenceState,
         previousEvidence: current.evidence,
-        ...(commissioning?.evidence.source === undefined ? {} : { source: commissioning.evidence.source }),
-        ...(commissioning?.evidence.sourceId === undefined ? {} : { sourceId: commissioning.evidence.sourceId }),
-        ...(commissioning?.evidence.observedAt === undefined ? {} : { observedAt: commissioning.evidence.observedAt }),
+        ...(evidence.source === undefined ? {} : { source: evidence.source }),
+        ...(evidence.sourceId === undefined ? {} : { sourceId: evidence.sourceId }),
+        ...(evidence.observedAt === undefined ? {} : { observedAt: evidence.observedAt }),
       },
       id: id("stock", ++this.sequence),
       actor: ctx.actor,
@@ -1106,6 +1120,102 @@ class MemoryProjectSetup implements ProjectSetupPort {
   }
 }
 
+/** Memory counterpart of the narrow inspection evidence adapter. */
+class MemoryInspections implements InspectionPort {
+  private readonly previews = new Map<string, { readonly actor: string; readonly preview: InspectionCompletionPreview }>();
+  private readonly evidence: InspectionEvidence[] = [];
+  private lastInventorySnapshot: ReturnType<MemoryInventory["snapshotState"]> | undefined;
+  private lastProjectsSnapshot: ReturnType<MemoryProjects["snapshotState"]> | undefined;
+  private lastEvidenceLength: number | undefined;
+
+  constructor(private readonly inventory: MemoryInventory, private readonly projects: MemoryProjects) {}
+
+  async savePreview(preview: InspectionCompletionPreview): Promise<InspectionCompletionPreview> {
+    this.previews.set(preview.id, { actor: preview.actor, preview: clone(preview) });
+    return clone(preview);
+  }
+
+  async getPreview(idValue: string, actor: string): Promise<InspectionCompletionPreview | null> {
+    const stored = this.previews.get(idValue);
+    return stored === undefined || stored.actor !== actor ? null : clone(stored.preview);
+  }
+
+  async commit(input: InspectionCommitInput, ctx: RequestContext): Promise<InspectionCommitReceipt> {
+    const current = await this.inventory.getItem(input.action.itemId);
+    if (current === null || current.retiredAt !== undefined) throw new ApplicationError("not_found", `Inventory item '${input.action.itemId}' was not found`);
+    if (current.version !== input.basis.itemVersion) throw conflict("Inspection inventory basis changed", { reason: "stale_basis", recoveryAction: "list_inspections" });
+    for (const reference of input.basis.lineVersions) {
+      const line = this.projects.bomLines.get(reference.lineId);
+      if (line === undefined || line.version !== reference.version) throw conflict("Inspection BOM basis changed", { reason: "stale_basis", recoveryAction: "list_inspections" });
+    }
+    const idValue = `inspection-${createHash("sha256").update(`${input.preview.id}\u0000${ctx.idempotencyKey ?? ctx.correlationId}`).digest("hex").slice(0, 40)}`;
+    const existing = this.evidence.find((candidate) => candidate.id === idValue);
+    if (existing !== undefined) return { id: idValue, evidence: clone(existing), ...(input.action.kind === "physical_quantity" ? { item: current } : {}) };
+    this.lastInventorySnapshot = this.inventory.snapshotState();
+    this.lastProjectsSnapshot = this.projects.snapshotState();
+    this.lastEvidenceLength = this.evidence.length;
+    try {
+      const beforeLines = input.preview.before.lines;
+      const afterLines = input.preview.after.lines;
+      for (const before of beforeLines) {
+        const currentLine = this.projects.bomLines.get(before.id);
+        if (currentLine === undefined || JSON.stringify(currentLine) !== JSON.stringify(before)) {
+          throw conflict("Inspection BOM basis changed", { reason: "stale_basis", recoveryAction: "list_inspections" });
+        }
+      }
+      let updated: InventoryItem | undefined;
+      if (input.action.kind === "physical_quantity" && input.observation.result === "confirmed") {
+        if (input.observation.quantity === undefined || input.observation.unit !== current.unit) throw new ApplicationError("validation", "Physical inspection quantity does not match the inventory unit");
+        const count = await this.inventory.recordPhysicalInspection(current.id, input.observation.quantity, input.observation, ctx);
+        updated = count.item;
+      }
+      if (input.observation.result === "confirmed" && input.action.kind !== "physical_quantity") {
+        if (afterLines.length !== beforeLines.length) throw new ApplicationError("integrity_error", "Inspection preview line changes are incomplete");
+        for (const after of afterLines) {
+          const before = beforeLines.find((candidate) => candidate.id === after.id);
+          if (before === undefined || after.version !== before.version + 1) throw new ApplicationError("integrity_error", "Inspection preview line version is invalid");
+          this.projects.bomLines.set(after.id, clone(after));
+        }
+      }
+      const recorded: InspectionEvidence = {
+        id: idValue,
+        projectRevisionId: input.projectRevisionId,
+        actionId: input.action.id,
+        itemId: input.action.itemId,
+        kind: input.action.kind,
+        result: input.observation.result,
+        source: input.observation.source,
+        ...(input.observation.sourceId === undefined ? {} : { sourceId: input.observation.sourceId }),
+        observedAt: input.observation.observedAt,
+        recordedAt: input.committedAt,
+        ...(input.observation.note === undefined ? {} : { note: input.observation.note }),
+        ...(input.observation.quantity === undefined ? {} : { quantity: input.observation.quantity }),
+        ...(input.observation.unit === undefined ? {} : { unit: input.observation.unit }),
+        ...(input.observation.conversion === undefined ? {} : { conversion: input.observation.conversion })
+      };
+      this.evidence.push(clone(recorded));
+      return { id: idValue, evidence: clone(recorded), ...(updated === undefined ? {} : { item: updated }) };
+    } catch (error: unknown) {
+      this.inventory.restoreState(this.lastInventorySnapshot);
+      this.projects.restoreState(this.lastProjectsSnapshot);
+      this.evidence.splice(this.lastEvidenceLength);
+      this.lastInventorySnapshot = undefined;
+      this.lastProjectsSnapshot = undefined;
+      this.lastEvidenceLength = undefined;
+      throw error;
+    }
+  }
+
+  async rollbackLastCommit(): Promise<void> {
+    if (this.lastInventorySnapshot !== undefined) this.inventory.restoreState(this.lastInventorySnapshot);
+    if (this.lastProjectsSnapshot !== undefined) this.projects.restoreState(this.lastProjectsSnapshot);
+    if (this.lastEvidenceLength !== undefined) this.evidence.splice(this.lastEvidenceLength);
+    this.lastInventorySnapshot = undefined;
+    this.lastProjectsSnapshot = undefined;
+    this.lastEvidenceLength = undefined;
+  }
+}
+
 class MemoryOffers implements OfferPort {
   readonly offers = new Map<string, Offer>(); private sequence = 300;
   listOffers(itemId: string | undefined, limit: number, cursor?: string): Promise<Page<Offer>> { return Promise.resolve(page([...this.offers.values()].filter((offer) => !itemId || offer.itemId === itemId), limit, cursor)); }
@@ -1335,6 +1445,7 @@ export interface MemoryRuntime {
   readonly catalog: MemoryCatalog;
   readonly inventoryCategories: MemoryInventoryCategories;
   readonly buildConfigurations: MemoryBuildConfigurations;
+  readonly inspections: InspectionPort;
   readonly unitOfWork: UnitOfWorkPort;
 }
 
@@ -1348,8 +1459,9 @@ export function createMemoryRuntime(seed: readonly InventoryItem[] = []): Memory
   const audit = new MemoryAudit();
   const idempotency = new MemoryIdempotency();
   const projectSetups = new MemoryProjectSetup(projects, inventory, audit, idempotency);
-  const ports: ApplicationPorts = { inventory, inventoryCategories, projects, projectSetups, offers: new MemoryOffers(), artifacts: new MemoryArtifacts(), catalog, buildConfigurations, audit, events: new MemoryEvents(), idempotency, unitOfWork, health: new MemoryHealth() };
-  return { ports, inventory, inventoryCategories, projects, catalog, buildConfigurations, unitOfWork };
+  const inspections = new MemoryInspections(inventory, projects);
+  const ports: ApplicationPorts = { inventory, inventoryCategories, projects, projectSetups, inspections, offers: new MemoryOffers(), artifacts: new MemoryArtifacts(), catalog, buildConfigurations, audit, events: new MemoryEvents(), idempotency, unitOfWork, health: new MemoryHealth() };
+  return { ports, inventory, inventoryCategories, projects, catalog, buildConfigurations, inspections, unitOfWork };
 }
 
 function seedItem(item: Omit<InventoryItem, "createdAt" | "updatedAt" | "version">): InventoryItem {

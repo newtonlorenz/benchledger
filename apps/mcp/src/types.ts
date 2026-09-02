@@ -30,6 +30,11 @@ import type {
   CommitProjectSetup as ApiCommitProjectSetup,
   ProjectSetupCommitResult as ApiProjectSetupCommitResult,
   PhysicalOnlyFilamentSelection as ApiPhysicalOnlyFilamentSelection,
+  InspectionAction as ApiInspectionAction,
+  InspectionCompletionPreview as ApiInspectionCompletionPreview,
+  InspectionCompletionCommit as ApiInspectionCompletionCommit,
+  InspectionObservation as ApiInspectionObservation,
+  BomGap as ApiBomGap,
 } from "@benchledger/api-contract";
 
 export type JsonPrimitive = null | boolean | number | string;
@@ -219,6 +224,62 @@ export type BuildConfigurationSnapshot = Omit<ApiBuildConfigurationSnapshot, "fi
 export type ReconciliationDraft = ApiReconciliationDraft;
 export type ReconciliationCommit = ApiReconciliationCommit;
 export type ReconciliationDraftSaveInput = ApiSaveReconciliationDraft;
+
+export type InspectionAction = Omit<ApiInspectionAction, "itemUnit" | "expectedUnit" | "candidate" | "expected"> & {
+  itemUnit: Quantity["unit"];
+  expectedUnit: Quantity["unit"];
+  candidate: Omit<ApiInspectionAction["candidate"], "unit"> & { unit: Quantity["unit"] };
+  expected: Omit<ApiInspectionAction["expected"], "unit" | "lineRequirements"> & {
+    unit: Quantity["unit"];
+    lineRequirements: readonly (Omit<ApiInspectionAction["expected"]["lineRequirements"][number], "unit"> & { unit: Quantity["unit"] })[];
+  };
+};
+export type InspectionGap = Omit<ApiBomGap, "unit" | "alternatives" | "candidates"> & {
+  unit: Quantity["unit"];
+  alternatives: readonly BomAlternative[];
+  candidates: readonly (Omit<ApiBomGap["candidates"][number], "availableQuantity" | "suppliedQuantity" | "inspectQuantity"> & {
+    availableQuantity: Quantity;
+    suppliedQuantity: Quantity;
+    inspectQuantity: Quantity;
+  })[];
+};
+export type InspectionGapEvaluation = {
+  readonly revisionId: string;
+  readonly lines: readonly InspectionGap[];
+  readonly totals: Readonly<Record<string, number>>;
+};
+export type InspectionObservation = Omit<ApiInspectionObservation, "unit" | "conversion"> & {
+  unit?: Quantity["unit"];
+  conversion?: BomAlternativeQuantityConversion;
+};
+export type InspectionPreview = Omit<ApiInspectionCompletionPreview, "action" | "observation" | "before" | "after" | "reevaluatedGaps"> & {
+  action: InspectionAction;
+  observation: InspectionObservation;
+  before: { item: InventoryItem; gaps: readonly InspectionGap[]; lines: readonly BomLine[] };
+  after: { item: InventoryItem; gaps: readonly InspectionGap[]; lines: readonly BomLine[] };
+  reevaluatedGaps: InspectionGapEvaluation;
+};
+export type InspectionEvidence = Omit<ApiInspectionCompletionCommit["evidence"], "unit" | "conversion"> & {
+  unit?: Quantity["unit"];
+  conversion?: BomAlternativeQuantityConversion;
+};
+export type InspectionCommit = Omit<ApiInspectionCompletionCommit, "evidence" | "item" | "gaps" | "inspections"> & {
+  evidence: InspectionEvidence;
+  item?: InventoryItem;
+  gaps: InspectionGapEvaluation;
+  inspections: {
+    revisionId: string;
+    data: readonly InspectionAction[];
+    limit: number;
+    nextCursor?: string;
+    total?: number;
+  };
+};
+export type InspectionObservationInput = Omit<InspectionObservation, "observedAt"> & { observedAt?: string };
+export interface InspectionListInput extends PageInput { projectRevisionId: string; }
+export interface InspectionReadInput { projectRevisionId: string; inspectionId: string; }
+export interface InspectionPreviewInput { projectRevisionId: string; inspectionId: string; observation: InspectionObservationInput; }
+export interface InspectionCommitInput { projectRevisionId: string; inspectionId: string; previewId: string; expectedPreviewVersion: number; contentSha256: string; confirmed: true; }
 
 type ApiProjectSetupBomLine = ApiProjectSetupProposal["bomLines"][number];
 type McpProjectSetupBomLine = Omit<ApiProjectSetupBomLine, "alternatives"> & { alternatives: readonly BomAlternative[] };
@@ -1011,6 +1072,13 @@ export interface ReconciliationBackend {
   commit(input: ReconciliationCommitInput, context: McpRequestContext): Promise<WriteResult<ReconciliationCommit>>;
 }
 
+export interface InspectionsBackend {
+  list(input: InspectionListInput, context: McpRequestContext): Promise<Page<InspectionAction>>;
+  get(input: InspectionReadInput, context: McpRequestContext): Promise<InspectionAction>;
+  preview(input: InspectionPreviewInput, context: McpRequestContext): Promise<InspectionPreview>;
+  commit(input: InspectionCommitInput, context: McpRequestContext): Promise<WriteResult<InspectionCommit>>;
+}
+
 export interface BenchLedgerBackend {
   inventory: InventoryBackend;
   inventoryCategories?: InventoryCategoriesBackend;
@@ -1021,6 +1089,7 @@ export interface BenchLedgerBackend {
   buildConfigurations?: BuildConfigurationsBackend;
   /** Optional for backwards-compatible hosts that have not enabled close-out. */
   reconciliation?: ReconciliationBackend;
+  inspections?: InspectionsBackend;
   bom: BomBackend;
   artifacts: ArtifactsBackend;
   offers: OffersBackend;

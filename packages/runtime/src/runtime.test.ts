@@ -36,6 +36,219 @@ afterEach(async () => {
 });
 
 describe("production runtime mappings", () => {
+  it("persists actor-bound inspection previews and atomically commits physical evidence", async () => {
+    const runtime = await makeRuntime();
+    const service = new ApplicationService(runtime.ports);
+    const item = await service.createInventoryItem({
+      id: "inspection-runtime-item", name: "Uncounted PETG", kind: "filament", quantity: 4, unit: "each", tags: [], links: [],
+      evidence: { state: "delivered_uncounted", source: "delivery", observedAt: "2026-09-02T00:00:00.000Z" },
+    }, context());
+    const project = await service.createProject({ id: "inspection-runtime-project", name: "Inspection runtime", status: "planned" }, context());
+    const revision = await service.createProjectRevision(project.data.id, { id: "inspection-runtime-revision", name: "Initial", status: "concept" }, context());
+    await service.createBomLine(revision.data.id, { id: "inspection-runtime-line", name: "Uncounted PETG", itemId: item.data.id, requiredQuantity: 2, unit: "each", optional: false, constraints: {}, alternatives: [] }, context());
+
+    const beforeEvents = runtime.database.all("SELECT id FROM stock_events WHERE item_id = ?", [item.data.id]);
+    const beforeEvidence = runtime.database.all("SELECT id FROM inspection_evidence");
+    const action = (await service.listInspections(revision.data.id)).data[0]!;
+    expect(action).toMatchObject({ kind: "physical_quantity", candidate: { id: item.data.id }, requiresHumanConfirmation: true });
+    const preview = await service.previewInspectionCompletion(revision.data.id, {
+      actionId: action.id,
+      observation: { result: "confirmed", quantity: 3, unit: "each", source: "human", observedAt: "2026-09-02T01:00:00.000Z" },
+    }, context({ actor: "inspection-human" }));
+    expect(runtime.database.all("SELECT id FROM stock_events WHERE item_id = ?", [item.data.id])).toHaveLength(beforeEvents.length);
+    expect(runtime.database.all("SELECT id FROM inspection_evidence")).toHaveLength(beforeEvidence.length);
+    expect(runtime.database.get("SELECT actor, action_id FROM inspection_previews WHERE id = ?", [preview.id])).toMatchObject({ actor: "inspection-human", action_id: action.id });
+
+    const committed = await service.commitInspectionCompletion(revision.data.id, {
+      actionId: action.id, previewId: preview.id, expectedPreviewVersion: preview.version,
+      contentSha256: preview.contentSha256, confirmed: true,
+    }, context({ actor: "inspection-human", idempotencyKey: "inspection-runtime-commit-1" }));
+    expect(committed.data).toMatchObject({ status: "committed", evidence: { actionId: action.id, result: "confirmed" }, item: { id: item.data.id, quantity: 3, evidence: { state: "physically_counted" }, version: 2 }, inspections: { revisionId: revision.data.id } });
+    expect(runtime.database.all("SELECT id FROM inspection_evidence WHERE action_id = ?", [action.id])).toHaveLength(1);
+    expect(runtime.database.all("SELECT id FROM stock_events WHERE item_id = ?", [item.data.id])).toHaveLength(beforeEvents.length + 1);
+    await expect(service.listInspections(revision.data.id)).resolves.toMatchObject({ data: [] });
+
+    await expect(service.commitInspectionCompletion(revision.data.id, {
+      actionId: action.id, previewId: preview.id, expectedPreviewVersion: preview.version,
+      contentSha256: preview.contentSha256, confirmed: true,
+    }, context({ actor: "inspection-human", idempotencyKey: "inspection-runtime-commit-1" }))).resolves.toMatchObject({ replayed: true, data: committed.data });
+    expect(runtime.database.all("SELECT id FROM inspection_evidence WHERE action_id = ?", [action.id])).toHaveLength(1);
+  });
+
+  it("captures and rechecks affected BOM and reservation dependencies", async () => {
+    const runtime = await makeRuntime();
+    const service = new ApplicationService(runtime.ports);
+    const uncertain = await service.createInventoryItem({
+      id: "inspection-basis-uncertain", name: "Uncounted cable", kind: "wire", quantity: 4, unit: "each", tags: [], links: [],
+      evidence: { state: "delivered_uncounted", source: "delivery", observedAt: "2026-09-02T00:00:00.000Z" },
+    }, context());
+    const confirmed = await service.createInventoryItem({
+      id: "inspection-basis-confirmed", name: "Confirmed controller", kind: "electronic", quantity: 1, unit: "each", tags: [], links: [],
+      evidence: { state: "physically_counted", source: "bench", observedAt: "2026-09-02T00:00:00.000Z" },
+    }, context());
+    const project = await service.createProject({ id: "inspection-basis-project", name: "Inspection basis", status: "planned" }, context());
+    const revision = await service.createProjectRevision(project.data.id, { id: "inspection-basis-revision", name: "Initial", status: "concept" }, context());
+    const physicalLine = await service.createBomLine(revision.data.id, {
+      id: "inspection-basis-physical-line", name: "Uncounted cable", itemId: uncertain.data.id, requiredQuantity: 2, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: confirmed.data.id, compatible: "confirmed" }],
+    }, context());
+    const competingLine = await service.createBomLine(revision.data.id, {
+      id: "inspection-basis-competing-line", name: "Confirmed controller", itemId: confirmed.data.id, requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [],
+    }, context());
+    const reservation = await service.createReservation(revision.data.id, {
+      id: "inspection-basis-reservation", lineId: physicalLine.data.id, itemId: confirmed.data.id, quantity: 1,
+    }, context());
+    const action = (await service.listInspections(revision.data.id)).data.find((candidate) => candidate.itemId === uncertain.data.id);
+    if (action === undefined) throw new Error("expected physical inspection action");
+    const preview = await service.previewInspectionCompletion(revision.data.id, {
+      actionId: action.id,
+      observation: { result: "confirmed", quantity: 3, unit: "each", source: "bench", observedAt: "2026-09-02T01:00:00.000Z" },
+    }, context({ actor: "inspection-basis-human" }));
+    expect(preview.basis.lineVersions).toEqual([{ lineId: physicalLine.data.id, version: 1 }]);
+
+    await service.updateBomLine(physicalLine.data.id, { notes: "Changed after preview" }, physicalLine.data.version, context());
+    await expect(service.commitInspectionCompletion(revision.data.id, {
+      actionId: action.id, previewId: preview.id, expectedPreviewVersion: preview.version,
+      contentSha256: preview.contentSha256, confirmed: true,
+    }, context({ actor: "inspection-basis-human", idempotencyKey: "inspection-basis-stale-line" }))).rejects.toMatchObject({ details: { reason: "stale_basis" } });
+
+    const refreshedAction = (await service.listInspections(revision.data.id)).data.find((candidate) => candidate.itemId === uncertain.data.id);
+    if (refreshedAction === undefined) throw new Error("expected refreshed physical inspection action");
+    const refreshed = await service.previewInspectionCompletion(revision.data.id, {
+      actionId: refreshedAction.id,
+      observation: { result: "confirmed", quantity: 3, unit: "each", source: "bench", observedAt: "2026-09-02T02:00:00.000Z" },
+    }, context({ actor: "inspection-basis-human" }));
+    await service.releaseReservation(reservation.data.id, reservation.data.version, context());
+    await expect(service.commitInspectionCompletion(revision.data.id, {
+      actionId: refreshedAction.id, previewId: refreshed.id, expectedPreviewVersion: refreshed.version,
+      contentSha256: refreshed.contentSha256, confirmed: true,
+    }, context({ actor: "inspection-basis-human", idempotencyKey: "inspection-basis-stale-reservation" }))).rejects.toMatchObject({ details: { reason: "stale_basis" } });
+  });
+
+  it("commits compatibility and conversion observations across every affected line with unique evidence", async () => {
+    const runtime = await makeRuntime();
+    const service = new ApplicationService(runtime.ports);
+    const item = await service.createInventoryItem({
+      id: "inspection-runtime-board", name: "ESP32-S3 board", kind: "electronic", model: "ESP32-S3", quantity: 4, unit: "each", tags: [], links: [],
+      evidence: { state: "physically_counted", source: "inventory count", observedAt: "2026-09-02T00:00:00.000Z" },
+    }, context());
+    const project = await service.createProject({ id: "inspection-runtime-bom-project", name: "Inspection BOM", status: "planned" }, context());
+    const revision = await service.createProjectRevision(project.data.id, { id: "inspection-runtime-bom-revision", name: "Initial", status: "concept" }, context());
+    const lineInputs = ["inspection-runtime-line-a", "inspection-runtime-line-b"].map((id, index) => ({
+      id, name: index === 0 ? "Controller board" : "Backup board", itemId: undefined, requiredQuantity: 1, unit: "each" as const,
+      optional: false, constraints: { kind: "electronic", model: "ESP32-S3" }, alternatives: [{ itemId: item.data.id, compatible: "unknown" as const }],
+    }));
+    for (const input of lineInputs) await service.createBomLine(revision.data.id, input, context());
+
+    const compatibilityAction = (await service.listInspections(revision.data.id)).data.find((action) => action.kind === "compatibility");
+    expect(compatibilityAction).toMatchObject({ lineIds: lineInputs.map((input) => input.id).sort(), possibleResults: ["confirmed", "inconclusive"] });
+    if (compatibilityAction === undefined) throw new Error("expected compatibility action");
+    const inconclusivePreview = await service.previewInspectionCompletion(revision.data.id, {
+      actionId: compatibilityAction.id,
+      observation: { result: "inconclusive", source: "bench review", observedAt: "2026-09-02T01:00:00.000Z" },
+    }, context({ actor: "inspection-human" }));
+    expect(inconclusivePreview.before.lines.map((line) => line.id)).toEqual(lineInputs.map((input) => input.id).sort());
+    expect(inconclusivePreview.after.lines).toEqual(inconclusivePreview.before.lines);
+    const inconclusive = await service.commitInspectionCompletion(revision.data.id, {
+      actionId: compatibilityAction.id, previewId: inconclusivePreview.id, expectedPreviewVersion: inconclusivePreview.version,
+      contentSha256: inconclusivePreview.contentSha256, confirmed: true,
+    }, context({ actor: "inspection-human", idempotencyKey: "inspection-compatibility-inconclusive" }));
+    expect(inconclusive.data.evidence.result).toBe("inconclusive");
+
+    const confirmedPreview = await service.previewInspectionCompletion(revision.data.id, {
+      actionId: compatibilityAction.id,
+      observation: { result: "confirmed", source: "bench review", observedAt: "2026-09-02T02:00:00.000Z" },
+    }, context({ actor: "inspection-human" }));
+    expect(confirmedPreview.before.lines.every((line) => line.version === 1)).toBe(true);
+    expect(confirmedPreview.after.lines.every((line) => line.version === 2 && line.alternatives[0]?.compatible === "confirmed")).toBe(true);
+    const confirmed = await service.commitInspectionCompletion(revision.data.id, {
+      actionId: compatibilityAction.id, previewId: confirmedPreview.id, expectedPreviewVersion: confirmedPreview.version,
+      contentSha256: confirmedPreview.contentSha256, confirmed: true,
+    }, context({ actor: "inspection-human", idempotencyKey: "inspection-compatibility-confirmed" }));
+    expect(confirmed.data.evidence.result).toBe("confirmed");
+    expect(confirmed.data.evidence.id).not.toBe(inconclusive.data.evidence.id);
+    expect((await service.listBomLines(revision.data.id)).every((line) => line.version === 2 && line.alternatives[0]?.compatible === "confirmed")).toBe(true);
+    expect((await service.listInspections(revision.data.id)).data).toEqual([]);
+    expect(runtime.database.all("SELECT id FROM inspection_evidence WHERE action_id = ?", [compatibilityAction.id])).toHaveLength(2);
+
+    const conversionItem = await service.createInventoryItem({
+      id: "inspection-runtime-set", name: "LED set", kind: "electronic", quantity: 2, unit: "set", tags: [], links: [],
+      evidence: { state: "physically_counted", source: "inventory count", observedAt: "2026-09-02T00:00:00.000Z" },
+    }, context());
+    const conversionLine = await service.createBomLine(revision.data.id, {
+      id: "inspection-runtime-conversion-line", name: "LEDs", requiredQuantity: 10, unit: "each", optional: false, constraints: {},
+      alternatives: [{ itemId: conversionItem.data.id, compatible: "confirmed" }],
+    }, context());
+    const conversionAction = (await service.listInspections(revision.data.id)).data.find((action) => action.itemId === conversionItem.data.id);
+    expect(conversionAction).toMatchObject({ kind: "unit_conversion", possibleResults: ["confirmed", "inconclusive"] });
+    if (conversionAction === undefined) throw new Error("expected conversion action");
+    const conversion = { inventory: { quantity: 1 as const, unit: "set" as const }, requirement: { quantity: 10, unit: "each" as const }, evidence: { basis: "package_label" as const, source: "package label", observedAt: "2026-09-02T03:00:00.000Z" } };
+    const conversionPreview = await service.previewInspectionCompletion(revision.data.id, {
+      actionId: conversionAction.id,
+      observation: { result: "confirmed", conversion, source: "package label", observedAt: "2026-09-02T03:00:00.000Z" },
+    }, context({ actor: "inspection-human" }));
+    expect(conversionPreview.after.lines.find((line) => line.id === conversionLine.data.id)?.alternatives[0]?.quantityConversion).toEqual(conversion);
+    const conversionCommit = await service.commitInspectionCompletion(revision.data.id, {
+      actionId: conversionAction.id, previewId: conversionPreview.id, expectedPreviewVersion: conversionPreview.version,
+      contentSha256: conversionPreview.contentSha256, confirmed: true,
+    }, context({ actor: "inspection-human", idempotencyKey: "inspection-conversion-confirmed" }));
+    expect(conversionCommit.data.evidence.result).toBe("confirmed");
+    expect((await service.listBomLines(revision.data.id)).find((line) => line.id === conversionLine.data.id)).toMatchObject({ version: 2, alternatives: [{ itemId: conversionItem.data.id, compatible: "confirmed", quantityConversion: conversion }] });
+    expect((await service.listInspections(revision.data.id)).data.find((action) => action.id === conversionAction.id)).toBeUndefined();
+  });
+
+  it("promotes a constraint-only compatibility match to an explicit alternative", async () => {
+    const runtime = await makeRuntime();
+    const service = new ApplicationService(runtime.ports);
+    const item = await service.createInventoryItem({
+      id: "inspection-constraint-item", name: "ESP32-C3 board", kind: "electronic", model: "ESP32-C3", quantity: 1, unit: "each", tags: [], links: [],
+      evidence: { state: "physically_counted", source: "inventory count", observedAt: "2026-09-02T00:00:00.000Z" },
+    }, context());
+    const project = await service.createProject({ id: "inspection-constraint-project", name: "Constraint inspection", status: "planned" }, context());
+    const revision = await service.createProjectRevision(project.data.id, { id: "inspection-constraint-revision", name: "Initial", status: "concept" }, context());
+    const line = await service.createBomLine(revision.data.id, {
+      id: "inspection-constraint-line", name: "Controller board", requiredQuantity: 1, unit: "each", optional: false,
+      constraints: { kind: "electronic", model: "ESP32-C3" }, alternatives: [],
+    }, context());
+    const action = (await service.listInspections(revision.data.id)).data.find((candidate) => candidate.kind === "compatibility");
+    expect(action).toMatchObject({ itemId: item.data.id, lineIds: [line.data.id], compatibility: "unknown" });
+    if (action === undefined) throw new Error("expected constraint compatibility action");
+
+    const preview = await service.previewInspectionCompletion(revision.data.id, {
+      actionId: action.id,
+      observation: { result: "confirmed", source: "human inspection", observedAt: "2026-09-02T01:00:00.000Z" },
+    }, context({ actor: "inspection-human" }));
+    expect(preview.before.lines[0]?.alternatives).toEqual([]);
+    expect(preview.after.lines[0]?.alternatives).toEqual([{ itemId: item.data.id, compatible: "confirmed", reason: `Confirmed by inspection ${action.id}` }]);
+    const committed = await service.commitInspectionCompletion(revision.data.id, {
+      actionId: action.id, previewId: preview.id, expectedPreviewVersion: preview.version,
+      contentSha256: preview.contentSha256, confirmed: true,
+    }, context({ actor: "inspection-human", idempotencyKey: "inspection-constraint-commit" }));
+    expect(committed.data.evidence.result).toBe("confirmed");
+    expect((await service.listBomLines(revision.data.id)).find((candidate) => candidate.id === line.data.id)).toMatchObject({
+      version: 2, alternatives: [{ itemId: item.data.id, compatible: "confirmed" }],
+    });
+    expect((await service.listInspections(revision.data.id)).data).toEqual([]);
+  });
+
+  it("rolls back multi-line compatibility changes when audited commit fails", async () => {
+    const runtime = await makeRuntime();
+    const service = new ApplicationService(runtime.ports);
+    const item = await service.createInventoryItem({ id: "inspection-rollback-item", name: "Rollback board", kind: "electronic", quantity: 2, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
+    const project = await service.createProject({ id: "inspection-rollback-project", name: "Inspection rollback", status: "planned" }, context());
+    const revision = await service.createProjectRevision(project.data.id, { id: "inspection-rollback-revision", name: "Initial", status: "concept" }, context());
+    for (const id of ["inspection-rollback-line-a", "inspection-rollback-line-b"]) {
+      await service.createBomLine(revision.data.id, { id, name: id, requiredQuantity: 1, unit: "each", optional: false, constraints: { kind: "electronic" }, alternatives: [{ itemId: item.data.id, compatible: "unknown" }] }, context());
+    }
+    const action = (await service.listInspections(revision.data.id)).data.find((candidate) => candidate.kind === "compatibility");
+    if (action === undefined) throw new Error("expected compatibility action");
+    const preview = await service.previewInspectionCompletion(revision.data.id, { actionId: action.id, observation: { result: "confirmed", source: "rollback test", observedAt: "2026-09-02T04:00:00.000Z" } }, context());
+    const audit = vi.spyOn(runtime.ports.audit, "append").mockRejectedValueOnce(new Error("injected inspection audit failure"));
+    await expect(service.commitInspectionCompletion(revision.data.id, { actionId: action.id, previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmed: true }, context({ idempotencyKey: "inspection-rollback-commit" }))).rejects.toThrow("injected inspection audit failure");
+    audit.mockRestore();
+    expect((await service.listBomLines(revision.data.id)).every((line) => line.version === 1 && line.alternatives[0]?.compatible === "unknown")).toBe(true);
+    expect(runtime.database.all("SELECT id FROM inspection_evidence WHERE action_id = ?", [action.id])).toHaveLength(0);
+  });
+
   it("previews setup without graph or ledger mutation and commits the exact preview", async () => {
     const runtime = await makeRuntime();
     const service = new ApplicationService(runtime.ports);

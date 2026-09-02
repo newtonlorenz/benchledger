@@ -780,6 +780,153 @@ export const bomGapSchema = z.object({
   candidates: z.array(bomGapCandidateSchema)
 }).strict();
 
+/**
+ * Inspection actions are a read-time projection of canonical Check gaps. They
+ * deliberately have no persisted action status: once the underlying BOM or
+ * inventory changes, the projection is rebuilt and resolved actions disappear.
+ */
+export const inspectionActionKindSchema = z.enum(["physical_quantity", "compatibility", "unit_conversion"]);
+export const inspectionActionLineSchema = z.object({
+  lineId: idSchema,
+  version: z.number().int().positive()
+}).strict();
+export const inspectionActionCandidateSchema = z.object({
+  id: idSchema,
+  version: z.number().int().positive(),
+  name: z.string().min(1).max(240),
+  unit: quantityUnitSchema,
+  evidence: evidenceSchema
+}).strict();
+export const inspectionActionExpectedSchema = z.object({
+  quantity: z.number().finite().nonnegative(),
+  unit: quantityUnitSchema,
+  lineIds: z.array(idSchema).max(24),
+  lineRequirements: z.array(z.object({ lineId: idSchema, quantity: z.number().finite().positive(), unit: quantityUnitSchema }).strict()).max(24)
+}).strict();
+export const inspectionActionEffectSchema = z.object({
+  kind: inspectionActionKindSchema,
+  description: z.string().min(1).max(1000)
+}).strict();
+export const inspectionActionBasisSchema = z.object({
+  itemVersion: z.number().int().positive(),
+  lineVersions: z.array(inspectionActionLineSchema).max(24)
+}).strict();
+export const inspectionActionSchema = z.object({
+  id: idSchema,
+  projectRevisionId: idSchema,
+  itemId: idSchema,
+  itemVersion: z.number().int().positive(),
+  kind: inspectionActionKindSchema,
+  /** Canonical predicate used to derive the deterministic action ID. */
+  normalizedPredicate: z.string().min(1).max(2000),
+  question: z.string().min(1).max(1000),
+  itemUnit: quantityUnitSchema,
+  expectedUnit: quantityUnitSchema,
+  compatibility: z.enum(["confirmed", "conditional", "unknown"]),
+  lineIds: z.array(idSchema).max(24),
+  lineVersions: z.array(inspectionActionLineSchema).max(24),
+  version: z.number().int().positive(),
+  candidate: inspectionActionCandidateSchema,
+  expected: inspectionActionExpectedSchema,
+  possibleResults: z.array(z.enum(["confirmed", "inconclusive"])).min(1).max(2),
+  effects: z.array(inspectionActionEffectSchema).min(1).max(4),
+  basis: inspectionActionBasisSchema,
+  requiresHumanConfirmation: z.literal(true)
+}).strict();
+export const inspectionActionPageSchema = z.object({
+  revisionId: idSchema,
+  data: z.array(inspectionActionSchema).max(200),
+  limit: z.number().int().min(1).max(200),
+  nextCursor: z.string().max(512).optional(),
+  total: z.number().int().nonnegative().optional()
+}).strict();
+
+export const inspectionObservationResultSchema = z.enum(["confirmed", "inconclusive"]);
+export const inspectionObservationSchema = z.object({
+  result: inspectionObservationResultSchema,
+  quantity: z.number().finite().nonnegative().optional(),
+  unit: quantityUnitSchema.optional(),
+  source: z.string().trim().min(1).max(500),
+  sourceId: z.string().trim().min(1).max(500).optional(),
+  observedAt: isoDateSchema,
+  note: z.string().max(1000).optional(),
+  conversion: quantityConversionSchema.optional()
+}).strict();
+export const inspectionBasisSchema = z.object({
+  actionId: idSchema,
+  actionVersion: z.number().int().positive(),
+  itemVersion: z.number().int().positive(),
+  lineVersions: z.array(inspectionActionLineSchema).max(24),
+  hash: z.string().length(64).regex(/^[a-f0-9]+$/)
+}).strict();
+export const inspectionAffectedLineSchema = z.object({
+  lineId: idSchema,
+  version: z.number().int().positive(),
+  beforeDecision: bomDecisionSchema.optional(),
+  afterDecision: bomDecisionSchema.optional()
+}).strict();
+export const inspectionCompletionPreviewSchema = z.object({
+  id: idSchema,
+  version: z.number().int().positive(),
+  projectRevisionId: idSchema,
+  actionId: idSchema,
+  // Actors may be opaque bearer-subject identifiers (including email-shaped
+  // values); the preview remains bound to the exact actor string by the
+  // inspection port.
+  actor: z.string().trim().min(1).max(160),
+  createdAt: isoDateSchema,
+  expiresAt: isoDateSchema,
+  contentSha256: z.string().length(64).regex(/^[a-f0-9]+$/),
+  action: inspectionActionSchema,
+  observation: inspectionObservationSchema,
+  basis: inspectionBasisSchema,
+  // The exact line snapshots make compatibility/conversion proposals
+  // reviewable and give the commit adapter a closed, optimistic basis for
+  // every affected alternative.
+  before: z.object({ item: inventoryItemSchema, gaps: z.array(bomGapSchema).max(24), lines: z.array(bomLineSchema).max(24) }).strict(),
+  after: z.object({ item: inventoryItemSchema, gaps: z.array(bomGapSchema).max(24), lines: z.array(bomLineSchema).max(24) }).strict(),
+  affectedLines: z.array(inspectionAffectedLineSchema).max(24),
+  reevaluatedGaps: z.object({ revisionId: idSchema, lines: z.array(bomGapSchema).max(24), totals: z.record(z.string(), z.number().int().nonnegative()) }).strict(),
+  requiresHumanConfirmation: z.literal(true)
+}).strict();
+export const commitInspectionCompletionSchema = z.object({
+  previewId: idSchema,
+  expectedPreviewVersion: z.number().int().positive(),
+  contentSha256: z.string().length(64).regex(/^[a-f0-9]+$/),
+  confirmed: z.literal(true)
+}).strict();
+/** HTTP keeps the revision/action in the path, but the preview identity is
+ * still required in the body so the command is bound to one exact preview. */
+export const commitInspectionCompletionBodySchema = commitInspectionCompletionSchema;
+export const inspectionEvidenceSchema = z.object({
+  id: idSchema,
+  projectRevisionId: idSchema,
+  actionId: idSchema,
+  itemId: idSchema,
+  kind: inspectionActionKindSchema,
+  result: inspectionObservationResultSchema,
+  source: z.string().min(1).max(500),
+  sourceId: z.string().min(1).max(500).optional(),
+  observedAt: isoDateSchema,
+  recordedAt: isoDateSchema,
+  note: z.string().max(1000).optional(),
+  quantity: z.number().finite().nonnegative().optional(),
+  unit: quantityUnitSchema.optional(),
+  conversion: quantityConversionSchema.optional()
+}).strict();
+export const inspectionCompletionCommitSchema = z.object({
+  id: idSchema,
+  status: z.literal("committed"),
+  projectRevisionId: idSchema,
+  actionId: idSchema,
+  previewId: idSchema,
+  evidence: inspectionEvidenceSchema,
+  item: inventoryItemSchema.optional(),
+  gaps: z.object({ revisionId: idSchema, lines: z.array(bomGapSchema).max(24), totals: z.record(z.string(), z.number().int().nonnegative()) }).strict(),
+  inspections: inspectionActionPageSchema,
+  committedAt: isoDateSchema
+}).strict();
+
 export const reservationSchema = z.object({
   id: idSchema,
   lineId: idSchema,

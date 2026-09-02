@@ -94,6 +94,24 @@ items, and explicit planning unknowns.
 Output: confirmed reuse, inspections needed, missing quantity, optional choices,
 and reservations created. Do not reserve uncertain stock.
 
+For a connected revision, resolve the derived inspection queue one action at a
+time. Call `GET /api/v1/project-revisions/{revisionId}/inspections` and read
+the selected `.../inspections/{inspectionId}` action. Record the observation
+with its source and observed time through
+`POST .../inspections/{inspectionId}/completion-preview`; the returned server
+preview is review-only. For confirmed compatibility, record the explicit
+compatibility result and evidence. For unit conversion, record the explicit
+factor, basis, source, and observed time; never infer either result. Show exact
+affected-line before/after changes, unit coverage, basis/version, and resulting
+state, then ask for explicit human confirmation before
+`POST .../inspections/{inspectionId}/completion-commit`. A commit must carry
+the returned preview ID/version/content hash and `confirmed: true`. The MCP
+list/read/preview/commit tools expose the same result with nested REST `each`
+quantities and conversions mapped to MCP `piece`, including before/after
+items/gaps, affected and reevaluated gaps, refreshed inspections, and evidence.
+Authorization remains project-scoped and fail-closed; there is no quick-complete
+operation.
+
 ## 5. Shopping proposal
 
 Use `list_offers` for existing observations and `record_offer_snapshot` only

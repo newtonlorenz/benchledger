@@ -112,6 +112,19 @@ until resolved. Use one recommended next action, such as “count the delivered
 wire” or “resolve the resistor rating.” Do not expose raw database jargon by
 default.
 
+When a connected revision exposes a Check candidate, use the revision-scoped
+inspection queue: list and read the action, submit its observation to the
+`completion-preview` endpoint, show the server preview, and ask for explicit
+human confirmation before calling `completion-commit`. The Project Plan Checks
+panel sits above the BOM, shows three concrete beginner questions plus **View
+all**, and reveals action/line/item versions, evidence, predicate, unit, and
+effects in expert mode. Confirmed compatibility and unit conversion require
+explicit values and evidence (source, basis, and observed time); never infer
+them. Preview exact per-line before/after changes and unit coverage. MCP
+list/read/preview/commit parity is complete, including nested each↔piece
+mapping, refreshed before/after state, and project-scoped fail-closed access.
+There is no quick-complete path.
+
 ## Minute 4–6: expert path
 
 When the user asks for detail, reveal exact item and revision IDs, units,

@@ -68,7 +68,7 @@ function bomQuantityConversion(
   return factors.size === 1 ? conversions[0] : undefined;
 }
 
-function bomMetadata(value: Readonly<Record<string, unknown>>): { readonly constraints?: ApiBomLine["constraints"]; readonly alternatives?: readonly ApiBomAlternative[]; readonly retired?: boolean; readonly createdAt?: string; readonly updatedAt?: string } {
+export function bomMetadata(value: Readonly<Record<string, unknown>>): { readonly constraints?: ApiBomLine["constraints"]; readonly alternatives?: readonly ApiBomAlternative[]; readonly retired?: boolean; readonly createdAt?: string; readonly updatedAt?: string } {
   const constraintsRecord = record(value.constraints);
   const constraints: Record<string, unknown> = {};
   for (const [key, candidate] of Object.entries(constraintsRecord)) {

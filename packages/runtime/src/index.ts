@@ -6,7 +6,7 @@ import {
   AuditRepository, BomRepository, BenchDatabase, InventoryRepository, ProcurementRepository,
   ProjectRepository, ReservationRepository, CanonicalCatalogRepository,
   ReconciliationRepository, migrateCatalogSchema, migrateProjectSchema, migrateWorkspaceSecuritySchema,
-  WorkspaceSecurityRepository, ProjectSetupRepository, migrateProjectSetupSchema
+  WorkspaceSecurityRepository, ProjectSetupRepository, migrateProjectSetupSchema, InspectionRepository, migrateInspectionSchema
 } from "@benchledger/database";
 import type { WorkspacePasswordHasher, WorkspacePasswordVerifier } from "./workspace-security-adapter.js";
 import { ProductionWorkspaceSecurityAdapter } from "./workspace-security-adapter.js";
@@ -22,6 +22,7 @@ import { ExclusiveBarrier } from "./barrier.js";
 import { ProductionUnitOfWork } from "./unit-of-work.js";
 import { ProductionBuildConfigurationAdapter, ProductionCatalogAdapter } from "./catalog-adapter.js";
 import { ProductionReconciliationAdapter } from "./reconciliation-adapter.js";
+import { ProductionInspectionAdapter } from "./inspection-adapter.js";
 import { ProductionInventoryCategoryAdapter } from "./category-adapter.js";
 import { seedStarterCatalog } from "./starter-catalog.js";
 
@@ -102,6 +103,7 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
     migrateCatalogSchema(database);
     migrateProjectSchema(database);
     migrateProjectSetupSchema(database);
+    migrateInspectionSchema(database);
     migrateWorkspaceSecuritySchema(database);
     seedStarterCatalog(database);
     const artifacts = new ArtifactStore({ root: artifactDir, maxUploadBytes, maxStorageBytes });
@@ -124,6 +126,7 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
     const health = new ProductionHealth(database, artifacts);
     const canonicalCatalog = new CanonicalCatalogRepository(database);
     const reconciliationRepository = new ReconciliationRepository(database);
+    const inspectionRepository = new InspectionRepository(database);
     const projectAdapter = new ProductionProjectAdapter(database, projectRepository, bomRepository, reservationRepository, inventory, state);
     const projectSetupRepository = new ProjectSetupRepository(database);
     const projectSetup = new ProductionProjectSetupAdapter(projectSetupRepository, projectAdapter, inventory);
@@ -137,6 +140,7 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
       catalog: new ProductionCatalogAdapter(database, state, unitOfWork, canonicalCatalog.products, canonicalCatalog.profiles),
       buildConfigurations: new ProductionBuildConfigurationAdapter(database, canonicalCatalog.snapshots, unitOfWork),
       reconciliations: new ProductionReconciliationAdapter(database, reconciliationRepository, projectRepository, bomRepository, reservationRepository, inventoryRepository, inventory, projectAdapter, state, unitOfWork),
+      inspections: new ProductionInspectionAdapter(database, inspectionRepository, inventoryRepository, bomRepository, state, unitOfWork),
       workspaceSecurity,
       audit: new ProductionAuditAdapter(auditRepository, database, state, unitOfWork),
       events,

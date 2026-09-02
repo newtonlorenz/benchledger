@@ -10,3 +10,4 @@ export * from "./catalog-repository.js";
 export * from "./reconciliation-repository.js";
 export * from "./category-repository.js";
 export * from "./project-setup-repository.js";
+export * from "./inspection-repository.js";

@@ -465,6 +465,78 @@ describe("McpAdapter", () => {
     });
   });
 
+  it("exposes and scopes the derived inspection queue and completion commands", async () => {
+    const action = {
+      id: "inspection-1",
+      projectRevisionId: "project-revision-1",
+      itemId: "item-esp32",
+      itemVersion: 1,
+      kind: "physical_quantity",
+      normalizedPredicate: "{\"kind\":\"physical_quantity\"}",
+      question: "Count the item.",
+      itemUnit: "each",
+      expectedUnit: "each",
+      compatibility: "confirmed",
+      lineIds: ["line-1"],
+      lineVersions: [{ lineId: "line-1", version: 1 }],
+      version: 1,
+      candidate: { id: "item-esp32", version: 1, name: "ESP32 development board", unit: "each", evidence: { state: "physically_counted" } },
+      expected: { quantity: 1, unit: "each", lineIds: ["line-1"], lineRequirements: [{ lineId: "line-1", quantity: 1, unit: "each" }] },
+      possibleResults: ["confirmed", "inconclusive"],
+      effects: [{ kind: "physical_quantity", description: "Count may update stock." }],
+      basis: { itemVersion: 1, lineVersions: [{ lineId: "line-1", version: 1 }] },
+      requiresHumanConfirmation: true,
+    };
+    const b = backend();
+    b.inspections = {
+      list: async () => page([action as never]),
+      get: async () => action as never,
+      preview: async () => ({ id: "preview-1" } as never),
+      commit: async () => ({ id: "commit-1", version: 1, commit: { id: "commit-1" } }),
+    };
+    const adapter = new McpAdapter(b);
+    expect(adapter.listTools().map((tool) => tool.name)).toEqual(expect.arrayContaining([
+      "list_inspections", "read_inspection", "preview_inspection_completion", "commit_inspection_completion",
+    ]));
+    expect(adapter.listTools().find((tool) => tool.name === "list_inspections")?.requiredScope).toBe("bom:read");
+    expect(adapter.listTools().find((tool) => tool.name === "commit_inspection_completion")?.requiredScope).toBe("bom:write");
+    expect(adapter.capabilityDocument()).toMatchObject({ scopeBehavior: { inspections: expect.stringContaining("inventory:write") } });
+
+    await expect(adapter.callTool("list_inspections", { projectRevisionId: "project-revision-1" }, context)).resolves.toMatchObject({ isError: false, structuredContent: { items: [action] } });
+    await expect(adapter.callTool("preview_inspection_completion", {
+      projectRevisionId: "project-revision-1", inspectionId: "inspection-1",
+      observation: { result: "inconclusive", source: "human", observedAt: "2026-08-30T10:00:00.000Z" },
+    }, context)).resolves.toMatchObject({ isError: false });
+    await expect(adapter.callTool("commit_inspection_completion", {
+      projectRevisionId: "project-revision-1", inspectionId: "inspection-1", previewId: "preview-1",
+      expectedPreviewVersion: 1, contentSha256: "a".repeat(64), confirmed: true,
+    }, { ...context, idempotencyKey: "inspection-key-1" })).resolves.toMatchObject({ isError: false });
+    await expect(adapter.callTool("commit_inspection_completion", {
+      projectRevisionId: "project-revision-1", inspectionId: "inspection-1", previewId: "preview-1",
+      expectedPreviewVersion: 1, contentSha256: "a".repeat(64), confirmed: true,
+    }, { ...context, scopes: context.scopes.filter((scope) => scope !== "inventory:write"), idempotencyKey: "inspection-key-2" })).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "FORBIDDEN" } } });
+  });
+
+  it("authorizes project-scoped inspections without exposing revision or action existence", async () => {
+    const scopedBackend = backend();
+    let dispatched = 0;
+    scopedBackend.inspections = {
+      list: async () => { dispatched += 1; return page([]); },
+      get: async () => { dispatched += 1; throw new Error("must not dispatch"); },
+      preview: async () => { dispatched += 1; throw new Error("must not dispatch"); },
+      commit: async () => { dispatched += 1; throw new Error("must not dispatch"); },
+    };
+    scopedBackend.projectScope = {
+      projectForProjectRevision: async (revisionId) => revisionId === "allowed-revision" ? "project-1" : null,
+    };
+    const adapter = new McpAdapter(scopedBackend);
+    const scoped: McpRequestContext = { ...context, projectIds: ["project-1"] };
+    await expect(adapter.callTool("list_inspections", { projectRevisionId: "allowed-revision" }, scoped)).resolves.toMatchObject({ isError: false });
+    await expect(adapter.callTool("list_inspections", { projectRevisionId: "unknown-revision" }, scoped)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "FORBIDDEN" } } });
+    await expect(adapter.callTool("read_inspection", { projectRevisionId: "unknown-revision", inspectionId: "unknown-action" }, scoped)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "FORBIDDEN" } } });
+    expect(dispatched).toBe(1);
+  });
+
   it("does not advertise unsupported mutation names as callable tools", async () => {
     const adapter = new McpAdapter(backend());
     await expect(adapter.callTool("retire_inventory_item", { itemId: "item-esp32" }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_TOOL" } } });

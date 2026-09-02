@@ -555,6 +555,19 @@ verify LED resistor topology, inspect adhesive expiry, or compare a finish sampl
 3. No candidate is promoted automatically from a photo, order, or name match.
 4. Beginner UI shows the next few checks; expert/MCP output exposes full traceability.
 
+**Current slice status (2026-09-02):** The shared application and HTTP contract
+derive canonical revision-scoped actions and support list/read plus server-side
+completion preview and explicit commit. The web Project Plan Checks panel is
+above the BOM, shows three concrete beginner questions with candidate and
+affected-line counts, and reveals action/line/item versions, evidence,
+predicate, unit, and effects in expert mode. The web dialog cannot commit until
+the server preview is displayed and the user explicitly confirms it; confirmed
+compatibility and unit-conversion observations collect explicit values and
+evidence and show exact per-line changes before commit. MCP list/read/preview/
+commit tools deep-map nested REST `each` quantities and conversions to MCP
+`piece` quantities, preserve before/after and reevaluation data, and fail closed
+for non-project-scoped access. REQ-011 is complete for this tranche.
+
 ### REQ-012 — Safe maker project templates
 
 **User story:** As an agent, I want a proven starting structure without fabricated
@@ -696,7 +709,8 @@ validated without claiming that a print occurred.
 
 ### Tranche E — Guided experience (P2)
 
-Implement `REQ-011` and `REQ-012` after the underlying states are stable.
+`REQ-011` is complete for the shared application, HTTP, web, and MCP surfaces;
+continue with `REQ-012` after the underlying states are stable.
 
 Exit criterion: a beginner can resolve project blockers through a short inspection
 queue and safe template-driven setup.
