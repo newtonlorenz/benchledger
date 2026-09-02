@@ -659,6 +659,18 @@ describe("McpAdapter", () => {
     expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
   });
 
+  it("advertises a strict exact-versus-physical-only filament oneOf", () => {
+    const adapter = new McpAdapter(backend());
+    const definition = adapter.listTools().find((tool) => tool.name === "create_build_configuration");
+    const properties = definition?.inputSchema.properties as Record<string, any>;
+    const selections = properties.filamentSelections.items as Record<string, any>;
+    expect(selections.oneOf).toHaveLength(2);
+    expect(selections.oneOf[0]).toMatchObject({ required: expect.arrayContaining(["itemId", "catalogProductId"]), additionalProperties: false });
+    expect(selections.oneOf[1]).toMatchObject({ required: expect.arrayContaining(["itemId", "catalogIdentityState"]), additionalProperties: false });
+    expect(JSON.stringify(selections)).toMatch(/no compatibility|no availability|no catalog/i);
+    expect(definition?.description).toMatch(/production approval blocked/i);
+  });
+
   it("dispatches every supported tool through its validated backend boundary", async () => {
     const adapter = new McpAdapter(backend());
     const calls: Array<[string, unknown]> = [

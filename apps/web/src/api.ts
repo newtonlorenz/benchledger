@@ -7,6 +7,7 @@ import type {
   BomSpecification,
   BomSpecificationDecision,
   BuildConfigInput,
+  BuildFilamentSelection,
   BuildConfigSnapshot,
   CatalogKind,
   CatalogProduct,
@@ -656,6 +657,9 @@ function mapBuildConfigSnapshot(value: unknown, projectId: string, revisionId: s
   const profile = descriptorText(record.profile, "name", "model") ?? firstString(record, "profile", "slicerProfile") ?? fallback.profile;
   const calibration = descriptorText(record.calibration, "state", "name") ?? firstString(record, "calibration", "calibrationState") ?? fallback.calibration;
   const unknowns = stringArray(record.explicitUnknowns).length ? stringArray(record.explicitUnknowns) : stringArray(record.unknowns).length ? stringArray(record.unknowns) : [...fallback.unknowns];
+  const mappedFilamentSelections = filamentSnapshots.length > 0
+    ? filamentSnapshots.map((entry) => ({ ...entry })) as BuildFilamentSelection[]
+    : fallback.filamentSelections ? fallback.filamentSelections.map((entry) => ({ ...entry })) : [];
   const input: BuildConfigInput = {
     ...(printerItemId ? { printerItemId } : {}),
     ...(printerProfileId ? { printerProfileId } : {}),
@@ -663,6 +667,7 @@ function mapBuildConfigSnapshot(value: unknown, projectId: string, revisionId: s
     ...(filamentProfileId ? { filamentProfileId } : {}),
     ...(printerProductId ? { printerProductId } : {}),
     ...(filamentProductId ? { filamentProductId } : {}),
+    ...(mappedFilamentSelections.length ? { filamentSelections: mappedFilamentSelections } : {}),
     ...(hotendSide ? { hotendSide } : {}),
     ...(nozzleDiameterMm !== undefined ? { nozzleDiameterMm } : {}),
     ...(nozzleMaterial ? { nozzleMaterial } : {}),
@@ -694,7 +699,7 @@ function mapBuildConfigSnapshot(value: unknown, projectId: string, revisionId: s
     ...(evidence ? { evidence } : {}),
     projectRevisionId: snapshotRevisionId,
     ...(printerSnapshot ? { printerItemSnapshot: { ...printerSnapshot } } : {}),
-    ...(filamentSnapshots.length ? { filamentSelections: filamentSnapshots.map((entry) => ({ ...entry })) } : {}),
+    ...(mappedFilamentSelections.length ? { filamentSelections: mappedFilamentSelections.map((entry) => ({ ...entry })) } : {}),
     ...(record.activeHotend !== undefined ? { activeHotend: record.activeHotend as SnapshotDescriptor } : {}),
     ...(record.nozzle !== undefined ? { nozzle: record.nozzle as SnapshotDescriptor } : {}),
     ...(record.plate !== undefined ? { plate: record.plate as SnapshotDescriptor } : {}),
@@ -824,9 +829,28 @@ function canonicalBuildConfigurationBody(revisionId: string, input: BuildConfigI
     throw new ApiError("Choose an exact owned printer before saving build setup", { kind: "validation", status: 400 });
   }
   const descriptor = (value: string | undefined, fallback: string): string => value?.trim() || fallback;
-  const filamentSelections = input.filamentItemId && input.filamentProductId
-    ? [{ itemId: input.filamentItemId, catalogProductId: input.filamentProductId, ...(input.filamentProfileId ? { profileId: input.filamentProfileId } : {}) }]
-    : [];
+  const selectionBody = (selection: BuildFilamentSelection): UnknownRecord => {
+    const hasCatalogIdentity = Boolean(selection.catalogProductId);
+    const hasPhysicalOnlyIdentity = selection.catalogIdentityState === "unknown";
+    if (!selection.itemId || hasCatalogIdentity === hasPhysicalOnlyIdentity || (hasPhysicalOnlyIdentity && selection.profileId)) {
+      throw new ApiError("Filament selection must provide an exact catalog product or an explicit physical-only identity", { kind: "validation", status: 400 });
+    }
+    return {
+      itemId: selection.itemId,
+      ...(hasCatalogIdentity ? { catalogProductId: selection.catalogProductId } : {}),
+      ...(selection.profileId ? { profileId: selection.profileId } : {}),
+      ...(hasPhysicalOnlyIdentity ? { catalogIdentityState: "unknown" } : {}),
+      ...(selection.role ? { role: selection.role } : {}),
+      ...(selection.quantity === undefined ? {} : { quantity: selection.quantity })
+    };
+  };
+  const filamentSelections = input.filamentSelections?.length
+    ? input.filamentSelections.map(selectionBody)
+    : input.filamentItemId && input.filamentProductId
+      ? [selectionBody({ itemId: input.filamentItemId, catalogProductId: input.filamentProductId, ...(input.filamentProfileId ? { profileId: input.filamentProfileId } : {}) })]
+      : input.filamentItemId
+        ? (() => { throw new ApiError("Filament item-only setup is ambiguous; provide an explicit physical-only selection", { kind: "validation", status: 400 }); })()
+        : [];
   const activeHotend = descriptor(input.hotendSide, "Not recorded");
   const nozzle = input.nozzleDiameterMm !== undefined || input.nozzleMaterial
     ? { ...(input.nozzleDiameterMm !== undefined ? { diameterMm: input.nozzleDiameterMm } : {}), ...(input.nozzleMaterial ? { material: input.nozzleMaterial } : {}) }

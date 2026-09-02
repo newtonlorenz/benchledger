@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ApplicationError } from "./errors.js";
 import { ApplicationService } from "./service.js";
 import type {
@@ -329,6 +329,120 @@ describe("catalog and build configuration application services", () => {
     expect(same.data.contentSha256).toBe(created.data.contentSha256);
     const superseding = await service.createBuildConfiguration("revision-1", { ...buildInput, supersedesSnapshotId: created.data.id }, context);
     expect(superseding.data.contentSha256).toBe(created.data.contentSha256);
+  });
+
+  it("snapshots an explicitly unlinked physical filament without catalog or profile writes", async () => {
+    const ports = makePorts();
+    const physicalItem: InventoryItem = {
+      id: "physical-filament-1",
+      name: "Unidentified PETG spool",
+      kind: "filament",
+      quantity: 760,
+      availableQuantity: 760,
+      unit: "gram",
+      tags: [],
+      links: [],
+      evidence: {
+        state: "physically_counted",
+        source: "bench count",
+        observedAt: timestamp,
+        note: "Label is partially missing",
+      },
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      version: 3,
+    };
+    const getItem = ports.inventory.getItem;
+    ports.inventory.getItem = async (id) => id === physicalItem.id ? physicalItem : getItem(id);
+    const getProduct = vi.spyOn(ports.catalog!, "getProduct");
+    const getProfile = vi.spyOn(ports.catalog!, "getInventoryProductProfile");
+
+    const result = await new ApplicationService(ports).createBuildConfiguration("revision-1", {
+      ...buildInput,
+      filamentSelections: [{
+        itemId: physicalItem.id,
+        catalogIdentityState: "unknown",
+        role: "model",
+        quantity: 320,
+      }],
+    }, context);
+
+    expect(result.data.filamentSelections).toEqual([{
+      itemId: physicalItem.id,
+      catalogIdentityState: "unknown",
+      physicalLabel: physicalItem.name,
+      physicalEvidence: physicalItem.evidence,
+      role: "model",
+      quantity: 320,
+    }]);
+    expect(result.data.explicitUnknowns).toContain("Filament catalog identity is unknown; production approval is blocked.");
+    expect(getProduct).not.toHaveBeenCalledWith("catalog-missing");
+    expect(getProfile).not.toHaveBeenCalledWith(physicalItem.id);
+  });
+
+  it.each([
+    ["delivered_uncounted", undefined],
+    ["ordered_unverified", undefined],
+    ["physically_counted", timestamp],
+    ["commissioned", timestamp],
+  ] as const)("requires confirmed physical evidence for an unlinked filament (%s)", async (state, observedAt) => {
+    const ports = makePorts();
+    const physicalItem: InventoryItem = {
+      id: `physical-${state}`,
+      name: "Unidentified spool",
+      kind: "filament",
+      quantity: 1000,
+      availableQuantity: 1000,
+      unit: "gram",
+      tags: [],
+      links: [],
+      evidence: { state, ...(observedAt === undefined ? {} : { observedAt }) },
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      version: 1,
+    };
+    const getItem = ports.inventory.getItem;
+    ports.inventory.getItem = async (id) => id === physicalItem.id ? physicalItem : getItem(id);
+
+    const command = {
+      ...buildInput,
+      filamentSelections: [{ itemId: physicalItem.id, catalogIdentityState: "unknown" as const }],
+    };
+    if (state === "physically_counted" || state === "commissioned") {
+      await expect(new ApplicationService(ports).createBuildConfiguration("revision-1", command, context)).resolves.toMatchObject({ data: { filamentSelections: [{ catalogIdentityState: "unknown" }] } });
+    } else {
+      await expect(new ApplicationService(ports).createBuildConfiguration("revision-1", command, context)).rejects.toMatchObject({ code: "validation" });
+    }
+  });
+
+  it("does not permit an unlinked filament on a production-approved revision", async () => {
+    const ports = makePorts();
+    const physicalItem: InventoryItem = {
+      id: "physical-production-1",
+      name: "Unidentified spool",
+      kind: "filament",
+      quantity: 1000,
+      availableQuantity: 1000,
+      unit: "gram",
+      tags: [],
+      links: [],
+      evidence: { state: "commissioned", source: "commissioning", observedAt: timestamp },
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      version: 1,
+    };
+    const getItem = ports.inventory.getItem;
+    ports.inventory.getItem = async (id) => id === physicalItem.id ? physicalItem : getItem(id);
+    const getRevision = ports.projects.getProjectRevision;
+    ports.projects.getProjectRevision = async (id) => {
+      const revision = await getRevision(id);
+      return revision === null ? null : { ...revision, status: "production approved" };
+    };
+
+    await expect(new ApplicationService(ports).createBuildConfiguration("revision-1", {
+      ...buildInput,
+      filamentSelections: [{ itemId: physicalItem.id, catalogIdentityState: "unknown" as const }],
+    }, context)).rejects.toMatchObject({ code: "conflict" });
   });
 
   it("uses a dedicated latest query and keeps content identity stable across revisions", async () => {

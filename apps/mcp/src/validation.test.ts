@@ -12,6 +12,7 @@ import {
   bomLineCreate,
   bomLineList,
   bomLineUpdate,
+  buildConfigurationCreate,
   boundedJsonObject,
   contextRefresh,
   bomLineList,
@@ -68,6 +69,40 @@ function expectInvalid(action: () => unknown, message?: RegExp): void {
 }
 
 describe("MCP validation boundary", () => {
+  it("accepts exact or explicitly physical-only filament selections, but no ambiguous partial identity", () => {
+    const base = {
+      projectRevisionId: "revision-1",
+      printerItemSnapshot: { itemId: "printer-1", catalogProductId: "printer-product-1" },
+      filamentSelections: [{ itemId: "filament-1", catalogProductId: "filament-product-1", profileId: "profile-1", role: "model", quantity: 1 }],
+      activeHotend: { side: "left" },
+      nozzle: { diameterMm: 0.4 },
+      plate: "Cool Plate",
+      accessories: [],
+      firmware: { version: "1" },
+      slicer: { name: "Bambu Studio" },
+      profile: { name: "0.20mm Standard" },
+      calibration: { state: "current" },
+      explicitUnknowns: [],
+    };
+
+    expect(buildConfigurationCreate(base).filamentSelections[0]).toMatchObject({
+      itemId: "filament-1",
+      catalogProductId: "filament-product-1",
+      profileId: "profile-1",
+    });
+
+    const physicalOnly = {
+      ...base,
+      filamentSelections: [{ itemId: "filament-1", catalogIdentityState: "unknown", role: "model", quantity: 1 }],
+    };
+    expect(buildConfigurationCreate(physicalOnly).filamentSelections[0]).toEqual(physicalOnly.filamentSelections[0]);
+
+    expectInvalid(() => buildConfigurationCreate({ ...base, filamentSelections: [{ itemId: "filament-1" }] }));
+    expectInvalid(() => buildConfigurationCreate({ ...base, filamentSelections: [{ catalogProductId: "filament-product-1" }] }));
+    expectInvalid(() => buildConfigurationCreate({ ...base, filamentSelections: [{ itemId: "filament-1", profileId: "profile-1" }] }));
+    expectInvalid(() => buildConfigurationCreate({ ...base, filamentSelections: [{ itemId: "filament-1", catalogProductId: "filament-product-1", catalogIdentityState: "unknown" }] }));
+  });
+
   it("accepts stable identifiers and rejects path-like or empty identifiers", () => {
     expect(id("part_v2:front", "id")).toBe("part_v2:front");
     expectInvalid(() => id("", "id"), /between 1 and 128/);

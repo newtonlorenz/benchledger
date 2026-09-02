@@ -981,7 +981,40 @@ function toMcpInventoryCategory(category: InventoryCategory): InventoryCategory 
 }
 
 function toMcpBuildConfiguration(snapshot: ApiBuildConfigurationSnapshot): BuildConfigurationSnapshot {
-  return snapshot;
+  const copied = copyJsonRecord(snapshot);
+  const selections = copied.filamentSelections;
+  if (Array.isArray(selections)) {
+    copied.filamentSelections = selections.map((selection) => {
+      if (!isRecord(selection) || selection.catalogIdentityState !== "unknown") return selection;
+      // Keep the physical-only branch deliberately free of catalog/profile or
+      // link fields.  The service copies the item's label and evidence into
+      // these fields; neither is a compatibility or availability assertion.
+      return {
+        itemId: selection.itemId,
+        catalogIdentityState: "unknown",
+        ...(selection.physicalLabel === undefined ? {} : { physicalLabel: selection.physicalLabel }),
+        ...(selection.physicalEvidence === undefined ? {} : { physicalEvidence: selection.physicalEvidence }),
+        ...(selection.role === undefined ? {} : { role: selection.role }),
+        ...(selection.quantity === undefined ? {} : { quantity: selection.quantity }),
+      };
+    });
+  }
+  return copied as unknown as BuildConfigurationSnapshot;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Copy backend snapshots before exposing them to MCP callers. */
+function copyJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(copyJson);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, copyJson(entry)]));
+}
+
+function copyJsonRecord(value: unknown): Record<string, unknown> {
+  return copyJson(value) as Record<string, unknown>;
 }
 
 function fromApiUnit(unit: ApiInventoryItem["unit"]): Quantity["unit"] {

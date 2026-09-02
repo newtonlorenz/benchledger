@@ -10,7 +10,7 @@ import type {
   ArtifactBuildConfigurationBinding, CommissionInventoryItem, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory,
   CommitProjectSetup, ProjectSetupCommitResult, ProjectSetupPreview, BomAlternative
 } from "@benchledger/api-contract";
-import { bomAlternativeSchema } from "@benchledger/api-contract";
+import { bomAlternativeSchema, buildConfigurationSnapshotSchema, buildConfigurationSnapshotStorageInputSchema } from "@benchledger/api-contract";
 import { ApplicationError, applyInventoryBulkChanges, bomSpecification, conflict, matchesBomConstraints, normalizeInventoryBulkChanges, parseInventoryCursor, stableCreateConflict } from "@benchledger/application";
 import type {
   ApplicationPorts, ArtifactDownload, ArtifactPort, AuditEvent, AuditInput, AuditPort,
@@ -20,8 +20,22 @@ import type {
   InventoryBulkUpdate, InventoryBulkUpdateResult, ReservationDetails, StockMutation, UnitOfWorkOperation, UnitOfWorkPort, UpdateInventoryInput, UploadSessionDetails, UsageInput
 } from "@benchledger/application";
 import { BUILTIN_INVENTORY_CATEGORIES, canonicalProjectStatus, compareInventoryCategoryKeys, normalizeInventoryCategoryKey, normalizeInventoryCategoryName, slugify } from "@benchledger/domain";
+import { computeBuildConfigurationContentSha256 } from "@benchledger/runtime";
 
 const clone = <T>(value: T): T => structuredClone(value);
+
+function parseMemoryBuildConfigurationSnapshot(value: unknown): BuildConfigurationSnapshot {
+  try {
+    const snapshot = buildConfigurationSnapshotSchema.parse(value);
+    if (computeBuildConfigurationContentSha256(snapshot) !== snapshot.contentSha256) {
+      throw new ApplicationError("integrity_error", `Build configuration snapshot '${snapshot.id}' content hash does not match its configuration`);
+    }
+    return snapshot;
+  } catch (error: unknown) {
+    if (error instanceof ApplicationError) throw error;
+    throw new ApplicationError("integrity_error", "Stored build configuration snapshot failed integrity validation");
+  }
+}
 
 const MAX_CATEGORY_CURSOR_LENGTH = 512;
 const MAX_INVENTORY_QUERY_LENGTH = 200;
@@ -1174,30 +1188,43 @@ class MemoryCatalog implements CatalogPort {
 
 class MemoryBuildConfigurations implements BuildConfigurationPort {
   readonly snapshots = new Map<string, BuildConfigurationSnapshot>();
+  private sequence = 700;
 
-  listBuildConfigurations(revisionId: string, options: BuildConfigurationListOptions): Promise<Page<BuildConfigurationSnapshot>> {
-    const values = [...this.snapshots.values()].filter((snapshot) => snapshot.projectRevisionId === revisionId).sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
-    return Promise.resolve(page(values, options.limit, options.cursor));
+  async listBuildConfigurations(revisionId: string, options: BuildConfigurationListOptions): Promise<Page<BuildConfigurationSnapshot>> {
+    const values = [...this.snapshots.values()]
+      .map((snapshot) => parseMemoryBuildConfigurationSnapshot(snapshot))
+      .filter((snapshot) => snapshot.projectRevisionId === revisionId)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+    return page(values, options.limit, options.cursor);
   }
 
-  getLatestBuildConfiguration(revisionId: string): Promise<BuildConfigurationSnapshot | null> {
+  async getLatestBuildConfiguration(revisionId: string): Promise<BuildConfigurationSnapshot | null> {
     const latest = [...this.snapshots.values()]
+      .map((snapshot) => parseMemoryBuildConfigurationSnapshot(snapshot))
       .filter((snapshot) => snapshot.projectRevisionId === revisionId)
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
       .at(-1);
-    return Promise.resolve(latest === undefined ? null : clone(latest));
+    return latest === undefined ? null : clone(latest);
   }
 
-  getBuildConfiguration(configurationId: string): Promise<BuildConfigurationSnapshot | null> {
+  async getBuildConfiguration(configurationId: string): Promise<BuildConfigurationSnapshot | null> {
     const snapshot = this.snapshots.get(configurationId);
-    return Promise.resolve(snapshot === undefined ? null : clone(snapshot));
+    return snapshot === undefined ? null : clone(parseMemoryBuildConfigurationSnapshot(snapshot));
   }
 
-  createBuildConfiguration(input: CreateBuildConfigurationSnapshot): Promise<BuildConfigurationSnapshot> {
-    const snapshot = input as BuildConfigurationSnapshot;
+  async createBuildConfiguration(input: CreateBuildConfigurationSnapshot): Promise<BuildConfigurationSnapshot> {
+    const candidate = input as unknown as Record<string, unknown>;
+    const { contentSha256: _contentSha256, createdAt: _createdAt, ...draft } = candidate;
+    const parsed = buildConfigurationSnapshotStorageInputSchema.parse(draft);
+    const snapshot = parseMemoryBuildConfigurationSnapshot({
+      ...parsed,
+      id: parsed.id ?? id("build-config", ++this.sequence),
+      createdAt: iso(),
+      contentSha256: computeBuildConfigurationContentSha256(parsed as unknown as Partial<BuildConfigurationSnapshot>),
+    });
     if (this.snapshots.has(snapshot.id)) throw new ApplicationError("conflict", `Build configuration '${snapshot.id}' already exists`);
     this.snapshots.set(snapshot.id, clone(snapshot));
-    return Promise.resolve(clone(snapshot));
+    return clone(snapshot);
   }
 }
 

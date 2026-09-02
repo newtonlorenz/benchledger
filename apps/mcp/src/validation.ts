@@ -337,7 +337,7 @@ export function inventoryProductProfileLink(value: unknown): InventoryProductPro
 }
 
 export function buildConfigurationCreate(value: unknown): BuildConfigurationCreateInput {
-  return canonicalSchema(createBuildConfigurationSnapshotSchema, record(value, "arguments"), "arguments");
+  return canonicalSchema(createBuildConfigurationSnapshotSchema, record(value, "arguments"), "arguments") as BuildConfigurationCreateInput;
 }
 
 export function buildConfigurationList(value: unknown): BuildConfigurationListInput {

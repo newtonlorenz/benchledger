@@ -11,6 +11,8 @@ import type {
   artifactBuildConfigurationBindingSchema, bomSpecificationDecisionSchema, bomSpecificationSchema, buildConfigurationSnapshotSchema, catalogProductSchema,
   catalogProductFilamentSchema, catalogProductPrinterSchema, createArtifactBuildConfigurationBindingSchema,
   buildConfigurationSnapshotStorageInputSchema, createBuildConfigurationSnapshotSchema, createCatalogProductSchema, createInventoryProductProfileSchema,
+  createPhysicalOnlyFilamentSelectionSchema, createSnapshotFilamentSelectionInputSchema, physicalOnlyFilamentSelectionSchema,
+  snapshotFilamentSelectionSchema,
   filamentSpoolProfileDetailsSchema, inventoryProductProfileFilamentSchema, inventoryProductProfilePrinterSchema,
   inventoryProductProfileSchema, printerAssetProfileDetailsSchema, updateCatalogProductSchema,
   updateInventoryProductProfileSchema, createInventoryProductProfileWithoutItemSchema,
@@ -107,6 +109,10 @@ export type UpdateInventoryProductProfile = z.infer<typeof updateInventoryProduc
 export type CreateInventoryWithProductProfile = z.infer<typeof createInventoryWithProductProfileSchema>;
 export type BuildConfigurationSnapshot = z.infer<typeof buildConfigurationSnapshotSchema>;
 export type CreateBuildConfigurationSnapshot = z.infer<typeof createBuildConfigurationSnapshotSchema>;
+export type SnapshotFilamentSelection = z.infer<typeof snapshotFilamentSelectionSchema>;
+export type CreateSnapshotFilamentSelection = z.infer<typeof createSnapshotFilamentSelectionInputSchema>;
+export type CreatePhysicalOnlyFilamentSelection = z.infer<typeof createPhysicalOnlyFilamentSelectionSchema>;
+export type PhysicalOnlyFilamentSelection = z.infer<typeof physicalOnlyFilamentSelectionSchema>;
 export type BuildConfigurationSnapshotStorageInput = z.infer<typeof buildConfigurationSnapshotStorageInputSchema>;
 export type ArtifactBuildConfigurationBinding = z.infer<typeof artifactBuildConfigurationBindingSchema>;
 export type ReconciliationOutcomeKind = z.infer<typeof reconciliationOutcomeKindSchema>;

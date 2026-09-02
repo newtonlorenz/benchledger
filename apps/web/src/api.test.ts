@@ -696,6 +696,41 @@ describe("authenticated BenchLedger API adapter", () => {
     expect(body).not.toHaveProperty("revisionId");
   });
 
+  it("posts an eligible physical filament as an explicit unknown identity", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-build-unknown" });
+    const snapshot = {
+      id: "build-config-unknown",
+      projectRevisionId: "revision-build-unknown",
+      printerItemSnapshot: { itemId: "printer-1", catalogProductId: "printer-product-1", profileId: "printer-profile-1" },
+      filamentSelections: [{ itemId: "legacy-spool", catalogIdentityState: "unknown", physicalLabel: "Drawer spool label", physicalEvidence: { state: "physically_counted", source: "legacy-import", sourceId: "spool-row-7", observedAt: "2026-08-30T09:00:00.000Z", note: "Counted from the drawer" }, role: "model", quantity: 540 }],
+      activeHotend: "left", nozzle: "Not recorded", plate: "Textured PEI", accessories: [], firmware: "Not recorded", slicer: "Not recorded", profile: "Not recorded", calibration: "Not recorded", explicitUnknowns: [], contentSha256: "a".repeat(64), createdAt: "2026-08-30T10:00:00.000Z"
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ data: { project: { id: "project-build-unknown", name: "Build", description: "A build", status: "idea", currentRevisionId: "revision-build-unknown", createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 }, revision: { id: "revision-build-unknown", projectId: "project-build-unknown", number: 1, name: "Initial", status: "concept", createdAt: "2026-08-30T10:00:00.000Z", version: 1 } } }))
+      .mockResolvedValueOnce(jsonResponse({ data: snapshot }));
+    const adapter = createWorkspaceAdapter();
+    const project = await adapter.createProject({ name: "Build", description: "A build" });
+    const created = await adapter.createBuildConfigSnapshot(project.id, "revision-build-unknown", {
+      printerItemId: "printer-1", printerProductId: "printer-product-1", printerProfileId: "printer-profile-1", filamentItemId: "legacy-spool", filamentSelections: [{ itemId: "legacy-spool", catalogIdentityState: "unknown", role: "model", quantity: 540 }], accessories: [], unknowns: []
+    });
+    expect(created).toMatchObject({ filamentItemId: "legacy-spool", filamentSelections: [{ itemId: "legacy-spool", catalogIdentityState: "unknown", physicalLabel: "Drawer spool label", physicalEvidence: { state: "physically_counted", source: "legacy-import", sourceId: "spool-row-7", observedAt: "2026-08-30T09:00:00.000Z", note: "Counted from the drawer" }, role: "model", quantity: 540 }] });
+    const body = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
+    expect(body.filamentSelections).toEqual([{ itemId: "legacy-spool", catalogIdentityState: "unknown", role: "model", quantity: 540 }]);
+    expect(body.filamentSelections).not.toContainEqual(expect.objectContaining({ catalogProductId: expect.anything() }));
+  });
+
+  it("rejects an ambiguous legacy filament item-only setup before posting", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-build-ambiguous" });
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ data: { project: { id: "project-build-ambiguous", name: "Build", description: "A build", status: "idea", currentRevisionId: "revision-build-ambiguous", createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 }, revision: { id: "revision-build-ambiguous", projectId: "project-build-ambiguous", number: 1, name: "Initial", status: "concept", createdAt: "2026-08-30T10:00:00.000Z", version: 1 } } }));
+    const adapter = createWorkspaceAdapter();
+    const project = await adapter.createProject({ name: "Build", description: "A build" });
+    await expect(adapter.createBuildConfigSnapshot(project.id, "revision-build-ambiguous", {
+      printerItemId: "printer-1", printerProductId: "printer-product-1", filamentItemId: "legacy-spool", accessories: [], unknowns: []
+    })).rejects.toMatchObject({ kind: "validation" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects an incomplete exact identity before posting to the catalog", async () => {
     vi.stubGlobal("document", { cookie: "forge_csrf=csrf-required" });
     const fetchMock = vi.spyOn(globalThis, "fetch");

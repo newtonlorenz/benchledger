@@ -173,6 +173,23 @@ export type SnapshotDescriptor = string | {
   quantity?: number;
 };
 
+/**
+ * A build may retain a physical filament spool even when its catalog identity
+ * is not known.  The unknown state is explicit so a client cannot silently
+ * discard the selected spool or replace it with a similarly named product.
+ */
+export interface BuildFilamentSelection {
+  [key: string]: unknown;
+  itemId: string;
+  catalogProductId?: string;
+  profileId?: string;
+  catalogIdentityState?: "unknown";
+  role?: string;
+  quantity?: number;
+  /** Server-copied display context for a legacy/unlinked physical spool. */
+  physicalLabel?: string;
+}
+
 export interface BuildConfigInput {
   printerItemId?: string;
   printerProfileId?: string;
@@ -180,6 +197,7 @@ export interface BuildConfigInput {
   filamentProfileId?: string;
   printerProductId?: string;
   filamentProductId?: string;
+  filamentSelections?: readonly BuildFilamentSelection[];
   hotendSide?: string;
   nozzleDiameterMm?: number;
   nozzleMaterial?: string;
@@ -203,7 +221,7 @@ export interface BuildConfigSnapshot extends BuildConfigInput {
   evidence?: string;
   projectRevisionId?: string;
   printerItemSnapshot?: Record<string, unknown>;
-  filamentSelections?: readonly Record<string, unknown>[];
+  filamentSelections?: readonly BuildFilamentSelection[];
   activeHotend?: SnapshotDescriptor;
   nozzle?: SnapshotDescriptor;
   plate?: SnapshotDescriptor;
@@ -530,7 +548,8 @@ export function buildSetupSummary(input: BuildConfigInput, printer?: InventoryIt
   const snapshot = input as BuildConfigInput & { printerItemSnapshot?: unknown; filamentSelections?: readonly unknown[] };
   const printerName = printer?.catalogProduct ? catalogProductLabel(printer.catalogProduct) : printer?.name ?? snapshotIdentity(snapshot.printerItemSnapshot, true) ?? "No printer selected";
   const filamentSnapshot = snapshot.filamentSelections?.[0];
-  const filamentName = filament?.catalogProduct ? catalogProductLabel(filament.catalogProduct) : filament?.name ?? snapshotIdentity(filamentSnapshot, false) ?? "No filament selected";
+  const filamentName = filament?.catalogProduct ? catalogProductLabel(filament.catalogProduct) : snapshotPhysicalLabel(filamentSnapshot) ?? filament?.name ?? snapshotIdentity(filamentSnapshot, false) ?? "No filament selected";
+  const unknownFilament = isUnknownFilamentSelection(input, filament);
   const process = [
     input.nozzleDiameterMm === undefined ? undefined : `${input.nozzleDiameterMm} mm nozzle`,
     input.nozzleMaterial,
@@ -542,8 +561,31 @@ export function buildSetupSummary(input: BuildConfigInput, printer?: InventoryIt
     process ? `Print setup: ${process}.` : undefined,
     software ? `Software: ${software}.` : undefined,
     input.calibration ? `Calibration: ${input.calibration}.` : undefined,
-    input.unknowns.length ? `${input.unknowns.length} setup detail${input.unknowns.length === 1 ? " remains" : "s remain"} to confirm.` : undefined
+    input.unknowns.length ? `${input.unknowns.length} setup detail${input.unknowns.length === 1 ? " remains" : "s remain"} to confirm.` : undefined,
+    unknownFilament ? "Exact product unknown. Design open: confirm the filament identity before production approval." : undefined
   ].filter((part): part is string => Boolean(part)).join(" ");
+}
+
+function snapshotRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function snapshotPhysicalLabel(value: unknown): string | undefined {
+  const record = snapshotRecord(value);
+  if (!record) return undefined;
+  for (const key of ["physicalLabel", "physicalName", "label", "displayName", "name"]) {
+    const candidate = record[key];
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+  return undefined;
+}
+
+/** Whether a setup retains a filament whose catalog identity is intentionally unknown. */
+export function isUnknownFilamentSelection(input: BuildConfigInput, filament?: InventoryItem): boolean {
+  const selection = input.filamentSelections?.[0] as (BuildFilamentSelection & Record<string, unknown>) | undefined;
+  if (selection?.catalogIdentityState === "unknown") return true;
+  if (!selection || selection.catalogProductId) return false;
+  return Boolean(input.filamentItemId || filament) && !filament?.catalogProduct;
 }
 
 export interface BomLineStatus {

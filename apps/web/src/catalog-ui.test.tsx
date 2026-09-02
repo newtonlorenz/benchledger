@@ -7,6 +7,9 @@ import {
   CatalogCombobox,
   CatalogInventoryFlow,
   CatalogProductCreateForm,
+  OwnedItemCombobox,
+  buildFilamentSelection,
+  buildItemEligibility,
   catalogFacetValues,
   filterCatalogProductsByFacets,
   loadCompleteCatalogProducts,
@@ -235,5 +238,82 @@ describe("exact-product language and setup summary", () => {
     expect(markup).toContain("slicer v1.10.0");
     expect(markup).toContain("a".repeat(64));
     expect(markup).toContain("Nozzle wear date");
+  });
+
+  it("keeps a counted physical filament selectable without inventing a catalog product", () => {
+    const { catalogProduct, productProfile, ...physicalBase } = inventory.find((item) => item.category === "Filament")!;
+    const physical = {
+      ...physicalBase,
+      id: "legacy-spool",
+      name: "Drawer spool label",
+      serverEvidence: "physically_counted" as const,
+      availableQuantity: 0,
+      reserved: 540
+    };
+    expect(buildItemEligibility(physical, "Filament")).toMatchObject({ eligible: true });
+    expect(buildFilamentSelection(physical)).toEqual({ itemId: "legacy-spool", catalogIdentityState: "unknown" });
+
+    const selectionMarkup = renderToStaticMarkup(<OwnedItemCombobox category="Filament" items={[physical]} value={physical} onSelect={() => undefined} label="Owned filament" />);
+    expect(selectionMarkup).toContain("Drawer spool label");
+    expect(selectionMarkup).toContain("Exact product unknown");
+    expect(selectionMarkup).not.toContain("Not eligible");
+  });
+
+  it("visibly rejects unverified physical evidence and printers without an exact product", () => {
+    const { catalogProduct: deliveredCatalogProduct, productProfile: deliveredProductProfile, ...deliveredBase } = inventory.find((item) => item.category === "Filament")!;
+    const delivered = {
+      ...deliveredBase,
+      id: "delivered-spool",
+      serverEvidence: "delivered_uncounted" as const,
+      availableQuantity: 0
+    };
+    const { catalogProduct: printerCatalogProduct, productProfile: printerProductProfile, ...printerBase } = inventory.find((item) => item.category === "Printers")!;
+    const unlinkedPrinter = {
+      ...printerBase,
+      id: "legacy-printer",
+      serverEvidence: "physically_counted" as const,
+      availableQuantity: 1
+    };
+    const exactPrinter = {
+      ...exactItem(inventory.find((item) => item.category === "Printers")!, printerProduct),
+      id: "confirmed-printer",
+      serverEvidence: "delivered_uncounted" as const,
+      availableQuantity: 0
+    };
+    const exactFilament = {
+      ...exactItem(inventory.find((item) => item.category === "Filament")!, filamentProduct),
+      id: "confirmed-filament",
+      serverEvidence: "delivered_uncounted" as const,
+      availableQuantity: 0
+    };
+    expect(buildItemEligibility(delivered, "Filament")).toMatchObject({ eligible: false, reason: expect.stringContaining("physical") });
+    expect(buildItemEligibility(unlinkedPrinter, "Printers")).toMatchObject({ eligible: false, reason: expect.stringContaining("exact printer") });
+    expect(buildItemEligibility(exactPrinter, "Printers")).toMatchObject({ eligible: true });
+    expect(buildItemEligibility(exactFilament, "Filament")).toMatchObject({ eligible: true });
+    const markup = renderToStaticMarkup(<OwnedItemCombobox category="Filament" items={[delivered]} value={delivered} onSelect={() => undefined} label="Owned filament" />);
+    expect(markup).toContain("Not eligible");
+    expect(markup).toContain("physical count");
+  });
+
+  it("renders a copied physical label and explicit design blocker for an unknown filament snapshot", () => {
+    const { catalogProduct, productProfile, ...physicalBase } = inventory.find((item) => item.category === "Filament")!;
+    const physical = { ...physicalBase, id: "legacy-spool", name: "Current inventory label", serverEvidence: "physically_counted" as const, availableQuantity: 540 };
+    const input = {
+      printerItemId: "printer-1",
+      printerProductId: "printer-product-1",
+      filamentItemId: "legacy-spool",
+      accessories: [],
+      unknowns: [],
+      filamentSelections: [{ itemId: "legacy-spool", catalogIdentityState: "unknown", physicalLabel: "Drawer spool label", physicalEvidence: { state: "physically_counted", source: "legacy-import", observedAt: "2026-08-30T09:00:00.000Z", note: "Counted from the drawer" }, role: "model", quantity: 540 }]
+    } as BuildConfigInput;
+    const markup = renderToStaticMarkup(<BuildSetupSummary input={input} filament={physical} expert />);
+    expect(markup).toContain("Drawer spool label");
+    expect(markup).toContain("Exact product unknown");
+    expect(markup).toContain("Design open");
+    expect(markup).toContain("Blocker");
+    expect(markup).toContain("before production approval");
+    expect(markup).toContain("physically_counted");
+    expect(markup).toContain("legacy-import");
+    expect(markup).toContain("Counted from the drawer");
   });
 });

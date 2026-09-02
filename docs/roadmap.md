@@ -119,7 +119,13 @@ output; package/unit migrations precede reliable component reservations.
 
 - [ ] `BL-AW-009` → `REQ-009`: multi-plate build-plan aggregate with repeated
   parts, material roles, exact spools, nozzle/side, and manufacturing evidence.
-  **Proposed; build-configuration snapshots are a prerequisite foundation.**
+  **Partial foundation implemented:** build-configuration snapshots now accept
+  an explicitly unknown catalog identity for an active physically counted or
+  commissioned filament item. The immutable snapshot copies only physical
+  label/evidence, remains Design open, and blocks production approval without
+  fabricating product/profile identity or changing stock. Exact filament and
+  printer paths remain unchanged. Multi-plate aggregation, repeated-part
+  planning, and material-role completeness remain proposed.**
 - [ ] `BL-AW-010` → `REQ-010`: host-mediated batch artifact staging and
   finalization without base64 MCP payloads, arbitrary paths, or executable
   handling. **Partial foundation only:** secure artifact sessions exist, but

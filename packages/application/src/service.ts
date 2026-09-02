@@ -13,7 +13,8 @@ import {
   inventoryItemSchema,
   saveReconciliationDraftSchema, commitReconciliationSchema, reconciliationDraftSchema,
   reconciliationCommitSchema, reservationSchema, workspaceSecurityStatusSchema, workspaceSecurityMutationSchema,
-  projectSetupProposalSchema, commitProjectSetupSchema, projectSetupPreviewSchema, quantityConversionSchema
+  projectSetupProposalSchema, commitProjectSetupSchema, projectSetupPreviewSchema, quantityConversionSchema,
+  FILAMENT_CATALOG_IDENTITY_UNKNOWN_BLOCKER
 } from "@benchledger/api-contract";
 import type {
   Artifact, BomGap, BomGapCandidate, BomLine, CreateBomLine, CreateInventoryItem, CreateOffer, CreateProject,
@@ -39,6 +40,8 @@ import { buildReconciliationDocument, reconciliationCommitId, reconciliationDraf
 import { canonicalInventoryBulkUpdate, inventoryBulkUpdateFingerprint, normalizeInventoryBulkChanges } from "./inventory-bulk.js";
 
 const CONFIRMED_EVIDENCE = new Set(["physically_counted", "commissioned"]);
+/** Stable blocker recorded when a physical filament has no catalog identity. */
+export const FILAMENT_CATALOG_IDENTITY_UNKNOWN = FILAMENT_CATALOG_IDENTITY_UNKNOWN_BLOCKER;
 const COMMISSIONABLE_EVIDENCE = new Set(["delivered_uncounted", "ordered_unverified"]);
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const ALLOWED_BINARY_MEDIA = new Set([
@@ -1153,6 +1156,10 @@ export class ApplicationService {
     delete supplied.createdAt;
     const parsed = createBuildConfigurationSnapshotSchema.parse(supplied);
     const unknowns = [...parsed.explicitUnknowns];
+    const hasPhysicalOnlyFilament = parsed.filamentSelections.some((selection) => "catalogIdentityState" in selection);
+    if (hasPhysicalOnlyFilament && revision.status === "production approved") {
+      throw conflict("A production-approved revision cannot use a filament with unknown catalog identity");
+    }
     const catalog = catalogPort(this.ports);
     const printerItem = await this.ports.inventory.getItem(parsed.printerItemSnapshot.itemId);
     if (printerItem === null) throw notFound("Inventory item", parsed.printerItemSnapshot.itemId);
@@ -1168,6 +1175,24 @@ export class ApplicationService {
       const item = await this.ports.inventory.getItem(selection.itemId);
       if (item === null) throw notFound("Inventory item", selection.itemId);
       if (item.kind !== "filament") throw new ApplicationError("validation", `Inventory item '${item.id}' is not a filament`);
+      if ("catalogIdentityState" in selection) {
+        if (item.retiredAt !== undefined) {
+          throw new ApplicationError("validation", `Inventory item '${item.id}' is retired and cannot be selected as a physical filament`);
+        }
+        if (!CONFIRMED_EVIDENCE.has(item.evidence.state)) {
+          throw new ApplicationError("validation", `Inventory item '${item.id}' requires physically_counted or commissioned evidence before an unlinked filament can be selected`);
+        }
+        filamentSelections.push({
+          itemId: item.id,
+          catalogIdentityState: "unknown",
+          physicalLabel: item.name,
+          physicalEvidence: { ...item.evidence },
+          ...(selection.role === undefined ? {} : { role: selection.role }),
+          ...(selection.quantity === undefined ? {} : { quantity: selection.quantity }),
+        });
+        unknowns.push(FILAMENT_CATALOG_IDENTITY_UNKNOWN);
+        continue;
+      }
       const product = await catalog.getProduct(selection.catalogProductId);
       if (product === null) throw notFound("Catalog product", selection.catalogProductId);
       if (product.kind !== "filament") throw new ApplicationError("validation", `Catalog product '${product.id}' is not a filament`);

@@ -146,6 +146,17 @@ and conditional or unknown compatibility, remain Check and are never buyable or
 reservable. Valid converted reservations use whole inventory `set` quantities
 and read back as `set`.
 
+Build-configuration filament selections use a strict union. The existing exact
+branch retains `itemId` plus exact catalog product/profile linkage. The
+physical-only branch must explicitly declare `catalogIdentityState: "unknown"`
+and is accepted only for an active filament with `physically_counted` or
+`commissioned` evidence. Its immutable response copies `physicalLabel` and
+`physicalEvidence`, includes the design-open production blocker, and contains
+no catalog, profile, link-state, or inferred compatibility fields. Creating the
+snapshot does not reserve or consume stock. Exact printer selection is
+unchanged, and a physical-only filament cannot be attached to a
+production-approved revision.
+
 `create_project_with_initial_revision` accepts optional caller-provided stable
 project and revision IDs. Those IDs identify records and never act as replay
 keys. An identical retry requires the same idempotency key and complete

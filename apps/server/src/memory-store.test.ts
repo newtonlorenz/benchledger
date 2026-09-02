@@ -478,3 +478,68 @@ describe("Memory BOM quantity conversion parity", () => {
     expect(committed.data.reservations).toMatchObject([{ id: "memory-conversion-setup-reservation", quantity: 2 }]);
   });
 });
+
+describe("Memory build configuration persistence", () => {
+  it("retains physical-only filament snapshots and rejects tampering", async () => {
+    const runtime = createMemoryRuntime([{
+      id: "memory-physical-filament",
+      name: "Unidentified PETG spool",
+      kind: "filament",
+      quantity: 760,
+      availableQuantity: 760,
+      unit: "gram",
+      tags: [],
+      links: [],
+      evidence: {
+        state: "physically_counted",
+        source: "synthetic bench count",
+        observedAt: "2026-08-30T00:00:00.000Z",
+        note: "Synthetic physical-only filament fixture",
+      },
+      createdAt: "2026-08-30T00:00:00.000Z",
+      updatedAt: "2026-08-30T00:00:00.000Z",
+      version: 1,
+    }]);
+    const service = new ApplicationService(runtime.ports);
+    const context = {
+      actor: "memory-physical-snapshot",
+      source: "api" as const,
+      correlationId: "memory-physical-snapshot",
+      scopes: new Set(["read", "write", "catalog:read", "catalog:write", "projects:read", "projects:write"]),
+    };
+    const project = await service.createProject({ id: "memory-physical-project", name: "Physical snapshot", status: "planned" }, context);
+    const revision = await service.createProjectRevision(project.data.id, { id: "memory-physical-revision", name: "Initial", status: "concept" }, context);
+    const printerItem = await service.createInventoryItem({ id: "memory-physical-printer", name: "H2D", kind: "printer", quantity: 1, unit: "each", tags: [], links: [], evidence: { state: "commissioned" } }, context);
+    const printerProduct = await service.createCatalogProduct({ kind: "printer", manufacturer: "Bambu Lab", exactModel: "H2D", technology: "fff", buildVolumeMm: { x: 325, y: 320, z: 325 } }, context);
+    const printerProfile = await service.putInventoryProductProfile(printerItem.data.id, { catalogProductId: printerProduct.data.id, profileType: "printer_asset", linkState: "confirmed", details: {} }, undefined, context);
+    const productsBefore = runtime.catalog.products.size;
+    const profilesBefore = runtime.catalog.profiles.size;
+
+    const snapshot = await service.createBuildConfiguration(revision.data.id, {
+      printerItemSnapshot: { itemId: printerItem.data.id, catalogProductId: printerProduct.data.id, profileId: printerProfile.data.id },
+      filamentSelections: [{ itemId: "memory-physical-filament", catalogIdentityState: "unknown", role: "model", quantity: 320 }],
+      activeHotend: "left", nozzle: { diameterMm: 0.4 }, plate: "Textured PEI", accessories: [], firmware: "01", slicer: "Bambu Studio", profile: "Standard", calibration: "checked", explicitUnknowns: [],
+    }, context);
+    expect(snapshot.data.filamentSelections).toEqual([{
+      itemId: "memory-physical-filament",
+      catalogIdentityState: "unknown",
+      physicalLabel: "Unidentified PETG spool",
+      physicalEvidence: runtime.inventory.items.get("memory-physical-filament")?.evidence,
+      role: "model",
+      quantity: 320,
+    }]);
+    expect(runtime.catalog.products.size).toBe(productsBefore);
+    expect(runtime.catalog.profiles.size).toBe(profilesBefore);
+    await expect(runtime.ports.buildConfigurations!.getBuildConfiguration(snapshot.data.id)).resolves.toEqual(snapshot.data);
+
+    const stored = runtime.buildConfigurations.snapshots.get(snapshot.data.id);
+    if (stored === undefined) throw new Error("expected memory snapshot");
+    runtime.buildConfigurations.snapshots.set(snapshot.data.id, {
+      ...stored,
+      filamentSelections: [{ ...stored.filamentSelections[0]!, physicalLabel: "Tampered label" }],
+    });
+    await expect(runtime.ports.buildConfigurations!.getBuildConfiguration(snapshot.data.id)).rejects.toThrow(/hash|integrity/i);
+    await expect(runtime.ports.buildConfigurations!.getLatestBuildConfiguration(revision.data.id)).rejects.toThrow(/hash|integrity/i);
+    await expect(runtime.ports.buildConfigurations!.listBuildConfigurations(revision.data.id, { limit: 10 })).rejects.toThrow(/hash|integrity/i);
+  });
+});
