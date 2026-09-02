@@ -9,7 +9,7 @@ import type {
   ProjectWithInitialRevision as ApiProjectWithInitialRevision, CreateProjectWithInitialRevision,
   Reservation as ApiReservation, WorkItem as ApiWorkItem, WorkItemRevision as ApiWorkItemRevision, ProjectTombstone
 } from "@benchledger/api-contract";
-import { ApplicationError, matchesBomConstraints, unsupportedBomConstraintKeys } from "@benchledger/application";
+import { ApplicationError, matchesBomConstraints, stableCreateConflict, unsupportedBomConstraintKeys } from "@benchledger/application";
 import type { ProjectPort, ProjectListOptions, RequestContext, ReservationDetails, StockMutation, UsageInput } from "@benchledger/application";
 import { BomRepository, ProjectRepository, ReservationRepository } from "@benchledger/database";
 import type { ReservationReleaseOptions } from "@benchledger/database";
@@ -161,7 +161,7 @@ export class ProductionProjectAdapter implements ProjectPort {
     });
   }
 
-  async createProjectWithInitialRevision(input: CreateProjectWithInitialRevision, _ctx: RequestContext): Promise<ApiProjectWithInitialRevision> {
+  async createProjectWithInitialRevision(input: CreateProjectWithInitialRevision, ctx: RequestContext): Promise<ApiProjectWithInitialRevision> {
     return attempt(() => {
       const projectId = input.project.id ?? createId("project");
       const revisionId = input.revision.id ?? createId("project-revision");
@@ -184,6 +184,15 @@ export class ProductionProjectAdapter implements ProjectPort {
         createdAt: now
       });
       return this.database.transaction(() => {
+        if (this.projects.hasProjectId(projectId)) {
+          throw stableCreateConflict("project_id_exists", "projectId", projectId, "The project ID is already in use; read the existing project or choose a different project ID.", ctx.idempotencyKey);
+        }
+        if (this.projects.hasRevisionId(revisionId)) {
+          throw stableCreateConflict("revision_id_exists", "revisionId", revisionId, "The revision ID is already in use; choose a different revision ID.", ctx.idempotencyKey);
+        }
+        if (this.projects.hasProjectSlug(nativeProject.slug)) {
+          throw stableCreateConflict("project_name_exists", "projectName", nativeProject.slug, "A project with this name already exists; read the existing project or choose a different project name.", ctx.idempotencyKey);
+        }
         const createdProject = this.projects.create(nativeProject);
         this.state.setInitialVersion(PROJECT, createdProject.id);
         const createdRevision = this.projects.createRevision(nativeRevision);

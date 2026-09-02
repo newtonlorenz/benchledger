@@ -31,6 +31,49 @@ describe("MCP error boundary", () => {
     }
   });
 
+  it("preserves safe collision details and gives the agent a next action", () => {
+    const error = new Error("Project 'stable-project' already exists");
+    Object.assign(error, {
+      code: "conflict",
+      details: {
+        reason: "project_id_exists",
+        field: "projectId",
+        id: "stable-project",
+        retryable: false,
+        commitState: "not_committed",
+      },
+    });
+    expect(mapBackendError(error)).toMatchObject({
+      code: "CONFLICT",
+      message: expect.stringMatching(/read the existing project|different project id/i),
+      details: {
+        reason: "project_id_exists",
+        field: "projectId",
+        id: "stable-project",
+        retryable: false,
+        commitState: "not_committed",
+      },
+    });
+  });
+
+  it("preserves valid 240-character project-name collision IDs and sanitizes unsafe details", () => {
+    const longId = "a".repeat(220);
+    const valid = new Error("name collision");
+    Object.assign(valid, {
+      code: "conflict",
+      details: { reason: "project_name_exists", field: "projectName", id: longId, retryable: false, commitState: "not_committed" },
+    });
+    expect(mapBackendError(valid)).toMatchObject({ code: "CONFLICT", details: { reason: "project_name_exists", id: longId } });
+
+    const unsafe = new Error("backend detail");
+    Object.assign(unsafe, {
+      code: "conflict",
+      details: { reason: "project_name_exists", field: "projectName", id: "a".repeat(241), retryable: false, commitState: "not_committed", sql: "SELECT * FROM projects" },
+    });
+    expect(mapBackendError(unsafe)).toMatchObject({ code: "CONFLICT" });
+    expect(mapBackendError(unsafe).details).toBeUndefined();
+  });
+
   it("maps validation and storage failures without leaking backend detail", () => {
     for (const code of ["validation", "invalid_cursor", "quota_exceeded", "unsupported_media"]) {
       expect(mapBackendError(codedError(code))).toMatchObject({ code: "INVALID_ARGUMENT", message: "The request arguments are invalid." });

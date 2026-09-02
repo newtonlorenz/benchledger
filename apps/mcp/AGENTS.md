@@ -214,6 +214,20 @@ audit information when available, and the resulting state. Pass the returned
 `expectedVersion` on the next mutable update. A conflict means another surface
 changed the record; read again rather than overwriting it.
 
+`create_project_with_initial_revision` accepts optional caller-provided
+`projectId` and `revisionId` values as stable record identities, never as replay
+keys. An ambiguous retry replays exactly once only when the idempotency key and
+the complete canonical project/revision payload are identical. Reusing the key
+with a changed payload returns a safe idempotency conflict. A 409 collision
+response exposes only bounded details (`reason`, `field`, `id`,
+`retryable: false`, `commitState: "not_committed"`) and distinguishes
+`project_id_exists`, `revision_id_exists`, `project_name_exists`, and
+`idempotency_key_reused`. Read the existing project, choose a different project
+or revision ID, or choose a different project name as directed. Removed
+projects retain their IDs and generated names/slugs, so those identities are
+not reclaimed. Bulk project-graph setup and preview/commit are still pending;
+this command covers only the project and its first revision.
+
 For bounded catalog corrections, use `bulk_update_inventory_items` with 1–100
 explicit `{itemId, expectedVersion}` targets. Supply at least one of a
 non-empty location, canonical condition (`new`, `good`, `worn`, `needs_repair`,
@@ -225,7 +239,8 @@ audit/events, and an idempotent retry returns the stored result without
 repeating them.
 When the host has no HTTP idempotency header (for example, stdio), the
 application bridge derives a bounded actor/action/payload key; an explicit
-host key remains authoritative.
+host key remains authoritative. Stable project and revision IDs never imply
+replay, and a reused key with changed project/revision fields is rejected.
 The single-item `update_inventory_item` command accepts a full replacement
 `tags` array (normalized and deduplicated). Quantity, evidence, identity,
 profile, retirement, partial, undo, and import changes remain unsupported by

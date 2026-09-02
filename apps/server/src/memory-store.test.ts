@@ -67,6 +67,23 @@ describe("MemoryInventory", () => {
     await expect(runtime.projects.listRemovedProjects()).resolves.toEqual([]);
   });
 
+  it("retains a project's generated slug collision identity after a rename", async () => {
+    const runtime = createMemoryRuntime();
+    const project = await runtime.projects.createProject({ id: "memory-slug-project", name: "Original Stable Name", status: "planned" });
+    const renamed = await runtime.projects.updateProject(project.id, { name: "A Different Name" }, project.version);
+    expect(renamed.name).toBe("A Different Name");
+
+    await expect(runtime.projects.createProjectWithInitialRevision({
+      project: { id: "memory-new-project", name: "Original Stable Name", status: "planned" },
+      revision: { id: "memory-new-revision", name: "Initial", status: "concept" },
+    }, { actor: "memory-store-test", source: "api", correlationId: "memory-slug-collision", scopes: new Set(["write"]) })).rejects.toMatchObject({
+      code: "conflict",
+      details: { reason: "project_name_exists", field: "projectName", id: "original-stable-name", commitState: "not_committed" },
+    });
+    await expect(runtime.projects.getProject("memory-new-project")).resolves.toBeNull();
+    await expect(runtime.projects.getProjectRevision("memory-new-revision")).resolves.toBeNull();
+  });
+
   it("rolls back an in-memory removal when reservation release fails", async () => {
     const runtime = createMemoryRuntime();
     const project = await runtime.projects.createProject({ id: "project-release-failure", name: "Release failure", status: "planned" });

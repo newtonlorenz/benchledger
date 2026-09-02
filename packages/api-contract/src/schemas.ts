@@ -419,6 +419,20 @@ export const createProjectWithInitialRevisionSchema = z.object({
   revision: createProjectRevisionSchema
 }).strict();
 
+/**
+ * Safe, machine-readable conflicts returned by the atomic project setup
+ * command. The details deliberately identify only the requested target; they
+ * never include an existing record or a database constraint message.
+ */
+export const projectCreationConflictDetailsSchema = z.object({
+  reason: z.enum(["project_id_exists", "revision_id_exists", "project_name_exists", "idempotency_key_reused"]),
+  field: z.enum(["projectId", "revisionId", "projectName", "idempotencyKey"]),
+  id: z.string().min(1).max(240),
+  retryable: z.literal(false),
+  commitState: z.literal("not_committed"),
+  commandId: z.string().min(1).max(200).optional()
+}).strict();
+
 export const projectWithInitialRevisionSchema = z.object({
   project: projectSchema,
   revision: projectRevisionSchema

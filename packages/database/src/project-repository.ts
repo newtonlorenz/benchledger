@@ -17,6 +17,15 @@ export class ProjectRepository {
     return row === undefined ? undefined : projectFromRow(row);
   }
 
+  /** Read-only collision checks used inside the atomic project-create transaction. */
+  hasProjectId(id: string): boolean {
+    return this.database.get<SqliteRow>("SELECT id FROM projects WHERE id = ?", [id]) !== undefined;
+  }
+
+  hasProjectSlug(slug: string): boolean {
+    return this.database.get<SqliteRow>("SELECT slug FROM projects WHERE slug = ?", [slug]) !== undefined;
+  }
+
   list(includeRetired = false): readonly Project[] {
     const where = includeRetired ? "" : "WHERE retired_at IS NULL AND removed_at IS NULL";
     return this.database.all<SqliteRow>(`SELECT * FROM projects ${where} ORDER BY updated_at DESC, id`, []).map(projectFromRow);
@@ -67,6 +76,10 @@ export class ProjectRepository {
   getRevision(id: string): ProjectRevision | undefined {
     const row = this.database.get<SqliteRow>("SELECT * FROM project_revisions WHERE id = ?", [id]);
     return row === undefined ? undefined : projectRevisionFromRow(row);
+  }
+
+  hasRevisionId(id: string): boolean {
+    return this.database.get<SqliteRow>("SELECT id FROM project_revisions WHERE id = ?", [id]) !== undefined;
   }
 
   createWorkItemRevision(revision: WorkItemRevision): WorkItemRevision {
