@@ -12,6 +12,8 @@ The detailed `REQ-*` engineering contracts below remain the implementation annex
 - [x] `MPM-A` / `MPM-001`: active BOM rows, optional requirements, confirmed,
   allocated and inspect-first inventory, and Ready/Check/Decide/Source totals now
   reconcile across the shared application, HTTP, MCP and web projections.
+  Web BOM rows retain server versions and canonical units for expert read-back
+  while keeping those fields behind the existing progressive disclosure.
 - [x] `MPM-002`: project lifecycle is now the single canonical
   `idea → planned → ready → building → validating → complete → archived`
   vocabulary across domain, database, HTTP/OpenAPI, MCP and web. `blocked`

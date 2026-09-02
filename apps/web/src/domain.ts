@@ -303,6 +303,8 @@ export interface InventoryItem {
 
 export interface BomLine {
   id: string;
+  /** Server version used for optimistic BOM updates and expert read-back. */
+  version: number;
   label: string;
   itemId?: string;
   required: number;
