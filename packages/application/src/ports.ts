@@ -17,7 +17,11 @@ import type {
   ReconciliationDraft,
   ReconciliationBasis,
   ReconciliationLine,
-  ReconciliationPreview
+  ReconciliationPreview,
+  ProjectSetupProposal,
+  ProjectSetupPreview,
+  CommitProjectSetup,
+  ProjectSetupCommitResult
 } from "@benchledger/api-contract";
 import type {
   InventoryCategory as ApiInventoryCategory,
@@ -115,6 +119,26 @@ export interface ReconciliationPort {
   saveDraft(draft: ReconciliationDraft, expectedVersion: number | undefined): Promise<ReconciliationDraft>;
   /** Re-read the canonical basis and apply every effect in one transaction. */
   commit(input: ReconciliationCommitInput, ctx: RequestContext): Promise<ReconciliationCommit>;
+}
+
+/**
+ * Storage seam for the review-first project setup aggregate. Preview rows are
+ * deliberately separate from projects and inventory so a preview cannot
+ * accidentally become a partially-created graph.
+ */
+export interface ProjectSetupPort {
+  savePreview(preview: ProjectSetupPreview, actor: string): Promise<ProjectSetupPreview>;
+  getPreview(id: string, actor: string): Promise<ProjectSetupPreview | null>;
+  commitPreview(input: {
+    readonly preview: ProjectSetupPreview;
+    readonly command: CommitProjectSetup;
+    readonly actor: string;
+    readonly source: RequestSource;
+    readonly correlationId: string;
+  }): Promise<ProjectSetupCommitResult>;
+  /** Memory adapters may expose an explicit compensation receipt for failures
+   * after graph creation but before the enclosing audit/idempotency commit. */
+  rollbackLastCommit?(): Promise<void>;
 }
 
 export type RequestSource = "ui" | "api" | "mcp" | "import" | "system";
@@ -439,6 +463,7 @@ export interface ApplicationPorts {
   /** Immutable setup snapshots owned by a project revision. */
   readonly buildConfigurations?: BuildConfigurationPort;
   readonly reconciliations?: ReconciliationPort;
+  readonly projectSetups?: ProjectSetupPort;
   readonly workspaceSecurity?: WorkspaceSecurityPort;
   readonly audit: AuditPort;
   readonly events: EventBusPort;

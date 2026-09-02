@@ -71,6 +71,21 @@ afterEach(() => {
 });
 
 describe("authenticated BenchLedger API adapter", () => {
+  it("keeps project setup preview and commit calls on the shared API with a caller-owned retry key", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=setup-csrf" });
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ id: "setup-preview", version: 1, status: "active" }))
+      .mockResolvedValueOnce(jsonResponse({ data: { project: { id: "setup-project" }, auditIds: ["audit-1"] } }));
+    const adapter = createWorkspaceAdapter();
+    const proposal = { project: { name: "Setup", status: "planned" }, revision: { name: "Initial", status: "concept" }, bomLines: [{ localRef: "line", name: "Requirement", requiredQuantity: 1, unit: "each" }] };
+    await expect(adapter.previewProjectSetup(proposal)).resolves.toMatchObject({ id: "setup-preview" });
+    await expect(adapter.commitProjectSetup({ previewId: "setup-preview", expectedPreviewVersion: 1, contentSha256: "a".repeat(64), confirmReservations: false, idempotencyKey: "setup-web-retry" })).resolves.toMatchObject({ data: { project: { id: "setup-project" } } });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/project-setup/previews");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/v1/project-setup/previews/setup-preview/commit");
+    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("idempotency-key")).toBe("setup-web-retry");
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({ expectedPreviewVersion: 1, contentSha256: "a".repeat(64), confirmReservations: false });
+  });
+
   it("reads workspace access and explicitly bootstraps a LAN-open session", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse({ mode: "lan_open", demo: false, version: 3 }))

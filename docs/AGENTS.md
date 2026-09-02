@@ -156,8 +156,12 @@ conflict. A 409 for this command has sanitized details with `reason`, `field`,
 `idempotency_key_reused`; read the existing project, choose a different project
 or revision ID, or choose a different project name as directed. Removed
 projects retain their IDs and generated names/slugs, so those identities are
-never reclaimed. Bulk project-graph setup and preview/commit remain pending;
-use this command only for the project and its first revision.
+never reclaimed. For a bounded complete project graph, use
+`preview_project_setup` followed by the actor-owned, version/hash-checked
+`commit_project_setup` (with explicit reservation confirmation when needed).
+The shared application service is authoritative across HTTP and MCP; web UI
+composition, templates, and a full Describe→Review→Create flow remain
+separate work.
 
 Projects use one lifecycle on every surface: `idea`, `planned`, `ready`,
 `building`, `validating`, `complete`, `archived`. Treat `blocked` as a derived

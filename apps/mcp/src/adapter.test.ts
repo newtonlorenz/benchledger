@@ -259,6 +259,23 @@ describe("McpAdapter", () => {
     expect(result.structuredContent).toMatchObject({ error: { code: "FORBIDDEN" } });
   });
 
+  it("requires both setup write scopes and denies project-scoped setup", async () => {
+    const adapter = new McpAdapter(backend());
+    const proposal = {
+      project: { name: "Setup", status: "planned" },
+      revision: { name: "Initial", status: "concept" },
+      bomLines: [{ localRef: "part", name: "Part", requiredQuantity: 1, unit: "each" }],
+    };
+    await expect(adapter.callTool("preview_project_setup", proposal, { actorId: "project-only", scopes: ["projects:write"] }))
+      .resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "FORBIDDEN" } } });
+    await expect(adapter.callTool("commit_project_setup", { previewId: "setup-preview", expectedPreviewVersion: 1, contentSha256: "a".repeat(64), confirmReservations: false }, { actorId: "bom-only", scopes: ["bom:write"], idempotencyKey: "setup-key-1" }))
+      .resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "FORBIDDEN" } } });
+    await expect(adapter.callTool("preview_project_setup", proposal, { ...context, projectIds: ["project-1"] }))
+      .resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "FORBIDDEN" } } });
+    await expect(adapter.callTool("commit_project_setup", { previewId: "setup-preview", expectedPreviewVersion: 1, contentSha256: "a".repeat(64), confirmReservations: false }, { ...context, projectIds: ["project-1"], idempotencyKey: "setup-key-2" }))
+      .resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "FORBIDDEN" } } });
+  });
+
   it("dispatches category CRUD with the same bounded scopes and archive command", async () => {
     const adapter = new McpAdapter(backend());
     const listed = await adapter.callTool("list_inventory_categories", { limit: 10 }, context);

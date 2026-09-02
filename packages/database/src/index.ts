@@ -9,3 +9,4 @@ export * from "./workspace-security-repository.js";
 export * from "./catalog-repository.js";
 export * from "./reconciliation-repository.js";
 export * from "./category-repository.js";
+export * from "./project-setup-repository.js";

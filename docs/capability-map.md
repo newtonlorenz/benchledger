@@ -85,6 +85,8 @@ and invalid hashes. Mutating tools use optimistic versions where applicable.
 | Catalog | `create_catalog_product`, `update_catalog_product`, `link_inventory_product_profile` | `catalog:write` | Yes |
 | Projects | `list_projects`, `list_removed_projects`, `read_removed_project_history`, `read_project`, `read_work_item`, `read_project_revision`, `read_work_item_revision` | `projects:read` | No |
 | Projects | `create_project`, `create_project_with_initial_revision`, `update_project`, `archive_project`, `restore_project`, `remove_project`, `retire_project` (compatibility alias), `create_work_item`, `create_project_revision`, `create_work_item_revision` | `projects:write` | Yes; atomic initial setup accepts stable caller IDs |
+| Project setup | `preview_project_setup` | `projects:write` + `bom:write` | Preview metadata only; actor-owned 30-minute row, no graph/stock/audit/event mutation |
+| Project setup | `commit_project_setup` | `projects:write` + `bom:write` | Yes; exact preview, reservations, one aggregate audit, and idempotent replay |
 | BOM | `list_bom_lines`, `list_reservations`, `read_reservation`, `calculate_bom_gaps` (Ready/Check/Decide/Source plus exact missing specification decisions) | `bom:read` | No |
 | BOM | `create_bom_line`, `update_bom_line`, `retire_bom_line`, `restore_bom_line`, `create_reservation`, `release_reservation`, `record_usage` | `bom:write` | Yes |
 | Reconciliation | `read_reconciliation` | `bom:read` | No |
@@ -120,6 +122,21 @@ reasons containing the revision, line, decision and explanation. The separate
 revision evidence ladder (`concept` through `production
 approved`) does not move when the project lifecycle changes.
 
+`preview_project_setup` accepts one project and initial revision, up to six work
+items (each with one initial revision), one to 24 BOM lines, and up to 48
+optional reservations. Local references are unique and the canonical proposal
+is limited to 256 KiB. The preview returns stable normalized IDs, semantic
+field errors, unresolved specifications, gap candidates/totals, planned
+reservation and before/after inventory basis, expiry, and a SHA-256 content
+hash. It persists only bounded actor-owned preview metadata for 30 minutes.
+`commit_project_setup` requires the exact preview ID/version/hash and an
+8–200-character idempotency key; planned reservations additionally require
+`confirmReservations: true`. It rechecks every basis row and creates the
+complete graph and allocation events in one transaction. Stale basis is a
+non-retryable 409 with `commitState: "not_committed"` and a fresh-preview
+recovery action. Identical same-actor/key/canonical commits replay; changed
+payloads conflict.
+
 `create_project_with_initial_revision` accepts optional caller-provided stable
 project and revision IDs. Those IDs identify records and never act as replay
 keys. An identical retry requires the same idempotency key and complete
@@ -130,9 +147,11 @@ and reused-key conflicts return sanitized, machine-readable details with
 The agent should read the existing project, choose a different project or
 revision ID, or choose a different project name according to the reason. No
 project, revision, audit, or idempotency record is committed on conflict, and
-removed identities are not reclaimed. Bulk project-graph setup and
-preview/commit remain pending; this capability is limited to the project and
-its first revision.
+removed identities are not reclaimed. Use the bounded
+`preview_project_setup` and `commit_project_setup` tools for complete graph
+setup; this capability remains available for the incremental project-plus-first
+revision path. Web UI composition, templates, and a full Describe→Review→Create
+flow are separate work.
 
 The server's `tools/list` response contains only MCP's public fields (`name`,
 `description`, and `inputSchema`). Scope and mutation metadata are intentionally

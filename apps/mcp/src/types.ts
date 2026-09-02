@@ -24,6 +24,10 @@ import type {
   CreateInventoryCategory as ApiCreateInventoryCategory,
   UpdateInventoryCategory as ApiUpdateInventoryCategory,
   ProjectLifecycle as ApiProjectLifecycle,
+  ProjectSetupProposal as ApiProjectSetupProposal,
+  ProjectSetupPreview as ApiProjectSetupPreview,
+  CommitProjectSetup as ApiCommitProjectSetup,
+  ProjectSetupCommitResult as ApiProjectSetupCommitResult,
 } from "@benchledger/api-contract";
 
 export type JsonPrimitive = null | boolean | number | string;
@@ -193,6 +197,10 @@ export type BuildConfigurationCreateInput = ApiCreateBuildConfigurationSnapshot;
 export type ReconciliationDraft = ApiReconciliationDraft;
 export type ReconciliationCommit = ApiReconciliationCommit;
 export type ReconciliationDraftSaveInput = ApiSaveReconciliationDraft;
+export type ProjectSetupProposal = ApiProjectSetupProposal;
+export type CommitProjectSetupInput = ApiCommitProjectSetup;
+export type ProjectSetupPreview = ApiProjectSetupPreview;
+export type ProjectSetupCommitResult = ApiProjectSetupCommitResult;
 /** MCP keeps the revision in the input because it is the ancestry anchor. */
 export type ReconciliationCommitInput = { projectRevisionId: string } & ApiCommitReconciliation;
 
@@ -858,6 +866,8 @@ export interface ProjectsBackend {
   get(input: { projectId: string }, context: McpRequestContext): Promise<Project>;
   create(input: ProjectCreateInput, context: McpRequestContext): Promise<WriteResult<Project>>;
   createWithInitialRevision(input: ProjectWithInitialRevisionCreateInput, context: McpRequestContext): Promise<ProjectWithInitialRevisionResult>;
+  previewSetup?(input: ProjectSetupProposal, context: McpRequestContext): Promise<ProjectSetupPreview>;
+  commitSetup?(input: CommitProjectSetupInput, context: McpRequestContext): Promise<ProjectSetupCommitResult & { auditId?: string; correlationId?: string; replayed?: boolean }>;
   update(input: ProjectUpdateInput, context: McpRequestContext): Promise<WriteResult<Project>>;
   retire(input: { projectId: string; expectedVersion?: number }, context: McpRequestContext): Promise<WriteResult>;
   /** Canonical reversible lifecycle command; retire remains a compatibility alias. */

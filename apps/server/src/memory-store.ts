@@ -7,14 +7,15 @@ import type {
   StockEventInput, UploadSession, WorkItem, WorkItemRevision, CatalogProduct, CreateCatalogProduct,
   UpdateCatalogProduct, InventoryProductProfile, CreateInventoryProductProfile,
   UpdateInventoryProductProfile, BuildConfigurationSnapshot, CreateBuildConfigurationSnapshot, ProjectTombstone,
-  ArtifactBuildConfigurationBinding, CommissionInventoryItem, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory
+  ArtifactBuildConfigurationBinding, CommissionInventoryItem, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory,
+  CommitProjectSetup, ProjectSetupCommitResult, ProjectSetupPreview
 } from "@benchledger/api-contract";
-import { ApplicationError, applyInventoryBulkChanges, normalizeInventoryBulkChanges, parseInventoryCursor, stableCreateConflict } from "@benchledger/application";
+import { ApplicationError, applyInventoryBulkChanges, bomSpecification, conflict, matchesBomConstraints, normalizeInventoryBulkChanges, parseInventoryCursor, stableCreateConflict } from "@benchledger/application";
 import type {
   ApplicationPorts, ArtifactDownload, ArtifactPort, AuditEvent, AuditInput, AuditPort,
   BeginUploadInput, EventBusEvent, EventBusPort, HealthPort, IdempotencyPort,
   BuildConfigurationListOptions, BuildConfigurationPort, CatalogPort, CatalogProductListOptions,
-  InventoryCategoryListOptions, InventoryCategoryPort, InventoryListOptions, InventoryPort, OfferPort, Page, ProjectListOptions, ProjectPort, RequestContext,
+  InventoryCategoryListOptions, InventoryCategoryPort, InventoryListOptions, InventoryPort, OfferPort, Page, ProjectListOptions, ProjectPort, ProjectSetupPort, RequestContext,
   InventoryBulkUpdate, InventoryBulkUpdateResult, ReservationDetails, StockMutation, UnitOfWorkOperation, UnitOfWorkPort, UpdateInventoryInput, UploadSessionDetails, UsageInput
 } from "@benchledger/application";
 import { BUILTIN_INVENTORY_CATEGORIES, canonicalProjectStatus, compareInventoryCategoryKeys, normalizeInventoryCategoryKey, normalizeInventoryCategoryName, slugify } from "@benchledger/domain";
@@ -178,6 +179,20 @@ class MemoryInventory implements InventoryPort {
 
   constructor(seed: readonly InventoryItem[] = []) {
     for (const item of seed) this.items.set(item.id, clone(item));
+  }
+
+  snapshotState() {
+    return {
+      items: [...this.items].map(([key, value]) => [key, clone(value)] as const),
+      events: [...this.events].map(([key, value]) => [key, clone(value)] as const),
+      sequence: this.sequence
+    };
+  }
+
+  restoreState(snapshot: ReturnType<MemoryInventory["snapshotState"]>): void {
+    this.items.clear(); for (const [key, value] of snapshot.items) this.items.set(key, clone(value));
+    this.events.clear(); for (const [key, value] of snapshot.events) this.events.set(key, clone(value));
+    this.sequence = snapshot.sequence;
   }
 
   async listItems(options: InventoryListOptions): Promise<Page<InventoryItem>> {
@@ -526,6 +541,30 @@ class MemoryProjects implements ProjectPort {
 
   constructor(private readonly inventory: MemoryInventory) {}
 
+  snapshotState() {
+    return {
+      projects: [...this.projects].map(([key, value]) => [key, clone(value)] as const),
+      projectSlugs: [...this.projectSlugs].map(([key, value]) => [key, value] as const),
+      workItems: [...this.workItems].map(([key, value]) => [key, clone(value)] as const),
+      projectRevisions: [...this.projectRevisions].map(([key, value]) => [key, clone(value)] as const),
+      workItemRevisions: [...this.workItemRevisions].map(([key, value]) => [key, clone(value)] as const),
+      bomLines: [...this.bomLines].map(([key, value]) => [key, clone(value)] as const),
+      reservations: [...this.reservations].map(([key, value]) => [key, clone(value)] as const),
+      sequence: this.sequence
+    };
+  }
+
+  restoreState(snapshot: ReturnType<MemoryProjects["snapshotState"]>): void {
+    this.projects.clear(); for (const [key, value] of snapshot.projects) this.projects.set(key, clone(value));
+    this.projectSlugs.clear(); for (const [key, value] of snapshot.projectSlugs) this.projectSlugs.set(key, value);
+    this.workItems.clear(); for (const [key, value] of snapshot.workItems) this.workItems.set(key, clone(value));
+    this.projectRevisions.clear(); for (const [key, value] of snapshot.projectRevisions) this.projectRevisions.set(key, clone(value));
+    this.workItemRevisions.clear(); for (const [key, value] of snapshot.workItemRevisions) this.workItemRevisions.set(key, clone(value));
+    this.bomLines.clear(); for (const [key, value] of snapshot.bomLines) this.bomLines.set(key, clone(value));
+    this.reservations.clear(); for (const [key, value] of snapshot.reservations) this.reservations.set(key, clone(value));
+    this.sequence = snapshot.sequence;
+  }
+
   listProjects(options: ProjectListOptions): Promise<Page<Project>> {
     const q = options.q?.trim().toLowerCase();
     const values = [...this.projects.values()].filter((project) => project.removedAt === undefined && (options.status === undefined ? project.status !== "archived" : project.status === options.status) && (!q || `${project.name} ${project.description ?? ""}`.toLowerCase().includes(q)));
@@ -767,7 +806,9 @@ class MemoryProjects implements ProjectPort {
     this.assertProjectActive(work.projectId);
     const number = [...this.workItemRevisions.values()].filter((revision) => revision.workItemId === workItemId).length + 1;
     const revision: WorkItemRevision = { id: input.id ?? id("work-revision", ++this.sequence), workItemId, projectId: work.projectId, number, name: input.name, ...(input.notes === undefined ? {} : { notes: input.notes }), status: input.status, createdAt: iso(), version: 1 };
-    this.workItemRevisions.set(revision.id, revision); return Promise.resolve(clone(revision));
+    this.workItemRevisions.set(revision.id, revision);
+    this.workItems.set(workItemId, { ...work, currentRevisionId: revision.id, updatedAt: revision.createdAt });
+    return Promise.resolve(clone(revision));
   }
   getWorkItemRevision(idValue: string): Promise<WorkItemRevision | null> { const value = this.workItemRevisions.get(idValue); return Promise.resolve(value ? clone(value) : null); }
   listBomLines(revisionId: string, options?: { readonly includeRetired?: boolean }): Promise<readonly BomLine[]> { return Promise.resolve(clone([...this.bomLines.values()].filter((line) => line.revisionId === revisionId && (options?.includeRetired === true || line.retiredAt === undefined)))); }
@@ -836,6 +877,145 @@ class MemoryProjects implements ProjectPort {
   private projectTombstone(project: Project): ProjectTombstone {
     if (project.removedAt === undefined || project.removedBy === undefined || project.lastLifecycleStatus === undefined) throw new ApplicationError("integrity_error", `Project '${project.id}' is missing removal tombstone metadata`);
     return { id: project.id, name: project.name, removedAt: project.removedAt, removedBy: project.removedBy, lastLifecycleStatus: project.lastLifecycleStatus, releasedReservationIds: [...(project.removedReservationIds ?? [])], version: project.version };
+  }
+}
+
+/**
+ * MemoryRuntime has no database transaction, so setup commit keeps an
+ * explicit snapshot until the surrounding audited mutation has completed.
+ * This mirrors SQLite rollback for graph, allocation, preview, audit, and
+ * idempotency state instead of leaving a partially committed demo record.
+ */
+class MemoryProjectSetup implements ProjectSetupPort {
+  private readonly previews = new Map<string, { readonly actor: string; readonly preview: ProjectSetupPreview }>();
+  private lastSnapshot: ReturnType<MemoryProjectSetup["snapshotState"]> | undefined;
+
+  constructor(
+    private readonly projects: MemoryProjects,
+    private readonly inventory: MemoryInventory,
+    private readonly audit: MemoryAudit,
+    private readonly idempotency: MemoryIdempotency
+  ) {}
+
+  private snapshotState() {
+    return {
+      projects: this.projects.snapshotState(),
+      inventory: this.inventory.snapshotState(),
+      previews: [...this.previews].map(([key, value]) => [key, clone(value)] as const),
+      audit: this.audit.snapshotState(),
+      idempotency: this.idempotency.snapshotState()
+    };
+  }
+
+  private restoreState(snapshot: ReturnType<MemoryProjectSetup["snapshotState"]>): void {
+    this.projects.restoreState(snapshot.projects);
+    this.inventory.restoreState(snapshot.inventory);
+    this.previews.clear(); for (const [key, value] of snapshot.previews) this.previews.set(key, clone(value));
+    this.audit.restoreState(snapshot.audit);
+    this.idempotency.restoreState(snapshot.idempotency);
+  }
+
+  async savePreview(preview: ProjectSetupPreview, actor: string): Promise<ProjectSetupPreview> {
+    const value = clone(preview);
+    this.previews.set(preview.id, { actor, preview: value });
+    return clone(value);
+  }
+
+  async getPreview(idValue: string, actor: string): Promise<ProjectSetupPreview | null> {
+    const value = this.previews.get(idValue);
+    return value === undefined || value.actor !== actor ? null : clone(value.preview);
+  }
+
+  async commitPreview(input: {
+    readonly preview: ProjectSetupPreview;
+    readonly command: CommitProjectSetup;
+    readonly actor: string;
+    readonly source: RequestContext["source"];
+    readonly correlationId: string;
+  }): Promise<ProjectSetupCommitResult> {
+    const { preview } = input;
+    if (preview.fieldErrors.length > 0) throw new ApplicationError("validation", "Project setup preview contains semantic field errors");
+
+    const staleItems: string[] = [];
+    for (const basis of preview.affectedInventory) {
+      const current = await this.inventory.getItem(basis.itemId);
+      const allocated = current === null ? undefined : current.allocatedQuantity ?? Math.max(0, current.quantity - current.availableQuantity);
+      if (current === null || current.version !== basis.before.version || current.quantity !== basis.before.quantity || current.availableQuantity !== basis.before.availableQuantity || allocated !== basis.before.allocatedQuantity || current.unit !== basis.unit || JSON.stringify(current.evidence) !== JSON.stringify(basis.evidenceBasis)) staleItems.push(basis.itemId);
+    }
+    if (staleItems.length > 0) throw conflict("Project setup inventory basis is stale", { reason: "stale_basis", staleItems, recoveryAction: "preview_project_setup", retryable: false, commitState: "not_committed" });
+
+    // Re-run identity and reservation preflight at commit time. The preview
+    // is an untrusted persisted document and inventory may have changed.
+    const proposal = preview.proposal;
+    if (await this.projects.getProject(proposal.project.id as string) !== null) throw conflict("Project ID is already in use", { reason: "project_id_exists", field: "projectId", id: proposal.project.id, retryable: false, commitState: "not_committed" });
+    if (await this.projects.getProjectRevision(proposal.revision.id as string) !== null) throw conflict("Revision ID is already in use", { reason: "revision_id_exists", field: "revisionId", id: proposal.revision.id, retryable: false, commitState: "not_committed" });
+    for (const item of proposal.workItems) {
+      if (await this.projects.getWorkItem(item.id as string) !== null) throw conflict("Work-item ID is already in use", { reason: "work_item_id_exists", field: "workItemId", id: item.id, retryable: false, commitState: "not_committed" });
+      if (await this.projects.getWorkItemRevision(item.revision.id as string) !== null) throw conflict("Work-item revision ID is already in use", { reason: "work_item_revision_id_exists", field: "workItemRevisionId", id: item.revision.id, retryable: false, commitState: "not_committed" });
+    }
+    for (const line of proposal.bomLines) if (await this.projects.getBomLine(line.id as string) !== null) throw conflict("BOM line ID is already in use", { reason: "bom_line_id_exists", field: "bomLineId", id: line.id, retryable: false, commitState: "not_committed" });
+    for (const reservation of proposal.reservations) if (await this.projects.getReservationDetails(reservation.id as string) !== null) throw conflict("Reservation ID is already in use", { reason: "reservation_id_exists", field: "reservationId", id: reservation.id, retryable: false, commitState: "not_committed" });
+
+    const lineByRef = new Map(proposal.bomLines.map((line) => [line.localRef, line]));
+    const reservedByLine = new Map<string, number>();
+    const reservedByItem = new Map<string, number>();
+    for (const reservation of proposal.reservations) {
+      const line = lineByRef.get(reservation.bomLineLocalRef);
+      const item = await this.inventory.getItem(reservation.itemId);
+      if (line === undefined || item === null) throw new ApplicationError("validation", `Reservation '${reservation.localRef}' references missing setup data`);
+      if (!bomSpecification(line).sufficient) throw new ApplicationError("validation", "Resolve the BOM specification decisions before reserving stock");
+      const approved = item.id === line.itemId || line.alternatives.some((alternative) => alternative.itemId === item.id && alternative.compatible === "confirmed");
+      if (!approved || item.unit !== line.unit || (reservation.unit !== undefined && reservation.unit !== item.unit) || !matchesBomConstraints(item, line.constraints) || !["physically_counted", "commissioned"].includes(item.evidence.state)) throw conflict("Reservation preflight no longer passes", { reason: "reservation_preflight", itemId: item.id, retryable: false, commitState: "not_committed", recoveryAction: "preview_project_setup" });
+      const lineTotal = (reservedByLine.get(line.localRef) ?? 0) + reservation.quantity;
+      if (lineTotal > line.requiredQuantity) throw conflict("Reservation exceeds BOM requirement", { reason: "reservation_requirement", itemId: item.id, retryable: false, commitState: "not_committed", recoveryAction: "preview_project_setup" });
+      reservedByLine.set(line.localRef, lineTotal);
+      reservedByItem.set(item.id, (reservedByItem.get(item.id) ?? 0) + reservation.quantity);
+    }
+    for (const [itemId, quantity] of reservedByItem) {
+      const item = await this.inventory.getItem(itemId);
+      if (item === null || quantity > item.availableQuantity) throw conflict("Reservation stock is no longer available", { reason: "reservation_stock", staleItems: [itemId], recoveryAction: "preview_project_setup", retryable: false, commitState: "not_committed" });
+    }
+
+    const snapshot = this.snapshotState();
+    this.lastSnapshot = snapshot;
+    try {
+      const created = await this.projects.createProjectWithInitialRevision({ project: proposal.project, revision: proposal.revision });
+      const workItems: ProjectSetupCommitResult["workItems"] = [];
+      const workItemRevisions: ProjectSetupCommitResult["workItemRevisions"] = [];
+      for (const item of proposal.workItems) {
+        const workItem = await this.projects.createWorkItem(created.project.id, { id: item.id, name: item.name, kind: item.kind, ...(item.description === undefined ? {} : { description: item.description }) });
+        const workRevision = await this.projects.createWorkItemRevision(workItem.id, item.revision);
+        workItems.push(workItem); workItemRevisions.push(workRevision);
+      }
+      const bomLines: ProjectSetupCommitResult["bomLines"] = [];
+      for (const line of proposal.bomLines) {
+        bomLines.push(await this.projects.createBomLine(created.revision.id, { id: line.id, name: line.name, ...(line.itemId === undefined ? {} : { itemId: line.itemId }), requiredQuantity: line.requiredQuantity, unit: line.unit, optional: line.optional, constraints: line.constraints, alternatives: line.alternatives, ...(line.notes === undefined ? {} : { notes: line.notes }) }));
+      }
+      const reservations: ProjectSetupCommitResult["reservations"] = [];
+      for (const reservation of proposal.reservations) {
+        const line = lineByRef.get(reservation.bomLineLocalRef);
+        if (line === undefined) throw new ApplicationError("validation", `Reservation '${reservation.localRef}' references an unknown BOM line`);
+        const bomLine = bomLines.find((candidate) => candidate.id === line.id);
+        if (bomLine === undefined) throw new ApplicationError("integrity_error", "Project setup graph mapping is incomplete");
+        const createdReservation = await this.projects.createReservation(created.revision.id, { id: reservation.id, lineId: bomLine.id, itemId: reservation.itemId, quantity: reservation.quantity });
+        reservations.push(createdReservation);
+        const item = this.inventory.items.get(reservation.itemId);
+        if (item === undefined) throw new ApplicationError("integrity_error", "Reservation allocation item disappeared");
+        const event: StockEvent = { id: `reservation-${createdReservation.id}-allocate`, itemId: item.id, type: "allocate", quantity: createdReservation.quantity, unit: item.unit, actor: input.actor, source: input.source === "system" ? "api" : input.source, evidence: { projectId: created.project.id, reservationId: createdReservation.id }, correlationId: input.correlationId, idempotencyKey: `reservation:${createdReservation.id}:allocate`, createdAt: createdReservation.createdAt, itemVersion: item.version };
+        this.inventory.events.set(item.id, [...(this.inventory.events.get(item.id) ?? []), event]);
+      }
+      this.previews.set(preview.id, { actor: input.actor, preview: { ...clone(preview), status: "committed", version: preview.version + 1, updatedAt: iso() } });
+      const project = await this.projects.getProject(created.project.id);
+      if (project === null) throw new ApplicationError("integrity_error", "Committed project could not be read back");
+      return { project, revision: created.revision, workItems, workItemRevisions, bomLines, reservations, auditIds: [], context: { previewId: preview.id, contentSha256: preview.contentSha256 }, gaps: preview.gaps, nextAction: "Review the committed project setup and resolve any remaining gaps." };
+    } catch (error: unknown) {
+      this.restoreState(snapshot); this.lastSnapshot = undefined; throw error;
+    }
+  }
+
+  async rollbackLastCommit(): Promise<void> {
+    if (this.lastSnapshot === undefined) return;
+    this.restoreState(this.lastSnapshot); this.lastSnapshot = undefined;
   }
 }
 
@@ -969,6 +1149,8 @@ class MemoryArtifacts implements ArtifactPort {
 
 class MemoryAudit implements AuditPort {
   readonly events: AuditEvent[] = []; private sequence = 500;
+  snapshotState() { return { events: clone(this.events), sequence: this.sequence }; }
+  restoreState(snapshot: ReturnType<MemoryAudit["snapshotState"]>): void { this.events.splice(0, this.events.length, ...clone(snapshot.events)); this.sequence = snapshot.sequence; }
   append(input: AuditInput): Promise<AuditEvent> { const event: AuditEvent = { ...input, id: id("audit", ++this.sequence), createdAt: iso() }; this.events.push(event); return Promise.resolve(clone(event)); }
   list(limit: number, cursor?: string): Promise<Page<AuditEvent>> { return Promise.resolve(page(this.events, limit, cursor)); }
   listEntity(entityType: string, entityId: string, limit: number, cursor?: string): Promise<Page<AuditEvent>> { return Promise.resolve(page(this.events.filter((event) => event.entityType === entityType && event.entityId === entityId), limit, cursor)); }
@@ -982,6 +1164,8 @@ class MemoryEvents implements EventBusPort {
 
 class MemoryIdempotency implements IdempotencyPort {
   private readonly values = new Map<string, unknown>();
+  snapshotState() { return [...this.values].map(([key, value]) => [key, clone(value)] as const); }
+  restoreState(snapshot: ReturnType<MemoryIdempotency["snapshotState"]>): void { this.values.clear(); for (const [key, value] of snapshot) this.values.set(key, clone(value)); }
   get(actor: string, key: string): Promise<unknown | null> { return Promise.resolve(this.values.has(`${actor}:${key}`) ? clone(this.values.get(`${actor}:${key}`)) : null); }
   set(actor: string, key: string, value: unknown): Promise<void> { this.values.set(`${actor}:${key}`, clone(value)); return Promise.resolve(); }
 }
@@ -1040,7 +1224,10 @@ export function createMemoryRuntime(seed: readonly InventoryItem[] = []): Memory
   const catalog = new MemoryCatalog();
   const buildConfigurations = new MemoryBuildConfigurations();
   const unitOfWork = new MemoryUnitOfWork();
-  const ports: ApplicationPorts = { inventory, inventoryCategories, projects, offers: new MemoryOffers(), artifacts: new MemoryArtifacts(), catalog, buildConfigurations, audit: new MemoryAudit(), events: new MemoryEvents(), idempotency: new MemoryIdempotency(), unitOfWork, health: new MemoryHealth() };
+  const audit = new MemoryAudit();
+  const idempotency = new MemoryIdempotency();
+  const projectSetups = new MemoryProjectSetup(projects, inventory, audit, idempotency);
+  const ports: ApplicationPorts = { inventory, inventoryCategories, projects, projectSetups, offers: new MemoryOffers(), artifacts: new MemoryArtifacts(), catalog, buildConfigurations, audit, events: new MemoryEvents(), idempotency, unitOfWork, health: new MemoryHealth() };
   return { ports, inventory, inventoryCategories, projects, catalog, buildConfigurations, unitOfWork };
 }
 

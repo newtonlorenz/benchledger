@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  bomGapSchema, bomSpecificationDecisionSchema, bomSpecificationSchema, createBomLineSchema, createInventoryCategorySchema, createInventoryItemSchema, createOfferSchema,
+  bomGapSchema, bomLineSchema, bomSpecificationDecisionSchema, bomSpecificationSchema, createBomLineSchema, createInventoryCategorySchema, createInventoryItemSchema, createOfferSchema,
   createProjectRevisionSchema, createProjectSchema, createReservationSchema,
   createProjectWithInitialRevisionSchema, createWorkItemRevisionSchema, createWorkItemSchema, idSchema, inventoryListQuerySchema,
   commissionInventoryItemSchema, stockEventInputSchema, updateBomLineSchema, updateInventoryCategorySchema, updateInventoryItemSchema,
@@ -12,7 +12,8 @@ import {
   createInventoryWithProductProfileSchema,
   inventoryItemSchema,
   saveReconciliationDraftSchema, commitReconciliationSchema, reconciliationDraftSchema,
-  reconciliationCommitSchema, workspaceSecurityStatusSchema, workspaceSecurityMutationSchema
+  reconciliationCommitSchema, reservationSchema, workspaceSecurityStatusSchema, workspaceSecurityMutationSchema,
+  projectSetupProposalSchema, commitProjectSetupSchema, projectSetupPreviewSchema
 } from "@benchledger/api-contract";
 import type {
   Artifact, BomGap, BomGapCandidate, BomLine, CreateBomLine, CreateInventoryItem, CreateOffer, CreateProject,
@@ -21,7 +22,8 @@ import type {
   InventoryBulkUpdate, StockEventInput, CommissionInventoryItem, UploadSession, WorkItem, WorkItemRevision, CatalogProduct, CreateCatalogProduct,
   UpdateCatalogProduct, InventoryProductProfile, CreateInventoryProductProfile,
   UpdateInventoryProductProfile, BuildConfigurationSnapshot, CreateBuildConfigurationSnapshot,
-  ReconciliationDraft, ReconciliationCommit, CommitReconciliation, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory, WorkspaceSecurityMutation, ProjectTombstone
+  ReconciliationDraft, ReconciliationCommit, CommitReconciliation, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory, WorkspaceSecurityMutation, ProjectTombstone,
+  ProjectSetupProposal, ProjectSetupPreview, CommitProjectSetup, ProjectSetupCommitResult, ProjectSetupFieldError
 } from "@benchledger/api-contract";
 import { ApplicationError, conflict, notFound, projectRemoved } from "./errors.js";
 import { parseInventoryCursor } from "./inventory-pagination.js";
@@ -168,11 +170,11 @@ type BomSpecification = z.infer<typeof bomSpecificationSchema>;
 const POWER_SUPPLY_NAME = /\b(?:power\s+supply|power\s+adapter|dc\s+adapter|ac\s+adapter|wall\s+adapter|mains\s+adapter)\b/i;
 const LEGACY_POWER_SUPPLY_DECISIONS: readonly BomSpecificationDecision[] = ["current_or_load", "connector"];
 
-function bomSpecification(line: BomLine): { readonly sufficient: boolean; readonly missingDecisions: readonly BomSpecificationDecision[] } {
+export function bomSpecification(line: Pick<BomLine, "name" | "constraints"> & { readonly id?: string | undefined; readonly itemId?: string | undefined }): { readonly sufficient: boolean; readonly missingDecisions: readonly BomSpecificationDecision[] } {
   const raw = line.constraints?.[SPECIFICATION_CONSTRAINT_KEY];
   if (raw !== undefined) {
     const explicit = bomSpecificationSchema.safeParse(raw);
-    if (!explicit.success) throw new ApplicationError("integrity_error", `BOM line ${line.id} contains a malformed specification decision.`);
+    if (!explicit.success) throw new ApplicationError("integrity_error", `BOM line ${line.id ?? "unknown"} contains a malformed specification decision.`);
     const decisions = explicit.data.decisions ?? {};
     const mandatoryMissing = POWER_SUPPLY_NAME.test(line.name)
       ? LEGACY_POWER_SUPPLY_DECISIONS.filter((decision) => {
@@ -299,18 +301,298 @@ async function listAllInventory(inventory: ApplicationPorts["inventory"]): Promi
   }
 }
 
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
 interface BomLineAllocation {
   readonly suppliedQuantity: number;
   readonly inspectQuantity: number;
 }
 
-function nowIso(): string {
-  return new Date().toISOString();
-}
-
 function commandContext(ctx: RequestContext, scope: string, input: unknown): RequestContext {
   if (ctx.fingerprint !== undefined) return ctx;
   return { ...ctx, fingerprint: createHash("sha256").update(JSON.stringify(canonicalize({ scope, input }))).digest("hex") };
+}
+
+function setupDerivedId(previewId: string, localRef: string, prefix: string): string {
+  const digest = createHash("sha256").update(`${previewId}\u0000${localRef}`).digest("hex").slice(0, 28);
+  return `${prefix}-${digest}`;
+}
+
+function setupCanonicalHash(proposal: ProjectSetupProposal): string {
+  return createHash("sha256").update(JSON.stringify(canonicalize(proposal))).digest("hex");
+}
+
+function setupNormalize(previewId: string, input: ProjectSetupProposal): ProjectSetupProposal {
+  const projectId = input.project.id ?? setupDerivedId(previewId, "project", "project");
+  const revisionId = input.revision.id ?? setupDerivedId(previewId, "project-revision", "revision");
+  const workItems = [...input.workItems].sort((left, right) => left.localRef.localeCompare(right.localRef)).map((workItem) => ({
+    ...workItem,
+    id: workItem.id ?? setupDerivedId(previewId, workItem.localRef, "work"),
+    revision: { ...workItem.revision, id: workItem.revision.id ?? setupDerivedId(previewId, `${workItem.localRef}:revision`, "work-revision") }
+  }));
+  return {
+    ...input,
+    project: { ...input.project, id: projectId },
+    revision: { ...input.revision, id: revisionId },
+    workItems,
+    bomLines: [...input.bomLines].sort((left, right) => left.localRef.localeCompare(right.localRef)).map((line) => ({
+      ...line,
+      revisionLocalRef: line.revisionLocalRef ?? "project",
+      id: line.id ?? setupDerivedId(previewId, line.localRef, "bom")
+    })),
+    reservations: [...input.reservations].sort((left, right) => left.localRef.localeCompare(right.localRef)).map((reservation) => ({
+      ...reservation,
+      id: reservation.id ?? setupDerivedId(previewId, reservation.localRef, "reservation")
+    }))
+  };
+}
+
+/**
+ * Evaluate one already-loaded snapshot. Project setup previews use this same
+ * allocator with their proposed reservations, so preview and live BOM reads
+ * cannot drift in candidate ordering, shared-stock allocation, or totals.
+ */
+function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], active: readonly InventoryItem[], reservations: readonly Reservation[]): GapEvaluation {
+  const ownedReservations = new Map<string, number>();
+  const reservedByItem = new Map<string, number>();
+  for (const reservation of reservations) {
+    if (reservation.status !== "active") continue;
+    const key = `${reservation.lineId}\u0000${reservation.itemId}`;
+    ownedReservations.set(key, (ownedReservations.get(key) ?? 0) + reservation.quantity);
+    reservedByItem.set(reservation.itemId, (reservedByItem.get(reservation.itemId) ?? 0) + reservation.quantity);
+  }
+  const candidatesByLine = new Map<BomLine, readonly BomCandidate[]>();
+  for (const line of lines) {
+    const candidates = active
+      .filter((item) => item.unit === line.unit && matchesBomConstraints(item, line.constraints))
+      .flatMap((item): readonly BomCandidate[] => {
+        const kind = bomCandidateKind(line, item);
+        return kind === undefined ? [] : [{ item, kind }];
+      });
+    candidatesByLine.set(line, candidates);
+  }
+
+  // `availableQuantity` is the unreserved quantity across all projects.
+  // Keep three local ledgers so a candidate can be allocated at most once
+  // across this evaluation while this revision's own reservations remain
+  // available to their declaring line. The physical and reservation caps
+  // also make malformed adapter data fail closed rather than count an item
+  // twice.
+  const remainingPhysical = new Map(active.map((item) => [item.id, Math.max(0, item.quantity)]));
+  const remainingFree = new Map(active.map((item) => [item.id, Math.min(Math.max(0, item.quantity), Math.max(0, item.availableQuantity))]));
+  const remainingReserved = new Map(active.map((item) => [item.id, Math.min(Math.max(0, item.quantity), Math.max(0, reservedByItem.get(item.id) ?? 0))]));
+  const allocations = new Map<BomLine, BomLineAllocation>();
+  const candidateFacts = new Map<string, BomGapCandidate>();
+  const allocationLines = [...lines].sort(compareBomLinesForAllocation);
+
+  const candidateCapacity = (line: BomLine, candidate: BomCandidate, mode: "confirmed" | "inspect"): number => {
+    const itemId = candidate.item.id;
+    const physical = remainingPhysical.get(itemId) ?? 0;
+    const free = remainingFree.get(itemId) ?? 0;
+    const reserved = remainingReserved.get(itemId) ?? 0;
+    const own = Math.min(reserved, Math.max(0, ownedReservations.get(`${line.id}\u0000${itemId}`) ?? 0));
+    // Uncounted stock may still be an inspect-first candidate even when its
+    // free balance is zero, but an active reservation belongs exclusively to
+    // its declaring line. Exclude reservations owned by other lines while
+    // retaining the historical inspect-first treatment of otherwise
+    // unavailable, unreserved physical stock.
+    if (mode === "inspect") return Math.min(physical, Math.max(0, physical - (reserved - own)));
+    return Math.min(physical, free + own);
+  };
+
+  const recordCandidateFacts = (line: BomLine, candidates: readonly BomCandidate[], mode: "confirmed" | "inspect"): void => {
+    for (const candidate of candidates) {
+      const factKey = `${line.id}\u0000${candidate.item.id}`;
+      const prior = candidateFacts.get(factKey);
+      candidateFacts.set(factKey, {
+        itemId: candidate.item.id,
+        relationship: bomCandidateRelationship(candidate.kind),
+        compatibility: bomCandidateCompatibility(line, candidate),
+        availableQuantity: Math.max(prior?.availableQuantity ?? 0, candidateCapacity(line, candidate, mode)),
+        suppliedQuantity: prior?.suppliedQuantity ?? 0,
+        inspectQuantity: prior?.inspectQuantity ?? 0,
+        reason: bomCandidateReason(line, candidate),
+      });
+    }
+  };
+
+  const allocate = (line: BomLine, candidates: readonly BomCandidate[], requested: number, mode: "confirmed" | "inspect"): number => {
+    let remaining = requested;
+    for (const candidate of [...candidates].sort(compareBomCandidates)) {
+      if (remaining <= 0) break;
+      const itemId = candidate.item.id;
+      const physical = remainingPhysical.get(itemId) ?? 0;
+      const capacity = candidateCapacity(line, candidate, mode);
+      const free = mode === "confirmed" ? remainingFree.get(itemId) ?? 0 : 0;
+      const own = mode === "confirmed"
+        ? Math.min(remainingReserved.get(itemId) ?? 0, Math.max(0, ownedReservations.get(`${line.id}\u0000${itemId}`) ?? 0))
+        : 0;
+      const factKey = `${line.id}\u0000${itemId}`;
+      const prior = candidateFacts.get(factKey);
+      const taken = Math.min(remaining, capacity);
+      candidateFacts.set(factKey, {
+        itemId,
+        relationship: bomCandidateRelationship(candidate.kind),
+        compatibility: bomCandidateCompatibility(line, candidate),
+        availableQuantity: Math.max(prior?.availableQuantity ?? 0, capacity),
+        suppliedQuantity: (prior?.suppliedQuantity ?? 0) + (mode === "confirmed" ? taken : 0),
+        inspectQuantity: (prior?.inspectQuantity ?? 0) + (mode === "inspect" ? taken : 0),
+        reason: bomCandidateReason(line, candidate),
+      });
+      if (taken <= 0) continue;
+      if (mode === "confirmed") {
+        // Consume a line's own reservation first; unreserved stock is then
+        // consumed from the shared free pool for later lines.
+        const fromReservation = Math.min(own, taken);
+        const fromFree = taken - fromReservation;
+        remainingReserved.set(itemId, Math.max(0, (remainingReserved.get(itemId) ?? 0) - fromReservation));
+        remainingFree.set(itemId, Math.max(0, free - fromFree));
+      }
+      remainingPhysical.set(itemId, Math.max(0, physical - taken));
+      remaining -= taken;
+    }
+    return requested - remaining;
+  };
+
+  // Confirmed supply is allocated first, so a line that only has an
+  // inspect-first relationship cannot consume capacity needed by an exact or
+  // approved-alternative line later in the stable ordering.
+  for (const line of allocationLines) {
+    const candidates = candidatesByLine.get(line) ?? [];
+    const confirmed = candidates.filter((candidate) => canSupplyBomCandidate(candidate) && CONFIRMED_EVIDENCE.has(candidate.item.evidence.state));
+    recordCandidateFacts(line, confirmed, "confirmed");
+    const suppliedQuantity = bomSpecification(line).sufficient ? allocate(line, confirmed, line.requiredQuantity, "confirmed") : 0;
+    allocations.set(line, { suppliedQuantity, inspectQuantity: 0 });
+  }
+  for (const line of allocationLines) {
+    const candidates = candidatesByLine.get(line) ?? [];
+    const uncertain = candidates.filter((candidate) => !canSupplyBomCandidate(candidate) || !CONFIRMED_EVIDENCE.has(candidate.item.evidence.state));
+    recordCandidateFacts(line, uncertain, "inspect");
+    const suppliedQuantity = allocations.get(line)?.suppliedQuantity ?? 0;
+    const inspectQuantity = allocate(line, uncertain, Math.max(line.requiredQuantity - suppliedQuantity, 0), "inspect");
+    allocations.set(line, { suppliedQuantity, inspectQuantity });
+  }
+
+  const gaps: BomGap[] = lines.map((line) => {
+    const candidates = candidatesByLine.get(line) ?? [];
+    const uncertain = candidates.filter((candidate) => !canSupplyBomCandidate(candidate) || !CONFIRMED_EVIDENCE.has(candidate.item.evidence.state));
+    const suppliedQuantity = allocations.get(line)?.suppliedQuantity ?? 0;
+    const inspectQuantity = allocations.get(line)?.inspectQuantity ?? 0;
+    const missingQuantity = Math.max(line.requiredQuantity - suppliedQuantity - inspectQuantity, 0);
+    const specification = bomSpecification(line);
+    let status: BomGap["status"];
+    if (line.optional && suppliedQuantity === 0 && inspectQuantity === 0) status = "optional";
+    else if (!specification.sufficient && inspectQuantity === 0) status = "specify_first";
+    else if (missingQuantity === 0 && inspectQuantity === 0) status = "supplied";
+    else if (suppliedQuantity > 0 && missingQuantity > 0) status = "partially_supplied";
+    else if (inspectQuantity > 0) status = "inspect_first";
+    else status = "missing";
+    const decision = bomDecision(line, status, specification.sufficient, inspectQuantity);
+    const candidateResults = candidates.map((candidate) => {
+      const fact = candidateFacts.get(`${line.id}\u0000${candidate.item.id}`);
+      if (fact === undefined) throw new ApplicationError("integrity_error", "BOM candidate facts were not recorded");
+      return fact;
+    });
+    const reasons = [
+      ...(suppliedQuantity > 0 ? ["Physically confirmed stock covers part or all of this requirement."] : []),
+      ...(uncertain.some((candidate) => !canSupplyBomCandidate(candidate)) ? ["Some matching stock needs an explicit compatibility decision before use."] : []),
+      ...(uncertain.some((candidate) => canSupplyBomCandidate(candidate) && !CONFIRMED_EVIDENCE.has(candidate.item.evidence.state)) ? ["Some matching stock is recorded but needs a physical count before use."] : []),
+      ...(decision === "decide" ? [`Specify ${specification.missingDecisions.join(" and ")} before sourcing this requirement.`] : []),
+      ...(decision !== "decide" && missingQuantity > 0 ? ["No confirmed stock covers the remaining quantity."] : []),
+      ...(decision !== "decide" && candidates.length === 0 ? ["No matching inventory item was found for this line."] : []),
+      ...(line.itemId === undefined && line.alternatives.length === 0 && hasInventoryMatchConstraints(line.constraints) ? ["Potential matches were selected using the line constraints."] : [])
+    ];
+    return bomGapSchema.parse({
+      lineId: line.id,
+      name: line.name,
+      optional: line.optional,
+      status,
+      decision,
+      ...(specification.missingDecisions.length === 0 ? {} : { missingDecisions: [...specification.missingDecisions] }),
+      requiredQuantity: line.requiredQuantity,
+      suppliedQuantity,
+      inspectQuantity,
+      missingQuantity,
+      unit: line.unit,
+      matchedItemIds: candidates.map((candidate) => candidate.item.id),
+      reasons,
+      alternatives: line.alternatives,
+      candidates: candidateResults
+    });
+  });
+  return {
+    revisionId: id,
+    lines: gaps,
+    totals: {
+      requiredLines: gaps.filter((gap) => gap.optional !== true).length,
+      suppliedLines: gaps.filter((gap) => gap.optional !== true && gap.status === "supplied").length,
+      inspectFirstLines: gaps.filter((gap) => gap.optional !== true && gap.status === "inspect_first").length,
+      partialLines: gaps.filter((gap) => gap.optional !== true && gap.status === "partially_supplied").length,
+      missingLines: gaps.filter((gap) => gap.optional !== true && gap.status === "missing").length,
+      optionalLines: gaps.filter((gap) => gap.optional === true).length,
+      readyLines: gaps.filter((gap) => gap.optional !== true && gap.decision === "ready").length,
+      checkLines: gaps.filter((gap) => gap.optional !== true && gap.decision === "check").length,
+      decideLines: gaps.filter((gap) => gap.optional !== true && gap.decision === "decide").length,
+      sourceLines: gaps.filter((gap) => gap.optional !== true && gap.decision === "source").length,
+    }
+  };
+}
+
+function setupBomLines(proposal: ProjectSetupProposal, now: string): readonly BomLine[] {
+  return proposal.bomLines.map((line) => bomLineSchema.parse({
+    id: line.id,
+    revisionId: proposal.revision.id,
+    name: line.name,
+    requiredQuantity: line.requiredQuantity,
+    unit: line.unit,
+    optional: line.optional,
+    ...(line.itemId === undefined ? {} : { itemId: line.itemId }),
+    constraints: line.constraints,
+    alternatives: line.alternatives,
+    ...(line.notes === undefined ? {} : { notes: line.notes }),
+    createdAt: now,
+    updatedAt: now,
+    version: 1,
+  }));
+}
+
+function setupReservationRecords(proposal: ProjectSetupProposal, lines: readonly BomLine[], now: string): readonly Reservation[] {
+  const lineByRef = new Map(proposal.bomLines.map((line, index) => [line.localRef, lines[index]]));
+  return proposal.reservations.flatMap((reservation) => {
+    const line = lineByRef.get(reservation.bomLineLocalRef);
+    if (line === undefined) return [];
+    return [reservationSchema.parse({
+      id: reservation.id,
+      lineId: line.id,
+      itemId: reservation.itemId,
+      quantity: reservation.quantity,
+      status: "active",
+      createdAt: now,
+      updatedAt: now,
+      version: 1,
+    })];
+  });
+}
+
+function setupProjectedInventory(inventory: readonly InventoryItem[], reservations: readonly Reservation[]): readonly InventoryItem[] {
+  const plannedByItem = new Map<string, number>();
+  for (const reservation of reservations) plannedByItem.set(reservation.itemId, (plannedByItem.get(reservation.itemId) ?? 0) + reservation.quantity);
+  return inventory.map((item) => {
+    const planned = plannedByItem.get(item.id) ?? 0;
+    if (planned <= 0) return item;
+    const allocated = item.allocatedQuantity ?? Math.max(0, item.quantity - item.availableQuantity);
+    return { ...item, availableQuantity: Math.max(0, item.availableQuantity - planned), allocatedQuantity: allocated + planned };
+  });
+}
+
+function setupGapCandidateIds(gaps: GapEvaluation): ReadonlySet<string> {
+  return new Set(gaps.lines.flatMap((gap) => gap.matchedItemIds));
+}
+
+function sameStringArray(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 /**
@@ -321,6 +603,10 @@ function commandContext(ctx: RequestContext, scope: string, input: unknown): Req
  */
 function canonicalProjectSetupContext(ctx: RequestContext, input: CreateProjectWithInitialRevision): RequestContext {
   return { ...ctx, fingerprint: createHash("sha256").update(JSON.stringify(canonicalize({ scope: "project.create_with_initial_revision", input }))).digest("hex") };
+}
+
+function canonicalProjectSetupCommitContext(ctx: RequestContext, input: CommitProjectSetup): RequestContext {
+  return { ...ctx, fingerprint: createHash("sha256").update(JSON.stringify(canonicalize({ scope: "project.setup.commit", input }))).digest("hex") };
 }
 
 /**
@@ -1234,6 +1520,158 @@ export class ApplicationService {
     });
   }
 
+  /** Build a bounded, actor-owned setup proposal without touching graph data. */
+  async previewProjectSetup(input: ProjectSetupProposal, ctx: RequestContext): Promise<ProjectSetupPreview> {
+    const parsed = projectSetupProposalSchema.parse(input);
+    if (ctx.projectId !== undefined) throw new ApplicationError("forbidden", "Project-scoped tokens cannot create workspace project setup previews");
+    const projectWrite = ctx.scopes.has("projects:write") || ctx.scopes.has("write") || ctx.scopes.has("admin");
+    const bomWrite = ctx.scopes.has("bom:write") || ctx.scopes.has("write") || ctx.scopes.has("admin");
+    if (!projectWrite || !bomWrite) throw new ApplicationError("forbidden", "Project setup preview requires projects:write and bom:write");
+    const setup = this.ports.projectSetups;
+    if (setup === undefined) throw new ApplicationError("integrity_error", "This runtime does not support project setup previews");
+    const previewId = setupDerivedId(randomUUID(), "preview", "setup-preview");
+    const proposal = setupNormalize(previewId, parsed);
+    const inventory = await this.ports.unitOfWork.exclusive(() => listAllInventory(this.ports.inventory));
+    const now = nowIso();
+    const setupLines = setupBomLines(proposal, now);
+    const plannedByItem = new Map<string, number>();
+    const plannedByLine = new Map<string, number>();
+    const fieldErrors: ProjectSetupFieldError[] = [];
+    const lineByRef = new Map(proposal.bomLines.map((line) => [line.localRef, line]));
+    const setupLineByRef = new Map(proposal.bomLines.map((line, index) => [line.localRef, setupLines[index]! ]));
+    for (let index = 0; index < proposal.reservations.length; index += 1) {
+      const reservation = proposal.reservations[index];
+      if (reservation === undefined) continue;
+      const line = lineByRef.get(reservation.bomLineLocalRef);
+      const setupLine = setupLineByRef.get(reservation.bomLineLocalRef);
+      const item = inventory.find((candidate) => candidate.id === reservation.itemId);
+      if (line === undefined) fieldErrors.push({ path: `reservations.${index}.bomLineLocalRef`, code: "unknown_bom_line", message: "Reservation references an unknown BOM line" });
+      if (item === undefined) fieldErrors.push({ path: `reservations.${index}.itemId`, code: "inventory_not_found", message: "Reservation references an unknown inventory item" });
+      if (line !== undefined && setupLine !== undefined && item !== undefined) {
+        const approved = canReserveBomItem(setupLine, item);
+        if (!approved) fieldErrors.push({ path: `reservations.${index}.itemId`, code: "invalid_reservation_reference", message: "Reservation item must be the exact BOM item or a confirmed alternative" });
+        if (!bomSpecification(setupLine).sufficient) fieldErrors.push({ path: `reservations.${index}.bomLineLocalRef`, code: "unresolved_specification", message: "Resolve the BOM specification decisions before reserving stock" });
+        if (item.unit !== line.unit || (reservation.unit !== undefined && reservation.unit !== item.unit)) fieldErrors.push({ path: `reservations.${index}.unit`, code: "unit_mismatch", message: "Reservation unit must match the BOM and inventory item" });
+        if (!matchesBomConstraints(item, line.constraints)) fieldErrors.push({ path: `reservations.${index}.itemId`, code: "constraint_mismatch", message: "Inventory item does not satisfy the BOM constraints" });
+        if (!CONFIRMED_EVIDENCE.has(item.evidence.state)) fieldErrors.push({ path: `reservations.${index}.itemId`, code: "insufficient_evidence", message: "Only physically confirmed stock can be reserved" });
+        if (reservation.quantity > line.requiredQuantity) fieldErrors.push({ path: `reservations.${index}.quantity`, code: "requirement_exceeded", message: "Reservation cannot exceed the BOM requirement" });
+        plannedByItem.set(item.id, (plannedByItem.get(item.id) ?? 0) + reservation.quantity);
+        plannedByLine.set(line.localRef, (plannedByLine.get(line.localRef) ?? 0) + reservation.quantity);
+      }
+    }
+    for (const line of proposal.bomLines) {
+      const planned = plannedByLine.get(line.localRef) ?? 0;
+      if (planned > line.requiredQuantity) fieldErrors.push({ path: "reservations", code: "requirement_exceeded", message: `Planned reservations exceed requirement for '${line.localRef}'` });
+    }
+    for (const item of inventory) {
+      const planned = plannedByItem.get(item.id) ?? 0;
+      if (planned > item.availableQuantity) fieldErrors.push({ path: "reservations", code: "insufficient_stock", message: `Planned reservations exceed available stock for '${item.id}'` });
+    }
+    const revisionId = proposal.revision.id as string;
+    const plannedReservationRecords = setupReservationRecords(proposal, setupLines, now);
+    // The preview is evaluated before reservation writes exist, so project the
+    // proposed allocation onto the inventory snapshot first. The evaluator
+    // then treats the projected reservation as owned by its declaring line,
+    // while keeping the remaining free pool unavailable to other lines.
+    const plannedInventory = setupProjectedInventory(inventory, plannedReservationRecords);
+    const evaluated = evaluateBomGapsFromData(revisionId, setupLines, plannedInventory, plannedReservationRecords);
+    const gaps = evaluated.lines;
+    const unresolvedSpecifications = proposal.bomLines.flatMap((line) => {
+      const specification = line.constraints.specification;
+      return specification?.status === "insufficient" ? [{ bomLineLocalRef: line.localRef, missingDecisions: [...(specification.missingDecisions ?? [])] }] : [];
+    });
+    const reservationState = new Map<string, { version: number; availableQuantity: number; allocatedQuantity: number }>();
+    const plannedReservations = proposal.reservations.flatMap((reservation) => {
+      const item = inventory.find((candidate) => candidate.id === reservation.itemId);
+      if (item === undefined) return [];
+      const prior = reservationState.get(item.id) ?? { version: item.version, availableQuantity: item.availableQuantity, allocatedQuantity: item.allocatedQuantity ?? Math.max(0, item.quantity - item.availableQuantity) };
+      const before = { ...prior };
+      const after = { version: prior.version + 1, availableQuantity: Math.max(0, prior.availableQuantity - reservation.quantity), allocatedQuantity: prior.allocatedQuantity + reservation.quantity };
+      reservationState.set(item.id, after);
+      return [{ localRef: reservation.localRef, bomLineLocalRef: reservation.bomLineLocalRef, reservationId: reservation.id as string, itemId: item.id, quantity: reservation.quantity, unit: item.unit, before, after }];
+    });
+    // Every candidate can change the setup decision. Include all matching
+    // candidates, even when no reservation is planned, so a changed row or a
+    // newly matching row cannot be committed against an old preview.
+    const affectedItemIds = new Set([...setupGapCandidateIds(evaluated), ...proposal.reservations.map((reservation) => reservation.itemId)]);
+    const affectedInventory = [...affectedItemIds].sort((left, right) => left.localeCompare(right)).flatMap((itemId) => {
+      const item = inventory.find((candidate) => candidate.id === itemId);
+      if (item === undefined) return [];
+      const planned = plannedByItem.get(item.id) ?? 0;
+      const allocated = item.allocatedQuantity ?? Math.max(0, item.quantity - item.availableQuantity);
+      return [{ itemId: item.id, unit: item.unit, evidenceBasis: item.evidence, before: { version: item.version, quantity: item.quantity, availableQuantity: item.availableQuantity, allocatedQuantity: allocated }, after: { version: item.version + (planned > 0 ? proposal.reservations.filter((reservation) => reservation.itemId === item.id).length : 0), quantity: item.quantity, availableQuantity: Math.max(0, item.availableQuantity - planned), allocatedQuantity: allocated + planned } }];
+    });
+    const preview = projectSetupPreviewSchema.parse({
+      id: previewId, version: 1, status: "active", createdAt: now, updatedAt: now,
+      expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(), contentSha256: setupCanonicalHash(proposal), proposal,
+      fieldErrors, unresolvedSpecifications,
+      gaps: { revisionId, lines: gaps, totals: evaluated.totals },
+      plannedReservations, affectedInventory, correlationId: ctx.correlationId
+    });
+    return this.ports.unitOfWork.run(() => setup.savePreview(preview, ctx.actor));
+  }
+
+  /** Commit exactly one validated preview as one audited mutation. */
+  async commitProjectSetup(input: CommitProjectSetup, ctx: RequestContext): Promise<Mutation<ProjectSetupCommitResult>> {
+    const parsed = commitProjectSetupSchema.parse(input);
+    if (ctx.projectId !== undefined) throw new ApplicationError("forbidden", "Project-scoped tokens cannot commit project setup");
+    const projectWrite = ctx.scopes.has("projects:write") || ctx.scopes.has("write") || ctx.scopes.has("admin");
+    const bomWrite = ctx.scopes.has("bom:write") || ctx.scopes.has("write") || ctx.scopes.has("admin");
+    if (!projectWrite || !bomWrite) throw new ApplicationError("forbidden", "Project setup commit requires projects:write and bom:write");
+    if (ctx.idempotencyKey === undefined || ctx.idempotencyKey.length < 8 || ctx.idempotencyKey.length > 200) throw new ApplicationError("validation", "An 8-200 character idempotency key is required");
+    const setup = this.ports.projectSetups;
+    if (setup === undefined) throw new ApplicationError("integrity_error", "This runtime does not support project setup commits");
+    const commandCtx = canonicalProjectSetupCommitContext(ctx, parsed);
+    return this.mutate(commandCtx, "project.setup.commit", "project", parsed.previewId, async () => {
+      const preview = await setup.getPreview(parsed.previewId, ctx.actor);
+      if (preview === null) throw conflict("Project setup preview was not found or is not owned by this actor", { reason: "preview_ownership", retryable: false, commitState: "not_committed" });
+      if (preview.status === "committed") throw conflict("Project setup preview has already been committed", { reason: "already_committed", retryable: false, commitState: "committed" });
+      if (preview.status !== "active") throw conflict("Project setup preview is no longer active", { reason: "preview_expired", retryable: false, commitState: "not_committed", recoveryAction: "preview_project_setup" });
+      if (preview.expiresAt <= nowIso()) throw conflict("Project setup preview has expired", { reason: "preview_expired", retryable: false, commitState: "not_committed", recoveryAction: "preview_project_setup" });
+      if (preview.version !== parsed.expectedPreviewVersion || preview.contentSha256 !== parsed.contentSha256) throw conflict("Project setup preview is stale", { reason: "stale_preview", retryable: false, commitState: "not_committed", recoveryAction: "preview_project_setup" });
+      if (preview.plannedReservations.length > 0 && parsed.confirmReservations !== true) throw new ApplicationError("validation", "confirmReservations must be true when reservations are planned");
+      // Candidate identity is part of the preview basis as well as the
+      // quantity/evidence rows below. A new inventory row that now matches a
+      // constraint has no prior version to compare, so recompute candidate
+      // identities before allowing the graph commit.
+      const currentInventory = await listAllInventory(this.ports.inventory);
+      const setupLines = setupBomLines(preview.proposal, preview.createdAt);
+      const setupReservations = setupReservationRecords(preview.proposal, setupLines, preview.createdAt);
+      const currentGaps = evaluateBomGapsFromData(preview.gaps.revisionId, setupLines, setupProjectedInventory(currentInventory, setupReservations), setupReservations);
+      const previewGaps = new Map(preview.gaps.lines.map((gap) => [gap.lineId, gap]));
+      const changedCandidates = currentGaps.lines.filter((gap) => {
+        const prior = previewGaps.get(gap.lineId);
+        return prior === undefined || !sameStringArray(prior.matchedItemIds, gap.matchedItemIds);
+      });
+      if (changedCandidates.length > 0) {
+        throw conflict("Project setup inventory candidate basis is stale", {
+          reason: "stale_basis",
+          staleItems: changedCandidates.flatMap((gap) => gap.matchedItemIds),
+          recoveryAction: "preview_project_setup",
+          retryable: false,
+          commitState: "not_committed",
+        });
+      }
+      const value = await setup.commitPreview({ preview, command: parsed, actor: ctx.actor, source: ctx.source, correlationId: ctx.correlationId });
+      // Return the same live allocator's post-commit result. In particular,
+      // planned reservations now exist as active reservations and must still
+      // count for their own lines without becoming free stock elsewhere.
+      const committedInventory = await listAllInventory(this.ports.inventory);
+      const committedGaps = evaluateBomGapsFromData(value.revision.id, value.bomLines, committedInventory, value.reservations);
+      const committed: ProjectSetupCommitResult = {
+        ...value,
+        gaps: { revisionId: committedGaps.revisionId, lines: [...committedGaps.lines], totals: { ...committedGaps.totals } }
+      };
+      return {
+        value: committed,
+        entityId: value.project.id,
+        version: value.project.version,
+        withAudit: (audit) => ({ ...committed, auditIds: [audit.id] }),
+        ...(setup.rollbackLastCommit === undefined ? {} : { compensate: () => setup.rollbackLastCommit!() })
+      };
+    });
+  }
+
   async getProjectRevision(id: string): Promise<ProjectRevision> {
     return this.ports.unitOfWork.exclusive(async () => {
       const revision = await this.ports.projects.getProjectRevision(requireId(id, "revision id"));
@@ -1328,193 +1766,9 @@ export class ApplicationService {
       const id = requireId(revisionId, "revision id");
       await this.assertProjectReadableFromRevision(id);
       const lines = await this.ports.projects.listBomLines(id);
-      const inventory = { data: await listAllInventory(this.ports.inventory) };
+      const inventory = await listAllInventory(this.ports.inventory);
       const reservations = await this.ports.projects.listReservations(id);
-      const ownedReservations = new Map<string, number>();
-      const reservedByItem = new Map<string, number>();
-      for (const reservation of reservations) {
-        if (reservation.status !== "active") continue;
-        const key = `${reservation.lineId}\u0000${reservation.itemId}`;
-        ownedReservations.set(key, (ownedReservations.get(key) ?? 0) + reservation.quantity);
-        reservedByItem.set(reservation.itemId, (reservedByItem.get(reservation.itemId) ?? 0) + reservation.quantity);
-      }
-      const active = inventory.data;
-      const candidatesByLine = new Map<BomLine, readonly BomCandidate[]>();
-      for (const line of lines) {
-        const candidates = active
-          .filter((item) => item.unit === line.unit && matchesBomConstraints(item, line.constraints))
-          .flatMap((item): readonly BomCandidate[] => {
-            const kind = bomCandidateKind(line, item);
-            return kind === undefined ? [] : [{ item, kind }];
-          });
-        candidatesByLine.set(line, candidates);
-      }
-
-      // `availableQuantity` is the unreserved quantity across all projects.
-      // Keep three local ledgers so a candidate can be allocated at most once
-      // across this evaluation while this revision's own reservations remain
-      // available to their declaring line. The physical and reservation caps
-      // also make a malformed adapter response fail closed rather than count
-      // the same item twice.
-      const remainingPhysical = new Map(active.map((item) => [item.id, Math.max(0, item.quantity)]));
-      const remainingFree = new Map(active.map((item) => [item.id, Math.min(Math.max(0, item.quantity), Math.max(0, item.availableQuantity))]));
-      const remainingReserved = new Map(active.map((item) => [item.id, Math.min(Math.max(0, item.quantity), Math.max(0, reservedByItem.get(item.id) ?? 0))]));
-      const allocations = new Map<BomLine, BomLineAllocation>();
-      const candidateFacts = new Map<string, BomGapCandidate>();
-      const allocationLines = [...lines].sort(compareBomLinesForAllocation);
-
-      const candidateCapacity = (line: BomLine, candidate: BomCandidate, mode: "confirmed" | "inspect"): number => {
-        const itemId = candidate.item.id;
-        const physical = remainingPhysical.get(itemId) ?? 0;
-        if (mode === "inspect") return physical;
-        const free = remainingFree.get(itemId) ?? 0;
-        const reserved = remainingReserved.get(itemId) ?? 0;
-        const own = Math.min(reserved, Math.max(0, ownedReservations.get(`${line.id}\u0000${itemId}`) ?? 0));
-        return Math.min(physical, free + own);
-      };
-
-      const recordCandidateFacts = (line: BomLine, candidates: readonly BomCandidate[], mode: "confirmed" | "inspect"): void => {
-        for (const candidate of candidates) {
-          const factKey = `${line.id}\u0000${candidate.item.id}`;
-          const prior = candidateFacts.get(factKey);
-          candidateFacts.set(factKey, {
-            itemId: candidate.item.id,
-            relationship: bomCandidateRelationship(candidate.kind),
-            compatibility: bomCandidateCompatibility(line, candidate),
-            availableQuantity: Math.max(prior?.availableQuantity ?? 0, candidateCapacity(line, candidate, mode)),
-            suppliedQuantity: prior?.suppliedQuantity ?? 0,
-            inspectQuantity: prior?.inspectQuantity ?? 0,
-            reason: bomCandidateReason(line, candidate),
-          });
-        }
-      };
-
-      const allocate = (line: BomLine, candidates: readonly BomCandidate[], requested: number, mode: "confirmed" | "inspect"): number => {
-        let remaining = requested;
-        for (const candidate of [...candidates].sort(compareBomCandidates)) {
-          if (remaining <= 0) break;
-          const itemId = candidate.item.id;
-          const physical = remainingPhysical.get(itemId) ?? 0;
-          const capacity = candidateCapacity(line, candidate, mode);
-          const free = mode === "confirmed" ? remainingFree.get(itemId) ?? 0 : 0;
-          const own = mode === "confirmed"
-            ? Math.min(remainingReserved.get(itemId) ?? 0, Math.max(0, ownedReservations.get(`${line.id}\u0000${itemId}`) ?? 0))
-            : 0;
-          const factKey = `${line.id}\u0000${itemId}`;
-          const prior = candidateFacts.get(factKey);
-          const taken = Math.min(remaining, capacity);
-          candidateFacts.set(factKey, {
-            itemId,
-            relationship: bomCandidateRelationship(candidate.kind),
-            compatibility: bomCandidateCompatibility(line, candidate),
-            availableQuantity: Math.max(prior?.availableQuantity ?? 0, capacity),
-            suppliedQuantity: (prior?.suppliedQuantity ?? 0) + (mode === "confirmed" ? taken : 0),
-            inspectQuantity: (prior?.inspectQuantity ?? 0) + (mode === "inspect" ? taken : 0),
-            reason: bomCandidateReason(line, candidate),
-          });
-          if (taken <= 0) continue;
-          if (mode === "confirmed") {
-            // Consume a line's own reservation first; unreserved stock is
-            // then consumed from the shared free pool for later lines.
-            const fromReservation = Math.min(own, taken);
-            const fromFree = taken - fromReservation;
-            remainingReserved.set(itemId, Math.max(0, (remainingReserved.get(itemId) ?? 0) - fromReservation));
-            remainingFree.set(itemId, Math.max(0, free - fromFree));
-          }
-          remainingPhysical.set(itemId, Math.max(0, physical - taken));
-          remaining -= taken;
-        }
-        return requested - remaining;
-      };
-
-      // Confirmed supply is allocated first, so a line that only has an
-      // inspect-first relationship cannot consume capacity needed by an exact
-      // or approved-alternative line later in the stable ordering.
-      for (const line of allocationLines) {
-        const candidates = candidatesByLine.get(line) ?? [];
-        const confirmed = candidates.filter((candidate) => canSupplyBomCandidate(candidate) && CONFIRMED_EVIDENCE.has(candidate.item.evidence.state));
-        recordCandidateFacts(line, confirmed, "confirmed");
-        const suppliedQuantity = bomSpecification(line).sufficient ? allocate(line, confirmed, line.requiredQuantity, "confirmed") : 0;
-        allocations.set(line, { suppliedQuantity, inspectQuantity: 0 });
-      }
-      for (const line of allocationLines) {
-        const candidates = candidatesByLine.get(line) ?? [];
-        const uncertain = candidates.filter((candidate) => !canSupplyBomCandidate(candidate) || !CONFIRMED_EVIDENCE.has(candidate.item.evidence.state));
-        recordCandidateFacts(line, uncertain, "inspect");
-        const suppliedQuantity = allocations.get(line)?.suppliedQuantity ?? 0;
-        // A recorded candidate that needs a physical or compatibility check
-        // remains Check even when sourcing specifications are incomplete.
-        const inspectQuantity = allocate(line, uncertain, Math.max(line.requiredQuantity - suppliedQuantity, 0), "inspect");
-        allocations.set(line, { suppliedQuantity, inspectQuantity });
-      }
-
-      const gaps: BomGap[] = lines.map((line) => {
-        const candidates = candidatesByLine.get(line) ?? [];
-        const confirmed = candidates.filter((candidate) => canSupplyBomCandidate(candidate) && CONFIRMED_EVIDENCE.has(candidate.item.evidence.state));
-        const uncertain = candidates.filter((candidate) => !canSupplyBomCandidate(candidate) || !CONFIRMED_EVIDENCE.has(candidate.item.evidence.state));
-        const suppliedQuantity = allocations.get(line)?.suppliedQuantity ?? 0;
-        const inspectQuantity = allocations.get(line)?.inspectQuantity ?? 0;
-        const missingQuantity = Math.max(line.requiredQuantity - suppliedQuantity - inspectQuantity, 0);
-        const specification = bomSpecification(line);
-        let status: BomGap["status"];
-        if (line.optional && suppliedQuantity === 0 && inspectQuantity === 0) status = "optional";
-        else if (!specification.sufficient && inspectQuantity === 0) status = "specify_first";
-        else if (missingQuantity === 0 && inspectQuantity === 0) status = "supplied";
-        else if (suppliedQuantity > 0 && missingQuantity > 0) status = "partially_supplied";
-        else if (inspectQuantity > 0) status = "inspect_first";
-        else status = "missing";
-        const decision = bomDecision(line, status, specification.sufficient, inspectQuantity);
-        const candidateResults = candidates.map((candidate) => {
-          const fact = candidateFacts.get(`${line.id}\u0000${candidate.item.id}`);
-          if (fact === undefined) {
-            throw new ApplicationError("integrity_error", "BOM candidate facts were not recorded");
-          }
-          return fact;
-        });
-        const reasons = [
-          ...(suppliedQuantity > 0 ? ["Physically confirmed stock covers part or all of this requirement."] : []),
-          ...(uncertain.some((candidate) => !canSupplyBomCandidate(candidate)) ? ["Some matching stock needs an explicit compatibility decision before use."] : []),
-          ...(uncertain.some((candidate) => canSupplyBomCandidate(candidate) && !CONFIRMED_EVIDENCE.has(candidate.item.evidence.state)) ? ["Some matching stock is recorded but needs a physical count before use."] : []),
-          ...(decision === "decide" ? [`Specify ${specification.missingDecisions.join(" and ")} before sourcing this requirement.`] : []),
-          ...(decision !== "decide" && missingQuantity > 0 ? ["No confirmed stock covers the remaining quantity."] : []),
-          ...(decision !== "decide" && candidates.length === 0 ? ["No matching inventory item was found for this line."] : []),
-          ...(line.itemId === undefined && line.alternatives.length === 0 && hasInventoryMatchConstraints(line.constraints) ? ["Potential matches were selected using the line constraints."] : [])
-        ];
-        const result = {
-          lineId: line.id,
-          name: line.name,
-          optional: line.optional,
-          status,
-          decision,
-          ...(specification.missingDecisions.length === 0 ? {} : { missingDecisions: [...specification.missingDecisions] }),
-          requiredQuantity: line.requiredQuantity,
-          suppliedQuantity,
-          inspectQuantity,
-          missingQuantity,
-          unit: line.unit,
-          matchedItemIds: candidates.map((candidate) => candidate.item.id),
-          reasons,
-          alternatives: line.alternatives,
-          candidates: candidateResults
-        } satisfies BomGap;
-        return bomGapSchema.parse(result);
-      });
-      return {
-        revisionId: id,
-        lines: gaps,
-        totals: {
-          requiredLines: gaps.filter((gap) => gap.optional !== true).length,
-          suppliedLines: gaps.filter((gap) => gap.optional !== true && gap.status === "supplied").length,
-          inspectFirstLines: gaps.filter((gap) => gap.optional !== true && gap.status === "inspect_first").length,
-          partialLines: gaps.filter((gap) => gap.optional !== true && gap.status === "partially_supplied").length,
-          missingLines: gaps.filter((gap) => gap.optional !== true && gap.status === "missing").length,
-          optionalLines: gaps.filter((gap) => gap.optional === true).length,
-          readyLines: gaps.filter((gap) => gap.optional !== true && gap.decision === "ready").length,
-          checkLines: gaps.filter((gap) => gap.optional !== true && gap.decision === "check").length,
-          decideLines: gaps.filter((gap) => gap.optional !== true && gap.decision === "decide").length,
-          sourceLines: gaps.filter((gap) => gap.optional !== true && gap.decision === "source").length,
-        }
-      }
+      return evaluateBomGapsFromData(id, lines, inventory, reservations);
     });
   }
 
@@ -1526,6 +1780,9 @@ export class ApplicationService {
       const lines = await this.ports.projects.listBomLines(parentId);
       const line = lines.find((candidate) => candidate.id === parsed.lineId);
       if (line === undefined) throw notFound("BOM line", parsed.lineId);
+      if (!bomSpecification(line).sufficient) {
+        throw new ApplicationError("validation", "Resolve the BOM specification decisions before reserving stock");
+      }
       const unsupported = unsupportedBomConstraintKeys(line.constraints);
       if (unsupported.length > 0) {
         throw new ApplicationError("validation", `Unsupported BOM constraint key(s): ${unsupported.join(", ")}`);
@@ -1954,6 +2211,8 @@ export class ApplicationService {
       readonly entityId: string;
       readonly version?: number;
       readonly eventMetadata?: Readonly<Record<string, unknown>>;
+      /** Allow an aggregate result to include the single audit identity. */
+      readonly withAudit?: (audit: AuditEvent) => T;
       /** Cleanup for filesystem state if the audited mutation cannot commit. */
       readonly compensate?: () => Promise<void>;
     }>
@@ -1996,7 +2255,7 @@ export class ApplicationService {
           ...(result.version !== undefined ? { version: result.version } : {})
         };
         const audit = await this.ports.audit.append(auditInput);
-        const mutation: Mutation<T> = { data: result.value, audit, correlationId: ctx.correlationId, replayed: false };
+        const mutation: Mutation<T> = { data: result.withAudit?.(audit) ?? result.value, audit, correlationId: ctx.correlationId, replayed: false };
         if (ctx.idempotencyKey) await this.ports.idempotency.set(ctx.actor, ctx.idempotencyKey, { action, fingerprint, mutation });
         const event: EventBusEvent = {
           id: audit.id,

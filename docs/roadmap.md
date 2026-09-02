@@ -72,12 +72,14 @@ error/idempotency language before changing setup or shopping behavior.
 #### Tranche B — Atomic setup (P0)
 
 - [ ] `BL-AW-005` → `REQ-003`: preview and commit a complete conflict-checked
-  project graph. **Partial foundation only:**
+  project graph. **Partial — atomic agent/API slice delivered:**
   `create_project_with_initial_revision` is atomic for its existing scope and
   the web uses that existing atomic project-plus-initial-revision endpoint. It
   now accepts stable caller IDs with sanitized project/revision/name collision
-  responses, but the bulk/previewable graph workflow and five-call success
-  contract remain proposed. Depends on Tranche A.
+  responses. Bounded actor-owned preview/commit now share ApplicationService,
+  SQLite/UnitOfWork, HTTP, MCP, and web client behavior. The UI composition
+  remains intentionally deferred; template flows and a full Describe→Review→Create
+  experience are separate work. Depends on Tranche A.
 
 Dependency gate: reuse the existing unit-of-work and reconciliation
 preview/commit patterns; do not create a parallel MCP or web implementation.

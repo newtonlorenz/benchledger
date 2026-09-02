@@ -1,8 +1,190 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CatalogProduct } from "@benchledger/api-contract";
+import { ApplicationService } from "@benchledger/application";
 import { createMemoryRuntime, MemoryUnitOfWork } from "./memory-store.js";
 
 describe("MemoryInventory", () => {
+  it("supports an atomic setup preview and commit with allocation evidence", async () => {
+    const runtime = createMemoryRuntime([{
+      id: "memory-setup-stock", name: "M3 screw", kind: "fastener", quantity: 3, availableQuantity: 3, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" }, createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1
+    }]);
+    const service = new ApplicationService(runtime.ports);
+    const context = { actor: "memory-setup-test", source: "api" as const, correlationId: "memory-setup", scopes: new Set(["projects:write", "bom:write"]) };
+    const preview = await service.previewProjectSetup({
+      project: { id: "memory-setup-project", name: "Memory setup", status: "planned" },
+      revision: { id: "memory-setup-revision", name: "Initial", status: "concept" },
+      workItems: [],
+      bomLines: [{ localRef: "screws", id: "memory-setup-line", name: "M3 screw", itemId: "memory-setup-stock", requiredQuantity: 2, unit: "each", optional: false, constraints: {}, alternatives: [] }],
+      reservations: [{ localRef: "screw-reservation", bomLineLocalRef: "screws", id: "memory-setup-reservation", itemId: "memory-setup-stock", quantity: 2, unit: "each" }]
+    }, context);
+    expect(preview.status).toBe("active");
+    const committed = await service.commitProjectSetup({ previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmReservations: true }, { ...context, idempotencyKey: "memory-setup-key" });
+    expect(committed.data).toMatchObject({ project: { id: "memory-setup-project" }, reservations: [{ id: "memory-setup-reservation" }], auditIds: [committed.audit.id] });
+    expect(runtime.inventory.items.get("memory-setup-stock")?.availableQuantity).toBe(1);
+    expect(runtime.inventory.events.get("memory-setup-stock")?.at(-1)).toMatchObject({ id: "reservation-memory-setup-reservation-allocate", type: "allocate", quantity: 2 });
+  });
+
+  it("keeps a planned reservation exclusive when two setup lines share one item", async () => {
+    const runtime = createMemoryRuntime([{
+      id: "memory-shared-setup-stock", name: "Shared board", kind: "electronic", quantity: 1, availableQuantity: 1, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" }, createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1
+    }]);
+    const service = new ApplicationService(runtime.ports);
+    const context = { actor: "memory-shared-setup", source: "api" as const, correlationId: "memory-shared-setup", scopes: new Set(["projects:write", "bom:write"]) };
+    const proposal = {
+      project: { id: "memory-shared-project", name: "Shared setup", status: "planned" as const },
+      revision: { id: "memory-shared-revision", name: "Initial", status: "concept" as const },
+      workItems: [],
+      bomLines: [
+        { localRef: "line-a", id: "memory-shared-line-a", name: "First board", itemId: "memory-shared-setup-stock", requiredQuantity: 1, unit: "each" as const, optional: false, constraints: {}, alternatives: [] },
+        { localRef: "line-b", id: "memory-shared-line-b", name: "Reserved board", itemId: "memory-shared-setup-stock", requiredQuantity: 1, unit: "each" as const, optional: false, constraints: {}, alternatives: [] }
+      ],
+      reservations: [{ localRef: "shared-reservation", bomLineLocalRef: "line-b", id: "memory-shared-reservation", itemId: "memory-shared-setup-stock", quantity: 1, unit: "each" as const }]
+    };
+    const preview = await service.previewProjectSetup(proposal, context);
+    const previewByLine = new Map(preview.gaps.lines.map((line) => [line.lineId, line]));
+    expect(previewByLine.get("memory-shared-line-a")).toMatchObject({ status: "missing", suppliedQuantity: 0, missingQuantity: 1 });
+    expect(previewByLine.get("memory-shared-line-b")).toMatchObject({ status: "supplied", suppliedQuantity: 1, missingQuantity: 0 });
+    const committed = await service.commitProjectSetup({ previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmReservations: true }, { ...context, idempotencyKey: "memory-shared-setup-key" });
+    const live = await service.evaluateBomGaps("memory-shared-revision");
+    expect(committed.data.gaps).toEqual(live);
+    expect(committed.data.gaps.lines.find((line) => line.lineId === "memory-shared-line-b")?.status).toBe("supplied");
+  });
+
+  it("blocks setup commit when a candidate row changes after preview", async () => {
+    const runtime = createMemoryRuntime([{
+      id: "memory-stale-candidate", name: "Candidate board", kind: "electronic", quantity: 1, availableQuantity: 1, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" }, createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1
+    }]);
+    const service = new ApplicationService(runtime.ports);
+    const context = { actor: "memory-stale-candidate", source: "api" as const, correlationId: "memory-stale-candidate", scopes: new Set(["projects:write", "bom:write"]) };
+    const preview = await service.previewProjectSetup({
+      project: { id: "memory-stale-project", name: "Stale candidate setup", status: "planned" },
+      revision: { id: "memory-stale-revision", name: "Initial", status: "concept" },
+      workItems: [],
+      bomLines: [{ localRef: "board", id: "memory-stale-line", name: "Any board", requiredQuantity: 1, unit: "each", optional: false, constraints: { kind: "electronic" }, alternatives: [] }],
+      reservations: []
+    }, context);
+    expect(preview.affectedInventory.map((row) => row.itemId)).toEqual(["memory-stale-candidate"]);
+    await runtime.inventory.updateItem("memory-stale-candidate", { location: "Shelf B" }, 1);
+    await expect(service.commitProjectSetup({ previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmReservations: false }, { ...context, idempotencyKey: "memory-stale-candidate-key" })).rejects.toMatchObject({
+      code: "conflict",
+      details: { reason: "stale_basis", retryable: false, commitState: "not_committed", recoveryAction: "preview_project_setup" }
+    });
+    await expect(runtime.ports.projects.getProject("memory-stale-project")).resolves.toBeNull();
+  });
+
+  it("enforces setup ownership, version/hash, expiry, and reservation confirmation", async () => {
+    const runtime = createMemoryRuntime([{
+      id: "memory-setup-guard-stock", name: "Guard screw", kind: "fastener", quantity: 2, availableQuantity: 2, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" }, createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1
+    }]);
+    const service = new ApplicationService(runtime.ports);
+    const context = { actor: "memory-setup-guard", source: "api" as const, correlationId: "memory-setup-guard", scopes: new Set(["projects:write", "bom:write"]) };
+    const preview = await service.previewProjectSetup({
+      project: { id: "memory-setup-guard-project", name: "Guard setup", status: "planned" },
+      revision: { id: "memory-setup-guard-revision", name: "Initial", status: "concept" },
+      workItems: [],
+      bomLines: [{ localRef: "screws", id: "memory-setup-guard-line", name: "Guard screw", itemId: "memory-setup-guard-stock", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }],
+      reservations: [{ localRef: "guard-reservation", bomLineLocalRef: "screws", id: "memory-setup-guard-reservation", itemId: "memory-setup-guard-stock", quantity: 1, unit: "each" }]
+    }, context);
+    await expect(service.commitProjectSetup({ previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmReservations: true }, { ...context, actor: "different-actor", idempotencyKey: "memory-setup-guard-owner" })).rejects.toMatchObject({ code: "conflict", details: { reason: "preview_ownership", commitState: "not_committed" } });
+    await expect(service.commitProjectSetup({ previewId: preview.id, expectedPreviewVersion: preview.version + 1, contentSha256: preview.contentSha256, confirmReservations: true }, { ...context, idempotencyKey: "memory-setup-guard-version" })).rejects.toMatchObject({ code: "conflict", details: { reason: "stale_preview" } });
+    await expect(service.commitProjectSetup({ previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: "a".repeat(64), confirmReservations: true }, { ...context, idempotencyKey: "memory-setup-guard-hash" })).rejects.toMatchObject({ code: "conflict", details: { reason: "stale_preview" } });
+    await expect(service.commitProjectSetup({ previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmReservations: false }, { ...context, idempotencyKey: "memory-setup-guard-confirm" })).rejects.toMatchObject({ code: "validation" });
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(preview.expiresAt));
+      await expect(service.commitProjectSetup({ previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmReservations: true }, { ...context, idempotencyKey: "memory-setup-guard-expiry" })).rejects.toMatchObject({ code: "conflict", details: { reason: "preview_expired", recoveryAction: "preview_project_setup" } });
+    } finally {
+      vi.useRealTimers();
+    }
+    await expect(runtime.ports.projects.getProject("memory-setup-guard-project")).resolves.toBeNull();
+  });
+
+  it("returns reviewable setup errors for every unsafe reservation class", async () => {
+    const stamp = { createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1 };
+    const runtime = createMemoryRuntime([
+      { id: "setup-valid-item", name: "Valid part", kind: "electronic", quantity: 5, availableQuantity: 5, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" }, ...stamp },
+      { id: "setup-incompatible-item", name: "Other part", kind: "electronic", quantity: 1, availableQuantity: 1, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" }, ...stamp },
+      { id: "setup-wrong-unit", name: "Packaged part", kind: "electronic", quantity: 1, availableQuantity: 1, unit: "set", tags: [], links: [], evidence: { state: "physically_counted" }, ...stamp },
+      { id: "setup-unconfirmed", name: "Uncounted part", kind: "electronic", quantity: 1, availableQuantity: 0, unit: "each", tags: [], links: [], evidence: { state: "delivered_uncounted" }, ...stamp },
+      { id: "setup-short-stock", name: "Short stock", kind: "electronic", quantity: 1, availableQuantity: 1, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" }, ...stamp },
+    ]);
+    const service = new ApplicationService(runtime.ports);
+    const context = { actor: "memory-setup-errors", source: "api" as const, correlationId: "memory-setup-errors", scopes: new Set(["projects:write", "bom:write"]) };
+    const exactLine = (localRef: string, itemId: string, requiredQuantity: number) => ({ localRef, id: `line-${localRef}`, name: localRef, itemId, requiredQuantity, unit: "each" as const, optional: false, constraints: {}, alternatives: [] });
+    const preview = await service.previewProjectSetup({
+      project: { id: "memory-setup-errors-project", name: "Unsafe reservation review", status: "planned" },
+      revision: { id: "memory-setup-errors-revision", name: "Initial", status: "concept" },
+      workItems: [],
+      bomLines: [
+        exactLine("incompatible", "setup-valid-item", 1),
+        exactLine("wrong-unit", "setup-wrong-unit", 1),
+        exactLine("unconfirmed", "setup-unconfirmed", 1),
+        exactLine("over-line", "setup-valid-item", 1),
+        exactLine("short-stock", "setup-short-stock", 3),
+        { ...exactLine("undecided", "setup-valid-item", 1), constraints: { specification: { status: "insufficient" as const, missingDecisions: ["current_or_load" as const] } } },
+      ],
+      reservations: [
+        { localRef: "reserve-incompatible", bomLineLocalRef: "incompatible", itemId: "setup-incompatible-item", quantity: 1, unit: "each" },
+        { localRef: "reserve-wrong-unit", bomLineLocalRef: "wrong-unit", itemId: "setup-wrong-unit", quantity: 1, unit: "set" },
+        { localRef: "reserve-unconfirmed", bomLineLocalRef: "unconfirmed", itemId: "setup-unconfirmed", quantity: 1, unit: "each" },
+        { localRef: "reserve-over-line", bomLineLocalRef: "over-line", itemId: "setup-valid-item", quantity: 2, unit: "each" },
+        { localRef: "reserve-short-stock", bomLineLocalRef: "short-stock", itemId: "setup-short-stock", quantity: 2, unit: "each" },
+        { localRef: "reserve-undecided", bomLineLocalRef: "undecided", itemId: "setup-valid-item", quantity: 1, unit: "each" },
+      ]
+    }, context);
+    const codes = new Set(preview.fieldErrors.map((error) => error.code));
+    expect([...codes]).toEqual(expect.arrayContaining([
+      "invalid_reservation_reference", "unit_mismatch", "insufficient_evidence", "requirement_exceeded", "insufficient_stock", "unresolved_specification"
+    ]));
+    await expect(service.commitProjectSetup({
+      previewId: preview.id,
+      expectedPreviewVersion: preview.version,
+      contentSha256: preview.contentSha256,
+      confirmReservations: true
+    }, { ...context, idempotencyKey: "memory-setup-errors-commit" })).rejects.toMatchObject({ code: "validation" });
+    await expect(runtime.ports.projects.getProject("memory-setup-errors-project")).resolves.toBeNull();
+  });
+
+  it("binds every matching candidate when more than 48 inventory rows affect a setup", async () => {
+    const stamp = { createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1 };
+    const runtime = createMemoryRuntime(Array.from({ length: 49 }, (_, index) => ({
+      id: `setup-many-candidate-${index}`, name: `Candidate ${index}`, kind: "fastener", quantity: 1,
+      availableQuantity: 1, unit: "each" as const, tags: [], links: [], evidence: { state: "physically_counted" as const }, ...stamp
+    })));
+    const service = new ApplicationService(runtime.ports);
+    const preview = await service.previewProjectSetup({
+      project: { id: "setup-many-project", name: "Many candidates", status: "planned" },
+      revision: { id: "setup-many-revision", name: "Initial", status: "concept" },
+      workItems: [],
+      bomLines: [{ localRef: "fastener", id: "setup-many-line", name: "Any fastener", requiredQuantity: 1, unit: "each", optional: false, constraints: { kind: "fastener" }, alternatives: [] }],
+      reservations: []
+    }, { actor: "setup-many-agent", source: "api", correlationId: "setup-many", scopes: new Set(["projects:write", "bom:write"]) });
+    expect(preview.affectedInventory).toHaveLength(49);
+    expect(preview.gaps.lines[0]?.matchedItemIds).toHaveLength(49);
+  });
+
+  it("compensates setup graph and allocation when the enclosing audit fails", async () => {
+    const runtime = createMemoryRuntime([{
+      id: "memory-setup-rollback-stock", name: "Rollback screw", kind: "fastener", quantity: 2, availableQuantity: 2, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" }, createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1
+    }]);
+    const service = new ApplicationService(runtime.ports);
+    const context = { actor: "memory-setup-rollback", source: "api" as const, correlationId: "memory-setup-rollback", scopes: new Set(["projects:write", "bom:write"]) };
+    const preview = await service.previewProjectSetup({
+      project: { id: "memory-setup-rollback-project", name: "Memory rollback setup", status: "planned" },
+      revision: { id: "memory-setup-rollback-revision", name: "Initial", status: "concept" },
+      workItems: [],
+      bomLines: [{ localRef: "screws", id: "memory-setup-rollback-line", name: "Rollback screw", itemId: "memory-setup-rollback-stock", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }],
+      reservations: [{ localRef: "screw-reservation", bomLineLocalRef: "screws", id: "memory-setup-rollback-reservation", itemId: "memory-setup-rollback-stock", quantity: 1, unit: "each" }]
+    }, context);
+    const failingAudit = vi.spyOn(runtime.ports.audit, "append").mockRejectedValueOnce(new Error("injected audit failure"));
+    await expect(service.commitProjectSetup({ previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmReservations: true }, { ...context, idempotencyKey: "memory-setup-rollback-key" })).rejects.toThrow("injected audit failure");
+    failingAudit.mockRestore();
+    await expect(runtime.ports.projects.getProject("memory-setup-rollback-project")).resolves.toBeNull();
+    expect(runtime.projects.reservations.size).toBe(0);
+    expect(runtime.inventory.items.get("memory-setup-rollback-stock")?.availableQuantity).toBe(2);
+    expect(runtime.inventory.events.get("memory-setup-rollback-stock")).toBeUndefined();
+  });
+
   it("normalizes search and enforces the REST inventory list bounds", async () => {
     const runtime = createMemoryRuntime();
     await runtime.inventory.createItem({

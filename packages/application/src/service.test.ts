@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { InventoryItem, InventoryCategory, StockEvent, BomLine, Reservation, Project, Offer, Artifact, UploadSession, ProjectRevision, WorkItem, WorkItemRevision, ReconciliationLine, ProjectTombstone } from "@benchledger/api-contract";
+import type { InventoryItem, InventoryCategory, StockEvent, BomLine, Reservation, Project, Offer, Artifact, UploadSession, ProjectRevision, WorkItem, WorkItemRevision, ReconciliationLine, ProjectTombstone, ProjectSetupProposal, ProjectSetupPreview, ProjectSetupCommitResult } from "@benchledger/api-contract";
 import { ApplicationError } from "./errors.js";
 import { ApplicationService, matchesBomConstraints, unsupportedBomConstraintKeys } from "./service.js";
 import { buildReconciliationDocument, type ReconciliationSourceSnapshot } from "./reconciliation.js";
@@ -16,6 +16,7 @@ function fakePorts(seed = item()): ApplicationPorts {
   let inventory = seed;
   let project: Project = { id: "project-1", name: "Lamp", status: "planned", createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1 };
   let auditCount = 0;
+  let setupPreview: ProjectSetupPreview | undefined;
   const bom: BomLine[] = [];
   const reservations: Reservation[] = [];
   const audit = async (input: AuditInput): Promise<AuditEvent> => ({ id: `audit-${++auditCount}`, action: input.action, actor: input.actor, source: input.source, correlationId: input.correlationId, entityType: input.entityType, entityId: input.entityId, ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }), ...(input.version === undefined ? {} : { version: input.version }), createdAt: "2026-08-30T00:00:00.000Z" });
@@ -43,6 +44,17 @@ function fakePorts(seed = item()): ApplicationPorts {
       createReservation: async (_id, input) => { const reservation = { ...input, id: input.id ?? "reservation-1", status: "active" as const, createdAt: project.createdAt, updatedAt: project.updatedAt, version: 1 }; reservations.push(reservation); return reservation; }, releaseReservation: async () => reservations[0]!, listReservations: async () => reservations, getReservationDetails: async (id) => { const reservation = reservations.find((candidate) => candidate.id === id); const line = reservation === undefined ? undefined : bom.find((candidate) => candidate.id === reservation.lineId); return reservation === undefined || line === undefined ? null : { reservation, projectId: project.id, projectRevisionId: line.revisionId, bomLine: line }; },
       recordUsage: async () => { throw new Error("not implemented"); }
     },
+    projectSetups: {
+      savePreview: async (preview) => { setupPreview = preview; return preview; },
+      getPreview: async () => setupPreview ?? null,
+      commitPreview: async ({ preview }) => ({
+        project: { id: preview.proposal.project.id as string, name: preview.proposal.project.name, status: preview.proposal.project.status, createdAt: preview.createdAt, updatedAt: preview.createdAt, version: 1 },
+        revision: { id: preview.proposal.revision.id as string, projectId: preview.proposal.project.id as string, number: 1, name: preview.proposal.revision.name, status: preview.proposal.revision.status, createdAt: preview.createdAt, version: 1 },
+        workItems: [], workItemRevisions: [],
+        bomLines: preview.proposal.bomLines.map((line) => ({ id: line.id as string, revisionId: preview.proposal.revision.id as string, name: line.name, requiredQuantity: line.requiredQuantity, unit: line.unit, optional: line.optional, ...(line.itemId === undefined ? {} : { itemId: line.itemId }), constraints: line.constraints, alternatives: line.alternatives, createdAt: preview.createdAt, updatedAt: preview.createdAt, version: 1 })),
+        reservations: [], auditIds: [], context: { previewId: preview.id, contentSha256: preview.contentSha256 }, gaps: preview.gaps, nextAction: "Review setup"
+      } as ProjectSetupCommitResult)
+    },
     offers: { listOffers: async () => ({ data: [], limit: 50 }), createOffer: async (input) => ({ ...input, id: input.id ?? "offer-1", observedAt: input.observedAt, currency: input.currency, priceMinor: input.priceMinor, name: input.name, supplier: input.supplier, url: input.url, version: 1 }) as Offer },
     artifacts: {
       listArtifacts: async () => [], getArtifact: async () => null, getUploadSessionDetails: async (id) => id === "session-1" ? { session: { id: "session-1", artifactId: "artifact-1", expiresAt: "2026-08-30T01:00:00.000Z", maxBytes: 1, uploadUrl: "/uploads/session-1", status: "pending" }, projectId: "project-1", revisionId: "rev-1" } : null,
@@ -59,6 +71,22 @@ function fakePorts(seed = item()): ApplicationPorts {
     }
   };
 }
+
+const setupProposal = (overrides: Partial<ProjectSetupProposal> = {}): ProjectSetupProposal => ({
+  project: { id: "setup-project", name: "Setup project", status: "planned" },
+  revision: { id: "setup-revision", name: "Initial", status: "concept" },
+  workItems: [],
+  bomLines: [{ localRef: "line", id: "setup-line", name: "PETG", itemId: "item-1", requiredQuantity: 1, unit: "gram", optional: false, constraints: {}, alternatives: [] }],
+  reservations: [],
+  ...overrides
+});
+
+const setupCommitInput = (preview: ProjectSetupPreview): { previewId: string; expectedPreviewVersion: number; contentSha256: string; confirmReservations: boolean } => ({
+  previewId: preview.id,
+  expectedPreviewVersion: preview.version,
+  contentSha256: preview.contentSha256,
+  confirmReservations: false
+});
 
 describe("ApplicationService", () => {
   it("removes a project only with exact-name confirmation and returns released reservation evidence", async () => {
@@ -528,6 +556,76 @@ describe("ApplicationService", () => {
     expect(result.totals).toEqual({ requiredLines: 0, suppliedLines: 0, inspectFirstLines: 0, partialLines: 0, missingLines: 0, optionalLines: 1, readyLines: 0, checkLines: 0, decideLines: 0, sourceLines: 0 });
   });
 
+  it("uses the authoritative allocator for setup preview and commit", async () => {
+    const ports = fakePorts(item({ id: "setup-source-item", name: "Setup source", quantity: 2, availableQuantity: 2, unit: "gram" }));
+    ports.projects.getProjectRevision = async () => null;
+    const service = new ApplicationService(ports);
+    const proposal = {
+      project: { id: "setup-source-project", name: "Setup source", status: "planned" as const },
+      revision: { id: "setup-source-revision", name: "Initial", status: "concept" as const },
+      workItems: [],
+      bomLines: [{ localRef: "source", id: "setup-source-line", name: "Setup source", itemId: "setup-source-item", requiredQuantity: 1, unit: "gram" as const, optional: false, constraints: {}, alternatives: [] }],
+      reservations: []
+    };
+    const preview = await service.previewProjectSetup(proposal, context);
+    expect(preview.gaps.totals).toMatchObject({ requiredLines: 1, suppliedLines: 1, readyLines: 1, checkLines: 0, decideLines: 0, sourceLines: 0, optionalLines: 0 });
+    const committed = await service.commitProjectSetup({ previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmReservations: false }, { ...context, idempotencyKey: "setup-source-key" });
+    expect(committed.data.gaps).toEqual(preview.gaps);
+  });
+
+  it("enforces workspace scope and runtime guards before previewing setup", async () => {
+    const proposal = setupProposal();
+    const service = new ApplicationService(fakePorts());
+    await expect(service.previewProjectSetup(proposal, { ...context, scopes: new Set() })).rejects.toMatchObject({ code: "forbidden" });
+    await expect(service.previewProjectSetup(proposal, { ...context, scopes: new Set(["projects:write"]) })).rejects.toMatchObject({ code: "forbidden" });
+    await expect(service.previewProjectSetup(proposal, { ...context, scopes: new Set(["bom:write"]) })).rejects.toMatchObject({ code: "forbidden" });
+    await expect(service.previewProjectSetup(proposal, { ...context, projectId: "project-1" })).rejects.toMatchObject({ code: "forbidden" });
+
+    const unavailable = fakePorts();
+    Object.assign(unavailable, { projectSetups: undefined });
+    await expect(new ApplicationService(unavailable).previewProjectSetup(proposal, context)).rejects.toMatchObject({ code: "integrity_error" });
+  });
+
+  it("enforces commit caller scope, workspace ownership, idempotency, and runtime guards", async () => {
+    const input = { previewId: "setup-preview", expectedPreviewVersion: 1, contentSha256: "a".repeat(64), confirmReservations: false };
+    const service = new ApplicationService(fakePorts());
+    await expect(service.commitProjectSetup(input, { ...context, scopes: new Set(), idempotencyKey: "setup-guard-key" })).rejects.toMatchObject({ code: "forbidden" });
+    await expect(service.commitProjectSetup(input, { ...context, scopes: new Set(["projects:write"]), idempotencyKey: "setup-guard-key" })).rejects.toMatchObject({ code: "forbidden" });
+    await expect(service.commitProjectSetup(input, { ...context, scopes: new Set(["bom:write"]), idempotencyKey: "setup-guard-key" })).rejects.toMatchObject({ code: "forbidden" });
+    await expect(service.commitProjectSetup(input, { ...context, projectId: "project-1", idempotencyKey: "setup-guard-key" })).rejects.toMatchObject({ code: "forbidden" });
+    await expect(service.commitProjectSetup(input, context)).rejects.toMatchObject({ code: "validation" });
+    await expect(service.commitProjectSetup(input, { ...context, idempotencyKey: "short" })).rejects.toMatchObject({ code: "validation" });
+    await expect(service.commitProjectSetup(input, { ...context, idempotencyKey: "x".repeat(201) })).rejects.toMatchObject({ code: "validation" });
+
+    const unavailable = fakePorts();
+    Object.assign(unavailable, { projectSetups: undefined });
+    await expect(new ApplicationService(unavailable).commitProjectSetup(input, { ...context, idempotencyKey: "setup-guard-key" })).rejects.toMatchObject({ code: "integrity_error" });
+  });
+
+  it("rejects setup commits for missing, inactive, expired, stale, or unconfirmed previews", async () => {
+    const reservationProposal = setupProposal({
+      reservations: [{ localRef: "reservation", bomLineLocalRef: "line", id: "setup-reservation", itemId: "item-1", quantity: 1, unit: "gram" }]
+    });
+    const ports = fakePorts();
+    const service = new ApplicationService(ports);
+    const preview = await service.previewProjectSetup(reservationProposal, context);
+    const originalGetPreview = ports.projectSetups!.getPreview;
+    const commit = (key: string, input = setupCommitInput(preview)) => service.commitProjectSetup(input, { ...context, idempotencyKey: key });
+
+    ports.projectSetups!.getPreview = async () => null;
+    await expect(commit("setup-missing-preview")).rejects.toMatchObject({ code: "conflict", details: { reason: "preview_ownership" } });
+    ports.projectSetups!.getPreview = async () => ({ ...preview, status: "committed" });
+    await expect(commit("setup-committed-preview")).rejects.toMatchObject({ code: "conflict", details: { reason: "already_committed" } });
+    ports.projectSetups!.getPreview = async () => ({ ...preview, status: "expired" });
+    await expect(commit("setup-inactive-preview")).rejects.toMatchObject({ code: "conflict", details: { reason: "preview_expired" } });
+    ports.projectSetups!.getPreview = async () => ({ ...preview, expiresAt: "2020-01-01T00:00:00.000Z" });
+    await expect(commit("setup-expired-preview")).rejects.toMatchObject({ code: "conflict", details: { reason: "preview_expired" } });
+    ports.projectSetups!.getPreview = originalGetPreview;
+    await expect(commit("setup-stale-version", { ...setupCommitInput(preview), expectedPreviewVersion: preview.version + 1 })).rejects.toMatchObject({ code: "conflict", details: { reason: "stale_preview" } });
+    await expect(commit("setup-stale-hash", { ...setupCommitInput(preview), contentSha256: "b".repeat(64) })).rejects.toMatchObject({ code: "conflict", details: { reason: "stale_preview" } });
+    await expect(commit("setup-unconfirmed-reservations")).rejects.toMatchObject({ code: "validation" });
+  });
+
   it("allocates one shared confirmed item to only one BOM line in stable line-id order", async () => {
     const ports = fakePorts(item({ id: "shared-part", name: "Shared part", kind: "electronic", quantity: 1, availableQuantity: 1, unit: "each" }));
     const line = (id: string): BomLine => ({
@@ -598,6 +696,26 @@ describe("ApplicationService", () => {
     expect(byId.get("bom-b")).toMatchObject({ status: "supplied", suppliedQuantity: 1, missingQuantity: 0 });
   });
 
+  it("does not let inspect-first candidates consume another line's reservation", async () => {
+    const ports = fakePorts(item({ id: "reserved-inspect-part", name: "Reserved inspect part", kind: "electronic", quantity: 1, availableQuantity: 0, unit: "each" }));
+    const lines: BomLine[] = [
+      {
+        id: "bom-inspect-a", revisionId: "revision-reserved-inspect", name: "Possible board", requiredQuantity: 1, unit: "each", optional: false,
+        constraints: { kind: "electronic" }, alternatives: [], createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1
+      },
+      {
+        id: "bom-inspect-b", revisionId: "revision-reserved-inspect", name: "Unspecified board", itemId: "reserved-inspect-part", requiredQuantity: 1, unit: "each", optional: false,
+        constraints: { specification: { status: "insufficient", missingDecisions: ["compatibility"] } }, alternatives: [], createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1
+      }
+    ];
+    ports.projects.listBomLines = async () => lines;
+    ports.projects.listReservations = async () => [{ id: "reservation-inspect-b", lineId: "bom-inspect-b", itemId: "reserved-inspect-part", quantity: 1, status: "active", createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1 }];
+    const result = await new ApplicationService(ports).evaluateBomGaps("revision-reserved-inspect");
+    const byId = new Map(result.lines.map((gap) => [gap.lineId, gap]));
+    expect(byId.get("bom-inspect-a")).toMatchObject({ status: "missing", suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 1 });
+    expect(byId.get("bom-inspect-b")).toMatchObject({ status: "specify_first", suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 1 });
+  });
+
   it("scans every inventory page and keeps shared-capacity allocation deterministic", async () => {
     const records = Array.from({ length: 200 }, (_, index) => item({
       id: `noise-${index.toString().padStart(3, "0")}`,
@@ -647,6 +765,11 @@ describe("ApplicationService", () => {
   });
 
   it("rejects reservation requests that do not satisfy the BOM and stock invariants", async () => {
+    const undecidedPorts = fakePorts(item({ id: "item-1", name: "12 V power supply", quantity: 1, availableQuantity: 1, unit: "gram" }));
+    const undecidedService = new ApplicationService(undecidedPorts);
+    await undecidedService.createBomLine("rev-1", { id: "bom-undecided", name: "12 V power supply", itemId: "item-1", requiredQuantity: 1, unit: "gram", optional: false, alternatives: [], constraints: { specification: { status: "insufficient", missingDecisions: ["current_or_load", "connector"] } } }, context);
+    await expect(undecidedService.createReservation("rev-1", { lineId: "bom-undecided", itemId: "item-1", quantity: 1 }, context)).rejects.toMatchObject({ code: "validation" });
+
     const unsupportedPorts = fakePorts();
     const unsupportedService = new ApplicationService(unsupportedPorts);
     await unsupportedService.createBomLine("rev-1", { id: "bom-unsupported", name: "Board", itemId: "item-1", requiredQuantity: 1, unit: "gram", optional: false, alternatives: [], constraints: { unsupported: "value" } }, context);

@@ -225,8 +225,13 @@ response exposes only bounded details (`reason`, `field`, `id`,
 `idempotency_key_reused`. Read the existing project, choose a different project
 or revision ID, or choose a different project name as directed. Removed
 projects retain their IDs and generated names/slugs, so those identities are
-not reclaimed. Bulk project-graph setup and preview/commit are still pending;
-this command covers only the project and its first revision.
+not reclaimed. For a complete graph, prefer `preview_project_setup`, inspect
+its normalized IDs, gaps, unresolved specifications, and inventory basis, then
+call `commit_project_setup` with the same preview ID/version/hash and explicit
+reservation confirmation when needed. The preview is actor-owned metadata only
+for 30 minutes; commit is one transaction with one aggregate audit and an
+8–200-character idempotency key. This command remains available for the
+incremental project-plus-initial-revision path.
 
 For bounded catalog corrections, use `bulk_update_inventory_items` with 1–100
 explicit `{itemId, expectedVersion}` targets. Supply at least one of a

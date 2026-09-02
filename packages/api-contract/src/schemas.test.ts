@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bomSpecificationSchema, commissionInventoryItemSchema, createBomLineSchema, createInventoryItemSchema, createProjectSchema, createProjectWithInitialRevisionSchema, inventoryBulkUpdateSchema, inventoryItemSchema, inventoryListQuerySchema, projectCreationConflictDetailsSchema, projectSchema, projectStatusSchema, updateBomLineSchema, updateInventoryItemSchema, updateProjectSchema } from "./schemas.js";
+import { bomSpecificationSchema, commitProjectSetupBodySchema, commitProjectSetupSchema, commissionInventoryItemSchema, createBomLineSchema, createInventoryItemSchema, createProjectSchema, createProjectWithInitialRevisionSchema, inventoryBulkUpdateSchema, inventoryItemSchema, inventoryListQuerySchema, projectCreationConflictDetailsSchema, projectSchema, projectStatusSchema, updateBomLineSchema, updateInventoryItemSchema, updateProjectSchema } from "./schemas.js";
 
 const constraints = {
   kind: "electronic",
@@ -105,6 +105,13 @@ describe("REST atomic project setup schema", () => {
       retryable: true,
       commitState: "not_committed"
     })).toThrow();
+  });
+
+  it("keeps the preview identity out of the path-addressed HTTP body", () => {
+    const command = { expectedPreviewVersion: 1, contentSha256: "a".repeat(64), confirmReservations: false };
+    expect(commitProjectSetupBodySchema.parse(command)).toEqual(command);
+    expect(() => commitProjectSetupBodySchema.parse({ ...command, previewId: "preview-1" })).toThrow();
+    expect(commitProjectSetupSchema.parse({ ...command, previewId: "preview-1" })).toMatchObject({ previewId: "preview-1" });
   });
 });
 
