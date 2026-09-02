@@ -81,6 +81,23 @@ function linesMap(snapshot: ReconciliationSourceSnapshot): Map<string, BomLine> 
   return result;
 }
 
+/**
+ * A reconciliation line can only have one scalar reservation unit. The
+ * quantity fields in its preview are summed without conversion, so a mixed
+ * active reservation set is malformed state and must never be presented as a
+ * meaningful total.
+ */
+function activeReservationUnit(
+  line: Pick<BomLine, "id" | "unit">,
+  reservations: readonly ReconciliationReservationSource[]
+): InventoryItem["unit"] {
+  const units = new Set(reservations.filter((reservation) => reservation.lineId === line.id && reservation.status === "active").map((reservation) => reservation.unit));
+  if (units.size > 1) {
+    throw new ApplicationError("integrity_error", `BOM line '${line.id}' has mixed active reservation units: ${[...units].sort((left, right) => left.localeCompare(right)).join(", ")}`);
+  }
+  return [...units][0] ?? line.unit;
+}
+
 /** Assign deterministic IDs to newly converted reusable assets. */
 export function normalizeReconciliationLines(revisionId: string, lines: readonly ReconciliationLine[]): readonly ReconciliationLine[] {
   return lines.map((line) => ({
@@ -215,15 +232,20 @@ export function buildReconciliationDocument(snapshot: ReconciliationSourceSnapsh
     const missing = snapshot.lines.find((line) => !seenLines.has(line.id));
     if (missing !== undefined) throw new ApplicationError("conflict", `BOM line '${missing.id}' has not been reviewed`);
   }
+  // Validate every line's active reservation unit before any preview totals or
+  // stock effects are calculated. This keeps malformed mixed-unit state from
+  // being hidden by an otherwise plausible numeric sum.
+  for (const line of snapshot.lines) activeReservationUnit(line, snapshot.reservations);
   const previewLines: ReconciliationPreview["lines"] = snapshot.lines.map((line) => {
     const lineReservations = snapshot.reservations.filter((reservation) => reservation.lineId === line.id && reservation.status === "active");
+    const unit = activeReservationUnit(line, snapshot.reservations);
     const reservedQuantity = lineReservations.reduce((sum, reservation) => sum + reservation.quantity, 0);
     const submitted = normalizedLines.find((candidate) => candidate.bomLineId === line.id);
     const accountedQuantity = submitted?.outcomes.filter((outcome) => outcome.kind !== "reviewed_no_change").reduce((sum, outcome) => sum + outcome.quantity, 0) ?? 0;
     if (accountedQuantity > reservedQuantity) throw new ApplicationError("validation", `BOM line '${line.id}' is over-accounted`);
     if (requireComplete && accountedQuantity !== reservedQuantity && reservedQuantity > 0) throw new ApplicationError("conflict", `BOM line '${line.id}' has unaccounted reserved quantity`);
     if (requireComplete && reservedQuantity === 0 && submitted?.outcomes.some((outcome) => outcome.kind === "reviewed_no_change") !== true) throw new ApplicationError("conflict", `BOM line '${line.id}' must be explicitly marked reviewed_no_change`);
-    return { bomLineId: line.id, reservedQuantity, accountedQuantity, unaccountedQuantity: reservedQuantity - accountedQuantity, outcomeCount: submitted?.outcomes.length ?? 0 };
+    return { bomLineId: line.id, reservedQuantity, accountedQuantity, unaccountedQuantity: reservedQuantity - accountedQuantity, outcomeCount: submitted?.outcomes.length ?? 0, unit };
   });
   const basisItems = [...items.values()].sort((a, b) => a.id.localeCompare(b.id)).map((item) => ({ itemId: item.id, version: item.version, onHand: item.quantity, allocated: item.quantity - item.availableQuantity, available: item.availableQuantity, unit: item.unit }));
   const basisReservations = [...snapshot.reservations].sort((a, b) => a.id.localeCompare(b.id)).map((reservation) => ({ reservationId: reservation.id, lineId: reservation.lineId, itemId: reservation.itemId, quantity: reservation.quantity, unit: reservation.unit, status: reservation.status, version: reservation.version }));

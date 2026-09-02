@@ -94,6 +94,23 @@ Check takes precedence so the existing item can be inspected before shopping.
 A known shortfall after confirmed partial coverage is Source for the remaining
 quantity unless an inspect-first candidate could cover it.
 
+### Canonical quantities and package conversions
+
+Readiness and reservations use the server's canonical units: `each`, `gram`,
+`millimetre`, `millilitre`, `metre`, and `set`. Beginner web aliases such as
+`g` and `m` are display-only; a `set` remains a `set` in mapped inventory, BOM,
+gap, and reservation data. A structured alternative may carry an evidence-backed
+nested conversion with package quantity, requirement quantity, evidence basis,
+observation time, and optional source details. Only a valid whole-set conversion
+whose units match the canonical contract may contribute capacity. Candidate
+reasons retain honest package capacity, allocation, and whole-unit overage.
+
+Missing, malformed, or unit-mismatched conversions are never inferred from a
+name or display label. Connected web readiness consumes the canonical server gap
+status and shows an explicit mismatch or conversion diagnostic; offline/sample
+fallback uses the shared resolver and fails closed. These candidates remain
+Check until evidence and compatibility are confirmed.
+
 Confirmed stock is consumed by allocation arithmetic, so two projects cannot
 silently reserve the same available quantity. If no confirmed candidate covers a
 fully specified required line, the agent may prepare a shopping proposal. It
@@ -110,6 +127,11 @@ required characteristics have been decided or while plausible stock still needs
 inspection. If no required Source line exists but Decide or Check work remains,
 the UI says “Nothing is ready to source” and explains the blockers instead of
 claiming that inventory covers everything.
+
+Within an eligible Source line, alternative-linked offers are included only for
+exact or `confirmed_alternative` candidates returned by canonical readiness.
+Conditional, uncertain, unknown, and unit-mismatch candidates never add an offer
+to the proposal.
 
 Show package rounding, observed price, currency, shipping when known, link, and
 price age. Never claim that the offer is current without a fresh observation.

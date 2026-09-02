@@ -15,8 +15,8 @@ describe("reconciliation close-out flow", () => {
       projectRevisionId: "revision-2",
       status: "draft",
       lines: [
-        { id: "line-filament", bomLineId: "bom-filament", name: "PETG for shade", itemLabel: "Bambu Lab PETG HF · black", itemKind: "filament", plannedQuantity: 3, reservedQuantity: 3, unit: "gram", outcomes: [] },
-        { id: "line-screws", bomLineId: "bom-screws", name: "M3 screws", itemLabel: "M3 × 8 mm", itemKind: "fastener", plannedQuantity: 0, reservedQuantity: 0, unit: "each", outcomes: [] }
+        { id: "line-filament", bomLineId: "bom-filament", name: "PETG for shade", itemLabel: "Bambu Lab PETG HF · black", itemKind: "filament", plannedQuantity: 3, plannedUnit: "gram", reservedQuantity: 3, unit: "gram", outcomes: [] },
+        { id: "line-screws", bomLineId: "bom-screws", name: "M3 screws", itemLabel: "M3 × 8 mm", itemKind: "fastener", plannedQuantity: 0, plannedUnit: "each", reservedQuantity: 0, unit: "each", outcomes: [] }
       ]
     };
     const render = (model: ReconciliationViewModel, options: { expert?: boolean; confirmationOpen?: boolean } = {}) => renderToStaticMarkup(
@@ -86,5 +86,31 @@ describe("reconciliation close-out flow", () => {
     expect(expertConfirmationMarkup).toContain("reconcile-event-filament");
     expect(expertConfirmationMarkup).toContain("Replayed idempotently");
     expect(expertConfirmationMarkup).toContain("Source ID");
+  });
+
+  it("keeps planned BOM units separate from set-valued reservations and outcomes", () => {
+    const model: ReconciliationViewModel = {
+      projectId: "project-leds",
+      projectName: "LED pack",
+      projectRevisionId: "revision-leds",
+      status: "draft",
+      lines: [{
+        id: "line-leds",
+        bomLineId: "bom-leds",
+        name: "LEDs",
+        itemLabel: "LED sets",
+        plannedQuantity: 10,
+        plannedUnit: "each",
+        reservedQuantity: 1,
+        unit: "set",
+        reservations: [{ id: "reservation-leds", itemId: "led-sets", quantity: 1, unit: "set", status: "active", version: 2 }],
+        outcomes: [{ id: "outcome-leds", reservationId: "reservation-leds", itemId: "led-sets", kind: "consumed", quantity: 1, unit: "set", evidence: { state: "physically_counted" } }]
+      }]
+    };
+    const markup = renderToStaticMarkup(<ReconciliationUI model={model} expert={false} confirmationOpen={false} onChange={() => undefined} onRequestPreview={() => undefined} onConfirmCommit={() => undefined} />);
+    expect(markup).toContain("10 each");
+    expect(markup).toContain("1 set");
+    expect(markup).not.toContain("10 set");
+    expect(summarizeReconciliationLine(model.lines[0]!).complete).toBe(true);
   });
 });

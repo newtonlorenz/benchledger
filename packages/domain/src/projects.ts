@@ -2,6 +2,7 @@ import { createId, nowIso, slugify } from "./ids.js";
 import { DomainError, assertNonNegativeQuantity, assertPositiveQuantity } from "./errors.js";
 import { classifyAvailability } from "./stock.js";
 import { isLedResistorRequirement, resolveBomSpecification, type ResolvedBomSpecification } from "./specification.js";
+import { cloneBomAlternativeQuantityConversion, resolveBomAlternativeQuantity } from "./quantity-conversion.js";
 import type {
   AvailabilityClass,
   BomCandidate,
@@ -176,7 +177,11 @@ export function createBomLine(input: NewBomLine): BomLine {
     ...(input.optional === undefined ? {} : { optional: input.optional }),
     ...(input.itemId === undefined ? {} : { itemId: input.itemId }),
     ...(input.alternativeItemIds === undefined ? {} : { alternativeItemIds: input.alternativeItemIds.slice() }),
-    ...(input.alternatives === undefined ? {} : { alternatives: input.alternatives.map((alternative) => ({ ...alternative, ...(alternative.constraints === undefined ? {} : { constraints: { ...alternative.constraints, ...(alternative.constraints.tags === undefined ? {} : { tags: alternative.constraints.tags.slice() }) } }) })) }),
+    ...(input.alternatives === undefined ? {} : { alternatives: input.alternatives.map((alternative) => ({
+      ...alternative,
+      ...(alternative.quantityConversion === undefined ? {} : { quantityConversion: cloneBomAlternativeQuantityConversion(alternative.quantityConversion) }),
+      ...(alternative.constraints === undefined ? {} : { constraints: { ...alternative.constraints, ...(alternative.constraints.tags === undefined ? {} : { tags: alternative.constraints.tags.slice() }) } })
+    })) }),
     ...(writtenConstraints === undefined ? {} : { constraints: { ...writtenConstraints, ...(writtenConstraints.tags === undefined ? {} : { tags: writtenConstraints.tags.slice() }) } }),
     ...(input.notes === undefined ? {} : { notes: input.notes })
   };
@@ -237,6 +242,21 @@ function candidateCompatibility(line: BomLine, itemId: string): BomCompatibility
   return alternatives.some((alternative) => alternative.compatible === "confirmed") ? "confirmed" : undefined;
 }
 
+function candidateQuantity(line: BomLine, candidate: BomCandidate): number | undefined {
+  const alternatives = line.alternatives?.filter((alternative) => alternative.itemId === candidate.item.id) ?? [];
+  if (candidate.item.unit === line.unit) return candidate.balance.available;
+  for (const alternative of alternatives) {
+    const quantity = resolveBomAlternativeQuantity({
+      inventoryQuantity: candidate.balance.available,
+      inventoryUnit: candidate.item.unit,
+      requirementUnit: line.unit,
+      conversion: alternative.quantityConversion
+    });
+    if (quantity !== undefined) return quantity;
+  }
+  return undefined;
+}
+
 function candidatesForLine(line: BomLine, inventory: readonly InventorySnapshot[]): BomCandidate[] {
   // An explicit item ID is an identity constraint, not a hint. Pooling another
   // similarly named SKU into that line can make a partial/inspect-first
@@ -275,14 +295,16 @@ function chooseCandidate(line: BomLine, candidates: readonly BomCandidate[]): Bo
     })[0];
 }
 
-function candidateIsConfirmed(candidate: BomCandidate): boolean {
-  return candidate.balance.confidence === "confirmed" && (candidate.compatibility === undefined || candidate.compatibility === "confirmed");
+function candidateIsConfirmed(line: BomLine, candidate: BomCandidate): boolean {
+  return candidate.balance.confidence === "confirmed"
+    && (candidate.compatibility === undefined || candidate.compatibility === "confirmed")
+    && candidateQuantity(line, candidate) !== undefined;
 }
 
 function evaluateCandidates(line: BomLine, candidates: readonly BomCandidate[]): Pick<BomLineEvaluation, "status" | "supplied" | "shortfall" | "explanation" | "selected"> {
-  const confirmed = candidates.filter(candidateIsConfirmed);
-  const uncertain = candidates.filter((candidate) => !candidateIsConfirmed(candidate));
-  const confirmedQuantity = confirmed.reduce((total, candidate) => total + candidate.balance.available, 0);
+  const confirmed = candidates.filter((candidate) => candidateIsConfirmed(line, candidate));
+  const uncertain = candidates.filter((candidate) => !candidateIsConfirmed(line, candidate));
+  const confirmedQuantity = confirmed.reduce((total, candidate) => total + (candidateQuantity(line, candidate) ?? 0), 0);
   const reportedUncertain = uncertain.reduce((total, candidate) => total + (candidate.balance.reported ?? candidate.balance.available), 0);
   const selected = chooseCandidate(line, candidates);
   const shortfall = Math.max(0, line.quantity - Math.min(line.quantity, confirmedQuantity));
@@ -373,7 +395,7 @@ export function evaluateBom(
           return { status: missing.status, supplied: missing.supplied, shortfall: missing.shortfall, explanation: missing.explanation };
         })()
       : evaluateCandidates(line, candidates);
-    const uncertainCandidate = candidates.some((candidate) => !candidateIsConfirmed(candidate));
+    const uncertainCandidate = candidates.some((candidate) => !candidateIsConfirmed(line, candidate));
     const gatedAvailability = !specification.sufficient
       ? uncertainCandidate
         ? {

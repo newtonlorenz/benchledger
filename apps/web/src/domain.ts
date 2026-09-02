@@ -1,6 +1,7 @@
 // Import the browser-safe specification subpath so the web bundle does not
 // pull the domain package's Node-only ID helpers through its barrel export.
 import { resolveBomSpecification } from "@benchledger/domain/specification";
+import { resolveBomAlternativeQuantity } from "@benchledger/domain/quantity-conversion";
 
 export type StockState =
   | "available"
@@ -30,6 +31,41 @@ export interface BomSpecification {
 
 export type BomCompatibility = "confirmed" | "conditional" | "unknown";
 export type BomDecision = "ready" | "check" | "decide" | "source";
+
+/** Browser display units retain the server's set identity. The short aliases
+ * are kept for the existing beginner-facing grams/metres copy. */
+export type QuantityDisplayUnit = "each" | "g" | "m" | "set" | "millimetre" | "millilitre";
+
+export type QuantityConversionEvidenceBasis = "package_label" | "manufacturer_spec" | "physical_count" | "user_assertion";
+
+export interface QuantityConversion {
+  readonly inventory: { readonly quantity: 1; readonly unit: "set" };
+  readonly requirement: { readonly quantity: number; readonly unit: "each" };
+  readonly evidence: {
+    readonly basis: QuantityConversionEvidenceBasis;
+    readonly observedAt: string;
+    readonly source?: string;
+    readonly sourceId?: string;
+    readonly note?: string;
+  };
+}
+
+export interface BomAlternative {
+  readonly itemId: string;
+  readonly compatible?: BomCompatibility;
+  readonly reason?: string;
+  readonly quantityConversion?: QuantityConversion;
+}
+
+export interface BomGapCandidate {
+  readonly itemId: string;
+  readonly relationship: "exact" | "confirmed_alternative" | "uncertain_alternative" | "constraint_match";
+  readonly compatibility: BomCompatibility;
+  readonly availableQuantity: number;
+  readonly suppliedQuantity: number;
+  readonly inspectQuantity: number;
+  readonly reason: string;
+}
 
 export type InventoryCategory =
   | "Printers"
@@ -218,7 +254,7 @@ export interface InventoryItem {
   availableQuantity?: number;
   /** Lossless API evidence state used by the paginated inventory query. */
   serverEvidence?: InventoryEvidenceState;
-  unit: "each" | "g" | "m";
+  unit: QuantityDisplayUnit;
   reserved: number;
   state: StockState;
   evidence: EvidenceState;
@@ -252,7 +288,7 @@ export interface BomLine {
   label: string;
   itemId?: string;
   required: number;
-  unit: "each" | "g" | "m";
+  unit: QuantityDisplayUnit;
   optional?: boolean;
   note?: string;
   constraints?: {
@@ -266,7 +302,10 @@ export interface BomLine {
   };
   /** Alternatives retain compatibility evidence; an uncertain alternative is
    * still a Check item even when its ID exactly matches itemId. */
-  alternatives?: readonly { itemId: string; compatible?: BomCompatibility; reason?: string }[];
+  alternatives?: readonly BomAlternative[];
+  /** Canonical API unit retained for expert/read-back use when the beginner
+   * display uses a short alias (for example gram -> g). */
+  serverUnit?: string;
 }
 
 export interface ProjectGapLine {
@@ -279,6 +318,10 @@ export interface ProjectGapLine {
   missingQuantity: number;
   matchedItemIds: readonly string[];
   reasons: readonly string[];
+  requiredQuantity?: number;
+  unit?: QuantityDisplayUnit;
+  alternatives?: readonly BomAlternative[];
+  candidates?: readonly BomGapCandidate[];
 }
 
 export interface ProjectGapEvaluation {
@@ -391,6 +434,9 @@ export function sumMoneyByCurrency(amounts: ReadonlyArray<Pick<Offer, "priceMino
 export function formatQuantity(quantity: number, unit: InventoryItem["unit"] | BomLine["unit"]): string {
   if (unit === "g") return `${quantity.toLocaleString()} g`;
   if (unit === "m") return `${quantity.toLocaleString()} m`;
+  if (unit === "millimetre") return `${quantity.toLocaleString()} mm`;
+  if (unit === "millilitre") return `${quantity.toLocaleString()} ml`;
+  if (unit === "set") return `${quantity.toLocaleString()} ${quantity === 1 ? "set" : "sets"}`;
   return `${quantity.toLocaleString()} ${quantity === 1 ? "piece" : "pieces"}`;
 }
 
@@ -503,11 +549,16 @@ export function buildSetupSummary(input: BuildConfigInput, printer?: InventoryIt
 export interface BomLineStatus {
   line: BomLine;
   item?: InventoryItem;
+  /** All candidates returned by the canonical gap read, retained for expert
+   * unit/compatibility diagnostics even when the compact row shows one. */
+  items?: readonly InventoryItem[];
   supplied: number;
   remaining: number;
   state: "ready" | "inspect-first" | "specify-first" | "partial" | "missing" | "optional";
   decision: BomDecision;
   missingDecisions?: readonly BomSpecificationDecision[];
+  /** The server's full canonical gap row, when connected. */
+  gap?: ProjectGapLine;
 }
 
 export interface ProjectSummary {
@@ -525,10 +576,74 @@ export interface ProjectSummary {
   lineStatuses: BomLineStatus[];
 }
 
+function resolverUnit(unit: QuantityDisplayUnit): "piece" | "gram" | "meter" | "millimetre" | "millilitre" | "set" {
+  if (unit === "each") return "piece";
+  if (unit === "g") return "gram";
+  if (unit === "m") return "meter";
+  return unit;
+}
+
+/**
+ * Resolve only the shared, evidence-backed one-set conversion in sample mode.
+ * Unknown or malformed conversions intentionally return undefined so offline
+ * data cannot make a cross-unit candidate look ready by inference.
+ */
+function offlineAlternativeQuantity(line: BomLine, item: InventoryItem, alternative: BomAlternative | undefined, inventoryQuantity = item.quantity): number | undefined {
+  const conversion = alternative?.quantityConversion;
+  if (conversion === undefined) return line.unit === item.unit ? inventoryQuantity : undefined;
+  const converted = {
+    inventory: conversion.inventory,
+    requirement: { quantity: conversion.requirement.quantity, unit: "piece" as const },
+    evidence: conversion.evidence,
+  };
+  return resolveBomAlternativeQuantity({
+    inventoryQuantity,
+    inventoryUnit: resolverUnit(item.unit),
+    requirementUnit: resolverUnit(line.unit),
+    conversion: converted,
+  // The browser contract spells the requirement unit `each`; the shared
+  // domain resolver uses its canonical `piece` synonym. The shape above is
+  // deliberately checked before this narrow adapter cast.
+  } as Parameters<typeof resolveBomAlternativeQuantity>[0]);
+}
+
+function alternativeForItem(line: BomLine, itemId: string): BomAlternative | undefined {
+  return line.alternatives?.find((alternative) => alternative.itemId === itemId);
+}
+
+export function unitDiagnostics(status: Pick<BomLineStatus, "line" | "item" | "items" | "gap">): readonly string[] {
+  const lineUnit = status.gap?.unit ?? status.line.unit;
+  const candidates = status.gap?.candidates ?? [];
+  const diagnostics = candidates.flatMap((candidate) => {
+    const item = (status.items ?? (status.item ? [status.item] : [])).find((candidateItem) => candidateItem.id === candidate.itemId);
+    const alternative = alternativeForItem(status.line, candidate.itemId) ?? status.gap?.alternatives?.find((entry) => entry.itemId === candidate.itemId);
+    if (!item || item.unit === lineUnit) return [];
+    if (alternative?.quantityConversion === undefined) return [`Unit mismatch: inventory is ${item.unit}, requirement is ${lineUnit}; no evidence-backed conversion is recorded.`];
+    const conversion = alternative.quantityConversion;
+    return [`Conversion: 1 ${conversion.inventory.unit} = ${conversion.requirement.quantity} ${conversion.requirement.unit} (observed ${conversion.evidence.observedAt.slice(0, 10)}).`];
+  });
+  return [...new Set(diagnostics)];
+}
+
 /** The shopping surface is a proposal for required Source lines only. */
 export function shoppingEligibleLines(summary: ProjectSummary): BomLineStatus[] {
   if (summary.readinessUnavailable) return [];
   return summary.lineStatuses.filter((line) => line.line.optional !== true && line.decision === "source");
+}
+
+/**
+ * Return offer identities that are safe for a required Source row. Connected
+ * rows use the server's candidate relationships; fallback rows only expose
+ * explicitly confirmed alternatives. Check/Decide rows return no identities.
+ */
+export function shoppingOfferItemIds(status: Pick<BomLineStatus, "line" | "decision" | "gap">): readonly string[] {
+  if (status.line.optional === true || status.decision !== "source") return [];
+  const candidateIds = status.gap?.candidates === undefined
+    ? (status.line.alternatives ?? []).filter((alternative) => alternative.compatible === "confirmed").map((alternative) => alternative.itemId)
+    : status.gap.candidates
+      .filter((candidate) => (candidate.relationship === "exact" || candidate.relationship === "confirmed_alternative") && candidate.compatibility === "confirmed")
+      .map((candidate) => candidate.itemId);
+  return [...new Set([status.line.id, status.line.itemId, ...candidateIds].filter((itemId): itemId is string => typeof itemId === "string" && itemId.length > 0))];
 }
 
 export function shoppingEmptyState(summary: ProjectSummary): { title: string; description: string } {
@@ -581,15 +696,18 @@ function summaryFromCanonicalGaps(project: Project, items: InventoryItem[], gaps
   const lineStatuses = project.bom.flatMap((line): BomLineStatus[] => {
     const gap = gapByLineId.get(line.id);
     if (gap === undefined) return [];
-    const item = gap.matchedItemIds.map((id) => items.find((candidate) => candidate.id === id)).find((candidate): candidate is InventoryItem => candidate !== undefined);
+    const matchedItems = gap.matchedItemIds.map((id) => items.find((candidate) => candidate.id === id)).filter((candidate): candidate is InventoryItem => candidate !== undefined);
+    const item = matchedItems[0];
     return [{
       line,
       ...(item === undefined ? {} : { item }),
+      ...(matchedItems.length === 0 ? {} : { items: matchedItems }),
       supplied: gap.suppliedQuantity,
       remaining: Math.max(gap.missingQuantity + gap.inspectQuantity, 0),
       state: stateFor(gap),
       decision: gap.decision,
       ...(gap.missingDecisions === undefined ? {} : { missingDecisions: gap.missingDecisions.slice() }),
+      gap,
     }];
   });
   return {
@@ -617,17 +735,24 @@ export function calculateProjectSummary(project: Project, items: InventoryItem[]
       return candidate === undefined ? [] : [candidate];
     });
     const specification = specificationForLine(line);
+    const candidateAvailable = (item: InventoryItem): number => {
+      const available = item.state === "depleted" ? 0 : Math.max(item.availableQuantity ?? item.quantity - item.reserved, 0);
+      return offlineAlternativeQuantity(line, item, alternativeForItem(line, item.id), available) ?? 0;
+    };
+    const quantityResolvable = (item: InventoryItem): boolean => offlineAlternativeQuantity(line, item, alternativeForItem(line, item.id)) !== undefined;
     const needsInspection = (item: InventoryItem): boolean => item.state === "inspect-first"
       || item.state === "ordered-unverified"
+      || !quantityResolvable(item)
       || (line.alternatives ?? []).some((alternative) => alternative.itemId === item.id && alternative.compatible !== undefined && alternative.compatible !== "confirmed");
     const confirmedCandidates = candidates.filter((item) => !needsInspection(item));
     const inspectCandidates = candidates.filter(needsInspection);
-    const confirmedAvailable = confirmedCandidates.reduce((total, item) => total + (item.state === "depleted" ? 0 : Math.max(item.availableQuantity ?? item.quantity - item.reserved, 0)), 0);
+    const confirmedAvailable = confirmedCandidates.reduce((total, item) => total + candidateAvailable(item), 0);
     const supplied = specification.sufficient ? Math.min(line.required, confirmedAvailable) : 0;
-    const inspectAvailable = inspectCandidates.reduce((total, item) => total + Math.max(item.availableQuantity ?? item.quantity - item.reserved, item.quantity - item.reserved, 0), 0);
+    const inspectAvailable = inspectCandidates.reduce((total, item) => total + candidateAvailable(item), 0);
     const inspectQuantity = Math.min(Math.max(line.required - supplied, 0), inspectAvailable);
     const missingQuantity = Math.max(line.required - supplied - inspectQuantity, 0);
     const item = confirmedCandidates[0] ?? inspectCandidates[0];
+    const unresolvedUnitMismatch = candidates.some((candidate) => candidate.unit !== line.unit && !quantityResolvable(candidate));
     const baseState: BomLineStatus["state"] = missingQuantity === 0 && inspectQuantity === 0
       ? "ready"
       : supplied > 0 && missingQuantity > 0
@@ -637,12 +762,15 @@ export function calculateProjectSummary(project: Project, items: InventoryItem[]
           : "missing";
     const state: BomLineStatus["state"] = line.optional === true && supplied === 0 && inspectQuantity === 0
       ? "optional"
+      : unresolvedUnitMismatch
+        ? "inspect-first"
       : !specification.sufficient && inspectQuantity === 0
         ? "specify-first"
         : baseState;
     return {
       line,
       ...(item === undefined ? {} : { item }),
+      ...(candidates.length === 0 ? {} : { items: candidates }),
       supplied,
       remaining: Math.max(inspectQuantity + missingQuantity, 0),
       state,

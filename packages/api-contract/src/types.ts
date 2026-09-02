@@ -30,7 +30,8 @@ import type {
   workspaceSecurityModeSchema, workspaceSecurityStatusSchema, workspaceSecurityMutationSchema, projectLifecycleSchema,
   projectSetupProposalSchema, projectSetupFieldErrorSchema, projectSetupInventoryBasisSchema,
   projectSetupPlannedReservationSchema, projectSetupPreviewSchema, commitProjectSetupSchema, commitProjectSetupBodySchema,
-  projectSetupCommitResultSchema
+  projectSetupCommitResultSchema, bomAlternativeSchema, quantityConversionEvidenceBasisSchema,
+  quantityConversionEvidenceSchema, quantityConversionSchema, bomAlternativeQuantityConversionSchema
 } from "./schemas.js";
 
 export type Dimension = z.infer<typeof dimensionSchema>;
@@ -68,6 +69,11 @@ export type ProjectWithInitialRevision = z.infer<typeof projectWithInitialRevisi
 export type WorkItemRevision = z.infer<typeof workItemRevisionSchema>;
 export type CreateWorkItemRevision = z.infer<typeof createWorkItemRevisionSchema>;
 export type BomLine = z.infer<typeof bomLineSchema>;
+export type BomAlternative = z.infer<typeof bomAlternativeSchema>;
+export type QuantityConversionEvidenceBasis = z.infer<typeof quantityConversionEvidenceBasisSchema>;
+export type QuantityConversionEvidence = z.infer<typeof quantityConversionEvidenceSchema>;
+export type QuantityConversion = z.infer<typeof quantityConversionSchema>;
+export type BomAlternativeQuantityConversion = z.infer<typeof bomAlternativeQuantityConversionSchema>;
 export type BomSpecificationDecision = z.infer<typeof bomSpecificationDecisionSchema>;
 export type BomSpecification = z.infer<typeof bomSpecificationSchema>;
 export type CreateBomLine = z.infer<typeof createBomLineSchema>;

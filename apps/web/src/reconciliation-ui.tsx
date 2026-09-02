@@ -87,7 +87,12 @@ export interface ReconciliationLineViewModel {
   itemLabel: string;
   itemKind?: ReconciliationItemKind;
   plannedQuantity: number;
+  /** Unit declared by the BOM/revision. It can differ from the held stock
+   * unit when the server has recorded a package conversion. */
+  plannedUnit: ReconciliationQuantityUnit;
   reservedQuantity: number;
+  /** Reservation/outcome unit. Unlike plannedUnit, this follows active held
+   * stock and is the unit used by reconciliation arithmetic and writes. */
   unit: ReconciliationQuantityUnit;
   reservations?: readonly ReconciliationReservationViewModel[];
   version?: number;
@@ -460,7 +465,7 @@ export function ReconciliationUI({ model, expert = false, onExpertChange, confir
         </div>
 
         <div className="reconciliation-quantity-strip" aria-label={`${activeLine.name} quantities`}>
-          <div><span>Planned</span><strong>{formatQuantity(activeLine.plannedQuantity, activeLine.unit)}</strong><small>From this revision</small></div>
+          <div><span>Planned</span><strong>{formatQuantity(activeLine.plannedQuantity, activeLine.plannedUnit)}</strong><small>From this revision</small></div>
           <div><span>Reserved</span><strong>{formatQuantity(activeLine.reservedQuantity, activeLine.unit)}</strong><small>{activeLine.reservations?.length ? `${activeLine.reservations.length} reservation${activeLine.reservations.length === 1 ? "" : "s"}` : "Held for this build"}</small></div>
           <div className={activeSummary.unaccountedQuantity > EPSILON ? "is-pending" : "is-ready"}><span>Unaccounted</span><strong>{formatQuantity(activeSummary.unaccountedQuantity, activeLine.unit)}</strong><small>{activeSummary.overageQuantity > EPSILON ? "Over the reservation" : activeSummary.unaccountedQuantity > EPSILON ? "Allocate an outcome" : "Ready for preview"}</small></div>
         </div>

@@ -2,7 +2,8 @@ import { catalogProducts as fallbackCatalogProducts, inventory as fallbackInvent
 import type {
   Artifact,
   BomLine,
-  BomCompatibility,
+  BomAlternative,
+  BomGapCandidate,
   BomSpecification,
   BomSpecificationDecision,
   BuildConfigInput,
@@ -17,6 +18,8 @@ import type {
   Offer,
   Project,
   ProjectGapEvaluation,
+  QuantityConversion,
+  QuantityDisplayUnit,
   SnapshotDescriptor
 } from "./domain";
 import type {
@@ -50,8 +53,10 @@ type ServerInventoryItem = {
   createdAt: string; updatedAt: string; version: number;
 };
 type ServerWorkItem = { id: string; projectId: string; name: string; kind: string; description?: string; currentRevisionId?: string; createdAt: string; updatedAt: string; version: number };
-type ServerBomLine = { id: string; revisionId: string; name: string; itemId?: string; requiredQuantity: number; unit: string; optional: boolean; constraints?: Record<string, unknown>; alternatives?: Array<{ itemId: string; reason?: string; compatible?: string }>; notes?: string; createdAt: string; updatedAt: string; version: number };
-type ServerGapLine = { lineId: string; status: string; decision?: string; missingDecisions?: string[]; suppliedQuantity: number; inspectQuantity: number; missingQuantity: number; matchedItemIds: string[]; reasons: string[] };
+type ServerBomAlternative = { itemId: string; reason?: string; compatible?: string; quantityConversion?: unknown };
+type ServerBomLine = { id: string; revisionId: string; name: string; itemId?: string; requiredQuantity: number; unit: string; optional: boolean; constraints?: Record<string, unknown>; alternatives?: ServerBomAlternative[]; notes?: string; createdAt: string; updatedAt: string; version: number };
+type ServerGapCandidate = { itemId: string; relationship: string; compatibility: string; availableQuantity: number; suppliedQuantity: number; inspectQuantity: number; reason: string };
+type ServerGapLine = { lineId: string; name?: string; optional?: boolean; status: string; decision?: string; missingDecisions?: string[]; requiredQuantity?: number; unit?: string; suppliedQuantity: number; inspectQuantity: number; missingQuantity: number; matchedItemIds: string[]; reasons: string[]; alternatives?: ServerBomAlternative[]; candidates?: ServerGapCandidate[] };
 type ServerGapEvaluation = { lines: ServerGapLine[]; totals: { requiredLines: number; optionalLines: number; readyLines?: number; checkLines?: number; decideLines?: number; sourceLines?: number; partialLines: number; missingLines: number } };
 type ServerArtifact = { id: string; projectId: string; workItemId?: string; revisionId?: string; role: string; filename: string; mediaType: string; byteSize: number; sha256: string; author?: string; source?: string; machineBinding?: Record<string, string>; currentCandidate: boolean; retired: boolean; createdAt: string; version: number };
 type ServerRevision = { id: string; projectId: string; number: number; name: string; notes?: string; status: string; createdAt: string; version: number; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; gapEvaluation?: ServerGapEvaluation; buildConfigSnapshot?: unknown; buildConfiguration?: unknown };
@@ -68,7 +73,7 @@ type ServerReconciliationBasisBomLine = { bomLineId: string; version: number; re
 type ServerReconciliationBasisReservation = { reservationId: string; lineId: string; itemId: string; quantity: number; unit: string; status: string; version: number };
 type ServerReconciliationBasisItem = { itemId: string; version: number; onHand: number; allocated: number; available: number; unit: string };
 type ServerReconciliationBasis = { hash: string; bomLines: ServerReconciliationBasisBomLine[]; reservations: ServerReconciliationBasisReservation[]; items: ServerReconciliationBasisItem[] };
-type ServerReconciliationPreviewLine = { bomLineId: string; reservedQuantity: number; accountedQuantity: number; unaccountedQuantity: number; outcomeCount: number; unit?: string };
+type ServerReconciliationPreviewLine = { bomLineId: string; reservedQuantity: number; accountedQuantity: number; unaccountedQuantity: number; outcomeCount: number; unit: string };
 type ServerReconciliationPreviewReservationChange = { reservationId: string; fromStatus: string; toStatus: string; quantity: number; unit: string };
 type ServerReconciliationPreviewStockChange = { itemId: string; kind: string; quantity: number; unit: string; beforeOnHand: number; afterOnHand: number; beforeAllocated: number; afterAllocated: number; beforeAvailable: number; afterAvailable: number; eventKey: string; eventId?: string };
 type ServerReconciliationPreviewAsset = { itemId: string; name: string; kind: string; quantity: number; unit: string };
@@ -316,9 +321,13 @@ function mapCategory(kind: string): InventoryItem["category"] {
   }
 }
 
-function mapUnit(unit: string): InventoryItem["unit"] {
+function mapUnit(unit: string): QuantityDisplayUnit {
   if (unit === "gram") return "g";
   if (unit === "metre") return "m";
+  if (unit === "each" || unit === "set" || unit === "millimetre" || unit === "millilitre") return unit;
+  // Preserve the original value separately on mapped records. The display
+  // model has a closed set of known units and must fail closed for unknown
+  // server data instead of presenting it as pieces.
   return "each";
 }
 
@@ -965,19 +974,69 @@ function mapBomConstraints(value: Record<string, unknown> | undefined): BomLine[
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+const QUANTITY_CONVERSION_BASES: readonly QuantityConversion["evidence"]["basis"][] = ["package_label", "manufacturer_spec", "physical_count", "user_assertion"];
+
+/** Map the nested conversion without normalising `set` to the beginner
+ * `each` label. Invalid historical values are omitted so they cannot make a
+ * cross-unit candidate appear reusable. */
+function mapQuantityConversion(value: unknown): QuantityConversion | undefined {
+  const record = asRecord(value);
+  const inventory = asRecord(record?.inventory);
+  const requirement = asRecord(record?.requirement);
+  const evidence = asRecord(record?.evidence);
+  const inventoryQuantity = inventory ? numberValue(inventory.quantity) : undefined;
+  const requirementQuantity = requirement ? numberValue(requirement.quantity) : undefined;
+  const basis = evidence?.basis;
+  const observedAt = evidence ? stringValue(evidence.observedAt) : undefined;
+  if (inventoryQuantity !== 1 || inventory?.unit !== "set" || requirementQuantity === undefined
+    || !Number.isSafeInteger(requirementQuantity) || requirementQuantity <= 0 || requirement?.unit !== "each"
+    || !observedAt || typeof basis !== "string" || !QUANTITY_CONVERSION_BASES.includes(basis as QuantityConversion["evidence"]["basis"])) return undefined;
+  const optionalText = (key: "source" | "sourceId" | "note", max: number): string | undefined => {
+    const candidate = evidence?.[key];
+    return typeof candidate === "string" && candidate.length <= max ? candidate : undefined;
+  };
+  const source = optionalText("source", 500);
+  const sourceId = optionalText("sourceId", 500);
+  const note = optionalText("note", 1000);
+  return {
+    inventory: { quantity: 1, unit: "set" },
+    requirement: { quantity: requirementQuantity, unit: "each" },
+    evidence: {
+      basis: basis as QuantityConversion["evidence"]["basis"],
+      observedAt,
+      ...(source === undefined ? {} : { source }),
+      ...(sourceId === undefined ? {} : { sourceId }),
+      ...(note === undefined ? {} : { note })
+    }
+  };
+}
+
+function mapBomAlternative(value: unknown): BomAlternative | undefined {
+  const record = asRecord(value);
+  const itemId = record ? stringValue(record.itemId) : undefined;
+  if (!itemId) return undefined;
+  const compatible = record?.compatible === "confirmed" || record?.compatible === "conditional" || record?.compatible === "unknown"
+    ? record.compatible : undefined;
+  const reason = typeof record?.reason === "string" && record.reason.length <= 1000 ? record.reason : undefined;
+  const quantityConversion = mapQuantityConversion(record?.quantityConversion);
+  return {
+    itemId,
+    ...(compatible === undefined ? {} : { compatible }),
+    ...(reason === undefined ? {} : { reason }),
+    ...(quantityConversion === undefined ? {} : { quantityConversion })
+  };
+}
+
 function mapBomLine(line: ServerBomLine): BomLine {
   const constraints = mapBomConstraints(line.constraints);
-  const alternatives = (line.alternatives ?? []).flatMap((alternative) => {
-    if (typeof alternative.itemId !== "string" || !alternative.itemId.trim()) return [];
-    const compatible: BomCompatibility | undefined = alternative.compatible === "confirmed" || alternative.compatible === "conditional" || alternative.compatible === "unknown" ? alternative.compatible : undefined;
-    return [{ itemId: alternative.itemId, ...(compatible === undefined ? {} : { compatible }), ...(alternative.reason ? { reason: alternative.reason } : {}) }];
-  });
+  const alternatives = (line.alternatives ?? []).map(mapBomAlternative).filter((alternative): alternative is BomAlternative => alternative !== undefined);
   return {
     id: line.id,
     label: line.name,
     ...(line.itemId ? { itemId: line.itemId } : {}),
     required: line.requiredQuantity,
     unit: mapUnit(line.unit),
+    serverUnit: line.unit,
     optional: line.optional,
     ...(constraints === undefined ? {} : { constraints }),
     ...(alternatives.length > 0 ? { alternatives } : {}),
@@ -987,6 +1046,30 @@ function mapBomLine(line: ServerBomLine): BomLine {
 
 function invalidGapEvaluation(): never {
   throw new ApiError("The service returned inconsistent project readiness", { kind: "server", status: 502, code: "invalid_gap_evaluation" });
+}
+
+function mapGapCandidate(value: unknown): BomGapCandidate | undefined {
+  const record = asRecord(value);
+  const itemId = record ? stringValue(record.itemId) : undefined;
+  const relationship = record?.relationship;
+  const compatibility = record?.compatibility;
+  const availableQuantity = record ? numberValue(record.availableQuantity) : undefined;
+  const suppliedQuantity = record ? numberValue(record.suppliedQuantity) : undefined;
+  const inspectQuantity = record ? numberValue(record.inspectQuantity) : undefined;
+  const reason = record && typeof record.reason === "string" ? record.reason : undefined;
+  if (!itemId || !["exact", "confirmed_alternative", "uncertain_alternative", "constraint_match"].includes(String(relationship))
+    || !["confirmed", "conditional", "unknown"].includes(String(compatibility))
+    || availableQuantity === undefined || suppliedQuantity === undefined || inspectQuantity === undefined || reason === undefined
+    || availableQuantity < 0 || suppliedQuantity < 0 || inspectQuantity < 0 || reason.length > 1000) return undefined;
+  return {
+    itemId,
+    relationship: relationship as BomGapCandidate["relationship"],
+    compatibility: compatibility as BomGapCandidate["compatibility"],
+    availableQuantity,
+    suppliedQuantity,
+    inspectQuantity,
+    reason
+  };
 }
 
 function mapGapEvaluation(value: ServerGapEvaluation | undefined, bom: readonly BomLine[]): ProjectGapEvaluation | undefined {
@@ -1006,11 +1089,15 @@ function mapGapEvaluation(value: ServerGapEvaluation | undefined, bom: readonly 
     if (!["ready", "check", "decide", "source"].includes(decision ?? "")) return invalidGapEvaluation();
     if (!Array.isArray(line.missingDecisions ?? []) || (line.missingDecisions ?? []).some((item) => !(BOM_SPECIFICATION_DECISIONS as readonly string[]).includes(item))) return invalidGapEvaluation();
     const missingDecisions = [...new Set((line.missingDecisions ?? []) as BomSpecificationDecision[])];
+    const requiredQuantity = line.requiredQuantity ?? bomLine.required;
+    const rawUnit = line.unit ?? bomLine.serverUnit ?? bomLine.unit;
+    const knownUnit = rawUnit === "each" || rawUnit === "gram" || rawUnit === "millimetre" || rawUnit === "millilitre" || rawUnit === "metre" || rawUnit === "set";
+    if (!knownUnit || !Number.isFinite(requiredQuantity) || requiredQuantity < 0) return invalidGapEvaluation();
     const quantities = [line.suppliedQuantity, line.inspectQuantity, line.missingQuantity];
     if (quantities.some((quantity) => !Number.isFinite(quantity) || quantity < 0)) return invalidGapEvaluation();
-    if (Math.abs(quantities.reduce((total, quantity) => total + quantity, 0) - bomLine.required) > 1e-9) return invalidGapEvaluation();
+    if (Math.abs(quantities.reduce((total, quantity) => total + quantity, 0) - requiredQuantity) > 1e-9) return invalidGapEvaluation();
     const isZero = (quantity: number): boolean => Math.abs(quantity) <= 1e-9;
-    const isRequired = (quantity: number): boolean => Math.abs(quantity - bomLine.required) <= 1e-9;
+    const isRequired = (quantity: number): boolean => Math.abs(quantity - requiredQuantity) <= 1e-9;
     const expectedDecision = status === "supplied"
       ? "ready"
       : status === "inspect_first"
@@ -1031,6 +1118,10 @@ function mapGapEvaluation(value: ServerGapEvaluation | undefined, bom: readonly 
     if ((status === "missing" || status === "optional") && (!isZero(line.suppliedQuantity) || !isZero(line.inspectQuantity) || !isRequired(line.missingQuantity))) return invalidGapEvaluation();
     if (!Array.isArray(line.matchedItemIds) || line.matchedItemIds.some((itemId) => typeof itemId !== "string" || itemId.trim().length === 0)) return invalidGapEvaluation();
     if (!Array.isArray(line.reasons) || line.reasons.some((reason) => typeof reason !== "string")) return invalidGapEvaluation();
+    const alternatives = line.alternatives === undefined ? bomLine.alternatives ?? [] : line.alternatives.map(mapBomAlternative).filter((alternative): alternative is BomAlternative => alternative !== undefined);
+    if (line.alternatives !== undefined && alternatives.length !== line.alternatives.length) return invalidGapEvaluation();
+    const candidates = line.candidates?.map(mapGapCandidate).filter((candidate): candidate is BomGapCandidate => candidate !== undefined);
+    if (line.candidates !== undefined && (!candidates || candidates.length !== line.candidates.length)) return invalidGapEvaluation();
     return {
       lineId: line.lineId,
       status: status as ProjectGapEvaluation["lines"][number]["status"],
@@ -1041,6 +1132,10 @@ function mapGapEvaluation(value: ServerGapEvaluation | undefined, bom: readonly 
       missingQuantity: line.missingQuantity,
       matchedItemIds: [...line.matchedItemIds],
       reasons: [...line.reasons],
+      requiredQuantity,
+      unit: mapUnit(rawUnit),
+      ...(alternatives.length === 0 ? {} : { alternatives }),
+      ...(candidates === undefined ? {} : { candidates }),
     };
   });
   const required = lines.filter((line) => bomById.get(line.lineId)?.optional !== true);
@@ -1252,7 +1347,7 @@ function serverUnitFor(item: InventoryItem): string {
   if (item.serverUnit) return item.serverUnit;
   if (item.unit === "g") return "gram";
   if (item.unit === "m") return "metre";
-  return "each";
+  return item.unit;
 }
 
 function idempotencyKey(prefix: string): string {
@@ -1436,7 +1531,7 @@ function serverItemKind(category: InventoryItem["category"]): string {
 function serverQuantityUnit(unit: InventoryItem["unit"]): string {
   if (unit === "g") return "gram";
   if (unit === "m") return "metre";
-  return "each";
+  return unit;
 }
 
 type InventoryRequestBody = ReturnType<typeof inventoryRequestBody>;
@@ -1488,6 +1583,14 @@ function reconciliationItemKind(value: string): ReconciliationItemKind {
 
 function reconciliationReservationStatus(value: string): ReconciliationReservationStatus {
   return value === "released" || value === "consumed" || value === "settled" ? value : "active";
+}
+
+function reconciliationPreviewUnit(bomUnit: string, reservations: readonly ServerReconciliationBasisReservation[]): string {
+  const units = [...new Set(reservations.filter((reservation) => reservation.status === "active").map((reservation) => reconciliationUnit(reservation.unit)))];
+  if (units.length > 1) {
+    throw new ApiError("The service returned mixed reservation units for a reconciliation line", { kind: "server", status: 502, code: "mixed_reconciliation_units" });
+  }
+  return units[0] ?? reconciliationUnit(bomUnit);
 }
 
 function reconciliationItemKindForCategory(category: InventoryItem["category"]): ReconciliationItemKind {
@@ -1567,11 +1670,14 @@ function reconciliationLineFromParts(
   outcomes: readonly ReconciliationOutcomeViewModel[],
   version?: number,
   reservedQuantityOverride?: number,
+  reservationUnitOverride?: string,
   inventory?: ReadonlyMap<string, InventoryItem>
 ): ReconciliationLineViewModel {
   const activeReservations = reservations.filter((reservation) => reservation.status === undefined || reservation.status === "active");
   const firstReservation = activeReservations[0];
   const itemId = bomLine.itemId ?? firstReservation?.itemId;
+  const plannedUnit = reconciliationUnit(bomLine.unit);
+  const reservationUnit = reconciliationUnit(reservationUnitOverride ?? firstReservation?.unit ?? plannedUnit);
   return {
     id: bomLine.id,
     bomLineId: bomLine.id,
@@ -1579,8 +1685,9 @@ function reconciliationLineFromParts(
     itemLabel: itemId ? reservations.find((reservation) => reservation.itemId === itemId)?.itemLabel ?? inventory?.get(itemId)?.name ?? itemId : "No exact item selected",
     ...(itemId && inventory?.get(itemId) ? { itemKind: reconciliationItemKindForCategory(inventory.get(itemId)!.category) } : {}),
     plannedQuantity: bomLine.required,
+    plannedUnit,
     reservedQuantity: reservedQuantityOverride ?? activeReservations.reduce((total, reservation) => total + reservation.quantity, 0),
-    unit: reconciliationUnit(bomLine.unit),
+    unit: reservationUnit,
     ...(reservations.length ? { reservations } : {}),
     ...(version === undefined ? {} : { version }),
     outcomes
@@ -1605,6 +1712,7 @@ function mapReconciliationDraft(value: ServerReconciliationDraft, project: Proje
       submitted?.outcomes.map((outcome, index) => mapReconciliationOutcome(outcome, `${lineId}-outcome-${index + 1}`)) ?? [],
       basis?.version,
       preview?.reservedQuantity,
+      preview?.unit,
       inventory
     );
   });
@@ -1625,7 +1733,7 @@ function mapReconciliationPreview(value: ServerReconciliationPreview, basisHash:
   return {
     ...(basisHash === undefined ? {} : { basisHash }),
     ...(generatedAt === undefined ? {} : { generatedAt }),
-    lines: value.lines.map((line) => ({ ...line, ...(line.unit ? { unit: reconciliationUnit(line.unit) } : {}) })),
+    lines: value.lines.map((line) => ({ ...line, unit: reconciliationUnit(line.unit) })),
     reservationChanges: value.reservationChanges.map((change) => ({ ...change, fromStatus: reconciliationReservationStatus(change.fromStatus), toStatus: reconciliationReservationStatus(change.toStatus), unit: reconciliationUnit(change.unit) })),
     stockChanges: value.stockChanges.map((change) => ({
       ...change,
@@ -1644,7 +1752,7 @@ function mapReconciliationCommit(value: ServerReconciliationCommit, project: Pro
       const activeReservations = value.basis.reservations.filter((reservation) => reservation.lineId === line.bomLineId && reservation.status === "active");
       const reservedQuantity = activeReservations.reduce((total, reservation) => total + reservation.quantity, 0);
       const accountedQuantity = submitted?.outcomes.filter((outcome) => outcome.kind !== "reviewed_no_change").reduce((total, outcome) => total + outcome.quantity, 0) ?? 0;
-      return { bomLineId: line.bomLineId, reservedQuantity, accountedQuantity, unaccountedQuantity: Math.max(reservedQuantity - accountedQuantity, 0), outcomeCount: submitted?.outcomes.length ?? 0, unit: line.unit };
+      return { bomLineId: line.bomLineId, reservedQuantity, accountedQuantity, unaccountedQuantity: Math.max(reservedQuantity - accountedQuantity, 0), outcomeCount: submitted?.outcomes.length ?? 0, unit: reconciliationPreviewUnit(line.unit, activeReservations) };
     }),
     reservationChanges: value.reservationChanges,
     stockChanges: value.stockChanges,
@@ -1719,7 +1827,10 @@ function reconciliationDraftBody(model: ReconciliationViewModel, revisionId: str
         ...(outcome.itemId ? { itemId: outcome.itemId } : {}),
         kind: outcome.kind,
         quantity: outcome.quantity,
-        unit: serverReconciliationUnit(outcome.unit || line.unit),
+        // The line's unit is the canonical reservation unit. A stale draft
+        // may contain an older outcome label, but writes must settle the
+        // reservation in the unit returned by the server preview.
+        unit: serverReconciliationUnit(line.unit),
         evidence: reconciliationEvidenceBody(outcome.evidence),
         ...(outcome.convertedAsset === undefined ? {} : { convertedAsset: reconciliationConvertedAssetBody(outcome.convertedAsset, outcome.evidence, line.unit) })
       }))
@@ -1747,7 +1858,7 @@ function reconciliationInitialModel(project: Project, reservations: readonly Ser
     projectName: project.name,
     projectRevisionId: project.serverRevisionId ?? "",
     status: "draft",
-    lines: project.bom.map((line) => reconciliationLineFromParts({ id: line.id, label: line.label, required: line.required, unit: line.unit, ...(line.itemId ? { itemId: line.itemId } : {}) }, reservationsByLine.get(line.id) ?? [], [], undefined, undefined, inventory))
+    lines: project.bom.map((line) => reconciliationLineFromParts({ id: line.id, label: line.label, required: line.required, unit: line.unit, ...(line.itemId ? { itemId: line.itemId } : {}) }, reservationsByLine.get(line.id) ?? [], [], undefined, undefined, undefined, inventory))
   };
 }
 
@@ -2750,7 +2861,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       const current = projectCache.get(projectId);
       const revisionId = current?.serverRevisionId;
       if (!revisionId) throw new ApiError("Create a project revision before adding a requirement", { kind: "validation", status: 409 });
-      const payload = await request<{ data: ServerBomLine }>(`/project-revisions/${encodeURIComponent(revisionId)}/bom`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey("bom") }, body: JSON.stringify({ name: input.name, requiredQuantity: input.requiredQuantity, unit: input.unit === "g" ? "gram" : input.unit === "m" ? "metre" : "each", ...(input.itemId ? { itemId: input.itemId } : {}), optional: input.optional ?? false, constraints: {}, alternatives: [], ...(input.note ? { notes: input.note } : {}) }) }, token);
+      const payload = await request<{ data: ServerBomLine }>(`/project-revisions/${encodeURIComponent(revisionId)}/bom`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey("bom") }, body: JSON.stringify({ name: input.name, requiredQuantity: input.requiredQuantity, unit: input.unit === "g" ? "gram" : input.unit === "m" ? "metre" : input.unit, ...(input.itemId ? { itemId: input.itemId } : {}), optional: input.optional ?? false, constraints: {}, alternatives: [], ...(input.note ? { notes: input.note } : {}) }) }, token);
       const line = mutationData(payload);
       if (!current) throw new ApiError("The project is not available in this workspace snapshot", { kind: "validation", status: 409 });
       const nextBom = [...current.bom, mapBomLine(line)];

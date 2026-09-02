@@ -503,6 +503,64 @@ describe("createApplicationBackend translation coverage", () => {
     expect(service.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ projectId: "project-1", reservationId: "reservation-1", note: "installed", unit: "each" }), expect.anything());
   });
 
+  it("maps structured package conversions across BOM writes and candidate diagnostics", async () => {
+    const service = serviceFixture();
+    const conversion = {
+      inventory: { quantity: 1, unit: "set" as const },
+      requirement: { quantity: 10, unit: "piece" as const },
+      evidence: { basis: "package_label" as const, observedAt: date, source: "packaging" },
+    };
+    const backend = createApplicationBackend(service);
+
+    const created = await backend.bom.createLine({
+      projectRevisionId: "revision-1",
+      description: "Fasteners",
+      quantity: 10,
+      unit: "piece",
+      alternatives: [{ itemId: "fastener-set", compatible: "confirmed", reason: "ten per set", quantityConversion: conversion }],
+    }, context);
+    expect(service.createBomLine).toHaveBeenCalledWith("revision-1", expect.objectContaining({
+      alternatives: [{ itemId: "fastener-set", compatible: "confirmed", reason: "ten per set", quantityConversion: { ...conversion, requirement: { quantity: 10, unit: "each" } } }],
+    }), expect.anything());
+    expect(created.line).toMatchObject({ alternatives: [{ itemId: "fastener-set", reason: "ten per set", quantityConversion: conversion }] });
+
+    service.evaluateBomGaps.mockResolvedValueOnce({
+      revisionId: "revision-1",
+      lines: [{
+        lineId: "bom-1", name: "Fasteners", optional: false, status: "supplied", decision: "ready",
+        requiredQuantity: 10, suppliedQuantity: 10, inspectQuantity: 0, missingQuantity: 0, unit: "each",
+        matchedItemIds: ["fastener-set"], reasons: ["converted capacity"],
+        alternatives: [{ itemId: "fastener-set", compatible: "confirmed", reason: "ten per set", quantityConversion: { ...conversion, requirement: { quantity: 10, unit: "each" } } }],
+        candidates: [{ itemId: "fastener-set", relationship: "confirmed_alternative", compatibility: "confirmed", availableQuantity: 20, suppliedQuantity: 10, inspectQuantity: 0, reason: "ten per set. Capacity: 2 set(s) = 20 each. Allocation: 1 set = 10 each, 0 each overage." }],
+      }],
+      totals: { requiredLines: 1, suppliedLines: 1, inspectFirstLines: 0, partialLines: 0, missingLines: 0, optionalLines: 0 },
+    });
+    const evaluation = await backend.bom.evaluate({ projectRevisionId: "revision-1" }, context);
+    expect(evaluation.lines[0]?.matches[0]).toMatchObject({
+      availableQuantity: { value: 20, unit: "piece" },
+      suppliedQuantity: { value: 10, unit: "piece" },
+      inspectQuantity: { value: 0, unit: "piece" },
+      reason: "ten per set. Capacity: 2 set(s) = 20 each. Allocation: 1 set = 10 each, 0 each overage.",
+      quantityConversion: { inventory: { quantity: 1, unit: "set" }, requirement: { quantity: 10, unit: "piece" } },
+    });
+  });
+
+  it("reads converted reservations in the inventory set unit", async () => {
+    const service = serviceFixture();
+    service.getInventoryItem.mockResolvedValue(apiItem({ id: "fastener-set", quantity: 2, availableQuantity: 1, unit: "set" }));
+    service.listReservations.mockResolvedValue([apiReservation({ itemId: "fastener-set", quantity: 1 })]);
+    service.getReservationDetails.mockResolvedValue({
+      reservation: apiReservation({ itemId: "fastener-set", quantity: 1 }),
+      projectId: "project-1",
+      projectRevisionId: "revision-1",
+      bomLine: apiLine({ unit: "each", alternatives: [{ itemId: "fastener-set", compatible: "confirmed", reason: "ten per set", quantityConversion: { inventory: { quantity: 1, unit: "set" }, requirement: { quantity: 10, unit: "each" }, evidence: { basis: "package_label", observedAt: date } } }] }),
+    });
+    const backend = createApplicationBackend(service);
+    await expect(backend.bom.getReservation?.({ reservationId: "reservation-1" }, context)).resolves.toMatchObject({ quantity: { value: 1, unit: "set" } });
+    const listed = await backend.bom.listReservations?.({ projectRevisionId: "revision-1", limit: 1 }, context);
+    expect(listed?.items[0]?.quantity).toEqual({ value: 1, unit: "set" });
+  });
+
   it("maps artifact roles, transfer unavailability, offers, and empty current revisions", async () => {
     const service = serviceFixture();
     const backend = createApplicationBackend(service, { publicBaseUrl: "https://maker.example", artifactTransfer: transferProvider });

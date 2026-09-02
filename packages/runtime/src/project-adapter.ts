@@ -7,7 +7,8 @@ import type {
   BomLine as ApiBomLine, CreateBomLine, CreateProject, CreateProjectRevision, CreateReservation,
   CreateWorkItem, CreateWorkItemRevision, Project as ApiProject, ProjectRevision as ApiProjectRevision,
   ProjectWithInitialRevision as ApiProjectWithInitialRevision, CreateProjectWithInitialRevision,
-  Reservation as ApiReservation, WorkItem as ApiWorkItem, WorkItemRevision as ApiWorkItemRevision, ProjectTombstone
+  Reservation as ApiReservation, WorkItem as ApiWorkItem, WorkItemRevision as ApiWorkItemRevision, ProjectTombstone,
+  InventoryItem as ApiInventoryItem
 } from "@benchledger/api-contract";
 import { ApplicationError, matchesBomConstraints, stableCreateConflict, unsupportedBomConstraintKeys } from "@benchledger/application";
 import type { ProjectPort, ProjectListOptions, RequestContext, ReservationDetails, StockMutation, UsageInput } from "@benchledger/application";
@@ -23,6 +24,7 @@ import {
 import { ProductionInventoryAdapter } from "./inventory-adapter.js";
 import { attempt, clone, nowIso, page } from "./utils.js";
 import { createStockEvent } from "@benchledger/domain";
+import { bomAlternativeSchema } from "@benchledger/api-contract";
 
 const PROJECT = "project";
 const WORK_ITEM = "work_item";
@@ -43,7 +45,30 @@ function number(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function bomMetadata(value: Readonly<Record<string, unknown>>): { readonly constraints?: ApiBomLine["constraints"]; readonly alternatives?: readonly ApiBomLine["alternatives"][number][]; readonly retired?: boolean; readonly createdAt?: string; readonly updatedAt?: string } {
+type ApiBomAlternative = ApiBomLine["alternatives"][number];
+
+function canonicalBomAlternatives(value: readonly ApiBomAlternative[]): ApiBomAlternative[] {
+  return value.map((alternative) => bomAlternativeSchema.parse(alternative));
+}
+
+function bomQuantityConversion(
+  line: Pick<ApiBomLine, "unit" | "alternatives">,
+  item: Pick<ApiInventoryItem, "id" | "unit">
+): NonNullable<ApiBomAlternative["quantityConversion"]> | undefined {
+  if (item.unit === line.unit) return undefined;
+  const conversions = line.alternatives
+    .filter((alternative) => alternative.itemId === item.id)
+    .flatMap((alternative) => {
+      const conversion = alternative.quantityConversion;
+      return conversion !== undefined && conversion.inventory.unit === item.unit && conversion.requirement.unit === line.unit
+        ? [conversion]
+        : [];
+    });
+  const factors = new Set(conversions.map((conversion) => conversion.requirement.quantity));
+  return factors.size === 1 ? conversions[0] : undefined;
+}
+
+function bomMetadata(value: Readonly<Record<string, unknown>>): { readonly constraints?: ApiBomLine["constraints"]; readonly alternatives?: readonly ApiBomAlternative[]; readonly retired?: boolean; readonly createdAt?: string; readonly updatedAt?: string } {
   const constraintsRecord = record(value.constraints);
   const constraints: Record<string, unknown> = {};
   for (const [key, candidate] of Object.entries(constraintsRecord)) {
@@ -58,7 +83,14 @@ function bomMetadata(value: Readonly<Record<string, unknown>>): { readonly const
       const item = record(candidate);
       if (typeof item.itemId !== "string") return [];
       const compatible = item.compatible === "confirmed" || item.compatible === "conditional" || item.compatible === "unknown" ? item.compatible : "conditional";
-      return [{ itemId: item.itemId, ...(typeof item.reason === "string" ? { reason: item.reason } : {}), compatible }];
+      const parsed = bomAlternativeSchema.safeParse({
+        itemId: item.itemId,
+        ...(typeof item.reason === "string" ? { reason: item.reason } : {}),
+        compatible,
+        ...(item.quantityConversion === undefined ? {} : { quantityConversion: item.quantityConversion })
+      });
+      if (!parsed.success) throw new Error("BOM alternative metadata is malformed");
+      return [parsed.data];
     })
     : undefined;
   const createdAt = text(value.createdAt);
@@ -411,10 +443,12 @@ export class ProductionProjectAdapter implements ProjectPort {
       const revision = this.findProjectRevision(revisionId);
       if (revision === undefined) throw new DomainError("project_revision_not_found", `project revision ${revisionId} does not exist`);
       this.assertProjectActive(revision.revision.projectId);
-      const native = nativeBomFromApi(revisionId, input, input.id ?? createId("bom"));
+      const alternatives = canonicalBomAlternatives(input.alternatives);
+      const canonicalInput = { ...input, alternatives };
+      const native = nativeBomFromApi(revisionId, canonicalInput, input.id ?? createId("bom"));
       const created = this.boms.createLine(native);
       this.state.setInitialVersion(BOM, created.id);
-      this.state.setMetadata(BOM, created.id, { constraints: input.constraints, alternatives: input.alternatives, createdAt: nowIso(), updatedAt: nowIso() });
+      this.state.setMetadata(BOM, created.id, { constraints: canonicalInput.constraints, alternatives, createdAt: nowIso(), updatedAt: nowIso() });
       return this.toApiBom(created, 1);
     });
   }
@@ -427,7 +461,7 @@ export class ProductionProjectAdapter implements ProjectPort {
         this.state.ensureVersion(BOM, id, expectedVersion);
         const current = this.toApiBom(native);
         const optional = input.optional ?? current.optional;
-        const alternatives = input.alternatives ?? current.alternatives;
+        const alternatives = canonicalBomAlternatives(input.alternatives ?? current.alternatives);
         const constraints = input.constraints ?? current.constraints;
         const updatedAt = nowIso();
         const updated: BomLine = {
@@ -505,10 +539,23 @@ export class ProductionProjectAdapter implements ProjectPort {
       const approvedAlternative = apiLine.alternatives.some((alternative) => alternative.itemId === input.itemId && alternative.compatible === "confirmed");
       if (!exact && !approvedAlternative) throw new DomainError("invalid_reservation_reference", "reservation item must be the exact BOM item or an approved alternative");
       if (!matchesBomConstraints(item, apiLine.constraints)) throw new DomainError("invalid_reservation_reference", "inventory item does not satisfy the BOM constraints");
-      if (item.unit !== this.apiUnit(line.unit)) throw new DomainError("invalid_reservation_reference", "reservation unit does not match the BOM line");
+      const conversion = bomQuantityConversion(apiLine, item);
+      if (item.unit !== this.apiUnit(line.unit) && conversion === undefined) throw new DomainError("invalid_reservation_reference", "reservation unit does not match the BOM line and has no valid quantity conversion");
       if (!isConfirmedEvidence(item.evidence.state)) throw new DomainError("insufficient_stock", "only physically confirmed stock can be reserved");
-      const reservedForLine = this.reservations.list().filter((reservation) => reservation.status === "active" && reservation.projectRevisionId === revisionId && reservation.bomLineId === input.lineId).reduce((total, reservation) => total + reservation.quantity, 0);
-      if (reservedForLine + input.quantity > line.quantity) throw new DomainError("insufficient_stock", `cannot reserve beyond the BOM requirement of ${line.quantity} ${this.apiUnit(line.unit)}`);
+      const factor = conversion?.requirement.quantity ?? 1;
+      const reservedForLine = this.reservations.list()
+        .filter((reservation) => reservation.status === "active" && reservation.projectRevisionId === revisionId && reservation.bomLineId === input.lineId)
+        .reduce((total, reservation) => {
+          const reservedNative = this.inventory.native(reservation.itemId);
+          if (reservedNative === undefined) throw new DomainError("inventory_not_found", `inventory item ${reservation.itemId} does not exist`);
+          const reservedItem = this.inventory.toApi(reservedNative);
+          const reservedConversion = bomQuantityConversion(apiLine, reservedItem);
+          if (reservedItem.unit !== this.apiUnit(line.unit) && reservedConversion === undefined) throw new DomainError("invalid_reservation_reference", "existing reservation has no valid quantity conversion");
+          return total + reservation.quantity * (reservedConversion?.requirement.quantity ?? 1);
+        }, 0);
+      const remainingCoverage = Math.max(0, line.quantity - reservedForLine);
+      const maximumInventoryUnits = Math.ceil(remainingCoverage / factor);
+      if (input.quantity > maximumInventoryUnits) throw new DomainError("insufficient_stock", `cannot reserve beyond the BOM requirement of ${line.quantity} ${this.apiUnit(line.unit)}; ${input.quantity} inventory unit(s) would exceed whole-unit coverage`);
       if (item.availableQuantity < input.quantity) throw new DomainError("insufficient_stock", `cannot reserve ${input.quantity}; only ${item.availableQuantity} unallocated unit(s) remain`);
       const reservation = this.reservations.create({ ...(input.id === undefined ? {} : { id: input.id }), projectRevisionId: revisionId, bomLineId: input.lineId, itemId: input.itemId, quantity: input.quantity, createdAt: nowIso() });
       this.state.setInitialVersion(RESERVATION, reservation.id);

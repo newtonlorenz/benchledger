@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bomSpecificationSchema, commitProjectSetupBodySchema, commitProjectSetupSchema, commissionInventoryItemSchema, createBomLineSchema, createInventoryItemSchema, createProjectSchema, createProjectWithInitialRevisionSchema, inventoryBulkUpdateSchema, inventoryItemSchema, inventoryListQuerySchema, projectCreationConflictDetailsSchema, projectSchema, projectStatusSchema, updateBomLineSchema, updateInventoryItemSchema, updateProjectSchema } from "./schemas.js";
+import { bomAlternativeSchema, bomSpecificationSchema, commitProjectSetupBodySchema, commitProjectSetupSchema, commissionInventoryItemSchema, createBomLineSchema, createInventoryItemSchema, createProjectSchema, createProjectWithInitialRevisionSchema, inventoryBulkUpdateSchema, inventoryItemSchema, inventoryListQuerySchema, projectCreationConflictDetailsSchema, projectSchema, projectStatusSchema, reconciliationPreviewLineSchema, updateBomLineSchema, updateInventoryItemSchema, updateProjectSchema } from "./schemas.js";
 
 const constraints = {
   kind: "electronic",
@@ -47,6 +47,49 @@ describe("REST BOM constraint schema", () => {
     expect(() => bomSpecificationSchema.parse({ status: "insufficient", missingDecisions: ["unknown_decision"] })).toThrow();
     expect(() => bomSpecificationSchema.parse({ status: "sufficient", missingDecisions: ["connector"] })).toThrow();
     expect(() => bomSpecificationSchema.parse({ status: "sufficient" })).toThrow();
+  });
+});
+
+describe("BOM alternative quantity conversions", () => {
+  const conversion = {
+    inventory: { quantity: 1, unit: "set" as const },
+    requirement: { quantity: 10, unit: "each" as const },
+    evidence: { basis: "package_label" as const, observedAt: "2026-09-02T10:00:00.000Z", source: "package label" },
+  };
+
+  it("accepts an optional evidence-backed one-set conversion", () => {
+    expect(bomAlternativeSchema.parse({ itemId: "led-set", compatible: "confirmed", quantityConversion: conversion })).toMatchObject({ quantityConversion: conversion });
+    expect(createBomLineSchema.parse({ name: "LED", requiredQuantity: 10, unit: "each", optional: false, alternatives: [{ itemId: "led-set", compatible: "confirmed", quantityConversion: conversion }] })).toMatchObject({ alternatives: [{ quantityConversion: conversion }] });
+  });
+
+  it("rejects reverse, fractional, same-unit, or unsupported conversions", () => {
+    expect(() => bomAlternativeSchema.parse({ itemId: "led-set", quantityConversion: { ...conversion, inventory: { quantity: 2, unit: "set" } } })).toThrow();
+    expect(() => bomAlternativeSchema.parse({ itemId: "led-set", quantityConversion: { ...conversion, requirement: { quantity: 1.5, unit: "each" } } })).toThrow();
+    expect(() => bomAlternativeSchema.parse({ itemId: "led-set", quantityConversion: { ...conversion, inventory: { quantity: 1, unit: "each" }, requirement: { quantity: 10, unit: "set" } } })).toThrow();
+    expect(() => bomAlternativeSchema.parse({ itemId: "led-set", quantityConversion: { ...conversion, evidence: { observedAt: conversion.evidence.observedAt } } })).toThrow();
+    expect(() => bomAlternativeSchema.parse({ itemId: "led-set", quantityConversion: { ...conversion, evidence: { ...conversion.evidence, basis: "inferred" } } })).toThrow();
+    expect(() => bomAlternativeSchema.parse({ itemId: "led-set", quantityConversion: { ...conversion, evidence: { ...conversion.evidence, extra: true } } })).toThrow();
+    expect(() => bomAlternativeSchema.parse({ itemId: "led-set", quantityConversion: { ...conversion, extra: true } })).toThrow();
+  });
+});
+
+describe("reconciliation preview units", () => {
+  it("requires an explicit scalar unit for every preview line", () => {
+    expect(reconciliationPreviewLineSchema.parse({
+      bomLineId: "bom-set-line",
+      reservedQuantity: 2,
+      accountedQuantity: 1,
+      unaccountedQuantity: 1,
+      outcomeCount: 1,
+      unit: "set"
+    })).toMatchObject({ unit: "set" });
+    expect(() => reconciliationPreviewLineSchema.parse({
+      bomLineId: "bom-set-line",
+      reservedQuantity: 2,
+      accountedQuantity: 1,
+      unaccountedQuantity: 1,
+      outcomeCount: 1
+    })).toThrow();
   });
 });
 
