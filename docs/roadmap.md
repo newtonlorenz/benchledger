@@ -132,11 +132,12 @@ output; package/unit migrations precede reliable component reservations.
   finalization without base64 MCP payloads, arbitrary paths, or executable
   handling. **Partial foundation implemented:** secure artifact sessions now
   require one validated project-revision or work-item-revision scope across
-  HTTP, MCP, persistence, and web. Exact filters do not mix project files with
-  work-item files; the all-project view preserves legacy/unbound visibility;
-  and the UI no longer infers ownership from the first work item. Generic MCP
-  remains fail-closed. The approved transactional batch host-transfer workflow
-  and inspection-queue handoff are still separate work.
+  HTTP, persistence, and web. The authenticated Files surface performs a
+  one-file begin/write/finalize upload with an explicit project/work-item scope
+  and file role; generic MCP transfer tools remain fail-closed. Exact filters do
+  not mix project files with work-item files; the all-project view preserves
+  legacy/unbound visibility. Atomic 50-file batch transfers and download-to-host
+  remain deferred.
 
 Dependency gate: bind build-plan files only to the secure staging boundary and
 retain human approval for physical statuses; never imply that a print occurred.

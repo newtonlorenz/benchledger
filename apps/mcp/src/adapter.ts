@@ -28,7 +28,6 @@ import {
   catalogProductUpdate,
   categoryId,
   categorySingleId,
-  finalizeArtifactUpload,
   inventoryCreate,
   inventoryCategoryList,
   inventoryCategoryCreate,
@@ -141,7 +140,7 @@ const TRANSFER_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   CONFLICT: "The artifact transfer could not be completed because the record changed.",
   UNSAFE_LINK: "Artifact transfer metadata failed safety validation.",
   RESOURCE_TOO_LARGE: "The artifact transfer result is too large.",
-  HOST_TRANSFER_UNAVAILABLE: "Artifact transfer is unavailable through generic MCP until a trusted host bridge exists.",
+  HOST_TRANSFER_UNAVAILABLE: "Artifact transfer is unavailable through generic MCP; use the authenticated browser/HTTP Files flow.",
   BACKEND_ERROR: "The artifact transfer could not be completed.",
 };
 
@@ -155,37 +154,6 @@ function failedTransferResult(error: unknown): McpToolResult {
 function objectValue(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new McpAdapterError("BACKEND_ERROR", `${label} must be an object.`);
   return value as Record<string, unknown>;
-}
-
-const TRANSFER_SECRET_KEY = /(?:uploadUrl|downloadUrl|finalizeUrl|uploadHeaders|finalizeHeaders|requiredHeaders|headers?$|authorization|accessToken|transfer[-_]?token|credential|password|secret|^token$)/iu;
-const TRANSFER_SECRET_VALUE = /(?:data:|base64|(?:^|[?&])(token|secret|credential|authorization|access_token)=|x-bench-transfer-token)/iu;
-const HTTP_URL_VALUE = /https?:\/\//iu;
-const TOKEN_SHAPED_VALUE = /^[A-Za-z0-9_-]{32,128}$/u;
-const LEGACY_TRANSFER_TOKEN = /^[A-Za-z0-9_-]{43}$/u;
-
-/**
- * Transfer results are model-visible. Recursively reject any URL, credential,
- * header map, or encoded byte payload before the result reaches text or
- * structuredContent. The error intentionally does not include the offending
- * value, so even a malicious backend cannot reflect its secret.
- */
-function validateTransferResult(value: unknown, depth = 0, key?: string): void {
-  if (depth > 12) throw new McpAdapterError("UNSAFE_LINK", "Artifact transfer metadata is too deeply nested.");
-  if (typeof value === "string") {
-    if (HTTP_URL_VALUE.test(value) || LEGACY_TRANSFER_TOKEN.test(value) || TRANSFER_SECRET_VALUE.test(value) || (key !== undefined && TRANSFER_SECRET_KEY.test(key) && TOKEN_SHAPED_VALUE.test(value))) {
-      throw new McpAdapterError("UNSAFE_LINK", "Artifact transfer metadata contains a credential or unsafe link.");
-    }
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const entry of value) validateTransferResult(entry, depth + 1, key);
-    return;
-  }
-  if (typeof value !== "object" || value === null) return;
-  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    if (TRANSFER_SECRET_KEY.test(key) || key === "_meta") throw new McpAdapterError("UNSAFE_LINK", "Artifact transfer metadata contains a credential or unsafe link.");
-    validateTransferResult(entry, depth + 1, key);
-  }
 }
 
 function resourceId(value: string, label: string): string {
@@ -353,6 +321,7 @@ async function assertAnyRevisionAccess(adapter: McpAdapter, context: McpRequestC
  */
 async function authorizeProjectScope(adapter: McpAdapter, name: string, input: unknown, context: McpRequestContext): Promise<void> {
   if (!isProjectScoped(context)) return;
+  if (name === "finalize_artifact_upload") return;
 
   if (name === "list_removed_projects") {
     rejectScopedGlobalAccess(context, "Removed-project history is workspace-global and requires an unscoped token.");
@@ -437,9 +406,6 @@ async function authorizeProjectScope(adapter: McpAdapter, name: string, input: u
   }
   if (name === "list_offers" && inputString(input, "itemId") === undefined) {
     throw new McpAdapterError("FORBIDDEN", "A project-scoped token must provide an inventory item when reading global offers.");
-  }
-  if (name === "finalize_artifact_upload" && adapter.backend.projectScope?.projectForUpload === undefined) {
-    throw new McpAdapterError("FORBIDDEN", "A project-scoped token cannot finalize an upload without a project ancestry lookup.");
   }
 }
 
@@ -579,10 +545,18 @@ export class McpAdapter {
 
       ["list_artifacts", (input, context) => this.backend.artifacts.list(artifactList(input), context)],
       ["read_artifact_metadata", (input, context) => this.backend.artifacts.getMetadata(artifactMetadata(input), context)],
-      ["begin_artifact_upload", (input, context) => this.backend.artifacts.beginUpload(beginArtifactUpload(input), context)],
-      ["finalize_artifact_upload", (input, context) => this.backend.artifacts.finalizeUpload(finalizeArtifactUpload(input), context)],
-      ["read_artifact_download_metadata", (input, context) => this.backend.artifacts.downloadMetadata(artifactMetadata(input), context)],
-      ["download_artifact", (input, context) => this.backend.artifacts.downloadMetadata(artifactMetadata(input), context)],
+      ["begin_artifact_upload", () => {
+        throw new McpAdapterError("HOST_TRANSFER_UNAVAILABLE", "Artifact transfer is unavailable through generic MCP; use the authenticated browser/HTTP Files flow.");
+      }],
+      ["finalize_artifact_upload", () => {
+        throw new McpAdapterError("HOST_TRANSFER_UNAVAILABLE", "Artifact transfer is unavailable through generic MCP; use the authenticated browser/HTTP Files flow.");
+      }],
+      ["read_artifact_download_metadata", () => {
+        throw new McpAdapterError("HOST_TRANSFER_UNAVAILABLE", "Artifact transfer is unavailable through generic MCP; use the authenticated browser/HTTP Files flow.");
+      }],
+      ["download_artifact", () => {
+        throw new McpAdapterError("HOST_TRANSFER_UNAVAILABLE", "Artifact transfer is unavailable through generic MCP; use the authenticated browser/HTTP Files flow.");
+      }],
       ["retire_artifact", (input, context) => this.backend.artifacts.retire(retireArtifact(input), context)],
 
       ["list_offers", (input, context) => this.backend.offers.list(offerList(input), context)],
@@ -637,10 +611,7 @@ export class McpAdapter {
         }) : [];
         value = { ...page, items: filteredItems, nextCursor: null, hasMore: false };
       }
-      const isTransferTool = TRANSFER_TOOL_NAMES.has(name);
-      if (isTransferTool) validateTransferResult(value);
       const safeValue = redactSerials(value);
-      if (isTransferTool) validateTransferResult(safeValue);
       return okResult(safeValue, this.maxToolResultBytes, name === "get_capabilities" ? CAPABILITY_DOCUMENT_MAX_DEPTH : undefined);
     } catch (error) {
       return TRANSFER_TOOL_NAMES.has(name) ? failedTransferResult(error) : failedResult(error);

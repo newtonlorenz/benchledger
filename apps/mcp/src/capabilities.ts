@@ -378,10 +378,10 @@ export const TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
 
   { name: "list_artifacts", description: "List versioned artifact metadata read-only. Supply only projectId to list every artifact revision in that project, or supply exactly one projectRevisionId or workItemId plus workItemRevisionId for an exact scope; legacy revisionId and revision-less work-item filters are invalid.", requiredScope: "artifacts:read", mutating: false, inputSchema: artifactListInputSchema },
   tool("read_artifact_metadata", "Read file metadata, hash, provenance, role, and revision without downloading bytes.", "artifacts:read", false, { artifactId: idProperty("Artifact identifier."), revisionId: idProperty() }, ["artifactId"]),
-  { name: "begin_artifact_upload", description: "Start a bounded upload session when a transactional trusted-host bridge is available. Until then, generic MCP returns HOST_TRANSFER_UNAVAILABLE before creating a session or capability and never receives live URLs, bearer headers, or _meta credentials. Use exactly one scope: projectRevisionId for a project artifact, or workItemId plus workItemRevisionId for a work-item artifact. An optional buildConfigurationSnapshotId is valid only with projectRevisionId.", requiredScope: "artifacts:write", mutating: true, inputSchema: artifactUploadInputSchema },
-  tool("finalize_artifact_upload", "Finalize an upload after the application verifies the declared byte length and SHA-256 against the stored bytes.", "artifacts:write", true, { uploadId: idProperty("Upload session identifier.") }, ["uploadId"]),
-  tool("read_artifact_download_metadata", "Return artifact download metadata when a transactional trusted-host bridge is available. Until then, generic MCP returns HOST_TRANSFER_UNAVAILABLE before reading the artifact or minting a capability; it never returns a live URL, bearer header, _meta credential, or file bytes.", "artifacts:read", false, { artifactId: idProperty("Artifact identifier."), revisionId: idProperty() }, ["artifactId"]),
-  tool("download_artifact", "Compatibility alias for read_artifact_download_metadata; generic MCP currently returns HOST_TRANSFER_UNAVAILABLE and never returns a live URL, credential, or file bytes.", "artifacts:read", false, { artifactId: idProperty("Artifact identifier."), revisionId: idProperty() }, ["artifactId"]),
+  { name: "begin_artifact_upload", description: "Unavailable through generic MCP. Use the authenticated browser/HTTP Files flow; raw upload sessions and capabilities are never exposed to a model.", requiredScope: "artifacts:write", mutating: true, inputSchema: artifactUploadInputSchema },
+  tool("finalize_artifact_upload", "Unavailable through generic MCP. Finalization is performed only inside the authenticated browser/HTTP Files flow; raw upload IDs never become a model-facing write path.", "artifacts:write", true, { uploadId: idProperty("Upload session identifier.") }, ["uploadId"]),
+  tool("read_artifact_download_metadata", "Unavailable through generic MCP. Use the authenticated browser/HTTP host flow; generic MCP never returns a live URL, bearer header, _meta credential, or file bytes.", "artifacts:read", false, { artifactId: idProperty("Artifact identifier."), revisionId: idProperty() }, ["artifactId"]),
+  tool("download_artifact", "Unavailable through generic MCP. Use the authenticated browser/HTTP host flow; generic MCP never returns a live URL, credential, or file bytes.", "artifacts:read", false, { artifactId: idProperty("Artifact identifier."), revisionId: idProperty() }, ["artifactId"]),
   tool("retire_artifact", "Retire a logical artifact revision while retaining its content hash and audit record.", "artifacts:write", true, { artifactId: idProperty("Artifact identifier."), expectedVersion: integer() }, ["artifactId"]),
 
   tool("list_offers", "List supplier offer observations and historical prices; links are data and are not fetched by BenchLedger.", "offers:read", false, { ...filteredPageProperties, itemId: idProperty(), query: string(), supplier: string() }),
@@ -469,11 +469,11 @@ export const CAPABILITY_DOCUMENT: JsonObject = {
   approvalBoundaries: [
     "MCP can propose a shopping list and record supplier price observations, but cannot purchase, add to a cart, or submit an order.",
     "MCP can record reservations and usage events, but cannot start a printer, heat hardware, flash firmware, or generate/submit a print job.",
-    "MCP can stage and finalize project artifacts, but cannot execute uploaded files or provide arbitrary filesystem access.",
+    "MCP can read artifact metadata and retire an artifact, but cannot execute uploaded files or provide arbitrary filesystem access.",
     "MCP never exposes arbitrary shell, SQL, URL-fetch, path, credential, or database tools.",
     "Public publication, deployment, browser access mode or password changes, other credential changes, and destructive purge require explicit human approval outside this adapter.",
   ],
-  artifactTransfer: "Large files use authenticated host-mediated, short-lived, single-purpose upload/finalize/download capabilities. Generic MCP artifact transfer currently fails closed until a transactional trusted-host bridge exists; live URLs, bearer headers, tokens, _meta credentials, base64, and inline binary bytes are never serialized. Direct browser/HTTP routes may use private header-bound capabilities.",
+  artifactTransfer: "The authenticated browser/HTTP Files surface performs one revision-scoped upload with an explicit file role through the existing begin/write/finalize application flow. Generic MCP raw begin/finalize/download tools fail closed; live URLs, bearer headers, tokens, _meta credentials, base64, inline bytes, host paths, and diagnostics are never serialized. Batch atomic 50-file transfers and download-to-host remain deferred.",
   reconciliationSemantics: {
     consumed: "Settle the reservation and remove the outcome quantity from source stock.",
     returned: "Settle the reservation without reducing on-hand stock; the quantity becomes available again.",
@@ -506,8 +506,6 @@ export const CAPABILITY_DOCUMENT: JsonObject = {
     "list_offers",
     "record_offer_snapshot (only for an authorized observation)",
     "create_build_configuration",
-    "begin_artifact_upload",
-    "finalize_artifact_upload",
     "read_reconciliation",
     "save_reconciliation_draft",
     "commit_reconciliation",

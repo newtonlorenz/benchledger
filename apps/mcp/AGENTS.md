@@ -270,29 +270,27 @@ series of usage and reservation-release writes.
 
 ## 6. Store CAD and build files (minute 8–9)
 
-Files are versioned project artifacts. Use `begin_artifact_upload` with the
-logical project and exactly one revisioned scope: `projectRevisionId` for a
-project artifact, or `workItemId` plus `workItemRevisionId` for a work-item
-artifact. The scope fields are a closed union: missing, mixed, and
-revision-less work-item scopes are rejected. `buildConfigurationSnapshotId` is
-valid only with a project revision. Use `list_artifacts` with only `projectId`
+Files are versioned project artifacts. Use the authenticated browser/HTTP Files
+surface for a one-file upload. Choose exactly one revisioned scope in its File
+scope picker: the project `projectRevisionId`, or a work item plus its
+`workItemRevisionId`; the all-files view is read-only. The selected file role is
+shown in the upload status and travels with the file. Missing, mixed, and
+revision-less work-item scopes are rejected, and
+`buildConfigurationSnapshotId` is valid only with a project revision. Use
+`list_artifacts` with only `projectId`
 for the read-only all-artifacts-in-project view, or add one exact scope from
 the same union; the legacy generic `revisionId` filter is not accepted. Every
 listed artifact exposes its exact `projectRevisionId` or
 `workItemId`/`workItemRevisionId` when that ancestry is present.
 
-Generic MCP never receives a live URL, header, token, or `_meta` credential.
-Until a transactional trusted-host bridge exists, the upload tool returns
-`HOST_TRANSFER_UNAVAILABLE` before creating a session or minting a capability.
-
-The typed `finalize_artifact_upload` command takes only the upload ID and lets
-the application verify the declaration recorded at begin time against stored
-bytes after the trusted host reports transfer completion.
-
-To retrieve a file, use the authenticated browser/HTTP host flow. Generic MCP
-download metadata remains unavailable until the same transactional trusted-host
-bridge exists; it never returns transfer URLs, headers, tokens, base64, or inline
-binary bytes. Artifact paths are logical IDs, not host filesystem paths.
+The authenticated Files flow hashes the browser-selected bytes, calls the
+existing application begin → write → finalize sequence, and returns the final
+artifact metadata. Generic MCP does not expose that upload session or transfer
+capability: raw `begin_artifact_upload`, `finalize_artifact_upload`, and
+download tools fail closed with `HOST_TRANSFER_UNAVAILABLE`. MCP never embeds
+CAD, STL, STEP, 3MF, build, firmware, or other large files as base64, and never
+accepts an absolute host path, shell command, SQL statement, or executable
+upload. Artifact paths are logical IDs, not host filesystem paths.
 
 Typical roles include `source`, `cad`, `step`, `stl`, `three_mf`,
 `slicer_project`, `gcode`, `drawing`, `validation`, and `document`. Manifest

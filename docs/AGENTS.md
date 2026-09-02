@@ -202,20 +202,21 @@ Choose one explicit file scope before listing or uploading: the exact current
 project revision, or one exact work item and its current revision. Project-level
 files never inherit the first work item returned by a list. Use the read-only
 all-project view to find retained legacy or unbound records without silently
-reclassifying them. Keep the chosen scope fixed for a multi-file upload run.
+reclassifying them. Keep the chosen scope fixed for the upload.
 
-Use `begin_artifact_upload` with that explicit revision scope and a safe
-filename when a trusted host bridge is available. Generic MCP returns no live
-URL, header, token, or `_meta` credential and currently fails closed with
-`HOST_TRANSFER_UNAVAILABLE` before creating a session or capability. A future
-transactional trusted-host bridge must keep the declared byte length and
-SHA-256 outside MCP. Use the authenticated browser/HTTP host flow for transfers
-until then; it retains private, short-lived, one-use header capabilities.
+Use the authenticated browser/HTTP Files surface for a one-file upload. Choose
+the project revision or a named work-item revision in its File scope picker;
+the all-files view is read-only. The upload status shows the file role, and the
+application runs the existing begin → write → finalize sequence with the
+browser-computed byte length and SHA-256. Keep source, STEP, STL, 3MF, slicer,
+drawing, and validation revisions separate; do not overwrite an accepted
+artifact.
 
-MCP never embeds CAD, STL, STEP, 3MF, build, firmware, or other large files as
-base64. It never accepts an absolute host path, shell command, SQL statement, or
-executable upload. Keep source, STEP, STL, 3MF, slicer, drawing, and validation
-revisions separate; do not overwrite an accepted artifact.
+Generic MCP does not expose upload sessions or transfer capabilities. Its raw
+`begin_artifact_upload`, `finalize_artifact_upload`, and download tools fail
+closed with `HOST_TRANSFER_UNAVAILABLE`. MCP never embeds CAD, STL, STEP, 3MF,
+build, firmware, or other large files as base64, and never accepts an absolute
+host path, shell command, SQL statement, or executable upload.
 
 ## Minute 9–10: shopping proposal
 
