@@ -113,7 +113,8 @@ function tokenFromHeader(value: string | string[] | undefined): string {
 }
 
 /**
- * Host-owned issuer and verifier for MCP artifact transfer links. This is an
+ * Host-owned issuer and verifier for authenticated host-mediated artifact
+ * transfer links. This is an
  * in-memory store by design: a process restart invalidates outstanding links,
  * which is safer than accidentally making a stale transfer capability durable.
  */
@@ -329,7 +330,45 @@ export class ArtifactTransferManager implements ArtifactTransferProvider {
   }
 
   authorizeDownload(tokenHeader: string | string[] | undefined, artifactId: string): TransferCapability {
-    return this.peek(tokenFromHeader(tokenHeader), "artifact_download", artifactId);
+    // Compatibility helper for callers that only need an immediately consumed
+    // capability. The transfer route uses claim/commit/release so a transient
+    // read or integrity failure does not burn the ticket.
+    const capability = this.claimDownload(tokenHeader, artifactId);
+    this.commitDownload(tokenHeader, artifactId);
+    return capability;
+  }
+
+  /** Claim a download while the durable artifact read and integrity checks run. */
+  claimDownload(tokenHeader: string | string[] | undefined, artifactId: string): TransferCapability {
+    const token = tokenFromHeader(tokenHeader);
+    const resourceId = validateId(artifactId, "artifactId");
+    const capability = this.peek(token, "artifact_download", resourceId);
+    const stored = this.capabilities.get(hashToken(token));
+    if (stored === undefined || stored.used || stored.inFlight) forbidden("The transfer capability has already been used");
+    stored.inFlight = true;
+    return { ...capability };
+  }
+
+  /** Consume a claimed download after the verified response is ready. */
+  commitDownload(tokenHeader: string | string[] | undefined, artifactId: string): void {
+    const token = tokenFromHeader(tokenHeader);
+    const resourceId = validateId(artifactId, "artifactId");
+    const stored = this.capabilities.get(hashToken(token));
+    if (stored === undefined || stored.action !== "artifact_download" || stored.resourceId !== resourceId || stored.inFlight !== true) forbidden();
+    stored.inFlight = false;
+    stored.used = true;
+    this.capabilities.delete(hashToken(token));
+  }
+
+  /** Release a download claim after a failed read or integrity check. */
+  releaseDownload(tokenHeader: string | string[] | undefined, artifactId: string): void {
+    const token = tokenFromHeader(tokenHeader);
+    const resourceId = validateId(artifactId, "artifactId");
+    const digest = hashToken(token);
+    const stored = this.capabilities.get(digest);
+    if (stored?.action === "artifact_download" && stored.resourceId === resourceId && stored.inFlight === true) {
+      stored.inFlight = false;
+    }
   }
 
   assertDownloadedArtifact(capability: TransferCapability, artifact: { projectId: string; byteSize: number; sha256: string }): void {

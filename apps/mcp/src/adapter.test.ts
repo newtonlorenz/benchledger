@@ -213,7 +213,7 @@ function backend(): BenchLedgerBackend {
     artifacts: {
       list: async () => page([]),
       getMetadata: async () => ({ id: "artifact-1", filename: "source.step", mediaType: "model/step", byteLength: 12, sha256: "a".repeat(64), revision: 1, status: "candidate" }),
-      beginUpload: async () => ({ uploadId: "upload-1", uploadUrl: "https://benchledger.test/api/v1/artifacts/uploads/upload-1", expiresAt: "2026-08-30T10:15:00.000Z", maxBytes: 1000000, method: "PUT" }),
+      beginUpload: async () => ({ uploadId: "upload-1", uploadUrl: "https://benchledger.test/api/v1/artifacts/uploads/upload-1", expiresAt: "2026-08-30T10:15:00.000Z", maxBytes: 1000000, method: "PUT" as const }),
       finalizeUpload: async () => ({ artifactId: "artifact-1", revisionId: "artifact-revision-1", filename: "source.step", byteLength: 12, sha256: "a".repeat(64), status: "candidate" }),
       downloadMetadata: async () => ({ artifactId: "artifact-1", revisionId: "artifact-revision-1", filename: "source.step", byteLength: 12, sha256: "a".repeat(64), downloadUrl: "https://benchledger.test/api/v1/artifacts/artifact-1/download", expiresAt: "2026-08-30T10:15:00.000Z" }),
       retire: async () => ({ artifactId: "artifact-1", retired: true, version: 2 }),
@@ -322,13 +322,13 @@ describe("McpAdapter", () => {
     }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
   });
 
-  it("returns scoped HTTP links for artifacts and rejects inline data URLs", async () => {
+  it("rejects credential-bearing transfer payloads", async () => {
     const adapter = new McpAdapter(backend());
     const result = await adapter.callTool("begin_artifact_upload", { projectId: "project-1", filename: "source.step", role: "source", mediaType: "model/step", byteLength: 12, sha256: "a".repeat(64) }, context);
 
-    expect(result.isError).toBe(false);
-    expect(result.structuredContent).toMatchObject({ uploadUrl: "https://benchledger.test/api/v1/artifacts/uploads/upload-1" });
-    expect(JSON.stringify(result.structuredContent)).not.toContain("base64");
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({ error: { code: "UNSAFE_LINK" } });
+    expect(JSON.stringify(result)).not.toMatch(/https:\/\/benchledger\.test|token|base64/i);
 
     const unsafeBackend = backend();
     unsafeBackend.artifacts.beginUpload = async () => ({ uploadId: "upload-2", uploadUrl: "data:application/octet-stream;base64,AAAA", expiresAt: "2026-08-30T10:15:00.000Z", maxBytes: 100, method: "PUT" });
@@ -616,7 +616,11 @@ describe("McpAdapter", () => {
     ];
     for (const [name, input] of calls) {
       const result = await adapter.callTool(name, input, context);
-      expect(result.isError, `${name} should dispatch successfully`).toBe(false);
+      if (name === "begin_artifact_upload" || name === "read_artifact_download_metadata" || name === "download_artifact") {
+        expect(result, `${name} should fail closed`).toMatchObject({ isError: true, structuredContent: { error: { code: "UNSAFE_LINK" } } });
+      } else {
+        expect(result.isError, `${name} should dispatch successfully`).toBe(false);
+      }
     }
     expect(adapter.listResources()).toHaveLength(3);
     expect(adapter.listResourceTemplates()).toHaveLength(11);

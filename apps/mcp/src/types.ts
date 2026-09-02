@@ -700,9 +700,10 @@ export interface ArtifactDownloadMetadata {
 }
 
 /**
- * The application adapter does not mint or validate transport credentials.
- * An HTTP host supplies this small provider so the MCP package remains
- * model-neutral while still returning usable, bounded transfer links.
+ * Legacy HTTP-host issuer for direct browser/HTTP transfer routes. Generic MCP
+ * never invokes this provider because it cannot safely expose the resulting
+ * URL/header capability to a model. It remains available to the authenticated
+ * HTTP routes.
  */
 export interface ArtifactTransferProvider {
   issueUpload(input: {

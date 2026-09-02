@@ -58,6 +58,8 @@ export interface ServerOptions {
   readonly trustProxy?: boolean;
   /** Exact configured origin used for MCP transfer capability links. */
   readonly publicBaseUrl?: string;
+  /** Host-owned transfer manager; injectable for route-level integration tests. */
+  readonly artifactTransferManager?: ArtifactTransferManager;
 }
 
 export interface RuntimeHandle {
@@ -658,7 +660,7 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       securitySchemes: {
       bearerAuth: { type: "http", scheme: "bearer", description: "Scoped MCP/API token. Store the plaintext token only in the client secret store." },
       cookieAuth: { type: "apiKey", in: "cookie", name: "forge_session" },
-      transferAuth: { type: "apiKey", in: "header", name: "X-Bench-Transfer-Token", description: "Short-lived single-purpose artifact capability returned by MCP; never put it in a URL." }
+      transferAuth: { type: "apiKey", in: "header", name: "X-Bench-Transfer-Token", description: "Short-lived single-purpose capability issued by the authenticated browser/host transfer flow; keep it in the header and never put it in a URL." }
       },
       schemas: {
         CreateInventoryItem: createInventoryItemSchema,
@@ -969,7 +971,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   const adminPasswordHash = options.auth?.adminPasswordHash;
   const sessionSecret = options.auth?.sessionSecret ?? process.env.BENCHLEDGER_SESSION_SECRET ?? (demo ? randomSecret() : "");
   const publicBaseUrl = publicBaseUrlFromEnvironment(options.publicBaseUrl ?? process.env.BENCHLEDGER_PUBLIC_BASE_URL, demo);
-  const artifactTransfer = new ArtifactTransferManager(publicBaseUrl);
+  const artifactTransfer = options.artifactTransferManager ?? new ArtifactTransferManager(publicBaseUrl);
   let activePasswordHashes = 0;
   const runtime: RuntimeHandle | undefined = options.runtime ?? (options.ports ? undefined : demo ? createSyntheticRuntime() : await createProductionRuntime({
     dataDir: options.dataDir ?? process.env.BENCHLEDGER_DATA_DIR ?? "",
@@ -1174,7 +1176,11 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
       return reply.code(401).send({ error: { code: "unauthenticated", message: "A scoped bearer token is required for MCP", correlationId: request.correlationId } });
     }
     const context = mcpContext(principal, request);
-    const protocol = createApplicationMcpProtocol(service, { publicBaseUrl, artifactTransfer, context, serverInfo: { name: "benchledger", version: service.getVersion() } });
+    // Generic MCP has no model-excluded channel for live transfer URLs or
+    // bearer headers. The HTTP host keeps direct browser/transfer routes
+    // private; MCP artifact transfer remains fail-closed until a transactional
+    // trusted-host bridge is implemented.
+    const protocol = createApplicationMcpProtocol(service, { context, serverInfo: { name: "benchledger", version: service.getVersion() } });
     const handler = createMcpHttpHandler(protocol, { context, maxBodyBytes: 1_000_000 });
     const headers = Object.fromEntries(Object.entries(request.headers).map(([key, value]) => [key, Array.isArray(value) ? value[0] : value]));
     const result = await handler({ method: request.method, headers, body: request.body });
@@ -1516,9 +1522,17 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   app.get(route("/artifacts/:id/download"), async (request, reply) => { requireScope(request, "read", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; const downloaded = await service.readArtifact(params.id); return reply.type(downloaded.artifact.mediaType).header("content-disposition", `attachment; filename="${downloaded.artifact.filename.replace(/"/gu, "")}"`).send(Buffer.from(downloaded.body)); });
   app.get(route("/transfers/artifacts/:id/download"), async (request, reply) => {
     const params = request.params as { id: string };
-    const capability = artifactTransfer.authorizeDownload(request.headers[TRANSFER_TOKEN_HEADER], params.id);
-    const downloaded = await service.readArtifact(params.id);
-    artifactTransfer.assertDownloadedArtifact(capability, downloaded.artifact);
+    const token = request.headers[TRANSFER_TOKEN_HEADER];
+    const capability = artifactTransfer.claimDownload(token, params.id);
+    let downloaded: Awaited<ReturnType<typeof service.readArtifact>>;
+    try {
+      downloaded = await service.readArtifact(params.id);
+      artifactTransfer.assertDownloadedArtifact(capability, downloaded.artifact);
+      artifactTransfer.commitDownload(token, params.id);
+    } catch (error: unknown) {
+      artifactTransfer.releaseDownload(token, params.id);
+      throw error;
+    }
     for (const [name, value] of Object.entries(TRANSFER_RESPONSE_HEADERS)) reply.header(name, value);
     const filename = downloaded.artifact.filename.replace(/["\r\n]/gu, "");
     return reply.type(downloaded.artifact.mediaType).header("content-disposition", `attachment; filename="${filename}"`).send(Buffer.from(downloaded.body));

@@ -472,7 +472,7 @@ describe("createApplicationBackend translation coverage", () => {
     expect(service.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ projectId: "project-1", reservationId: "reservation-1", note: "installed", unit: "each" }), expect.anything());
   });
 
-  it("maps artifact roles, transfer capabilities, offers, and empty current revisions", async () => {
+  it("maps artifact roles, transfer unavailability, offers, and empty current revisions", async () => {
     const service = serviceFixture();
     const backend = createApplicationBackend(service, { publicBaseUrl: "https://maker.example", artifactTransfer: transferProvider });
     const artifacts = await backend.artifacts.list({ projectId: "project-1", role: "design_record", limit: 10 }, context);
@@ -484,13 +484,12 @@ describe("createApplicationBackend translation coverage", () => {
     expect(await backend.artifacts.getMetadata({ artifactId: "artifact-1" }, context)).toMatchObject({ role: "step", byteLength: 100 });
     service.getArtifact.mockResolvedValueOnce(apiArtifact({ role: "brief", revisionId: undefined, currentCandidate: false }));
     expect(await backend.artifacts.getMetadata({ artifactId: "artifact-1" }, context)).toMatchObject({ role: "brief", status: "frozen" });
-    const upload = await backend.artifacts.beginUpload({ projectId: "project-1", projectRevisionId: "revision-1", filename: "part.step", role: "source", mediaType: "model/step", byteLength: 100, sha256: "A".repeat(64) }, context);
-    expect(upload).toMatchObject({ uploadId: "upload-1", method: "PUT", requiredHeaders: { "x-bench-transfer-token": "upload" }, finalizeHeaders: { "x-bench-transfer-token": "finalize" } });
-    expect(transferProvider.issueUpload).toHaveBeenCalledWith(expect.objectContaining({ projectId: "project-1", sha256: "A".repeat(64), actor: context.actorId }));
     const finalized = await backend.artifacts.finalizeUpload({ uploadId: "upload-1" }, context);
     expect(finalized).toMatchObject({ role: "step", status: "candidate" });
-    const download = await backend.artifacts.downloadMetadata({ artifactId: "artifact-1", revisionId: "revision-1" }, context);
-    expect(download).toMatchObject({ downloadUrl: expect.stringContaining("/transfers/artifacts/artifact-1/download"), requiredHeaders: { "x-bench-transfer-token": "download" } });
+    await expect(backend.artifacts.beginUpload({ projectId: "project-1", projectRevisionId: "revision-1", filename: "part.step", role: "source", mediaType: "model/step", byteLength: 100, sha256: "A".repeat(64) }, context)).rejects.toMatchObject({ code: "HOST_TRANSFER_UNAVAILABLE" });
+    await expect(backend.artifacts.downloadMetadata({ artifactId: "artifact-1", revisionId: "revision-1" }, context)).rejects.toMatchObject({ code: "HOST_TRANSFER_UNAVAILABLE" });
+    expect(service.beginArtifactUpload).not.toHaveBeenCalled();
+    expect(service.getArtifact).toHaveBeenCalledTimes(2);
     expect(await backend.artifacts.retire({ artifactId: "artifact-1", expectedVersion: 1 }, context)).toMatchObject({ artifact: { status: "retired" } });
     const offers = await backend.offers.list({ itemId: "screw-m3", query: "amazon", supplier: "amazon", limit: 1 }, context);
     expect(offers.items).toHaveLength(1);
@@ -548,9 +547,9 @@ describe("createApplicationBackend translation coverage", () => {
     await expect(backend.projectScope?.projectForUpload?.("missing")).resolves.toBeNull();
     service.getReservationDetails.mockResolvedValueOnce(null);
     await expect(backend.projectScope?.reservationDetails?.("missing")).resolves.toBeNull();
-    await expect(backend.artifacts.beginUpload({ projectId: "project-1", filename: "part.step", role: "step", mediaType: "model/step", byteLength: 1 }, context)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    await expect(backend.artifacts.beginUpload({ projectId: "project-1", filename: "part.step", role: "step", mediaType: "model/step", byteLength: 1 }, context)).rejects.toMatchObject({ code: "HOST_TRANSFER_UNAVAILABLE" });
     const noTransfer = createApplicationBackend(service);
-    await expect(noTransfer.artifacts.downloadMetadata({ artifactId: "artifact-1" }, context)).rejects.toMatchObject({ code: "BACKEND_ERROR" });
+    await expect(noTransfer.artifacts.downloadMetadata({ artifactId: "artifact-1" }, context)).rejects.toMatchObject({ code: "HOST_TRANSFER_UNAVAILABLE" });
     service.getArtifact.mockResolvedValueOnce(apiArtifact({ revisionId: "other-revision" }));
     await expect(backend.artifacts.getMetadata({ artifactId: "artifact-1", revisionId: "revision-1" }, context)).rejects.toMatchObject({ code: "NOT_FOUND" });
   });

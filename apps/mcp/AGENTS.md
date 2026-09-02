@@ -218,20 +218,20 @@ series of usage and reservation-release writes.
 ## 6. Store CAD and build files (minute 8–9)
 
 Files are versioned project artifacts. Use `begin_artifact_upload` with the
-logical project/work-item/revision and a safe filename. It returns short-lived
-scoped HTTP `uploadUrl` and `finalizeUrl` values, each with its own required
-`X-Bench-Transfer-Token` header. Upload the bytes to `uploadUrl`, then POST the
-byte length and SHA-256 to `finalizeUrl` (or use the typed finalize tool).
+logical project/work-item/revision and a safe filename when a trusted host
+bridge is available. Generic MCP never receives a live URL, header, token, or
+`_meta` credential. Until a transactional trusted-host bridge exists, the tool
+returns `HOST_TRANSFER_UNAVAILABLE` before creating a session or minting a
+capability.
 
 The typed `finalize_artifact_upload` command takes only the upload ID and lets
 the application verify the declaration recorded at begin time against stored
-bytes. If the agent uses the returned HTTP finalize URL directly, it must send
-the byte length and SHA-256 JSON payload with the finalize capability header.
+bytes after the trusted host reports transfer completion.
 
-To retrieve a file, call `read_artifact_download_metadata`; it returns metadata,
-a short-lived scoped `downloadUrl`, and a required transfer header. MCP results
-never contain base64 or inline binary bytes. Artifact paths are logical IDs, not
-host filesystem paths. Transfer tokens never appear in query strings.
+To retrieve a file, use the authenticated browser/HTTP host flow. Generic MCP
+download metadata remains unavailable until the same transactional trusted-host
+bridge exists; it never returns transfer URLs, headers, tokens, base64, or inline
+binary bytes. Artifact paths are logical IDs, not host filesystem paths.
 
 Typical roles include `source`, `cad`, `step`, `stl`, `three_mf`,
 `slicer_project`, `gcode`, `drawing`, `validation`, and `document`. Manifest

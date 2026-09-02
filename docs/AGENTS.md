@@ -155,12 +155,12 @@ verified`, `production approved`); moving one never proves or resets the other.
 ## Minute 8–9: files and revisions
 
 Use `begin_artifact_upload` with a logical project/work-item/revision and a safe
-filename. It returns short-lived scoped HTTP `uploadUrl` and `finalizeUrl`
-values, each with its own required `X-Bench-Transfer-Token` header; transfer
-bytes with the write header, then finalize with the finalize header and byte
-length/SHA-256. Use `read_artifact_download_metadata` to receive a short-lived
-scoped `downloadUrl` and required transfer header. Tokens never appear in query
-strings.
+filename when a trusted host bridge is available. Generic MCP returns no live
+URL, header, token, or `_meta` credential and currently fails closed with
+`HOST_TRANSFER_UNAVAILABLE` before creating a session or capability. A future
+transactional trusted-host bridge must keep the declared byte length and
+SHA-256 outside MCP. Use the authenticated browser/HTTP host flow for transfers
+until then; it retains private, short-lived, one-use header capabilities.
 
 MCP never embeds CAD, STL, STEP, 3MF, build, firmware, or other large files as
 base64. It never accepts an absolute host path, shell command, SQL statement, or

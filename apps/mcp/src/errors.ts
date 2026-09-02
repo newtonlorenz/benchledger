@@ -9,6 +9,7 @@ export type McpErrorCode =
   | "CONFLICT"
   | "UNSAFE_LINK"
   | "RESOURCE_TOO_LARGE"
+  | "HOST_TRANSFER_UNAVAILABLE"
   | "BACKEND_ERROR";
 
 export class McpAdapterError extends Error {

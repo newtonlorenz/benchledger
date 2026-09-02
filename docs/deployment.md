@@ -57,10 +57,12 @@ explicit approval for that action.
 6. Bind the port to the intended LAN interface only. In the example Compose
    file, set `BENCHLEDGER_BIND_ADDRESS` to that exact address; the safe default
    is loopback and no public LAN address is hardcoded.
-7. Set `BENCHLEDGER_PUBLIC_BASE_URL` to the exact HTTP(S) origin that agents
-   can reach (for example `http://benchledger.local:8792`). It must not contain a
-   path, credentials, query, or fragment; the server never trusts a request
-   Host header when constructing transfer links.
+7. Set `BENCHLEDGER_PUBLIC_BASE_URL` to the exact HTTP(S) origin used by the
+   authenticated browser/host transfer flow (for example
+   `http://benchledger.local:8792`). It must not contain a path, credentials,
+   query, or fragment; the server never trusts a request Host header when
+   constructing transfer links. Generic MCP does not receive this origin or
+   any transfer credential.
 8. Keep `BENCHLEDGER_SECURE_COOKIES=false` for the documented plain-HTTP LAN
    deployment. Set it to `true` only after TLS is configured and verified.
 9. Configure MCP tokens with lowercase SHA-256 digests in the read/write hash
@@ -145,9 +147,13 @@ container after the command completes.
 - Verify an MCP read token cannot write at `/api/v1/mcp`.
 - Verify `/api/v1/mcp` still rejects requests without a scoped bearer token even
   when the browser is in `lan_open` mode.
-- Upload/download a synthetic artifact and compare its SHA-256. Use the
-  `X-Bench-Transfer-Token` header returned by MCP; capabilities are scoped to
-  one action and expire, and ordinary browser session routes remain separate.
+- Upload/download a synthetic artifact through the authenticated browser/host
+  flow and compare its SHA-256. The private transfer manager may use the
+  `X-Bench-Transfer-Token` header; these capabilities are scoped to one action
+  and expire. Generic MCP currently returns `HOST_TRANSFER_UNAVAILABLE` before
+  creating a session or reading artifact metadata and never returns the private
+  origin, URL, header, or token. Do not enable a future bridge until it is
+  transactional and host-mediated.
 - Create an online SQLite backup and artifact manifest.
 - Restore into a separate temporary directory and verify counts and hashes.
 - Confirm neighbouring containers and services remain healthy.

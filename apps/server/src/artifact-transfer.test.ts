@@ -164,7 +164,33 @@ describe("ArtifactTransferManager", () => {
     expect(() => manager.assertDownloadedArtifact(capability, { projectId: "project-1", byteSize: 9, sha256: "a".repeat(64) })).not.toThrow();
 
     now = 1_100;
-    expectError(() => manager.authorizeDownload(token, "artifact-1"), "upload_expired");
+    expectError(() => manager.authorizeDownload(token, "artifact-1"), "forbidden");
+  });
+
+  it("consumes a download capability after the first successful authorization", () => {
+    const manager = new ArtifactTransferManager("https://maker.example", { clock: () => 1_000 });
+    const issued = manager.issueDownload({ artifactId: "artifact-1", projectId: "project-1", byteLength: 9, sha256: "a".repeat(64), actor: "agent" });
+    const token = issued.requiredHeaders[TRANSFER_TOKEN_HEADER];
+    if (token === undefined) throw new Error("expected a download token");
+    const capability = manager.authorizeDownload(token, "artifact-1");
+    manager.assertDownloadedArtifact(capability, { projectId: "project-1", byteSize: 9, sha256: "a".repeat(64) });
+    expectError(() => manager.authorizeDownload(token, "artifact-1"), "forbidden");
+  });
+
+  it("keeps a download capability retryable until the verified response commits", () => {
+    const manager = new ArtifactTransferManager("https://maker.example", { clock: () => 1_000 });
+    const issued = manager.issueDownload({ artifactId: "artifact-1", projectId: "project-1", byteLength: 9, sha256: "a".repeat(64), actor: "agent" });
+    const token = issued.requiredHeaders[TRANSFER_TOKEN_HEADER];
+    if (token === undefined) throw new Error("expected a download token");
+
+    const claimed = manager.claimDownload(token, "artifact-1");
+    expectError(() => manager.claimDownload(token, "artifact-1"), "forbidden");
+    expectError(() => manager.assertDownloadedArtifact(claimed, { projectId: "project-1", byteSize: 8, sha256: "a".repeat(64) }), "forbidden");
+    manager.releaseDownload(token, "artifact-1");
+    const retry = manager.claimDownload(token, "artifact-1");
+    manager.assertDownloadedArtifact(retry, { projectId: "project-1", byteSize: 9, sha256: "a".repeat(64) });
+    manager.commitDownload(token, "artifact-1");
+    expectError(() => manager.claimDownload(token, "artifact-1"), "forbidden");
   });
 
   it("validates finalize details, download tickets, and removes used capabilities", () => {
@@ -182,7 +208,7 @@ describe("ArtifactTransferManager", () => {
     const downloadToken = download.requiredHeaders[TRANSFER_TOKEN_HEADER];
     expectError(() => manager.assertDownloadedArtifact(manager.authorizeDownload(downloadToken, "artifact-1"), { projectId: "project-1", byteSize: body.byteLength + 1, sha256: digest(body) }), "forbidden");
     now = 1_100;
-    expectError(() => manager.authorizeDownload(downloadToken, "artifact-1"), "upload_expired");
+    expectError(() => manager.authorizeDownload(downloadToken, "artifact-1"), "forbidden");
     // Issuing a new ticket also exercises cleanup of the already-used write capability.
     expect(manager.issueDownload({ artifactId: "artifact-2", projectId: "project-1", byteLength: 1, sha256: "c".repeat(64), actor: "agent" }).downloadUrl).toContain("artifact-2");
   });
