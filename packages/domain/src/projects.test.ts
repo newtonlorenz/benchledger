@@ -209,4 +209,43 @@ describe("project BOM domain", () => {
     expect(() => planReconciliation(reservedSource, [noChange], { requireComplete: true })).toThrow(/sole outcome.*zero active reserved quantity/i);
     expect(() => planReconciliation(reservedSource, [{ ...noChange, outcomes: [noChange.outcomes[0]!, { kind: "consumed" as const, reservationId: active.id, quantity: 1, unit: "board" as const, evidence: { state: "consumed" } }] }], { requireComplete: true })).toThrow(/sole outcome.*zero active reserved quantity/i);
   });
+
+  it("completes close-out from active reservations without reviewing every zero-reservation BOM line", () => {
+    const lines = Array.from({ length: 22 }, (_, index) => createBomLine({
+      id: `b-closeout-${index + 1}`,
+      revisionId: "r-closeout",
+      name: `Fitzroy Cafe part ${index + 1}`,
+      quantity: 1,
+      unit: "board"
+    }));
+    const inventory = [1, 2, 3].map((index) => {
+      const reserved = snapshot(`closeout-item-${index}`, `Board ${index}`, "confirmed", 1);
+      return { ...reserved, balance: { ...reserved.balance, allocated: 1, available: 0 } };
+    });
+    const reservations = inventory.map((entry, index) => createReservation({
+      id: `closeout-reservation-${index + 1}`,
+      projectRevisionId: "r-closeout",
+      bomLineId: lines[index]!.id,
+      itemId: entry.item.id,
+      quantity: 1
+    }, entry.balance));
+    const source = { revisionId: "r-closeout", lines, reservations, inventory };
+    const outcomes = reservations.map((reservation) => ({
+      bomLineId: reservation.bomLineId,
+      outcomes: [{
+        kind: "consumed" as const,
+        reservationId: reservation.id,
+        itemId: reservation.itemId,
+        quantity: 1,
+        unit: "board" as const,
+        evidence: { state: "physically_counted" as const }
+      }]
+    }));
+
+    const plan = planReconciliation(source, outcomes, { requireComplete: true });
+    expect(plan.settlements).toHaveLength(3);
+    expect(plan.stockEvents.filter((event) => event.kind === "release")).toHaveLength(3);
+    expect(plan.stockEvents.filter((event) => event.kind === "consume")).toHaveLength(3);
+    expect(() => planReconciliation(source, outcomes.slice(0, 2), { requireComplete: true })).toThrow(/closeout-reservation-3/);
+  });
 });

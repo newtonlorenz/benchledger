@@ -199,7 +199,10 @@ on one model vendor or private instance data.
 ### Post-project inventory reconciliation
 
 Status: implemented and release-verified. The close-out commits as one atomic
-operation rather than a loose sequence of usage and reservation calls.
+operation rather than a loose sequence of usage and reservation calls. The
+default review queue contains only active-reservation lines plus explicitly
+submitted lines; unreserved BOM requirements remain optional display context
+and do not block or enter writes unless an outcome is recorded.
 
 Add a guided project-close flow that starts from reservations and the approved
 BOM, then records what was actually consumed, returned, damaged, left over, or

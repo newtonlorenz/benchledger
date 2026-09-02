@@ -14,7 +14,9 @@ endpoints, because a failure between them could leave a partly closed project.
 
 ## Review outcomes
 
-Every BOM line is explicitly reviewed. A reservation can be divided between:
+Start by listing reservations and identify the records whose status is
+`active`. Only those active reservations need close-out outcomes. A reservation
+can be divided between:
 
 - consumed;
 - returned or released intact;
@@ -22,8 +24,12 @@ Every BOM line is explicitly reviewed. A reservation can be divided between:
 - usable leftover, with its measurement evidence;
 - converted into a new reusable inventory asset.
 
-An untouched line must be marked `reviewed_no_change`. No outcome is selected
-by default. Quantities must account for the full reservation in the same unit.
+Every active reservation must be fully and exactly accounted for in the same
+unit before commit. BOM lines with zero active reservations may be omitted from
+the submitted draft. If an agent or user submits one anyway, it may use the
+explicit sole outcome `reviewed_no_change`; that outcome is optional and is not
+selected by default. Released, consumed, and settled reservation history is
+never erased by omitting a zero-reservation line.
 
 ## Evidence and safety
 
@@ -32,9 +38,11 @@ condition, and optional uncertainty. Recording an estimated use does not promote
 the whole inventory item to physically counted. A converted asset requires a
 complete identity and a positive initial quantity.
 
-The draft stores a hash of the BOM, reservations, item versions, and balances
-used as its basis. Commit fails closed when that basis has changed. A reservation
-may be settled once, and a revision may have one committed reconciliation.
+The draft stores a hash of every BOM line, reservation, source item version,
+and balance used as its basis, and the preview retains the same complete source
+view even when the submitted lines cover only active reservations. Commit fails
+closed when that basis has changed. A reservation may be settled once, and a
+revision may have one committed reconciliation.
 Command idempotency and deterministic event keys make retries safe.
 
 ## Interface
@@ -44,14 +52,16 @@ reconciliation, saving a version-checked draft, and explicitly committing it.
 Project-scoped agents may use this bounded close-out flow but do not gain general
 inventory-write authority.
 
-The UI reviews one requirement at a time, shows planned, reserved, and
-unaccounted quantities, and previews every stock change before confirmation.
+The UI highlights active reservation-bearing requirements for review, shows
+planned, reserved, and unaccounted quantities, and previews every stock change
+before confirmation. Zero-reservation requirements remain visible in the full
+preview but do not require individual review input.
 Beginner mode uses plain-language outcomes; expert detail exposes ancestry,
 versions, basis hash, evidence, event IDs, audit ID, and replay state.
 
 ## Implemented surface
 
-- Project dossier **Close out** tab with one-line-at-a-time review.
+- Project dossier **Close out** tab with focused active-reservation line review.
 - Server-generated preview before the confirmation action is enabled.
 - Atomic REST read, draft-save, and commit operations beneath a project revision.
 - Matching MCP read, draft-save, and commit tools using bounded BOM scopes.

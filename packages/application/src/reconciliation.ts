@@ -228,10 +228,12 @@ export function buildReconciliationDocument(snapshot: ReconciliationSourceSnapsh
     if (!sourceLines.has(line.bomLineId)) throw new ApplicationError("not_found", `BOM line '${line.bomLineId}' was not found in this revision`);
     seenLines.add(line.bomLineId);
   }
-  if (requireComplete) {
-    const missing = snapshot.lines.find((line) => !seenLines.has(line.id));
-    if (missing !== undefined) throw new ApplicationError("conflict", `BOM line '${missing.id}' has not been reviewed`);
-  }
+  // Close-out completeness is reservation-focused: zero-reservation BOM lines
+  // have no stock state to settle and may remain omitted. The preview still
+  // includes every source line (and the basis below still includes every
+  // source line, reservation, and item) so a later commit is protected from
+  // changes anywhere in the revision. Active reservations are checked below
+  // against their exact submitted accounting.
   // Validate every line's active reservation unit before any preview totals or
   // stock effects are calculated. This keeps malformed mixed-unit state from
   // being hidden by an otherwise plausible numeric sum.
@@ -244,7 +246,6 @@ export function buildReconciliationDocument(snapshot: ReconciliationSourceSnapsh
     const accountedQuantity = submitted?.outcomes.filter((outcome) => outcome.kind !== "reviewed_no_change").reduce((sum, outcome) => sum + outcome.quantity, 0) ?? 0;
     if (accountedQuantity > reservedQuantity) throw new ApplicationError("validation", `BOM line '${line.id}' is over-accounted`);
     if (requireComplete && accountedQuantity !== reservedQuantity && reservedQuantity > 0) throw new ApplicationError("conflict", `BOM line '${line.id}' has unaccounted reserved quantity`);
-    if (requireComplete && reservedQuantity === 0 && submitted?.outcomes.some((outcome) => outcome.kind === "reviewed_no_change") !== true) throw new ApplicationError("conflict", `BOM line '${line.id}' must be explicitly marked reviewed_no_change`);
     return { bomLineId: line.id, reservedQuantity, accountedQuantity, unaccountedQuantity: reservedQuantity - accountedQuantity, outcomeCount: submitted?.outcomes.length ?? 0, unit };
   });
   const basisItems = [...items.values()].sort((a, b) => a.id.localeCompare(b.id)).map((item) => ({ itemId: item.id, version: item.version, onHand: item.quantity, allocated: item.quantity - item.availableQuantity, available: item.availableQuantity, unit: item.unit }));
