@@ -30,6 +30,7 @@ import type {
   InventoryCategoryListQuery as ApiInventoryCategoryListQuery,
 } from "@benchledger/api-contract";
 import type { WorkspaceSecurityStatus as ApiWorkspaceSecurityStatus } from "@benchledger/api-contract";
+import type { ArtifactListQuery as ApiArtifactListQuery, ArtifactScope as ApiArtifactScope, BeginUpload as ApiBeginUpload } from "@benchledger/api-contract";
 
 /** Application aliases intentionally re-export the canonical API contracts. */
 export type CatalogProduct = ApiCatalogProduct;
@@ -46,6 +47,9 @@ export type InventoryCategory = ApiInventoryCategory;
 export type CreateInventoryCategory = ApiCreateInventoryCategory;
 export type UpdateInventoryCategory = ApiUpdateInventoryCategory;
 export type WorkspaceSecurityStatus = ApiWorkspaceSecurityStatus;
+export type ArtifactScope = ApiArtifactScope;
+export type BeginArtifactUpload = ApiBeginUpload;
+export type ArtifactListQuery = ApiArtifactListQuery;
 
 /**
  * Storage-facing workspace access boundary. The encoded hash members are

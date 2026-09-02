@@ -566,10 +566,18 @@ describe("createApplicationBackend translation coverage", () => {
     const backend = createApplicationBackend(service, { publicBaseUrl: "https://maker.example", artifactTransfer: transferProvider });
     const artifacts = await backend.artifacts.list({ projectId: "project-1", role: "design_record", limit: 10 }, context);
     expect(artifacts.items).toHaveLength(1);
-    expect(artifacts.items[0]).toMatchObject({ role: "design_record", status: "candidate" });
-    const workItemArtifacts = await backend.artifacts.list({ projectId: "project-1", workItemId: "work-1", revisionId: "work-revision-1", limit: 10 }, context);
-    expect(service.listArtifacts).toHaveBeenCalledWith("project-1", "work-1", "work-revision-1");
+    expect(artifacts.items[0]).toMatchObject({ role: "design_record", status: "candidate", projectRevisionId: "revision-1" });
+    service.listArtifacts.mockResolvedValueOnce([
+      apiArtifact({ role: "brief", workItemId: "work-1", revisionId: "work-revision-1" }),
+      apiArtifact({ id: "artifact-design", role: "design_record", workItemId: "work-1", revisionId: "work-revision-1" }),
+      apiArtifact({ id: "artifact-cad", role: "cad_source", workItemId: "work-1", revisionId: "work-revision-1" }),
+      apiArtifact({ id: "artifact-3mf", role: "three_mf", workItemId: "work-1", revisionId: "work-revision-1" }),
+      apiArtifact({ id: "artifact-other", role: "other", currentCandidate: false, workItemId: "work-1", revisionId: "work-revision-1" }),
+    ]);
+    const workItemArtifacts = await backend.artifacts.list({ projectId: "project-1", workItemId: "work-1", workItemRevisionId: "work-revision-1", limit: 10 }, context);
+    expect(service.listArtifacts).toHaveBeenLastCalledWith("project-1", { workItemId: "work-1", workItemRevisionId: "work-revision-1" });
     expect(workItemArtifacts.items).toHaveLength(5);
+    expect(workItemArtifacts.items[0]).toMatchObject({ workItemId: "work-1", workItemRevisionId: "work-revision-1" });
     expect(await backend.artifacts.getMetadata({ artifactId: "artifact-1" }, context)).toMatchObject({ role: "step", byteLength: 100 });
     service.getArtifact.mockResolvedValueOnce(apiArtifact({ role: "brief", revisionId: undefined, currentCandidate: false }));
     expect(await backend.artifacts.getMetadata({ artifactId: "artifact-1" }, context)).toMatchObject({ role: "brief", status: "frozen" });
@@ -636,7 +644,7 @@ describe("createApplicationBackend translation coverage", () => {
     await expect(backend.projectScope?.projectForUpload?.("missing")).resolves.toBeNull();
     service.getReservationDetails.mockResolvedValueOnce(null);
     await expect(backend.projectScope?.reservationDetails?.("missing")).resolves.toBeNull();
-    await expect(backend.artifacts.beginUpload({ projectId: "project-1", filename: "part.step", role: "step", mediaType: "model/step", byteLength: 1 }, context)).rejects.toMatchObject({ code: "HOST_TRANSFER_UNAVAILABLE" });
+    await expect(backend.artifacts.beginUpload({ projectId: "project-1", projectRevisionId: "revision-1", filename: "part.step", role: "step", mediaType: "model/step", byteLength: 1, sha256: "a".repeat(64) }, context)).rejects.toMatchObject({ code: "HOST_TRANSFER_UNAVAILABLE" });
     const noTransfer = createApplicationBackend(service);
     await expect(noTransfer.artifacts.downloadMetadata({ artifactId: "artifact-1" }, context)).rejects.toMatchObject({ code: "HOST_TRANSFER_UNAVAILABLE" });
     service.getArtifact.mockResolvedValueOnce(apiArtifact({ revisionId: "other-revision" }));

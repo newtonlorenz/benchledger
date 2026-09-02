@@ -909,7 +909,7 @@ describe("production runtime mappings", () => {
 
     const body = Buffer.from("bound-step");
     const sha256 = createHash("sha256").update(body).digest("hex");
-    const begun = await service.beginArtifactUpload({ projectId: project.data.id, revisionId: revision.data.id, buildConfigurationSnapshotId: snapshot.data.id, role: "step", filename: "bound.step", mediaType: "model/step", byteSize: body.length, sha256 }, context());
+    const begun = await service.beginArtifactUpload({ projectId: project.data.id, projectRevisionId: revision.data.id, buildConfigurationSnapshotId: snapshot.data.id, role: "step", filename: "bound.step", mediaType: "model/step", byteSize: body.length, sha256 }, context());
     await runtime.ports.artifacts.writeUpload(begun.data.id, body);
     const finalized = await service.finalizeArtifactUpload(begun.data.id, context());
     expect(finalized.data).toMatchObject({ id: begun.data.artifactId, revisionId: revision.data.id });
@@ -917,7 +917,7 @@ describe("production runtime mappings", () => {
       { artifact_id: finalized.data.id, build_configuration_snapshot_id: snapshot.data.id, project_revision_id: revision.data.id }
     ]);
 
-    await expect(service.beginArtifactUpload({ projectId: project.data.id, revisionId: laterRevision.data.id, buildConfigurationSnapshotId: snapshot.data.id, role: "step", filename: "wrong-begin.step", mediaType: "model/step", byteSize: body.length, sha256 }, context())).rejects.toMatchObject({ code: "validation" });
+    await expect(service.beginArtifactUpload({ projectId: project.data.id, projectRevisionId: laterRevision.data.id, buildConfigurationSnapshotId: snapshot.data.id, role: "step", filename: "wrong-begin.step", mediaType: "model/step", byteSize: body.length, sha256 }, context())).rejects.toMatchObject({ code: "validation" });
     const directCrossRevision = await runtime.ports.artifacts.beginUpload({ projectId: project.data.id, revisionId: laterRevision.data.id, buildConfigurationSnapshotId: snapshot.data.id, role: "step", filename: "wrong-finalize.step", mediaType: "model/step", byteSize: body.length, sha256 }, context());
     await runtime.ports.artifacts.writeUpload(directCrossRevision.id, body);
     await expect(service.finalizeArtifactUpload(directCrossRevision.id, context())).rejects.toMatchObject({ code: "validation" });
@@ -927,7 +927,7 @@ describe("production runtime mappings", () => {
     const originalBinding = failingBinding.bindBuildConfiguration;
     failingBinding.bindBuildConfiguration = async () => { throw new Error("forced binding failure"); };
     try {
-      const failedBegin = await service.beginArtifactUpload({ projectId: project.data.id, revisionId: revision.data.id, buildConfigurationSnapshotId: snapshot.data.id, role: "step", filename: "failed-binding.step", mediaType: "model/step", byteSize: body.length, sha256 }, context());
+      const failedBegin = await service.beginArtifactUpload({ projectId: project.data.id, projectRevisionId: revision.data.id, buildConfigurationSnapshotId: snapshot.data.id, role: "step", filename: "failed-binding.step", mediaType: "model/step", byteSize: body.length, sha256 }, context());
       await runtime.ports.artifacts.writeUpload(failedBegin.data.id, body);
       await expect(service.finalizeArtifactUpload(failedBegin.data.id, context())).rejects.toThrow("forced binding failure");
       await expect(runtime.ports.artifacts.getArtifact(failedBegin.data.artifactId)).resolves.toBeNull();
@@ -945,7 +945,7 @@ describe("production runtime mappings", () => {
     const service = new ApplicationService(runtime.ports);
     const body = Buffer.from("artifact audit rollback\n");
     const sha256 = createHash("sha256").update(body).digest("hex");
-    const begun = await service.beginArtifactUpload({ projectId: project.id, revisionId: revision.id, role: "step", filename: "rollback.step", mediaType: "model/step", byteSize: body.length, sha256 }, context());
+    const begun = await service.beginArtifactUpload({ projectId: project.id, projectRevisionId: revision.id, role: "step", filename: "rollback.step", mediaType: "model/step", byteSize: body.length, sha256 }, context());
     await runtime.ports.artifacts.writeUpload(begun.data.id, body);
 
     const audit = runtime.ports.audit as typeof runtime.ports.audit & { append: typeof runtime.ports.audit.append };
@@ -967,7 +967,8 @@ describe("production runtime mappings", () => {
   it("removes a filesystem upload session when the audited begin mutation rolls back", async () => {
     const runtime = await makeRuntime();
     const service = new ApplicationService(runtime.ports);
-    await runtime.ports.projects.createProject({ id: "begin-rollback-project", name: "Begin rollback", status: "planned" }, context());
+    const rollbackProject = await runtime.ports.projects.createProject({ id: "begin-rollback-project", name: "Begin rollback", status: "planned" }, context());
+    await runtime.ports.projects.createProjectRevision(rollbackProject.id, { id: "begin-rollback-revision", name: "Initial", status: "concept" }, context());
     const artifactPort = runtime.ports.artifacts;
     const originalBegin = artifactPort.beginUpload.bind(artifactPort);
     let sessionId: string | undefined;
@@ -979,7 +980,7 @@ describe("production runtime mappings", () => {
     const audit = runtime.ports.audit as typeof runtime.ports.audit & { append: typeof runtime.ports.audit.append };
     audit.append = async () => { throw new Error("injected begin audit failure"); };
 
-    await expect(service.beginArtifactUpload({ projectId: "begin-rollback-project", role: "step", filename: "begin-rollback.step", mediaType: "model/step", byteSize: 1, sha256: "a".repeat(64) }, context())).rejects.toThrow("injected begin audit failure");
+    await expect(service.beginArtifactUpload({ projectId: "begin-rollback-project", projectRevisionId: "begin-rollback-revision", role: "step", filename: "begin-rollback.step", mediaType: "model/step", byteSize: 1, sha256: "a".repeat(64) }, context())).rejects.toThrow("injected begin audit failure");
     expect(sessionId).toEqual(expect.any(String));
     const session = await runtime.artifacts.getUploadSession(sessionId!);
     expect(session).toMatchObject({ ok: false, error: { code: "NOT_FOUND" } });

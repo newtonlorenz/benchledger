@@ -18,7 +18,9 @@ import { fromApiQuantityConversion, parseMcpQuantityConversion, toApiQuantityCon
 import { BOM_CONSTRAINT_KEYS } from "./types.js";
 import type {
   Availability,
+  ArtifactScope,
   BomAlternative,
+  ArtifactListScope,
   BeginArtifactUploadInput,
   BomEvaluationInput,
   BomLineCreateInput,
@@ -892,6 +894,34 @@ export function usage(value: unknown): UsageInput {
 
 const artifactRoles = ["source", "cad", "cad_source", "step", "stl", "three_mf", "slicer_project", "gcode", "drawing", "validation", "document", "brief", "design_record", "firmware", "photo", "text", "other"] as const;
 
+/**
+ * Parse the shared artifact scope union used by list and begin.  MCP keeps
+ * projectId as the list resource path, so the no-scope branch is allowed only
+ * for the read-only all-project listing.  A revision-less work-item filter is
+ * deliberately rejected as ambiguous.
+ */
+export function artifactScope(value: UnknownRecord, label?: string, allowAllProject?: false): ArtifactScope;
+export function artifactScope(value: UnknownRecord, label: string, allowAllProject: true): ArtifactListScope;
+export function artifactScope(value: UnknownRecord, label = "arguments", allowAllProject = false): ArtifactListScope {
+  const projectRevisionId = optionalId(value.projectRevisionId, `${label}.projectRevisionId`);
+  const workItemId = optionalId(value.workItemId, `${label}.workItemId`);
+  const workItemRevisionId = optionalId(value.workItemRevisionId, `${label}.workItemRevisionId`);
+  const hasProjectRevision = projectRevisionId !== undefined;
+  const hasWorkItem = workItemId !== undefined;
+  const hasWorkItemRevision = workItemRevisionId !== undefined;
+
+  if (hasProjectRevision && (hasWorkItem || hasWorkItemRevision)) {
+    fail(`${label} must contain exactly one artifact scope: projectRevisionId or workItemId plus workItemRevisionId.`);
+  }
+  if (hasWorkItem !== hasWorkItemRevision) {
+    fail(`${label} must contain both workItemId and workItemRevisionId for a work-item artifact scope.`);
+  }
+  if (hasProjectRevision) return { projectRevisionId };
+  if (hasWorkItem && hasWorkItemRevision) return { workItemId, workItemRevisionId };
+  if (allowAllProject) return {};
+  fail(`${label} must contain exactly one artifact scope: projectRevisionId or workItemId plus workItemRevisionId.`);
+}
+
 function filename(value: unknown, label: string): string {
   const result = stringValue(value, label, { max: 255 });
   if (result === "." || result === ".." || result.includes("/") || result.includes("\\") || result.includes("\0") || result.includes("\n") || result.includes("\r")) {
@@ -908,12 +938,12 @@ function sha256(value: unknown, label: string): string {
 
 export function artifactList(value: unknown): import("./types.js").ArtifactListInput {
   const input = record(value, "arguments");
-  keys(input, ["projectId", "workItemId", "revisionId", "role", "limit", "cursor"], "arguments");
+  keys(input, ["projectId", "projectRevisionId", "workItemId", "workItemRevisionId", "role", "limit", "cursor"], "arguments");
+  const scope = artifactScope(input, "arguments", true);
   return {
     ...parsePageInput({ limit: input.limit, cursor: input.cursor }),
     projectId: id(input.projectId, "arguments.projectId"),
-    workItemId: optionalId(input.workItemId, "arguments.workItemId"),
-    revisionId: optionalId(input.revisionId, "arguments.revisionId"),
+    ...scope,
     role: optionalEnum(input.role, "arguments.role", artifactRoles),
   };
 }
@@ -921,22 +951,32 @@ export function artifactList(value: unknown): import("./types.js").ArtifactListI
 export function beginArtifactUpload(value: unknown): BeginArtifactUploadInput {
   const input = record(value, "arguments");
   keys(input, ["projectId", "projectRevisionId", "buildConfigurationSnapshotId", "workItemId", "workItemRevisionId", "filename", "role", "mediaType", "byteLength", "sha256"], "arguments");
-  const result: BeginArtifactUploadInput = {
+  const scope = artifactScope(input);
+  const common = {
     projectId: id(input.projectId, "arguments.projectId"),
     filename: filename(input.filename, "arguments.filename"),
     role: enumValue(input.role, "arguments.role", artifactRoles),
     mediaType: stringValue(input.mediaType, "arguments.mediaType", { max: 256 }),
     byteLength: integer(input.byteLength, "arguments.byteLength", 0, 2_000_000_000),
+    sha256: sha256(input.sha256, "arguments.sha256"),
   };
-  result.projectRevisionId = optionalId(input.projectRevisionId, "arguments.projectRevisionId");
-  result.buildConfigurationSnapshotId = optionalId(input.buildConfigurationSnapshotId, "arguments.buildConfigurationSnapshotId");
-  result.workItemId = optionalId(input.workItemId, "arguments.workItemId");
-  result.workItemRevisionId = optionalId(input.workItemRevisionId, "arguments.workItemRevisionId");
-  if (result.projectRevisionId !== undefined && result.workItemRevisionId !== undefined) fail("arguments may include projectRevisionId or workItemRevisionId, not both.");
-  if (result.workItemRevisionId !== undefined && result.workItemId === undefined) fail("arguments.workItemId is required when workItemRevisionId is provided.");
-  if (result.projectRevisionId !== undefined && result.workItemId !== undefined) fail("arguments may include projectRevisionId or workItemId, not both.");
-  result.sha256 = sha256(input.sha256, "arguments.sha256");
-  return result;
+  if ("projectRevisionId" in scope) {
+    return {
+      ...common,
+      projectRevisionId: scope.projectRevisionId,
+      buildConfigurationSnapshotId: optionalId(input.buildConfigurationSnapshotId, "arguments.buildConfigurationSnapshotId"),
+    };
+  }
+  if (input.buildConfigurationSnapshotId !== undefined) {
+    fail("arguments.buildConfigurationSnapshotId is only valid for a projectRevisionId artifact scope.");
+  }
+  if ("workItemId" in scope) {
+    return { ...common, workItemId: scope.workItemId, workItemRevisionId: scope.workItemRevisionId };
+  }
+  // artifactScope() has already rejected this path; keep the return type
+  // explicit so a future change cannot accidentally reintroduce an unscoped
+  // upload branch.
+  fail("arguments must contain an artifact scope.");
 }
 
 export function finalizeArtifactUpload(value: unknown): FinalizeArtifactUploadInput {

@@ -185,7 +185,13 @@ their existing exact catalog requirements.
 
 ## Minute 8–9: files and revisions
 
-Use `begin_artifact_upload` with a logical project/work-item/revision and a safe
+Choose one explicit file scope before listing or uploading: the exact current
+project revision, or one exact work item and its current revision. Project-level
+files never inherit the first work item returned by a list. Use the read-only
+all-project view to find retained legacy or unbound records without silently
+reclassifying them. Keep the chosen scope fixed for a multi-file upload run.
+
+Use `begin_artifact_upload` with that explicit revision scope and a safe
 filename when a trusted host bridge is available. Generic MCP returns no live
 URL, header, token, or `_meta` credential and currently fails closed with
 `HOST_TRANSFER_UNAVAILABLE` before creating a session or capability. A future

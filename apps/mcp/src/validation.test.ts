@@ -349,7 +349,9 @@ describe("MCP validation boundary", () => {
   });
 
   it("protects artifact filenames, digests, role selectors, and transfer invariants", () => {
-    expect(artifactList({ projectId: "lamp", workItemId: "base", revisionId: "base-r1", role: "step", limit: 5 })).toMatchObject({ projectId: "lamp", workItemId: "base", revisionId: "base-r1", role: "step" });
+    expect(artifactList({ projectId: "lamp", projectRevisionId: "lamp-r1", role: "step", limit: 5 })).toMatchObject({ projectId: "lamp", projectRevisionId: "lamp-r1", role: "step" });
+    expect(artifactList({ projectId: "lamp", workItemId: "base", workItemRevisionId: "base-r1", role: "step", limit: 5 })).toMatchObject({ projectId: "lamp", workItemId: "base", workItemRevisionId: "base-r1", role: "step" });
+    expect(artifactList({ projectId: "lamp" })).toEqual({ projectId: "lamp", limit: 25, role: undefined });
     expect(beginArtifactUpload({ projectId: "lamp", projectRevisionId: "lamp-r1", buildConfigurationSnapshotId: "build-config-1", filename: "part.step", role: "step", mediaType: "model/step", byteLength: 100, sha256: digest })).toMatchObject({ projectRevisionId: "lamp-r1", buildConfigurationSnapshotId: "build-config-1", filename: "part.step", sha256: digest.toLowerCase() });
     expect(beginArtifactUpload({ projectId: "lamp", workItemId: "base", workItemRevisionId: "base-r1", filename: "part.3mf", role: "three_mf", mediaType: "model/3mf", byteLength: 0, sha256: digest })).toMatchObject({ workItemId: "base", workItemRevisionId: "base-r1", byteLength: 0 });
     expect(finalizeArtifactUpload({ uploadId: "upload-1" })).toEqual({ uploadId: "upload-1" });
@@ -361,6 +363,12 @@ describe("MCP validation boundary", () => {
     expectInvalid(() => beginArtifactUpload({ projectId: "lamp", filename: "part.step", role: "step", mediaType: "model/step", byteLength: 10, sha256: "not-a-digest" }));
     expectInvalid(() => beginArtifactUpload({ projectId: "lamp", projectRevisionId: "lamp-r1", workItemId: "base", filename: "part.step", role: "step", mediaType: "model/step", byteLength: 10, sha256: digest }));
     expectInvalid(() => beginArtifactUpload({ projectId: "lamp", workItemRevisionId: "base-r1", filename: "part.step", role: "step", mediaType: "model/step", byteLength: 10, sha256: digest }));
+    expectInvalid(() => beginArtifactUpload({ projectId: "lamp", workItemId: "base", filename: "part.step", role: "step", mediaType: "model/step", byteLength: 10, sha256: digest }));
+    expectInvalid(() => beginArtifactUpload({ projectId: "lamp", projectRevisionId: "lamp-r1", buildConfigurationSnapshotId: "build-config-1", workItemId: "base", workItemRevisionId: "base-r1", filename: "part.step", role: "step", mediaType: "model/step", byteLength: 10, sha256: digest }));
+    expectInvalid(() => beginArtifactUpload({ projectId: "lamp", revisionId: "legacy-revision", filename: "part.step", role: "step", mediaType: "model/step", byteLength: 10, sha256: digest }));
+    expectInvalid(() => artifactList({ projectId: "lamp", revisionId: "legacy-revision" }));
+    expectInvalid(() => artifactList({ projectId: "lamp", workItemId: "base" }));
+    expectInvalid(() => artifactList({ projectId: "lamp", projectRevisionId: "lamp-r1", workItemId: "base", workItemRevisionId: "base-r1" }));
     expectInvalid(() => artifactList({ projectId: "lamp", role: "unknown" }));
   });
 

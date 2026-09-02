@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   artifactBuildConfigurationBindingSchema,
+  artifactListQuerySchema,
+  artifactScopeSchema,
   beginUploadSchema,
   buildConfigurationSnapshotSchema,
   createBuildConfigurationSnapshotSchema,
@@ -188,17 +190,56 @@ describe("v2 compound inventory/profile schema", () => {
 });
 
 describe("artifact upload contract", () => {
-  it("accepts an optional build configuration binding on begin", () => {
+  it("accepts exactly one revisioned artifact scope", () => {
     expect(beginUploadSchema.parse({
       projectId: "project-1",
-      revisionId: "revision-1",
+      projectRevisionId: "revision-1",
       buildConfigurationSnapshotId: "build-config-1",
       role: "step",
       filename: "part.step",
       mediaType: "model/step",
       byteSize: 1,
       sha256: "a".repeat(64),
-    })).toMatchObject({ buildConfigurationSnapshotId: "build-config-1" });
+    })).toMatchObject({ projectRevisionId: "revision-1", buildConfigurationSnapshotId: "build-config-1" });
+
+    expect(beginUploadSchema.parse({
+      projectId: "project-1",
+      workItemId: "work-1",
+      workItemRevisionId: "work-revision-1",
+      role: "step",
+      filename: "part.step",
+      mediaType: "model/step",
+      byteSize: 1,
+      sha256: "a".repeat(64),
+    })).toMatchObject({ workItemId: "work-1", workItemRevisionId: "work-revision-1" });
+
+    for (const invalid of [
+      { projectId: "project-1", role: "step", filename: "part.step", mediaType: "model/step", byteSize: 1, sha256: "a".repeat(64) },
+      { projectId: "project-1", revisionId: "legacy-revision", role: "step", filename: "part.step", mediaType: "model/step", byteSize: 1, sha256: "a".repeat(64) },
+      { projectId: "project-1", projectRevisionId: "revision-1", workItemId: "work-1", workItemRevisionId: "work-revision-1", role: "step", filename: "part.step", mediaType: "model/step", byteSize: 1, sha256: "a".repeat(64) },
+      { projectId: "project-1", workItemId: "work-1", role: "step", filename: "part.step", mediaType: "model/step", byteSize: 1, sha256: "a".repeat(64) },
+      { projectId: "project-1", workItemId: "work-1", workItemRevisionId: "work-revision-1", buildConfigurationSnapshotId: "build-config-1", role: "step", filename: "part.step", mediaType: "model/step", byteSize: 1, sha256: "a".repeat(64) },
+    ]) {
+      expect(() => beginUploadSchema.parse(invalid)).toThrow();
+    }
+  });
+
+  it("exposes a strict scope union and exact revision-aware listing filters", () => {
+    expect(artifactScopeSchema.parse({ projectRevisionId: "revision-1" })).toEqual({ projectRevisionId: "revision-1" });
+    expect(artifactScopeSchema.parse({ workItemId: "work-1", workItemRevisionId: "work-revision-1" })).toEqual({ workItemId: "work-1", workItemRevisionId: "work-revision-1" });
+    expect(artifactListQuerySchema.parse({})).toEqual({});
+    expect(artifactListQuerySchema.parse({ projectRevisionId: "revision-1", role: "step" })).toMatchObject({ projectRevisionId: "revision-1", role: "step" });
+    expect(artifactListQuerySchema.parse({ workItemId: "work-1", workItemRevisionId: "work-revision-1", role: "step" })).toMatchObject({ workItemId: "work-1", workItemRevisionId: "work-revision-1", role: "step" });
+    for (const invalid of [
+      { workItemId: "work-1" },
+      { workItemRevisionId: "work-revision-1" },
+      { projectRevisionId: "revision-1", workItemId: "work-1", workItemRevisionId: "work-revision-1" },
+      { projectRevisionId: "revision-1", workItemId: "work-1" },
+      { projectRevisionId: "revision-1", limit: 10 },
+      { projectRevisionId: "revision-1", cursor: "next" },
+    ]) {
+      expect(() => artifactListQuerySchema.parse(invalid)).toThrow();
+    }
   });
 });
 

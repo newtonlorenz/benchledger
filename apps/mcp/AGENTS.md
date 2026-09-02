@@ -271,11 +271,19 @@ series of usage and reservation-release writes.
 ## 6. Store CAD and build files (minute 8–9)
 
 Files are versioned project artifacts. Use `begin_artifact_upload` with the
-logical project/work-item/revision and a safe filename when a trusted host
-bridge is available. Generic MCP never receives a live URL, header, token, or
-`_meta` credential. Until a transactional trusted-host bridge exists, the tool
-returns `HOST_TRANSFER_UNAVAILABLE` before creating a session or minting a
-capability.
+logical project and exactly one revisioned scope: `projectRevisionId` for a
+project artifact, or `workItemId` plus `workItemRevisionId` for a work-item
+artifact. The scope fields are a closed union: missing, mixed, and
+revision-less work-item scopes are rejected. `buildConfigurationSnapshotId` is
+valid only with a project revision. Use `list_artifacts` with only `projectId`
+for the read-only all-artifacts-in-project view, or add one exact scope from
+the same union; the legacy generic `revisionId` filter is not accepted. Every
+listed artifact exposes its exact `projectRevisionId` or
+`workItemId`/`workItemRevisionId` when that ancestry is present.
+
+Generic MCP never receives a live URL, header, token, or `_meta` credential.
+Until a transactional trusted-host bridge exists, the upload tool returns
+`HOST_TRANSFER_UNAVAILABLE` before creating a session or minting a capability.
 
 The typed `finalize_artifact_upload` command takes only the upload ID and lets
 the application verify the declaration recorded at begin time against stored

@@ -9,6 +9,7 @@ import {
   updateCatalogProductSchema, inventoryProductProfileSchema,
   createInventoryProductProfileSchema, updateInventoryProductProfileSchema,
   buildConfigurationSnapshotSchema, createBuildConfigurationSnapshotSchema,
+  beginUploadSchema, artifactListQuerySchema,
   createInventoryWithProductProfileSchema,
   inventoryItemSchema,
   saveReconciliationDraftSchema, commitReconciliationSchema, reconciliationDraftSchema,
@@ -24,7 +25,7 @@ import type {
   UpdateCatalogProduct, InventoryProductProfile, CreateInventoryProductProfile,
   UpdateInventoryProductProfile, BuildConfigurationSnapshot, CreateBuildConfigurationSnapshot,
   ReconciliationDraft, ReconciliationCommit, CommitReconciliation, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory, WorkspaceSecurityMutation, ProjectTombstone,
-  ProjectSetupProposal, ProjectSetupPreview, CommitProjectSetup, ProjectSetupCommitResult, ProjectSetupFieldError
+  ProjectSetupProposal, ProjectSetupPreview, CommitProjectSetup, ProjectSetupCommitResult, ProjectSetupFieldError, BeginUpload as ApiBeginUpload, ArtifactListQuery
 } from "@benchledger/api-contract";
 import { ApplicationError, conflict, notFound, projectRemoved } from "./errors.js";
 import { isLedResistorRequirement, resolveBomSpecification } from "@benchledger/domain";
@@ -750,6 +751,29 @@ function safeFilename(filename: string): string {
     throw new ApplicationError("unsupported_media", "This file type is not accepted");
   }
   return trimmed;
+}
+
+/**
+ * Translate the strict public upload shape to the storage-facing shape used by
+ * existing artifact adapters. Every application caller must cross the strict
+ * public revisioned contract before this normalization step.
+ */
+function normalizeArtifactUpload(input: ApiBeginUpload): BeginUploadInput {
+  const result = beginUploadSchema.safeParse(input);
+  if (!result.success) {
+    throw new ApplicationError("validation", "Artifact upload must contain exactly one revisioned scope", { issues: result.error.issues });
+  }
+  const parsed = result.data;
+  if ("projectRevisionId" in parsed) {
+    const { projectRevisionId, buildConfigurationSnapshotId, ...rest } = parsed;
+    return {
+      ...rest,
+      revisionId: projectRevisionId,
+      ...(buildConfigurationSnapshotId === undefined ? {} : { buildConfigurationSnapshotId }),
+    } as BeginUploadInput;
+  }
+  const { workItemId, workItemRevisionId, ...rest } = parsed;
+  return { ...rest, workItemId, revisionId: workItemRevisionId } as BeginUploadInput;
 }
 
 function requireId(value: string, label: string): string {
@@ -2191,10 +2215,31 @@ export class ApplicationService {
     });
   }
 
-  async listArtifacts(projectId: string, workItemId?: string, revisionId?: string) {
+  async listArtifacts(projectId: string, query?: ArtifactListQuery) {
     const parsedProjectId = requireId(projectId, "project id");
     await this.assertProjectReadable(parsedProjectId);
-    return this.ports.unitOfWork.exclusive(() => this.ports.artifacts.listArtifacts(parsedProjectId, workItemId, revisionId));
+    const parsedQuery = artifactListQuerySchema.parse(query ?? {});
+    let workItemId: string | undefined;
+    let revisionId: string | undefined;
+    if ("projectRevisionId" in parsedQuery) {
+      const revision = await this.ports.projects.getProjectRevision(parsedQuery.projectRevisionId);
+      const collidingWorkRevision = await this.ports.projects.getWorkItemRevision(parsedQuery.projectRevisionId);
+      if (revision === null || revision.projectId !== parsedProjectId || collidingWorkRevision !== null) {
+        throw notFound("Project revision", parsedQuery.projectRevisionId);
+      }
+      revisionId = parsedQuery.projectRevisionId;
+    } else if ("workItemRevisionId" in parsedQuery) {
+      const workItem = await this.ports.projects.getWorkItem(parsedQuery.workItemId);
+      const revision = await this.ports.projects.getWorkItemRevision(parsedQuery.workItemRevisionId);
+      const collidingProjectRevision = await this.ports.projects.getProjectRevision(parsedQuery.workItemRevisionId);
+      if (workItem === null || workItem.projectId !== parsedProjectId || revision === null || revision.projectId !== parsedProjectId || revision.workItemId !== parsedQuery.workItemId || collidingProjectRevision !== null) {
+        throw notFound("Work-item revision", parsedQuery.workItemRevisionId);
+      }
+      workItemId = parsedQuery.workItemId;
+      revisionId = parsedQuery.workItemRevisionId;
+    }
+    const artifacts = await this.ports.unitOfWork.exclusive(() => this.ports.artifacts.listArtifacts(parsedProjectId, workItemId, revisionId));
+    return parsedQuery.role === undefined ? artifacts : artifacts.filter((artifact) => artifact.role === parsedQuery.role);
   }
 
   async getArtifact(id: string) {
@@ -2215,15 +2260,18 @@ export class ApplicationService {
     });
   }
 
-  async beginArtifactUpload(input: BeginUploadInput, ctx: RequestContext): Promise<Mutation<UploadSession>> {
-    if (input.byteSize <= 0 || input.byteSize > MAX_UPLOAD_BYTES) throw new ApplicationError("quota_exceeded", "Upload exceeds the per-file limit");
-    const filename = safeFilename(input.filename);
-    if (!ALLOWED_BINARY_MEDIA.has(input.mediaType) && !input.mediaType.startsWith("text/")) {
+  async beginArtifactUpload(input: ApiBeginUpload, ctx: RequestContext): Promise<Mutation<UploadSession>> {
+    const normalizedInput = normalizeArtifactUpload(input);
+    // Validate ancestry before entering mutate(): malformed/cross-project
+    // requests must not create a session, audit row, or idempotency record.
+    await this.assertArtifactAncestry(normalizedInput);
+    if (normalizedInput.byteSize <= 0 || normalizedInput.byteSize > MAX_UPLOAD_BYTES) throw new ApplicationError("quota_exceeded", "Upload exceeds the per-file limit");
+    const filename = safeFilename(normalizedInput.filename);
+    if (!ALLOWED_BINARY_MEDIA.has(normalizedInput.mediaType) && !normalizedInput.mediaType.startsWith("text/")) {
       throw new ApplicationError("unsupported_media", "This media type is not accepted");
     }
-    const normalized = { ...input, filename };
-    return this.mutate(ctx, "artifact.upload.begin", "project", input.projectId, async () => {
-      await this.assertArtifactAncestry(normalized);
+    const normalized = { ...normalizedInput, filename };
+    return this.mutate(ctx, "artifact.upload.begin", "project", normalized.projectId, async () => {
       const session = await this.ports.artifacts.beginUpload(normalized, ctx);
       return {
         value: session,
@@ -2372,7 +2420,9 @@ export class ApplicationService {
     if (input.buildConfigurationSnapshotId !== undefined && (input.revisionId === undefined || input.workItemId !== undefined)) {
       throw new ApplicationError("validation", "A build configuration can only bind to a project-revision upload");
     }
-    if (input.revisionId === undefined) return;
+    if (input.revisionId === undefined) {
+      throw new ApplicationError("validation", "Artifact upload must be anchored to exactly one revisioned scope");
+    }
     const revisionId = requireId(input.revisionId, "revision id");
     const projectRevision = await this.ports.projects.getProjectRevision(revisionId);
     const workItemRevision = await this.ports.projects.getWorkItemRevision(revisionId);

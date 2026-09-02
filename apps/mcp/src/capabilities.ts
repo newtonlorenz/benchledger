@@ -255,6 +255,48 @@ const reconciliationLineProperty: JsonObject = object({
   outcomes: array(reconciliationOutcomeProperty),
 }, ["bomLineId", "outcomes"]);
 
+const artifactScopeProjectRevisionProperties = {
+  projectId: idProperty("Project identifier."),
+  projectRevisionId: idProperty("Exact project revision identifier."),
+};
+const artifactScopeWorkItemRevisionProperties = {
+  projectId: idProperty("Project identifier."),
+  workItemId: idProperty("Work-item identifier."),
+  workItemRevisionId: idProperty("Exact work-item revision identifier."),
+};
+const artifactListProperties = {
+  ...pageProperties,
+  role: string("Optional artifact role filter."),
+};
+const artifactListInputSchema: JsonObject = {
+  oneOf: [
+    object({ ...artifactListProperties, projectId: idProperty("Project identifier; lists all artifact revisions in this project when no exact scope is supplied.") }, ["projectId"]),
+    object({ ...artifactListProperties, ...artifactScopeProjectRevisionProperties }, ["projectId", "projectRevisionId"]),
+    object({ ...artifactListProperties, ...artifactScopeWorkItemRevisionProperties }, ["projectId", "workItemId", "workItemRevisionId"]),
+  ],
+};
+const artifactUploadCommonProperties = {
+  projectId: idProperty("Project identifier."),
+  filename: string("Safe filename, not a path."),
+  role: string("source, cad, cad_source, step, stl, three_mf, slicer_project, gcode, drawing, validation, document, brief, design_record, firmware, photo, text, or other."),
+  mediaType: string(),
+  byteLength: integer("Declared byte length; the application verifies it before finalization."),
+  sha256: string("Required SHA-256 digest of the bytes to be uploaded."),
+};
+const artifactUploadInputSchema: JsonObject = {
+  oneOf: [
+    object({
+      ...artifactUploadCommonProperties,
+      projectRevisionId: idProperty("Exact project revision identifier."),
+      buildConfigurationSnapshotId: idProperty("Optional immutable build-configuration snapshot to bind at finalize."),
+    }, ["projectId", "projectRevisionId", "filename", "role", "mediaType", "byteLength", "sha256"]),
+    object({
+      ...artifactUploadCommonProperties,
+      ...artifactScopeWorkItemRevisionProperties,
+    }, ["projectId", "workItemId", "workItemRevisionId", "filename", "role", "mediaType", "byteLength", "sha256"]),
+  ],
+};
+
 export const TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
   tool("read_inventory_summary", "Read a bounded inventory summary and category counts.", "inventory:read", false, pageProperties),
   tool("list_inventory", "List equipment, tools, consumables, and electronics with evidence-aware availability.", "inventory:read", false, { ...filteredPageProperties, query: string(), category: string("Semantic item kind."), categoryNodeId: categoryIdProperty("Exact user-managed category or subcategory."), unassigned: boolean("Only inventory without a managed category assignment; cannot be combined with categoryNodeId."), availability: string(), location: string() }),
@@ -319,9 +361,9 @@ export const TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
   tool("list_build_configurations", "List immutable build-configuration snapshots for one project revision with bounded pagination.", "projects:read", false, { ...pageProperties, projectRevisionId: idProperty("Project revision identifier.") }, ["projectRevisionId"]),
   tool("read_build_configuration", "Read one immutable build-configuration snapshot, including copied product/profile facts for exact selections and physicalLabel/physicalEvidence for physical-only selections. Physical-only identity infers no compatibility, availability, or catalog identity; explicitUnknowns keep it design-open and production approval blocked.", "projects:read", false, { buildConfigurationId: idProperty("Build-configuration snapshot identifier.") }, ["buildConfigurationId"]),
 
-  tool("list_artifacts", "List versioned project files by project, work item, revision, or role.", "artifacts:read", false, { ...pageProperties, projectId: idProperty("Project identifier."), workItemId: idProperty(), revisionId: idProperty(), role: string() }, ["projectId"]),
+  { name: "list_artifacts", description: "List versioned artifact metadata read-only. Supply only projectId to list every artifact revision in that project, or supply exactly one projectRevisionId or workItemId plus workItemRevisionId for an exact scope; legacy revisionId and revision-less work-item filters are invalid.", requiredScope: "artifacts:read", mutating: false, inputSchema: artifactListInputSchema },
   tool("read_artifact_metadata", "Read file metadata, hash, provenance, role, and revision without downloading bytes.", "artifacts:read", false, { artifactId: idProperty("Artifact identifier."), revisionId: idProperty() }, ["artifactId"]),
-  tool("begin_artifact_upload", "Start a bounded upload session when a transactional trusted-host bridge is available. Until then, generic MCP returns HOST_TRANSFER_UNAVAILABLE before creating a session or capability and never receives live URLs, bearer headers, or _meta credentials. Use projectRevisionId alone for a project artifact, or workItemId plus workItemRevisionId for a work-item artifact. An optional buildConfigurationSnapshotId is bound only after finalization and must belong to the same project revision.", "artifacts:write", true, { projectId: idProperty("Project identifier."), projectRevisionId: idProperty("Project revision identifier; mutually exclusive with workItemId."), buildConfigurationSnapshotId: idProperty("Optional immutable build-configuration snapshot to bind at finalize."), workItemId: idProperty("Work-item identifier; pair with workItemRevisionId when revision-bound."), workItemRevisionId: idProperty("Work-item revision identifier; requires workItemId and is mutually exclusive with projectRevisionId."), filename: string(), role: string("source, cad, cad_source, step, stl, three_mf, slicer_project, gcode, drawing, validation, document, brief, design_record, firmware, photo, text, or other."), mediaType: string(), byteLength: integer(), sha256: string("Required SHA-256 digest of the bytes to be uploaded.") }, ["projectId", "filename", "role", "mediaType", "byteLength", "sha256"]),
+  { name: "begin_artifact_upload", description: "Start a bounded upload session when a transactional trusted-host bridge is available. Until then, generic MCP returns HOST_TRANSFER_UNAVAILABLE before creating a session or capability and never receives live URLs, bearer headers, or _meta credentials. Use exactly one scope: projectRevisionId for a project artifact, or workItemId plus workItemRevisionId for a work-item artifact. An optional buildConfigurationSnapshotId is valid only with projectRevisionId.", requiredScope: "artifacts:write", mutating: true, inputSchema: artifactUploadInputSchema },
   tool("finalize_artifact_upload", "Finalize an upload after the application verifies the declared byte length and SHA-256 against the stored bytes.", "artifacts:write", true, { uploadId: idProperty("Upload session identifier.") }, ["uploadId"]),
   tool("read_artifact_download_metadata", "Return artifact download metadata when a transactional trusted-host bridge is available. Until then, generic MCP returns HOST_TRANSFER_UNAVAILABLE before reading the artifact or minting a capability; it never returns a live URL, bearer header, _meta credential, or file bytes.", "artifacts:read", false, { artifactId: idProperty("Artifact identifier."), revisionId: idProperty() }, ["artifactId"]),
   tool("download_artifact", "Compatibility alias for read_artifact_download_metadata; generic MCP currently returns HOST_TRANSFER_UNAVAILABLE and never returns a live URL, credential, or file bytes.", "artifacts:read", false, { artifactId: idProperty("Artifact identifier."), revisionId: idProperty() }, ["artifactId"]),
@@ -350,7 +392,7 @@ export const RESOURCE_TEMPLATES: readonly McpResourceTemplate[] = [
   { uriTemplate: "benchledger://build-configurations/{buildConfigurationId}", name: "Build configuration", description: "One immutable build-configuration snapshot; physical-only filament selections return copied physicalLabel/physicalEvidence and remain design-open until catalog identity is resolved.", mimeType: "application/json" },
   { uriTemplate: "benchledger://projects/{projectId}/revisions/{revisionId}/reconciliation", name: "Project reconciliation", description: "Review-only close-out draft and server preview for a project revision; reading it never changes stock.", mimeType: "application/json" },
   { uriTemplate: "benchledger://projects/{projectId}/bom", name: "Project BOM", description: "Bounded BOM lines for a project revision/workspace.", mimeType: "application/json" },
-  { uriTemplate: "benchledger://projects/{projectId}/artifacts", name: "Project artifacts", description: "Bounded artifact metadata; bytes remain behind authenticated host-mediated transfer. Generic MCP exposes no live URL, header, token, or file bytes.", mimeType: "application/json" },
+  { uriTemplate: "benchledger://projects/{projectId}/artifacts", name: "Project artifacts", description: "Bounded read-only artifact metadata for all artifacts in a project; exact revision filters are available through list_artifacts. Bytes remain behind authenticated host-mediated transfer. Generic MCP exposes no live URL, header, token, or file bytes.", mimeType: "application/json" },
 ];
 
 export const CAPABILITY_DOCUMENT: JsonObject = {
@@ -398,6 +440,7 @@ export const CAPABILITY_DOCUMENT: JsonObject = {
   scopeBehavior: {
     projectTokens: "A token with projectIds may address only those projects. Project list results are allow-list filtered; workspace-wide aggregate endpoints are rejected.",
     indirectProjectIds: "Revision, work-item, BOM-line, reservation, artifact, and upload identifiers are resolved from durable host state before dispatch. If ancestry cannot be proven, the request is rejected; request-local ID caches are never authoritative.",
+    artifacts: "Artifact begin and exact list filters use one closed union: projectRevisionId, or workItemId plus workItemRevisionId. Missing, mixed, legacy revisionId, and revision-less work-item scopes are rejected. list_artifacts with only projectId is the read-only all-artifacts-in-project view, and each returned artifact preserves its exact revision ancestry.",
     inventory: "The inventory catalog and user-managed category taxonomy are shared workspace context. Project-scoped tokens may read inventory, categories, and stock history for matching, but cannot create, update, bulk-update, retire, commission, count, record stock events, or mutate categories. Uncertain delivery/order evidence can be promoted only through commission_inventory_item with an observed quantity, commissioned provenance, expectedVersion, and a distinct idempotency key; the prior evidence remains in the append-only count event. Bulk metadata edits require 1-100 explicit itemId/expectedVersion targets and leave no-op rows unaudited.",
     atomicInventoryProfile: "create_inventory_with_product_profile requires both inventory:write and catalog:write on an unscoped token. Its item and profile commit as one audited, idempotent command; a failed profile, audit, idempotency, or binding step compensates the just-created records.",
     catalog: "The runtime starts with a curated, versioned starter catalog of major FFF printer and filament identities. Exact catalog products are shared workspace context; project-scoped tokens may search and read products for in-scope snapshots, but only unscoped catalog tokens may create or correct products. Curated records may expose read-only manufacturer provenance; provenance is excluded from create/update inputs and is not searched as identity.",

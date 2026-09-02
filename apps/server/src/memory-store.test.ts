@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { CatalogProduct } from "@benchledger/api-contract";
 import { ApplicationService } from "@benchledger/application";
@@ -541,5 +542,56 @@ describe("Memory build configuration persistence", () => {
     await expect(runtime.ports.buildConfigurations!.getBuildConfiguration(snapshot.data.id)).rejects.toThrow(/hash|integrity/i);
     await expect(runtime.ports.buildConfigurations!.getLatestBuildConfiguration(revision.data.id)).rejects.toThrow(/hash|integrity/i);
     await expect(runtime.ports.buildConfigurations!.listBuildConfigurations(revision.data.id, { limit: 10 })).rejects.toThrow(/hash|integrity/i);
+  });
+});
+
+describe("Memory artifact persistence", () => {
+  it("keeps project and work-item revision scopes exact while retaining legacy artifacts in all-project reads", async () => {
+    const runtime = createMemoryRuntime();
+    const projectId = "memory-artifact-scope-project";
+    const projectRevisionId = "memory-artifact-scope-project-revision";
+    const workItemId = "memory-artifact-scope-work-item";
+    const workItemRevisionId = "memory-artifact-scope-work-revision";
+    const created: Array<{ readonly id: string; readonly body: Buffer }> = [];
+
+    const finalize = async (
+      suffix: string,
+      input: { readonly workItemId?: string; readonly revisionId?: string },
+      body: Buffer
+    ) => {
+      const session = await runtime.ports.artifacts.beginUpload({
+        projectId,
+        ...(input.workItemId === undefined ? {} : { workItemId: input.workItemId }),
+        ...(input.revisionId === undefined ? {} : { revisionId: input.revisionId }),
+        role: "step",
+        filename: `${suffix}.step`,
+        mediaType: "model/step",
+        byteSize: body.length,
+        sha256: createHash("sha256").update(body).digest("hex"),
+      }, { actor: "memory-artifact-scope", source: "api", correlationId: "memory-artifact-scope", scopes: new Set(["read", "write"]) });
+      await runtime.ports.artifacts.writeUpload(session.id, body);
+      const artifact = await runtime.ports.artifacts.finalizeUpload(session.id, { actor: "memory-artifact-scope", source: "api", correlationId: "memory-artifact-scope", scopes: new Set(["read", "write"]) });
+      created.push({ id: artifact.id, body });
+      return artifact;
+    };
+
+    const projectArtifact = await finalize("project", { revisionId: projectRevisionId }, Buffer.from("project artifact bytes\n"));
+    const workArtifact = await finalize("work", { workItemId, revisionId: projectRevisionId }, Buffer.from("work artifact bytes\n"));
+    const laterWorkArtifact = await finalize("later-work", { workItemId, revisionId: workItemRevisionId }, Buffer.from("later work artifact bytes\n"));
+    await finalize("legacy", {}, Buffer.from("legacy artifact bytes\n"));
+
+    const ids = async (requestedWorkItemId?: string, requestedRevisionId?: string) => new Set(
+      (await runtime.ports.artifacts.listArtifacts(projectId, requestedWorkItemId, requestedRevisionId)).map((artifact) => artifact.id)
+    );
+    expect(await ids(undefined, projectRevisionId)).toEqual(new Set([projectArtifact.id]));
+    expect(await ids(workItemId, workItemRevisionId)).toEqual(new Set([laterWorkArtifact.id]));
+    expect(await ids(workItemId, projectRevisionId)).toEqual(new Set([workArtifact.id]));
+    expect(await ids(workItemId)).toEqual(new Set([workArtifact.id, laterWorkArtifact.id]));
+    expect(await ids()).toEqual(new Set(created.map((artifact) => artifact.id)));
+
+    const before = await Promise.all(created.map((artifact) => runtime.ports.artifacts.readArtifact(artifact.id)));
+    await runtime.ports.artifacts.listArtifacts(projectId);
+    const after = await Promise.all(created.map((artifact) => runtime.ports.artifacts.readArtifact(artifact.id)));
+    expect(after).toEqual(before);
   });
 });

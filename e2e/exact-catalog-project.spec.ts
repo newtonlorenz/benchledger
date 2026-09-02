@@ -249,7 +249,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   const beginUploadBody = beginUpload.request().postDataJSON() as Record<string, unknown>;
   expect(beginUploadBody).toMatchObject({
     projectId: createdProjectId,
-    revisionId: snapshot?.projectRevisionId,
+    projectRevisionId: snapshot?.projectRevisionId,
     filename: "e2e-bound-setup.step",
     buildConfigurationSnapshotId: snapshotId,
   });
