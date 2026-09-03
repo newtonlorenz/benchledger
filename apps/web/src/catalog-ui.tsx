@@ -9,7 +9,7 @@ import type {
   InventoryProductProfile,
   LinkState
 } from "./domain";
-import { buildSetupSummary, catalogProductLabel, exactProductLabel, isUnknownFilamentSelection } from "./domain";
+import { buildSetupSummary, catalogProductLabel, exactProductLabel, isExactProductIdentityComplete, isUnknownFilamentSelection } from "./domain";
 import type { CatalogProductDraft, CatalogProductPage, CatalogSearchOptions, ExactInventoryInput } from "./api";
 import { Icon } from "./icons";
 import { inventoryCandidateLabel, inventoryCandidateText } from "./inventory-identity";
@@ -446,9 +446,10 @@ export function buildItemEligibility(item: InventoryItem, category: "Printers" |
   if (item.category !== category) return { eligible: false, reason: `Choose a ${category === "Printers" ? "printer" : "filament"} inventory item.` };
   if (item.unitStatus === "needs_correction") return { eligible: false, reason: item.unitCorrectionReason ?? "Correct this item's unit before using it in a build setup." };
   if (category === "Printers") {
-    return item.catalogProduct
+    if (!item.catalogProduct) return { eligible: false, reason: "An exact printer product link is required for setup." };
+    return isExactProductIdentityComplete(item)
       ? { eligible: true }
-      : { eligible: false, reason: "An exact printer product link is required for setup." };
+      : { eligible: false, reason: "The linked catalog product does not include this printer's recorded bundle or variant." };
   }
   // Exact catalog-backed filament keeps the established setup path. The
   // physical evidence and availability gate only applies when no catalog

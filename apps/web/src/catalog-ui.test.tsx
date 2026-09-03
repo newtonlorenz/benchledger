@@ -186,6 +186,19 @@ describe("exact-product language and setup summary", () => {
     expect(exactProductLabel(confirmedPrinter)).toBe("Exact product confirmed");
   });
 
+  it("does not call a generic printer record an exact bundle identity", () => {
+    const printer = inventory.find((item) => item.category === "Printers")!;
+    const ordinaryPrinter = inventory.find((item) => item.id === "eq-ender")!;
+    const ordinaryProduct = catalogProducts.find((product) => product.id === "catalog-ender-v3-se")!;
+    const { variant: _variant, exactVariant: _exactVariant, ...genericH2D } = printerProduct;
+    const incompletePrinter = exactItem(printer, genericH2D);
+
+    expect(exactProductLabel(incompletePrinter)).toBe("Product identity incomplete");
+    expect(buildItemEligibility(incompletePrinter, "Printers")).toMatchObject({ eligible: false, reason: expect.stringContaining("bundle or variant") });
+    expect(exactProductLabel(exactItem(printer, { ...genericH2D, exactVariant: "AMS Combo" }))).toBe("Exact product confirmed");
+    expect(exactProductLabel(exactItem(ordinaryPrinter, ordinaryProduct))).toBe("Exact product confirmed");
+  });
+
   it("gives beginners a plain setup sentence and experts the trace fields", () => {
     const printer = exactItem(inventory.find((item) => item.category === "Printers")!, printerProduct);
     const filament = exactItem(inventory.find((item) => item.category === "Filament")!, filamentProduct);

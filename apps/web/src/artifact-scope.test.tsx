@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { InventoryDrawer, ProjectExpertContext, ProjectFiles } from "./App";
 import type { Artifact, Project } from "./domain";
-import { inventory } from "./mock-data";
+import { catalogProducts, inventory } from "./mock-data";
 import { artifactIdentityLabel, artifactRevisionLabel, artifactScopeChoices, artifactScopeIdentity, defaultArtifactScope, filterArtifactsForScope } from "./artifact-scope";
 
 const project: Project = {
@@ -112,6 +112,22 @@ describe("artifact scope selection", () => {
     expect(beginnerMarkup).not.toContain("Unassigned legacy item");
     const expertMarkup = renderToStaticMarkup(<InventoryDrawer {...props} expert />);
     expect(expertMarkup).toContain("Unassigned legacy item");
+  });
+
+  it("renders an incomplete bundle link honestly", () => {
+    const item = inventory.find((candidate) => candidate.id === "eq-h2d")!;
+    const catalogProduct = catalogProducts.find((candidate) => candidate.id === "catalog-h2d")!;
+    const { variant: _variant, exactVariant: _exactVariant, ...genericProduct } = catalogProduct;
+    const incompleteItem = {
+      ...item,
+      catalogProduct: genericProduct,
+      productProfile: { inventoryItemId: item.id, catalogProductId: genericProduct.id, linkState: "confirmed" as const }
+    };
+    const markup = renderToStaticMarkup(<InventoryDrawer item={incompleteItem} categories={[]} categoriesLoading={false} expert={false} onClose={() => undefined} onCount={async () => incompleteItem} onCommission={async () => incompleteItem} onUpdate={async () => incompleteItem} />);
+
+    expect(markup).toContain("Product identity incomplete");
+    expect(markup).toContain("does not include the recorded bundle or variant");
+    expect(markup).not.toContain("Product identity confirmed for setup matching");
   });
 
   it("offers a history-safe corrected replacement for an invalid legacy unit", () => {

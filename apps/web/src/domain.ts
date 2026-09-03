@@ -551,13 +551,29 @@ export function filterInventory(items: InventoryItem[], query: string, filters?:
   });
 }
 
-export function isExactProductConfirmed(item: Pick<InventoryItem, "category" | "catalogProduct" | "productProfile">): boolean {
-  return (item.category === "Filament" || item.category === "Printers")
-    && item.catalogProduct !== undefined
-    && item.productProfile?.linkState === "confirmed";
+type ExactProductItem = Pick<InventoryItem, "category" | "name" | "variant" | "catalogProduct" | "productProfile">;
+
+export function isExactProductIdentityComplete(item: ExactProductItem): boolean {
+  if (!item.catalogProduct) return false;
+  if (item.category !== "Printers") return true;
+
+  const recordedIdentity = `${item.name} ${item.variant}`.toLowerCase();
+  const catalogVariant = `${item.catalogProduct.exactVariant ?? ""} ${item.catalogProduct.variant ?? ""}`.toLowerCase();
+  const recordsBundle = /\b(combo|bundle)\b/u.test(recordedIdentity);
+  return !recordsBundle || /\b(combo|bundle)\b/u.test(catalogVariant);
 }
 
-export function exactProductLabel(item: Pick<InventoryItem, "category" | "catalogProduct" | "productProfile">): string {
+export function isExactProductConfirmed(item: ExactProductItem): boolean {
+  return (item.category === "Filament" || item.category === "Printers")
+    && item.catalogProduct !== undefined
+    && item.productProfile?.linkState === "confirmed"
+    && isExactProductIdentityComplete(item);
+}
+
+export function exactProductLabel(item: ExactProductItem): string {
+  if (item.productProfile?.linkState === "confirmed" && item.catalogProduct && !isExactProductIdentityComplete(item)) {
+    return "Product identity incomplete";
+  }
   return isExactProductConfirmed(item) ? "Exact product confirmed" : "Exact product not confirmed";
 }
 
