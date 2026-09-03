@@ -800,6 +800,8 @@ kbd { display: inline-block; padding: 1px 5px; border: 1px solid var(--line); bo
 }
 .category-archive-scrim { position: fixed; z-index: 20; inset: 0; border: 0; background: oklch(22% .03 174 / .36); cursor: default; }
 .category-archive-confirm { position: fixed; z-index: 21; top: 50%; left: 50%; width: min(500px, calc(100vw - 32px)); margin: 0; box-shadow: 0 15px 40px oklch(25% .03 174 / .2); transform: translate(-50%, -50%); }
+.reconciliation-loading { display: grid; gap: 8px; padding: 18px; border: 1px solid var(--line); background: var(--surface-strong); }
+.reconciliation-loading .button { width: fit-content; margin-top: 4px; }
 
 @media (max-width: 700px) {
   .workspace-access-section .section-heading { align-items: flex-start; flex-direction: column; }
@@ -808,4 +810,26 @@ kbd { display: inline-block; padding: 1px 5px; border: 1px solid var(--line); bo
   .workspace-access-form .form-field:last-of-type { grid-column: auto; }
   .workspace-access-form .button { width: 100%; justify-self: stretch; }
   .workspace-access-disable .button { width: 100%; }
+}
+
+@media (max-width: 480px) {
+  .mode-toggle { width: auto; padding: 0 8px; font-size: .7rem; }
+  .mode-toggle::after, .mode-toggle:not(.is-expert)::after { content: none !important; }
+  .build-rail { overflow: visible; }
+  .rail-track { width: 100%; min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
+  .rail-step { min-width: 0; white-space: normal; }
+  .rail-line { display: none; }
+  .tab-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible; }
+  .tab-list button { min-width: 0; justify-content: center; }
+  .inventory-table { table-layout: fixed; }
+  .inventory-table th, .inventory-table td { padding-left: 5px; padding-right: 5px; }
+  .inventory-table .select-column:first-child { width: 34px; padding-left: 8px; padding-right: 2px; }
+  .inventory-table th:nth-child(4), .inventory-table td:nth-child(4) { width: 64px; }
+  .inventory-table th:nth-child(5), .inventory-table td:nth-child(5) { width: 88px; }
+  .inventory-table th:nth-child(7), .inventory-table td:nth-child(7) { display: none; }
+  .inventory-table .table-item { min-width: 0; }
+  .inventory-table .table-item .item-glyph, .inventory-table .table-item small { display: none; }
+  .inventory-table .table-item strong { overflow-wrap: anywhere; }
+  .inventory-table .status-pill { min-width: 0; white-space: normal; }
+  .reconciliation-loading .button { width: 100%; }
 }

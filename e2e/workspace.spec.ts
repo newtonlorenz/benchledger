@@ -61,10 +61,9 @@ test("filters, edits, and physically counts evidence-aware inventory", async ({ 
 
   await page.getByRole("button", { name: "ESP32 development board electronic" }).click();
   const drawer = page.getByRole("dialog", { name: "ESP32 development board" });
-  await expect(drawer.getByText("Provenance", { exact: true })).toBeVisible();
-  await expect(drawer).toContainText("Physically counted");
-  await expect(drawer).toContainText("Source");
-  await expect(drawer).toContainText("synthetic-demo");
+  await expect(drawer.getByText("Provenance", { exact: true })).toHaveCount(0);
+  await expect(drawer).toContainText("Ready to use");
+  await expect(drawer).not.toContainText("synthetic-demo");
 
   await drawer.getByRole("button", { name: "Edit item" }).click();
   await drawer.getByLabel("Name").fill("Temporary name");
@@ -90,9 +89,9 @@ test("filters, edits, and physically counts evidence-aware inventory", async ({ 
   await expect(drawer).toContainText("Electronics drawer 2");
   await expect(drawer.locator(".drawer-header .eyebrow")).toHaveText("Electronics");
 
-  await drawer.getByLabel("Physical count").fill("3");
-  await drawer.getByRole("button", { name: "Save physical count" }).click();
-  await expect(drawer.getByRole("status")).toContainText("Saved 3 pieces as the verified on-hand quantity.");
+  await drawer.getByLabel("Counted quantity").fill("3");
+  await drawer.getByRole("button", { name: "Confirm physical count" }).click();
+  await expect(drawer.getByRole("status")).toContainText("Confirmed 3 pieces as the on-hand quantity.");
 
   await page.route("**/api/v1/inventory/*", async (route) => {
     if (route.request().method() !== "PATCH") return route.continue();
@@ -351,6 +350,10 @@ test("keeps inventory quantity and status columns usable on mobile", async ({ pa
   await expect(table.getByLabel("Select all loaded inventory items")).toBeVisible();
   await expect(table.getByRole("columnheader", { name: "Quantity", exact: true })).toBeVisible();
   await expect(table.getByRole("columnheader", { name: "Status", exact: true })).toBeVisible();
+  expect(await table.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return rect.left >= 0 && rect.right <= window.innerWidth && element.scrollWidth <= element.clientWidth;
+  })).toBe(true);
   const horizontalScroll = await page.evaluate(() => {
     window.scrollTo(500, 0);
     return window.scrollX;
@@ -358,7 +361,33 @@ test("keeps inventory quantity and status columns usable on mobile", async ({ pa
   expect(horizontalScroll).toBe(0);
 });
 
+test("keeps project navigation and build progress discoverable on mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await signIn(page);
+  await expect(page.getByRole("button", { name: "Beginner view" })).toBeVisible();
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: /^Projects/ }).click();
+
+  const buildPath = page.getByRole("region", { name: "Build progress" });
+  await expect(buildPath).toBeVisible();
+  expect(await buildPath.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+
+  const tabs = page.getByRole("tablist", { name: "Project workspace" });
+  await expect(tabs.getByRole("tab", { name: /^Plan/ })).toBeVisible();
+  await expect(tabs.getByRole("tab", { name: /^Files/ })).toBeVisible();
+  await expect(tabs.getByRole("tab", { name: /^Shopping list/ })).toBeVisible();
+  expect(await tabs.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return rect.left >= 0 && rect.right <= window.innerWidth && element.scrollWidth <= element.clientWidth;
+  })).toBe(true);
+});
+
 test("requires and persists the managed category and semantic kind for quick inventory add", async ({ page }) => {
+  const categoryStatuses: number[] = [];
+  page.on("response", (response) => {
+    const url = new URL(response.url());
+    if (response.request().method() === "GET" && url.pathname === "/api/v1/inventory/categories") categoryStatuses.push(response.status());
+  });
   await signIn(page);
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
   await page.getByRole("button", { name: "Add item", exact: true }).click();
@@ -367,6 +396,9 @@ test("requires and persists the managed category and semantic kind for quick inv
   await selectionDialog.getByRole("combobox", { name: /Item type/u }).selectOption("tool");
   await expect(selectionDialog.getByRole("button", { name: "Continue", exact: true })).toBeDisabled();
   await selectionDialog.getByRole("combobox", { name: /Category/u }).selectOption("category-tools");
+  expect(categoryStatuses.length).toBeGreaterThan(0);
+  expect(categoryStatuses).not.toContain(404);
+  await expect(selectionDialog.getByRole("button", { name: "Continue", exact: true })).toBeEnabled();
   await selectionDialog.getByRole("button", { name: "Continue", exact: true }).click();
 
   const quickDialog = page.getByRole("dialog", { name: "Add an inventory item" });
@@ -386,8 +418,44 @@ test("requires and persists the managed category and semantic kind for quick inv
   await expect(page.locator(".table-item").filter({ hasText: "E2E quick category item" })).toBeVisible();
 });
 
+test("shows a truthful non-overlapping close-out capability boundary on mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await signIn(page);
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: /^Projects/ }).click();
+  await page.getByRole("tab", { name: /^Close out/ }).click();
+
+  const unavailable = page.locator(".reconciliation-load-error");
+  await expect(unavailable).toHaveAttribute("role", "alert");
+  await expect(unavailable).toContainText("This runtime does not support post-project reconciliation");
+  const back = unavailable.getByRole("button", { name: "Back to plan" });
+  await expect(back).toBeVisible();
+  expect(await unavailable.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  const [messageBox, buttonBox] = await Promise.all([
+    unavailable.locator("strong").boundingBox(),
+    back.boundingBox(),
+  ]);
+  expect(messageBox).not.toBeNull();
+  expect(buttonBox).not.toBeNull();
+  expect(buttonBox!.y).toBeGreaterThanOrEqual(messageBox!.y + messageBox!.height);
+});
+
+test("guides beginners through one blank physical-count action", async ({ page }) => {
+  await signIn(page);
+  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await page.getByLabel("Search inventory").fill("Dupont jumper wire assortment");
+  await page.getByRole("button", { name: "Dupont jumper wire assortment wire" }).click();
+
+  const drawer = page.getByRole("dialog", { name: "Dupont jumper wire assortment" });
+  await expect(drawer.getByLabel("Counted quantity")).toHaveValue("");
+  await expect(drawer.getByRole("button", { name: "Confirm physical count" })).toHaveCount(1);
+  await expect(drawer.getByLabel("Observed quantity")).toHaveCount(0);
+  await expect(drawer.getByText("Provenance", { exact: true })).toHaveCount(0);
+});
+
 test("keeps the physical-count field aligned after commissioning delivered stock", async ({ page }) => {
   await signIn(page);
+  await page.getByRole("button", { name: "Beginner view" }).click();
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
   await page.getByLabel("Search inventory").fill("Dupont jumper wire assortment");
   await page.getByRole("button", { name: "Dupont jumper wire assortment wire" }).click();
@@ -398,7 +466,7 @@ test("keeps the physical-count field aligned after commissioning delivered stock
   await drawer.getByLabel("Observed", { exact: true }).fill("2026-09-01T12:00");
   await drawer.getByRole("button", { name: "Commission stock" }).click();
 
-  await expect(drawer.getByLabel("Physical count")).toHaveValue("7");
+  await expect(drawer.getByLabel("Counted quantity")).toHaveValue("7");
 });
 
 test("creates a project atomically and finalizes a revisioned artifact", async ({ page }) => {
@@ -475,7 +543,8 @@ test("offers exact work-item scopes, keeps legacy files in All, and freezes uplo
   await expect(scope).toHaveValue(`project:${projectRevisionId}`);
   await expect(scope.locator("option")).toContainText(["Project", "Body", "Unbound notes", "All files (read-only)"]);
   await expect(scope.locator("option").filter({ hasText: "Unbound notes" })).toHaveAttribute("disabled", "");
-  await expect(page.locator(".file-scope-identity")).toContainText(`Project · ${projectRevisionId}`);
+  await expect(page.locator(".file-scope-identity")).toContainText("Project revision");
+  await expect(page.locator(".file-scope-identity")).not.toContainText(projectRevisionId);
 
   await scope.selectOption("all");
   await expect(page.locator(".file-scope-identity")).toContainText("All files · read-only");
@@ -483,9 +552,14 @@ test("offers exact work-item scopes, keeps legacy files in All, and freezes uplo
   await expect(page.getByRole("button", { name: "Choose a revision to upload" })).toBeDisabled();
 
   await scope.selectOption(`work-item:${workItemId}:${workItemRevisionId}`);
-  await expect(page.locator(".file-scope-identity")).toContainText(`Work item · ${workItemId} · ${workItemRevisionId}`);
+  await expect(page.locator(".file-scope-identity")).toContainText("Work item revision");
+  await expect(page.locator(".file-scope-identity")).not.toContainText(workItemId);
   await expect(page.getByRole("cell", { name: /body-existing\.step/u })).toBeVisible();
   await expect(page.getByRole("cell", { name: /legacy-scope-note\.md/u })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Beginner view" }).click();
+  await expect(page.locator(".file-scope-identity")).toContainText(`Work item · ${workItemId} · ${workItemRevisionId}`);
+  await expect(scope.locator("option").filter({ hasText: "Body" })).toContainText(workItemId);
 
   const beginBodies: Record<string, unknown>[] = [];
   let releaseFirstBegin: (() => void) | undefined;

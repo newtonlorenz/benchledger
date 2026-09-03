@@ -1,8 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { ProjectExpertContext, ProjectFiles } from "./App";
+import { InventoryDrawer, ProjectExpertContext, ProjectFiles } from "./App";
 import type { Artifact, Project } from "./domain";
-import { artifactIdentityLabel, artifactScopeChoices, artifactScopeIdentity, defaultArtifactScope, filterArtifactsForScope } from "./artifact-scope";
+import { inventory } from "./mock-data";
+import { artifactIdentityLabel, artifactRevisionLabel, artifactScopeChoices, artifactScopeIdentity, defaultArtifactScope, filterArtifactsForScope } from "./artifact-scope";
 
 const project: Project = {
   id: "project-lamp",
@@ -43,6 +44,12 @@ describe("artifact scope selection", () => {
     const choices = artifactScopeChoices(project);
     expect(defaultArtifactScope(project)).toEqual({ kind: "project", projectRevisionId: "project-r7" });
     expect(choices.map((choice) => choice.label)).toEqual([
+      "Project · r07 · Current fit",
+      "Work item · Body · r03 · Body fit",
+      "Work item · Unbound notes · No current revision",
+      "All files (read-only)"
+    ]);
+    expect(artifactScopeChoices(project, true).map((choice) => choice.label)).toEqual([
       "Project · r07 · Current fit · project-r7",
       "Work item · Body · work-body · r03 · Body fit · work-r3",
       "Work item · Unbound notes · work-legacy · No current revision",
@@ -64,10 +71,47 @@ describe("artifact scope selection", () => {
     expect(filterArtifactsForScope(files, { kind: "project", projectRevisionId: "project-r7" }).map((file) => file.id)).toEqual(["project-current"]);
     expect(filterArtifactsForScope(files, { kind: "work-item", workItemId: "work-body", workItemRevisionId: "work-r3" }).map((file) => file.id)).toEqual(["work-current"]);
     expect(filterArtifactsForScope(files, { kind: "all" }).map((file) => file.id)).toEqual(files.map((file) => file.id));
-    expect(artifactIdentityLabel(files[0]!)).toBe("Project · project-r7");
-    expect(artifactIdentityLabel(files[2]!)).toBe("Work item · work-body · work-r3");
-    expect(artifactIdentityLabel(files[4]!)).toBe("Unbound / legacy");
+    expect(artifactIdentityLabel(files[0]!)).toBe("Project revision");
+    expect(artifactIdentityLabel(files[2]!)).toBe("Work item revision");
+    expect(artifactIdentityLabel(files[4]!)).toBe("Not assigned to a revision");
+    expect(artifactIdentityLabel(files[0]!, true)).toBe("Project · project-r7");
+    expect(artifactIdentityLabel(files[2]!, true)).toBe("Work item · work-body · work-r3");
+    expect(artifactIdentityLabel(files[4]!, true)).toBe("Unbound / legacy");
     expect(artifactScopeIdentity({ kind: "all" })).toBe("All files · read-only");
+  });
+
+  it("keeps raw artifact ancestry and hashes out of beginner file views", () => {
+    const markup = renderToStaticMarkup(<ProjectFiles project={{ ...project, allArtifacts: [artifact("project-current", { projectRevisionId: "project-r7", revision: "opaque-artifact-revision" }), artifact("legacy")] }} expert={false} sampleMode={false} onUpload={async () => undefined} />);
+    expect(markup).toContain("Project · r07 · Current fit");
+    expect(markup).toContain("Project revision");
+    expect(markup).not.toContain("projectRevisionId=");
+    expect(markup).not.toContain("Current fit · project-r7");
+    expect(markup).not.toContain("Body · work-body");
+    expect(markup).not.toContain("SHA-256");
+    expect(markup).not.toContain("Unbound / legacy");
+    expect(markup).toContain("Recorded revision");
+    expect(markup).not.toContain("opaque-artifact-revision");
+    expect(artifactRevisionLabel(artifact("friendly"))).toBe("r07");
+    expect(artifactRevisionLabel(artifact("caller-id", { projectRevisionId: "r07", revision: "r07" }))).toBe("Recorded revision");
+    expect(artifactRevisionLabel(artifact("opaque", { projectRevisionId: "project-r7", revision: "opaque-artifact-revision" }), true)).toBe("opaque-artifact-revision");
+  });
+
+  it("keeps the unassigned inventory label plain for beginners and diagnostic for experts", () => {
+    const item = inventory.find((candidate) => candidate.categoryNodeId === undefined)!;
+    const props = {
+      item,
+      categories: [],
+      categoriesLoading: false,
+      onClose: () => undefined,
+      onCount: async () => item,
+      onCommission: async () => item,
+      onUpdate: async () => item
+    };
+    const beginnerMarkup = renderToStaticMarkup(<InventoryDrawer {...props} expert={false} />);
+    expect(beginnerMarkup).toContain("Unassigned item");
+    expect(beginnerMarkup).not.toContain("Unassigned legacy item");
+    const expertMarkup = renderToStaticMarkup(<InventoryDrawer {...props} expert />);
+    expect(expertMarkup).toContain("Unassigned legacy item");
   });
 
   it("renders real scope identity, disabled unrevisioned items, and hash evidence without a fabricated path", () => {
