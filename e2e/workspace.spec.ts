@@ -20,9 +20,11 @@ function inventoryRecord(id: string, name: string, kind = "tool") {
 test("filters, edits, and physically counts evidence-aware inventory", async ({ page }) => {
   await signIn(page);
   const inventoryRequests: string[] = [];
+  let countRequests = 0;
   page.on("request", (request) => {
     const url = new URL(request.url());
     if (request.method() === "GET" && url.pathname.endsWith("/api/v1/inventory")) inventoryRequests.push(url.toString());
+    if (request.method() === "POST" && /\/api\/v1\/inventory\/[^/]+\/count$/u.test(url.pathname)) countRequests += 1;
   });
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
 
@@ -90,7 +92,15 @@ test("filters, edits, and physically counts evidence-aware inventory", async ({ 
   await expect(drawer.locator(".drawer-header .eyebrow")).toHaveText("Electronics");
 
   await drawer.getByLabel("Counted quantity").fill("3");
-  await drawer.getByRole("button", { name: "Confirm physical count" }).click();
+  await drawer.getByRole("button", { name: "Review physical count" }).click();
+  const countReview = page.getByRole("alertdialog", { name: "Review physical count" });
+  await expect(countReview).toContainText("Item");
+  await expect(countReview).toContainText("Old value");
+  await expect(countReview).toContainText("New value");
+  await expect(countReview).toContainText("Effect");
+  expect(countRequests).toBe(0);
+  await countReview.getByRole("button", { name: "Confirm physical count", exact: true }).click();
+  expect(countRequests).toBe(1);
   await expect(drawer.getByRole("status")).toContainText("Confirmed 3 pieces as the on-hand quantity.");
 
   await page.route("**/api/v1/inventory/*", async (route) => {
@@ -488,9 +498,49 @@ test("guides beginners through one blank physical-count action", async ({ page }
 
   const drawer = page.getByRole("dialog", { name: "Dupont jumper wire assortment" });
   await expect(drawer.getByLabel("Counted quantity")).toHaveValue("");
-  await expect(drawer.getByRole("button", { name: "Confirm physical count" })).toHaveCount(1);
+  await expect(drawer.getByRole("button", { name: "Review physical count" })).toHaveCount(1);
   await expect(drawer.getByLabel("Observed quantity")).toHaveCount(0);
   await expect(drawer.getByText("Provenance", { exact: true })).toHaveCount(0);
+});
+
+test("reviews a physical count without writing and restores focus on Escape", async ({ page }) => {
+  await signIn(page);
+  let countRequests = 0;
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (request.method() === "POST" && /\/api\/v1\/inventory\/[^/]+\/count$/u.test(url.pathname)) countRequests += 1;
+  });
+  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await page.getByLabel("Search inventory").fill("ESP32 development board");
+  await page.getByRole("row", { name: /ESP32 development board/u }).locator(".table-item").click();
+
+  const drawer = page.getByRole("dialog", { name: "ESP32 development board" });
+  const quantity = drawer.getByLabel("Counted quantity");
+  const trigger = drawer.getByRole("button", { name: "Review physical count", exact: true });
+  await quantity.fill("4");
+  await quantity.press("Enter");
+  expect(countRequests).toBe(0);
+  const review = page.getByRole("alertdialog", { name: "Review physical count" });
+  await expect(page.locator(".detail-drawer")).toHaveAttribute("inert", "");
+  expect(await page.locator("#count-quantity").evaluate((input) => {
+    const bounds = input.getBoundingClientRect();
+    return document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2) === input;
+  })).toBe(false);
+  await expect(page.getByRole("dialog", { name: "ESP32 development board" })).toHaveCount(0);
+  await expect(review).toContainText("ESP32 development board");
+  await expect(review.locator("span").filter({ hasText: "Old value" })).toContainText("pieces");
+  await expect(review).toContainText("4 pieces");
+  await expect(review).toContainText("updates the quantity available for reuse");
+  await page.keyboard.press("Escape");
+  await expect(review).toHaveCount(0);
+  await expect(quantity).toBeFocused();
+  expect(countRequests).toBe(0);
+
+  await trigger.click();
+  expect(countRequests).toBe(0);
+  await page.keyboard.press("Escape");
+  await expect(trigger).toBeFocused();
+  expect(countRequests).toBe(0);
 });
 
 test("keeps the physical-count field aligned after commissioning delivered stock", async ({ page }) => {
@@ -504,7 +554,27 @@ test("keeps the physical-count field aligned after commissioning delivered stock
   await drawer.getByLabel("Observed quantity").fill("7");
   await drawer.getByLabel("Source", { exact: true }).fill("E2E bench count");
   await drawer.getByLabel("Observed", { exact: true }).fill("2026-09-01T12:00");
-  await drawer.getByRole("button", { name: "Commission stock" }).click();
+  let commissionRequests = 0;
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (request.method() === "POST" && /\/api\/v1\/inventory\/[^/]+\/commission$/u.test(url.pathname)) commissionRequests += 1;
+  });
+  await drawer.getByRole("button", { name: "Review commissioning" }).click();
+  expect(commissionRequests).toBe(0);
+  const review = page.getByRole("alertdialog", { name: "Review stock commissioning" });
+  await expect(review).toContainText("Dupont jumper wire assortment");
+  await expect(review).toContainText("Old value");
+  await expect(review).toContainText("New value");
+  await expect(review).toContainText("Effect");
+  await expect(review).toContainText("E2E bench count");
+  await page.keyboard.press("Escape");
+  await expect(review).toHaveCount(0);
+  await expect(drawer.getByRole("button", { name: "Review commissioning", exact: true })).toBeFocused();
+  expect(commissionRequests).toBe(0);
+  await drawer.getByRole("button", { name: "Review commissioning", exact: true }).click();
+  expect(commissionRequests).toBe(0);
+  await page.getByRole("alertdialog", { name: "Review stock commissioning" }).getByRole("button", { name: "Commission stock", exact: true }).click();
+  expect(commissionRequests).toBe(1);
 
   await expect(drawer.getByLabel("Counted quantity")).toHaveValue("7");
 });
@@ -648,7 +718,7 @@ test("archives a project into the explicit Archived view and restores it", async
   await createDialog.getByLabel("Project name").fill("E2E retirement project");
   await createDialog.getByLabel("Project goal").fill("Retained history acceptance flow.");
   await createDialog.getByRole("button", { name: "Create project" }).click();
-  await expect(page.getByRole("heading", { name: "E2E retirement project" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "E2E retirement project", exact: true })).toBeVisible();
 
   const archiveTrigger = page.getByRole("button", { name: "Archive project", exact: true });
   await archiveTrigger.click();
@@ -669,8 +739,9 @@ test("archives a project into the explicit Archived view and restores it", async
   await expect(page.locator(".archive-notice")).toContainText("revisions, files, BOM, stock evidence, and audit history remain retained");
 
   await page.getByRole("button", { name: "Restore project", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "E2E retirement project" })).toBeVisible();
-  await expect(page.getByText("Project restored to idea.", { exact: false })).toBeVisible();
+  await page.getByRole("alertdialog", { name: "Restore E2E retirement project?" }).getByRole("button", { name: "Restore project", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "E2E retirement project", exact: true })).toBeVisible();
+  await expect(page.getByText("E2E retirement project was restored to Idea. Released reservations were not recreated.", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Active projects", exact: true })).toHaveClass(/is-active/u);
   await expect(page.getByRole("combobox", { name: "Choose project" }).getByRole("option", { name: "E2E retirement project", exact: true })).toHaveCount(1);
 });

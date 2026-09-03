@@ -1722,9 +1722,11 @@ function Legend({ tone, title, text }: { tone: StockLabelTone; title: string; te
 
 const focusableOverlaySelector = "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], summary, [tabindex]:not([tabindex='-1'])";
 
-function useOverlayBehavior(containerRef: React.RefObject<HTMLElement | null>, onClose: () => void) {
+function useOverlayBehavior(containerRef: React.RefObject<HTMLElement | null>, onClose: () => void, active = true) {
   const closeRef = useRef(onClose);
+  const activeRef = useRef(active);
   closeRef.current = onClose;
+  activeRef.current = active;
   useEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
     const container = containerRef.current;
@@ -1740,6 +1742,7 @@ function useOverlayBehavior(containerRef: React.RefObject<HTMLElement | null>, o
     // changes, so repeat the handoff after the browser applies inertness.
     const deferredFocus = window.setTimeout(focusFirstControl, 0);
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (!activeRef.current) return;
       if (event.key === "Escape") {
         event.preventDefault();
         closeRef.current();
@@ -1789,6 +1792,7 @@ export function InventoryDrawer({ item, categories, categoriesLoading, categorie
   const [countSaving, setCountSaving] = useState(false);
   const [countError, setCountError] = useState<string>();
   const [countSaved, setCountSaved] = useState<string>();
+  const [mutationReview, setMutationReview] = useState<InventoryMutationReview>();
   const [commissionQuantity, setCommissionQuantity] = useState("");
   const [commissionSource, setCommissionSource] = useState(item.provenance?.source ?? "");
   const [commissionSourceId, setCommissionSourceId] = useState(item.provenance?.sourceId ?? "");
@@ -1811,8 +1815,9 @@ export function InventoryDrawer({ item, categories, categoriesLoading, categorie
   const drawerRef = useRef<HTMLElement>(null);
   const drawerTitleId = useId();
   const availableForReuse = item.availableQuantity ?? Math.max(item.quantity - item.reserved, 0);
-  useOverlayBehavior(drawerRef, onClose);
-  const submitCount = async () => {
+  useOverlayBehavior(drawerRef, onClose, !mutationReview);
+  const reviewCount = (event: FormEvent) => {
+    event.preventDefault();
     const parsed = Number(quantity);
     setCountError(undefined);
     setCountSaved(undefined);
@@ -1820,11 +1825,17 @@ export function InventoryDrawer({ item, categories, categoriesLoading, categorie
       setCountError("Enter a quantity of zero or greater.");
       return;
     }
+    setMutationReview({ kind: "count", quantity: parsed });
+  };
+
+  const submitCount = async () => {
+    if (mutationReview?.kind !== "count" || countSaving) return;
     setCountSaving(true);
     try {
-      const result = await onCount(item.id, parsed);
+      const result = await onCount(item.id, mutationReview.quantity);
       setQuantity(String(result.quantity));
       setCountSaved(`Confirmed ${formatQuantity(result.quantity, result.unit)} as the on-hand quantity.`);
+      setMutationReview(undefined);
     } catch (error: unknown) {
       setCountError(normalizeApiError(error).message);
     } finally {
@@ -1832,7 +1843,8 @@ export function InventoryDrawer({ item, categories, categoriesLoading, categorie
     }
   };
 
-  const submitCommission = async () => {
+  const reviewCommission = (event: FormEvent) => {
+    event.preventDefault();
     const parsed = Number(commissionQuantity);
     const observedAt = observedAtFromLocalDateTime(commissionObservedAt);
     setCommissionError(undefined);
@@ -1853,18 +1865,27 @@ export function InventoryDrawer({ item, categories, categoriesLoading, categorie
       setCommissionError("Reload this item before commissioning it.");
       return;
     }
-    setCommissionSaving(true);
-    try {
-      const result = await onCommission(item.id, {
+    setMutationReview({
+      kind: "commission",
+      input: {
         quantity: parsed,
         source: commissionSource.trim(),
         ...(commissionSourceId.trim() ? { sourceId: commissionSourceId.trim() } : {}),
         observedAt,
         ...(commissionNote.trim() ? { note: commissionNote.trim() } : {})
-      }, item.version);
+      }
+    });
+  };
+
+  const submitCommission = async () => {
+    if (mutationReview?.kind !== "commission" || commissionSaving || item.version === undefined) return;
+    setCommissionSaving(true);
+    try {
+      const result = await onCommission(item.id, mutationReview.input, item.version);
       setCommissionQuantity(String(result.quantity));
       setQuantity(String(result.quantity));
       setCommissionSaved(`Commissioned ${formatQuantity(result.quantity, result.unit)} as confirmed stock.`);
+      setMutationReview(undefined);
     } catch (error: unknown) {
       setCommissionError(normalizeApiError(error).message);
     } finally {
@@ -1914,7 +1935,7 @@ export function InventoryDrawer({ item, categories, categoriesLoading, categorie
 
   return <>
     <div className="drawer-scrim" aria-hidden="true" onClick={onClose} />
-    <aside ref={drawerRef} className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby={drawerTitleId} tabIndex={-1}>
+    <aside ref={drawerRef} className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby={drawerTitleId} aria-hidden={mutationReview ? true : undefined} inert={mutationReview ? true : undefined} tabIndex={-1}>
       <div className="drawer-header"><span className={`item-glyph accent-${item.accent}`} aria-hidden="true"><Icon name={categoryIcons[item.category]} size={18} /></span><div><span className="eyebrow">{managedInventoryLabel(categories, item, expert)}</span><h2 id={drawerTitleId}>{item.name}</h2></div><button type="button" className="icon-button" aria-label="Close item details" onClick={onClose}><Icon name="close" size={20} /></button></div>
       <div className="drawer-body">
         <div className="drawer-title-actions"><StatusPill state={displayedInventoryState(item)} />{!editing && <button type="button" className="button button-secondary" onClick={() => setEditing(true)}>Edit item</button>}</div>
@@ -1939,16 +1960,38 @@ export function InventoryDrawer({ item, categories, categoriesLoading, categorie
           <div className="drawer-facts"><div><span>Model or variant</span><strong>{item.variant}</strong></div><div><span>Location</span><strong>{item.location}</strong></div>{item.manufacturer && <div><span>Manufacturer</span><strong>{item.manufacturer}</strong></div>}{item.sku && <div><span>SKU</span><code>{item.sku}</code></div>}{item.productProfile?.filament?.lotBatch && <div><span>Lot or batch</span><strong>{item.productProfile.filament.lotBatch}</strong></div>}{item.productProfile?.printer?.assetLabel && <div><span>Asset label</span><strong>{item.productProfile.printer.assetLabel}</strong></div>}</div>
         </>}
 
-        {expert && unverifiedQuantity && <section className="drawer-quantity" aria-labelledby="commission-heading"><div><span className="eyebrow" id="commission-heading">Expert stock evidence</span><strong>Commission received stock</strong><span>Record a physical observation while retaining the delivery evidence.</span><p>Use this only when you need an explicit source and observation time in the audit trail.</p></div><div className="count-form"><label htmlFor="commission-quantity">Observed quantity</label><div><input id="commission-quantity" type="number" min="0" step="any" inputMode="decimal" value={commissionQuantity} onChange={(event) => setCommissionQuantity(event.target.value)} disabled={commissionSaving} /><span>{item.unit}</span></div><label className="form-field"><span>Source</span><input required value={commissionSource} maxLength={500} placeholder="Physical check, delivery record, or project log" onChange={(event) => setCommissionSource(event.target.value)} disabled={commissionSaving} /></label><label className="form-field"><span>Observed</span><input required type="datetime-local" value={commissionObservedAt} onChange={(event) => setCommissionObservedAt(event.target.value)} disabled={commissionSaving} /></label><label className="form-field"><span>Source ID <small>(optional)</small></span><input value={commissionSourceId} maxLength={500} placeholder="Evidence reference" onChange={(event) => setCommissionSourceId(event.target.value)} disabled={commissionSaving} /></label><label className="form-field"><span>Note <small>(optional)</small></span><textarea rows={2} maxLength={1000} value={commissionNote} placeholder="What did you observe?" onChange={(event) => setCommissionNote(event.target.value)} disabled={commissionSaving} /></label><button type="button" className="button button-secondary" onClick={() => { void submitCommission(); }} disabled={commissionSaving}>{commissionSaving ? "Saving…" : "Commission stock"}</button>{commissionError && <p className="form-error" role="alert">{commissionError}</p>}{commissionSaved && <p className="form-success" role="status">{commissionSaved}</p>}</div></section>}
+        {expert && unverifiedQuantity && <section className="drawer-quantity" aria-labelledby="commission-heading"><div><span className="eyebrow" id="commission-heading">Expert stock evidence</span><strong>Commission received stock</strong><span>Record a physical observation while retaining the delivery evidence.</span><p>Use this only when you need an explicit source and observation time in the audit trail.</p></div><form className="count-form" onSubmit={(event) => reviewCommission(event)}><label htmlFor="commission-quantity">Observed quantity</label><div><input id="commission-quantity" type="number" min="0" step="any" inputMode="decimal" value={commissionQuantity} onChange={(event) => setCommissionQuantity(event.target.value)} disabled={commissionSaving} /><span>{item.unit}</span></div><label className="form-field"><span>Source</span><input required value={commissionSource} maxLength={500} placeholder="Physical check, delivery record, or project log" onChange={(event) => setCommissionSource(event.target.value)} disabled={commissionSaving} /></label><label className="form-field"><span>Observed</span><input required type="datetime-local" value={commissionObservedAt} onChange={(event) => setCommissionObservedAt(event.target.value)} disabled={commissionSaving} /></label><label className="form-field"><span>Source ID <small>(optional)</small></span><input value={commissionSourceId} maxLength={500} placeholder="Evidence reference" onChange={(event) => setCommissionSourceId(event.target.value)} disabled={commissionSaving} /></label><label className="form-field"><span>Note <small>(optional)</small></span><textarea rows={2} maxLength={1000} value={commissionNote} placeholder="What did you observe?" onChange={(event) => setCommissionNote(event.target.value)} disabled={commissionSaving} /></label><button type="submit" className="button button-secondary" disabled={commissionSaving}>{commissionSaving ? "Saving…" : "Review commissioning"}</button>{commissionError && <p className="form-error" role="alert">{commissionError}</p>}{commissionSaved && <p className="form-success" role="status">{commissionSaved}</p>}</form></section>}
 
-        <section className="drawer-quantity" aria-labelledby="physical-count-heading"><div><span className="eyebrow">Stock check</span><strong id="physical-count-heading">Confirm physical count</strong><span>{item.reserved ? `${formatQuantity(item.reserved, item.unit)} reserved; ${formatQuantity(availableForReuse, item.unit)} currently available for reuse.` : `Recorded quantity: ${formatQuantity(item.quantity, item.unit)}.`}</span><p>Count what is physically in front of you, then enter that quantity here.</p></div><div className="count-form"><label htmlFor="count-quantity">Counted quantity</label><div><input id="count-quantity" type="number" min="0" step="any" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={countSaving} /><span>{item.unit}</span></div><button type="button" className="button button-secondary" onClick={() => { void submitCount(); }} disabled={countSaving}>{countSaving ? "Saving…" : "Confirm physical count"}</button>{countError && <p className="form-error" role="alert">{countError}</p>}{countSaved && <p className="form-success" role="status">{countSaved}</p>}</div></section>
+        <section className="drawer-quantity" aria-labelledby="physical-count-heading"><div><span className="eyebrow">Stock check</span><strong id="physical-count-heading">Confirm physical count</strong><span>{item.reserved ? `${formatQuantity(item.reserved, item.unit)} reserved; ${formatQuantity(availableForReuse, item.unit)} currently available for reuse.` : `Recorded quantity: ${formatQuantity(item.quantity, item.unit)}.`}</span><p>Count what is physically in front of you, then enter that quantity here.</p></div><form className="count-form" onSubmit={(event) => reviewCount(event)}><label htmlFor="count-quantity">Counted quantity</label><div><input id="count-quantity" type="number" min="0" step="any" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={countSaving} /><span>{item.unit}</span></div><button type="submit" className="button button-secondary" disabled={countSaving}>{countSaving ? "Saving…" : "Review physical count"}</button>{countError && <p className="form-error" role="alert">{countError}</p>}{countSaved && <p className="form-success" role="status">{countSaved}</p>}</form></section>
 
         {expert && <section className="provenance-panel" aria-labelledby="provenance-heading"><div><span className="eyebrow" id="provenance-heading">Provenance</span><strong>{evidenceLabel(item.evidence, item.serverEvidence)}</strong></div><dl><div><dt>Source</dt><dd>{item.provenance?.source ?? "Not recorded"}</dd></div><div><dt>Observed</dt><dd>{item.provenance?.observedAt ? item.provenance.observedAt.slice(0, 10) : "Not recorded"}</dd></div>{item.provenance?.sourceId && <div><dt>Source record</dt><dd><code>{item.provenance.sourceId}</code></dd></div>}{item.provenance?.note && <div><dt>Note</dt><dd>{item.provenance.note}</dd></div>}</dl></section>}
 
         {expert && <details className="expert-detail" open><summary>Technical evidence</summary><div className="detail-grid"><div><span>Item kind</span><code>{item.kind ?? "Not recorded"}</code></div><div><span>Category node</span><code>{item.categoryNodeId ?? "Not assigned"}</code></div><div><span>Evidence state</span><code>{item.evidence}</code></div><div><span>Exact link state</span><code>{item.productProfile?.linkState ?? "not linked"}</code></div><div><span>Catalog product</span><code>{item.catalogProduct?.id ?? "Not recorded"}</code></div><div><span>Version</span><code>{item.version ?? "Not recorded"}</code></div><div><span>Dimensions</span><code>{item.dimensions ? formatDimensions(item.dimensions) : "Not recorded"}</code></div><div><span>Tags</span><code>{item.tags.join(" · ") || "None"}</code></div></div><div className="compatibility-box"><span>Compatibility notes</span>{item.compatibility.length ? <ul>{item.compatibility.map((note) => <li key={note}>{note}</li>)}</ul> : <p>No compatibility evidence is recorded.</p>}</div></details>}
       </div>
     </aside>
+    {mutationReview && <InventoryMutationReviewDialog item={item} review={mutationReview} saving={mutationReview.kind === "count" ? countSaving : commissionSaving} onClose={() => { if (!countSaving && !commissionSaving) setMutationReview(undefined); }} onConfirm={() => { void (mutationReview.kind === "count" ? submitCount() : submitCommission()); }} />}
   </>;
+}
+
+function InventoryMutationReviewDialog({ item, review, saving, onClose, onConfirm }: { item: InventoryItem; review: InventoryMutationReview; saving: boolean; onClose: () => void; onConfirm: () => void }) {
+  const isCount = review.kind === "count";
+  const newQuantity = isCount ? review.quantity : review.input.quantity;
+  const oldEvidence = evidenceLabel(item.evidence, item.serverEvidence);
+  const newEvidence = isCount ? "Physically counted" : "Commissioned";
+  const effect = isCount
+    ? "Records this physical count and updates the quantity available for reuse."
+    : "Marks the received stock as commissioned and makes the observed quantity available for reuse; delivery evidence remains retained.";
+  return <Dialog title={isCount ? "Review physical count" : "Review stock commissioning"} role="alertdialog" onClose={onClose}>
+    <p className="dialog-intro">Check the recorded change before saving it to inventory.</p>
+    <div className="inventory-selection-summary">
+      <span><strong>Item</strong>{item.name}<small>{item.variant}</small></span>
+      <span><strong>Old value</strong>{formatQuantity(item.quantity, item.unit)}<small>{oldEvidence}</small></span>
+      <span><strong>New value</strong>{formatQuantity(newQuantity, item.unit)}<small>{newEvidence}</small></span>
+      <span><strong>Effect</strong>{effect}</span>
+      {!isCount && <span><strong>Observation</strong>{review.input.source} · {review.input.observedAt}</span>}
+    </div>
+    <div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose} disabled={saving}>Back to item</button><button type="button" className="button button-primary" onClick={onConfirm} disabled={saving} aria-busy={saving}>{saving ? "Saving…" : isCount ? "Confirm physical count" : "Commission stock"}<Icon name="check" size={16} /></button></div>
+  </Dialog>;
 }
 
 function NewProjectDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (input: Pick<Project, "name" | "description">) => Promise<ProjectCreateOutcome> }) {
@@ -2092,6 +2135,10 @@ function displayInventoryUnit(unit: ReturnType<typeof defaultUnitForItemKind>): 
 const inventoryUnitLabels: Readonly<Record<InventoryItem["unit"], string>> = {
   each: "pieces", g: "grams", m: "metres", set: "sets", millimetre: "millimetres", millilitre: "millilitres"
 };
+
+type InventoryMutationReview =
+  | { readonly kind: "count"; readonly quantity: number }
+  | { readonly kind: "commission"; readonly input: InventoryCommissionInput };
 
 function displayCategoryForKind(kind: InventoryItemType): InventoryCategory {
   if (kind === "printer") return "Printers";
