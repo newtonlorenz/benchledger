@@ -463,6 +463,10 @@ kbd { display: inline-block; padding: 1px 5px; border: 1px solid var(--line); bo
 .exact-product-callout { display: grid; gap: 2px; margin-top: 15px; padding: 10px; border: 1px solid oklch(79% .09 77 / .55); background: var(--amber-soft); }
 .exact-product-callout strong { font-size: .75rem; }
 .exact-product-callout span { color: oklch(46% .065 74); font-size: .68rem; }
+.unit-correction-callout { display: grid; gap: 7px; margin-top: 14px; padding: 12px; border: 1px solid oklch(72% .12 55 / .58); background: var(--amber-soft); }
+.unit-correction-callout strong, .unit-correction-callout span, .unit-correction-callout small { display: block; }
+.unit-correction-callout strong { font-size: .76rem; }.unit-correction-callout span, .unit-correction-callout small { color: oklch(44% .065 60); font-size: .69rem; line-height: 1.45; }.unit-correction-callout .button { justify-self: start; margin-top: 2px; }
+.unit-replacement-note { margin: 0 0 13px; padding: 10px 11px; border-left: 3px solid var(--amber); color: var(--ink-soft); background: var(--amber-soft); font-size: .72rem; line-height: 1.5; }
 .setup-picker-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
 .setup-picker-grid .catalog-combobox { min-width: 0; }
 .catalog-facet-picker { margin-top: 16px; padding: 13px; border: 1px solid var(--line); background: var(--surface-soft); }
