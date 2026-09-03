@@ -574,6 +574,8 @@ export interface ProjectContext {
   /** Readiness is derived from the current BOM; it is never a lifecycle value. */
   blocked: ProjectBlocked;
   currentRevisionId?: string;
+  /** The selected revision, including its persisted human-readable summary. */
+  currentRevision?: Revision;
   nextActions?: readonly string[];
 }
 

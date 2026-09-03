@@ -20,8 +20,9 @@ The detailed `REQ-*` engineering contracts below remain the implementation annex
   remains derived from reasons, while the revision-scoped manufacturing evidence
   ladder remains independent. The migration maps only known legacy values,
   retains each original value in audit history and fails closed on unknown data.
-  Project context also returns the canonical lifecycle and structured derived
-  blocker reasons without persisting `blocked` as a status.
+  Project context also returns the canonical lifecycle, selected revision
+  summary, and structured derived blocker reasons without persisting `blocked`
+  as a status.
 
 These checks describe the current roadmap branch. They do not imply that its
 commits have been pushed, reviewed on GitHub, merged or deployed.

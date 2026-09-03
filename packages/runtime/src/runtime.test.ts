@@ -1366,10 +1366,14 @@ describe("production runtime mappings", () => {
     directories.push(dataDir);
     const first = await createProductionRuntime({ dataDir, maxUploadBytes: 1024, maxStorageBytes: 4096 });
     await first.ports.inventory.createItem({ id: "persisted", name: "Persisted tool", kind: "tool", quantity: 1, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
+    await first.ports.projects.createProject({ id: "persisted-project", name: "Persisted project", status: "planned" }, context());
+    const richSummary = "Fit review:\nKeep the 0.15 mm clearance and recheck the captive nut after the first test print. 🛠️";
+    const persistedRevision = await first.ports.projects.createProjectRevision("persisted-project", { id: "persisted-revision", name: "r01", notes: richSummary, status: "concept" }, context());
     await first.close();
     const second = await createProductionRuntime({ dataDir, maxUploadBytes: 1024, maxStorageBytes: 4096 });
     runtimes.push(second);
     await expect(second.ports.inventory.getItem("persisted")).resolves.toMatchObject({ id: "persisted", quantity: 1 });
+    await expect(second.ports.projects.getProjectRevision(persistedRevision.id)).resolves.toMatchObject({ id: persistedRevision.id, notes: richSummary });
     await expect(second.ports.health?.check()).resolves.toEqual({ database: "ok", artifacts: "ok" });
   });
 

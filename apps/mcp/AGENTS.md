@@ -94,7 +94,9 @@ the v1-to-v2 upgrade it corrects only complete, untouched v1 seed payloads;
 edited or custom rows remain authoritative.
 
 The adapter exposes bounded pages. Continue with the returned cursor instead of
-requesting an unbounded dump. A project resource is similarly scoped:
+requesting an unbounded dump. A project resource is similarly scoped and
+includes the selected revision plus its persisted summary without enumerating
+revision history:
 
 `list_bom_lines` returns active requirements by default. Pass
 `includeRetired: true` only when auditing history. Retiring a line preserves its
@@ -171,8 +173,10 @@ read back as `set`. Only an exact `itemId` or an explicit alternative becomes a
 gap or inspection candidate; kind/category constraints alone are descriptive,
 not automatic inventory discovery.
 
-Optional lines remain separately identified and never authorize Source. A BOM
-line may record `constraints.specification` with a required `status`, resolved
+Optional lines remain separately identified and never authorize Source or
+create default inspection actions; they stay visible in the plan for explicit
+review. A BOM line may record `constraints.specification` with a required
+`status`, resolved
 `decisions`, and exact `missingDecisions`. The closed decision vocabulary
 includes `identity`, `purpose`, `voltage`, `current_or_load`, `connector`,
 `compatibility`, `dimensions`, `resistance`, and `power_rating`. An insufficient

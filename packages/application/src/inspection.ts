@@ -139,6 +139,7 @@ export function deriveInspectionActions(
     if (gap.decision !== "check") continue;
     const line = lineById.get(gap.lineId);
     if (line === undefined || line.retiredAt !== undefined) continue;
+    if (line.optional === true) continue;
     for (const candidate of gap.candidates) {
       // Older gap snapshots may still carry the legacy constraint-only
       // relationship. It has no explicit human-approved identity and must

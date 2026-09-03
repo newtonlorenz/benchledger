@@ -673,11 +673,15 @@ describe("BenchLedger HTTP API", () => {
       expect(document.paths["/auth/security"]).toMatchObject({ post: { security: [{ cookieAuth: [] }] } });
       const payload = {
         project: { id: "atomic-project", name: "Atomic project", description: "One command", status: "planned" },
-        revision: { id: "atomic-revision", name: "Initial", notes: "Starting point", status: "concept" }
+        revision: { id: "atomic-revision", name: "Initial", notes: "Fit review:\nKeep the 0.15 mm clearance and recheck the captive nut after the first test print. 🛠️", status: "concept" }
       };
       const first = await app.inject({ method: "POST", url: "/api/v1/projects/with-initial-revision", headers: { cookie, "x-csrf-token": csrf, "idempotency-key": "atomic-project-1" }, payload });
       expect(first.statusCode).toBe(201);
-      expect(first.json()).toMatchObject({ data: { project: { id: "atomic-project", currentRevisionId: "atomic-revision" }, revision: { id: "atomic-revision", projectId: "atomic-project", number: 1 } }, audit: { action: "project.create_with_initial_revision" }, replayed: false });
+      expect(first.json()).toMatchObject({ data: { project: { id: "atomic-project", description: "One command", currentRevisionId: "atomic-revision" }, revision: { id: "atomic-revision", projectId: "atomic-project", number: 1, notes: payload.revision.notes } }, audit: { action: "project.create_with_initial_revision" }, replayed: false });
+      const revisionRead = await app.inject({ method: "GET", url: "/api/v1/project-revisions/atomic-revision", headers: { cookie } });
+      expect(revisionRead.statusCode).toBe(200);
+      expect(revisionRead.json()).toMatchObject({ id: "atomic-revision", notes: payload.revision.notes });
+      expect(revisionRead.json()).not.toHaveProperty("description");
       const replay = await app.inject({ method: "POST", url: "/api/v1/projects/with-initial-revision", headers: { cookie, "x-csrf-token": csrf, "idempotency-key": "atomic-project-1" }, payload });
       expect(replay.statusCode).toBe(201);
       expect(replay.json()).toMatchObject({ replayed: true, data: { project: { id: "atomic-project" }, revision: { id: "atomic-revision" } } });

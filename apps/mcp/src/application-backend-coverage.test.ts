@@ -464,9 +464,14 @@ describe("createApplicationBackend translation coverage", () => {
       const revision = await backend.projects.getProjectRevision({ revisionId: `rev-${status}` }, context);
       expect(revision.status).toBe(status === "CAD complete" ? "cad_complete" : status === "DFAM reviewed" ? "dfam_reviewed" : status === "mesh validated" ? "mesh_validated" : status === "slicer validated" ? "slicer_validated" : status === "test printed" ? "test_printed" : status === "fit/function verified" ? "fit_function_verified" : status === "production approved" ? "production_approved" : "concept");
     }
+    const richSummary = "Fit review:\nKeep the 0.15 mm clearance and recheck the captive nut after the first test print. 🛠️";
+    service.getProjectRevision.mockResolvedValueOnce(apiRevision({ notes: richSummary }));
+    await expect(backend.projects.getProjectRevision({ revisionId: "revision-1" }, context)).resolves.toMatchObject({ summary: richSummary });
+    service.getProjectRevision.mockResolvedValueOnce(apiRevision({ notes: richSummary }));
     const contextResult = await backend.projects.context({ projectId: "project-1" }, context);
     expect(contextResult.text).toContain("Work items: Base (part)");
-    expect(contextResult).toMatchObject({ status: "building", blocked: { blocked: false, reasons: [] } });
+    expect(contextResult.text).toContain(`Revision summary: ${richSummary}`);
+    expect(contextResult).toMatchObject({ status: "building", blocked: { blocked: false, reasons: [] }, currentRevision: { id: "revision-1", summary: richSummary } });
     service.evaluateBomGaps.mockResolvedValueOnce({
       revisionId: "revision-1",
       lines: [

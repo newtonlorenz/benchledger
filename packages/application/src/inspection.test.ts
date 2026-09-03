@@ -46,6 +46,21 @@ describe("inspection queue derivation", () => {
     expect(deriveInspectionActions("revision-1", noAction, [line()], [item()])).toEqual([]);
   });
 
+  it("skips optional Check lines while retaining required checks and set-to-piece conversion", () => {
+    const setItem = item({ id: "set-item", unit: "set", evidence: { state: "physically_counted" } });
+    const optionalLine = line({ id: "optional-line", name: "Optional adapter", optional: true, alternatives: [{ itemId: setItem.id, compatible: "unknown" }] });
+    const requiredLine = line({ id: "required-line", name: "Required adapter", alternatives: [{ itemId: setItem.id, compatible: "unknown" }] });
+    const candidate = { itemId: setItem.id, relationship: "uncertain_alternative" as const, compatibility: "unknown" as const, availableQuantity: 1, suppliedQuantity: 0, inspectQuantity: 1, reason: "Needs inspection" };
+    const actions = deriveInspectionActions("revision-1", [
+      gap({ lineId: optionalLine.id, name: optionalLine.name, optional: true, candidates: [candidate] }),
+      gap({ lineId: requiredLine.id, name: requiredLine.name, candidates: [candidate] }),
+    ], [optionalLine, requiredLine], [setItem]);
+
+    expect(actions.map((action) => action.kind).sort()).toEqual(["compatibility", "unit_conversion"]);
+    expect(actions.every((action) => action.lineIds.includes(requiredLine.id))).toBe(true);
+    expect(actions.every((action) => !action.lineIds.includes(optionalLine.id))).toBe(true);
+  });
+
   it("does not reintroduce legacy constraint-only candidates into inspections", () => {
     const legacyConstraintCandidate = {
       itemId: "item-1", relationship: "constraint_match" as const, compatibility: "unknown" as const,

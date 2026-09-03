@@ -553,6 +553,9 @@ export function createApplicationBackend(service: ApplicationService, options: P
       context: async (input) => {
         const project = await service.getProject(input.projectId);
         const workItems = await service.listWorkItems(input.projectId);
+        const currentRevision = project.currentRevisionId === undefined
+          ? undefined
+          : toMcpRevision(await service.getProjectRevision(project.currentRevisionId));
         const blocked = project.currentRevisionId === undefined
           ? { blocked: false, reasons: [] }
           : projectBlockedFromBom(project.currentRevisionId, await service.evaluateBomGaps(project.currentRevisionId));
@@ -564,8 +567,9 @@ export function createApplicationBackend(service: ApplicationService, options: P
           project.description === undefined ? undefined : `Description: ${project.description}`,
           `Work items: ${workItems.map((item) => `${item.name} (${item.kind})`).join(", ") || "none recorded"}`,
           project.currentRevisionId === undefined ? "Current revision: not selected" : `Current revision: ${project.currentRevisionId}`,
+          currentRevision?.summary === undefined ? undefined : `Revision summary: ${currentRevision.summary}`,
         ].filter((line): line is string => line !== undefined).join("\n");
-        return { projectId: project.id, generatedAt: new Date().toISOString(), text, status: project.status, blocked, ...(project.currentRevisionId === undefined ? {} : { currentRevisionId: project.currentRevisionId }) };
+        return { projectId: project.id, generatedAt: new Date().toISOString(), text, status: project.status, blocked, ...(project.currentRevisionId === undefined ? {} : { currentRevisionId: project.currentRevisionId }), ...(currentRevision === undefined ? {} : { currentRevision }) };
       },
     },
     bom: {
@@ -1346,7 +1350,8 @@ function toMcpRevision(value: ApiProjectRevision | ApiWorkItemRevision): Revisio
   const status = toMcpRevisionStatus(String(value.status));
   const projectId = "projectId" in value && typeof value.projectId === "string" ? value.projectId : undefined;
   const workItemId = "workItemId" in value && typeof value.workItemId === "string" ? value.workItemId : undefined;
-  return { id: value.id, number: value.number, status, ...(projectId === undefined ? {} : { projectId }), ...(workItemId === undefined ? {} : { workItemId }), version: value.version };
+  const summary = typeof value.notes === "string" ? value.notes : undefined;
+  return { id: value.id, number: value.number, status, ...(projectId === undefined ? {} : { projectId }), ...(workItemId === undefined ? {} : { workItemId }), ...(summary === undefined ? {} : { summary }), version: value.version };
 }
 
 function toMcpRevisionStatus(value: string): Revision["status"] {

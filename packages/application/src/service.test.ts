@@ -1181,6 +1181,27 @@ describe("ApplicationService", () => {
     expect(inspections.data).toEqual([]);
   });
 
+  it("keeps optional BOM lines in gaps but out of the service inspection queue", async () => {
+    const optionalItem = item({ id: "optional-item", name: "Optional board", kind: "electronic", unit: "each", quantity: 1, availableQuantity: 0, evidence: { state: "delivered_uncounted" } });
+    const requiredItem = item({ id: "required-item", name: "Required board", kind: "electronic", unit: "each", quantity: 1, availableQuantity: 0, evidence: { state: "delivered_uncounted" } });
+    const optionalLine: BomLine = { id: "optional-line", revisionId: "rev-1", name: "Optional board", itemId: optionalItem.id, requiredQuantity: 1, unit: "each", optional: true, constraints: {}, alternatives: [], createdAt: optionalItem.createdAt, updatedAt: optionalItem.updatedAt, version: 1 };
+    const requiredLine: BomLine = { id: "required-line", revisionId: "rev-1", name: "Required board", itemId: requiredItem.id, requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: requiredItem.createdAt, updatedAt: requiredItem.updatedAt, version: 1 };
+    const ports = fakePorts(optionalItem);
+    ports.inventory.listItems = async () => ({ data: [optionalItem, requiredItem], limit: 200, total: 2 });
+    ports.projects.listBomLines = async () => [optionalLine, requiredLine];
+    const service = new ApplicationService(ports);
+
+    const gaps = await service.evaluateBomGaps("rev-1");
+    expect(gaps.lines).toEqual(expect.arrayContaining([
+      expect.objectContaining({ lineId: optionalLine.id, optional: true, status: "inspect_first", decision: "check" }),
+      expect.objectContaining({ lineId: requiredLine.id, optional: false, status: "inspect_first", decision: "check" }),
+    ]));
+
+    const inspections = await service.listInspections("rev-1");
+    expect(inspections.data).toHaveLength(1);
+    expect(inspections.data[0]).toMatchObject({ kind: "physical_quantity", itemId: requiredItem.id, lineIds: [requiredLine.id] });
+  });
+
   it.each(["conditional", "unknown"] as const)("keeps %s alternatives inspect-first and never reserves them", async (compatibility) => {
     const ports = fakePorts();
     const alternative = item({ id: `alternative-${compatibility}`, name: "Possible board", kind: "electronic", unit: "each" });
