@@ -139,7 +139,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   await expect(ownedFilament).toHaveCount(1);
   await ownedFilament.click();
 
-  await revisionDialog.locator("summary").filter({ hasText: "Advanced setup" }).click();
+  await revisionDialog.locator("summary").filter({ hasText: "Build details" }).click();
   await revisionDialog.getByLabel("Hotend side").fill("single nozzle");
   await revisionDialog.getByLabel("Nozzle diameter (mm)").fill("0.4");
   await revisionDialog.getByLabel("Nozzle material").fill("hardened steel");

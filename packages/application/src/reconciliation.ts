@@ -9,6 +9,7 @@ import type {
   ReconciliationPreviewStockChange,
   ReconciliationOutcome
 } from "@benchledger/api-contract";
+import { isUnitCompatibleWithItemKind, unitCorrectionReason } from "@benchledger/api-contract";
 import { ApplicationError } from "./errors.js";
 
 export interface ReconciliationSourceSnapshot {
@@ -222,6 +223,14 @@ export function buildReconciliationDocument(snapshot: ReconciliationSourceSnapsh
   const sourceLines = linesMap(snapshot);
   const reservations = reservationMap(snapshot);
   const items = itemMap(snapshot);
+  for (const reservation of snapshot.reservations) {
+    if (reservation.status !== "active") continue;
+    const item = items.get(reservation.itemId);
+    if (item !== undefined && !isUnitCompatibleWithItemKind(item.kind, item.unit)) {
+      const reason = unitCorrectionReason(item.kind, item.unit) ?? `unit '${item.unit}' is not recognized for kind '${item.kind}'`;
+      throw new ApplicationError("validation", `Inventory item ${item.id} needs unit correction before reconciliation: ${reason}`);
+    }
+  }
   const seenLines = new Set<string>();
   for (const line of normalizedLines) {
     if (seenLines.has(line.bomLineId)) throw new ApplicationError("validation", `BOM line '${line.bomLineId}' was supplied more than once`);

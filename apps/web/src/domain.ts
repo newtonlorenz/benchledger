@@ -294,6 +294,9 @@ export interface InventoryItem {
   version?: number;
   /** Original API unit retained so writes remain lossless after UI normalization. */
   serverUnit?: string;
+  /** Derived server classification; legacy invalid pairs stay readable. */
+  unitStatus?: "compatible" | "needs_correction";
+  unitCorrectionReason?: string;
   lastCounted?: string;
   accent: "orange" | "teal" | "blue" | "yellow" | "slate";
   /** Exact catalog identity and physical profile, when this legacy item has

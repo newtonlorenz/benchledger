@@ -114,6 +114,32 @@ describe("artifact scope selection", () => {
     expect(expertMarkup).toContain("Unassigned legacy item");
   });
 
+  it("offers a history-safe corrected replacement for an invalid legacy unit", () => {
+    const item = {
+      ...inventory[0]!,
+      unitStatus: "needs_correction" as const,
+      unitCorrectionReason: "Printer items use each; this record uses gram."
+    };
+    const props = {
+      item,
+      categories: [],
+      categoriesLoading: false,
+      onClose: () => undefined,
+      onCount: async () => item,
+      onCommission: async () => item,
+      onUpdate: async () => item,
+      onCreateReplacement: () => undefined
+    };
+    const beginnerMarkup = renderToStaticMarkup(<InventoryDrawer {...props} expert={false} />);
+    expect(beginnerMarkup).toContain("This record cannot be used yet");
+    expect(beginnerMarkup).toContain("Create corrected replacement");
+    expect(beginnerMarkup).toContain("original stays blocked as history");
+    expect(beginnerMarkup).not.toContain("Recorded unit:");
+    const expertMarkup = renderToStaticMarkup(<InventoryDrawer {...props} expert />);
+    expect(expertMarkup).toContain("Recorded unit:");
+    expect(expertMarkup).toContain("Historical quantities and evidence are not rewritten");
+  });
+
   it("renders real scope identity, disabled unrevisioned items, and hash evidence without a fabricated path", () => {
     const markup = renderToStaticMarkup(<ProjectFiles project={{ ...project, allArtifacts: [artifact("project-current", { projectRevisionId: "project-r7" }), artifact("legacy")] }} expert sampleMode={false} onUpload={async () => undefined} />);
     expect(markup).toContain("Project · r07 · Current fit · project-r7");

@@ -16,7 +16,8 @@ import {
   reconciliationCommitSchema, reservationSchema, workspaceSecurityStatusSchema, workspaceSecurityMutationSchema,
   projectSetupProposalSchema, commitProjectSetupSchema, projectSetupPreviewSchema, quantityConversionSchema,
   inspectionObservationSchema, inspectionCompletionPreviewSchema, commitInspectionCompletionSchema, inspectionCompletionCommitSchema,
-  FILAMENT_CATALOG_IDENTITY_UNKNOWN_BLOCKER
+  FILAMENT_CATALOG_IDENTITY_UNKNOWN_BLOCKER,
+  isUnitCompatibleWithItemKind, unitCorrectionReason
 } from "@benchledger/api-contract";
 import type {
   Artifact, BomGap, BomGapCandidate, BomLine, CreateBomLine, CreateInventoryItem, CreateOffer, CreateProject,
@@ -54,6 +55,23 @@ const ALLOWED_BINARY_MEDIA = new Set([
 const DISALLOWED_EXTENSIONS = new Set([".html", ".htm", ".svg", ".js", ".mjs", ".cjs", ".exe", ".sh", ".zip", ".tar", ".gz"]);
 const INVENTORY_SCAN_PAGE_SIZE = 200;
 const WORKSPACE_SECURITY_ENTITY_ID = "workspace";
+
+function inventoryWithUnitStatus(item: InventoryItem): InventoryItem {
+  const reason = unitCorrectionReason(item.kind, item.unit);
+  const { unitStatus: _storedStatus, unitCorrectionReason: _storedReason, ...withoutStoredStatus } = item;
+  return {
+    ...withoutStoredStatus,
+    unitStatus: reason === undefined ? "compatible" : "needs_correction",
+    ...(reason === undefined ? {} : { unitCorrectionReason: reason })
+  };
+}
+
+function assertCompatibleInventoryUnit(item: Pick<InventoryItem, "kind" | "unit" | "id">, action: string): void {
+  if (!isUnitCompatibleWithItemKind(item.kind, item.unit)) {
+    const reason = unitCorrectionReason(item.kind, item.unit) ?? `unit '${item.unit}' is not recognized for kind '${item.kind}'`;
+    throw new ApplicationError("validation", `${action}: inventory item '${item.id}' needs unit correction. ${reason}`);
+  }
+}
 
 /**
  * The REST and MCP boundaries use the closed bomConstraintsSchema. The
@@ -165,6 +183,7 @@ function bomCandidateQuantityConversion(line: BomLine, item: InventoryItem): Bom
 }
 
 function bomCandidateQuantityFactor(line: BomLine, item: InventoryItem): number | undefined {
+  if (!isUnitCompatibleWithItemKind(item.kind, item.unit)) return undefined;
   if (item.unit === line.unit) return 1;
   return bomCandidateQuantityConversion(line, item)?.requirement.quantity;
 }
@@ -188,6 +207,9 @@ function bomCandidateReason(line: BomLine, candidate: BomCandidate): string {
     ?? (candidate.kind === "exact" ? "Exact inventory item declared by the BOM."
       : candidate.kind === "confirmed_alternative" ? "Explicitly confirmed BOM alternative."
       : "Alternative compatibility is not explicitly confirmed.");
+  if (!isUnitCompatibleWithItemKind(candidate.item.kind, candidate.item.unit)) {
+    return `${base} Unit needs correction before this stock can be matched or reserved.`;
+  }
   if (candidate.item.unit === line.unit) return base;
   const conversion = bomCandidateQuantityConversion(line, candidate.item);
   if (conversion === undefined) return `${base} No valid one-set conversion from ${candidate.item.unit} to ${line.unit} is recorded; inspect before use.`;
@@ -701,7 +723,10 @@ function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], active: 
     // Preserve Source for an identified same-unit item with no stock. A
     // cross-unit explicit alternative is different: even with no conversion
     // capacity it remains visible as Check so the maker can resolve it.
-    const inspectFirstCandidate = inspectQuantity > 0 || uncertain.some((candidate) => candidate.item.unit !== line.unit);
+    const uncoveredQuantity = Math.max(line.requiredQuantity - suppliedQuantity, 0);
+    const inspectFirstCandidate = inspectQuantity > 0 || (uncoveredQuantity > 0 && uncertain.some((candidate) =>
+      candidate.item.unit !== line.unit || !isUnitCompatibleWithItemKind(candidate.item.kind, candidate.item.unit)
+    ));
     let status: BomGap["status"];
     if (line.optional && suppliedQuantity === 0 && inspectQuantity === 0) status = "optional";
     else if (inspectFirstCandidate && inspectQuantity === 0) status = "inspect_first";
@@ -729,7 +754,8 @@ function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], active: 
       ...(suppliedQuantity > 0 ? ["Physically confirmed stock covers part or all of this requirement."] : []),
       ...(uncertain.some((candidate) => !canSupplyBomCandidate(candidate)) ? ["Some matching stock needs an explicit compatibility decision before use."] : []),
       ...(uncertain.some((candidate) => canSupplyBomCandidate(candidate) && !CONFIRMED_EVIDENCE.has(candidate.item.evidence.state)) ? ["Some matching stock is recorded but needs a physical count before use."] : []),
-      ...(uncertain.some((candidate) => !bomCandidateHasResolvableQuantity(line, candidate)) ? ["A cross-unit alternative has no valid evidence-backed conversion; inspect before use."] : []),
+      ...(uncertain.some((candidate) => isUnitCompatibleWithItemKind(candidate.item.kind, candidate.item.unit) && !bomCandidateHasResolvableQuantity(line, candidate)) ? ["A cross-unit alternative has no valid evidence-backed conversion; inspect before use."] : []),
+      ...(uncertain.some((candidate) => !isUnitCompatibleWithItemKind(candidate.item.kind, candidate.item.unit)) ? ["Matching stock has a unit that needs correction before use."] : []),
       ...(decision === "decide" ? [`Specify ${specification.missingDecisions.join(" and ")} before sourcing this requirement.`] : []),
       ...(decision !== "decide" && missingQuantity > 0 ? ["No confirmed stock covers the remaining quantity."] : []),
       ...(decision !== "decide" && candidates.length === 0 ? ["No matching inventory item was found for this line."] : []),
@@ -1299,6 +1325,7 @@ export class ApplicationService {
     const printerItem = await this.ports.inventory.getItem(parsed.printerItemSnapshot.itemId);
     if (printerItem === null) throw notFound("Inventory item", parsed.printerItemSnapshot.itemId);
     if (printerItem.kind !== "printer") throw new ApplicationError("validation", "Build configurations require a printer inventory item");
+    assertCompatibleInventoryUnit(printerItem, "Cannot use printer in build configuration");
     const printerProduct = await catalog.getProduct(parsed.printerItemSnapshot.catalogProductId);
     if (printerProduct === null) throw notFound("Catalog product", parsed.printerItemSnapshot.catalogProductId);
     if (printerProduct.kind !== "printer") throw new ApplicationError("validation", "Printer inventory item must link to a printer catalog product");
@@ -1310,6 +1337,7 @@ export class ApplicationService {
       const item = await this.ports.inventory.getItem(selection.itemId);
       if (item === null) throw notFound("Inventory item", selection.itemId);
       if (item.kind !== "filament") throw new ApplicationError("validation", `Inventory item '${item.id}' is not a filament`);
+      assertCompatibleInventoryUnit(item, "Cannot use filament in build configuration");
       if ("catalogIdentityState" in selection) {
         if (item.retiredAt !== undefined) {
           throw new ApplicationError("validation", `Inventory item '${item.id}' is retired and cannot be selected as a physical filament`);
@@ -1371,14 +1399,17 @@ export class ApplicationService {
   async listInventory(query: InventoryListQuery): Promise<Page<InventoryItem>> {
     const parsed = inventoryListQuerySchema.parse(query) as InventoryListOptions;
     parseInventoryCursor(parsed.cursor);
-    return this.ports.unitOfWork.exclusive(() => this.ports.inventory.listItems(parsed));
+    return this.ports.unitOfWork.exclusive(async () => {
+      const page = await this.ports.inventory.listItems(parsed);
+      return { ...page, data: page.data.map(inventoryWithUnitStatus) };
+    });
   }
 
   async getInventoryItem(id: string): Promise<InventoryItem> {
     return this.ports.unitOfWork.exclusive(async () => {
       const item = await this.ports.inventory.getItem(requireId(id, "item id"));
       if (!item) throw notFound("Inventory item", id);
-      return item;
+      return inventoryWithUnitStatus(item);
     });
   }
 
@@ -1439,7 +1470,8 @@ export class ApplicationService {
     return this.mutate(ctx, "inventory.item.create", "inventory_item", parsed.id ?? "pending", async () => {
       await this.validateInventoryCategoryReferences(parsed.categoryNodeId);
       const item = await this.ports.inventory.createItem(parsed, ctx);
-      return { value: item, entityId: item.id, version: item.version };
+      const value = inventoryWithUnitStatus(item);
+      return { value, entityId: value.id, version: value.version };
     });
   }
 
@@ -1487,7 +1519,7 @@ export class ApplicationService {
         const profile = await catalog.putInventoryProductProfile(createdItem.id, { ...parsedProfile, itemId: createdItem.id }, undefined, commandContext);
         createdProfile = inventoryProductProfileSchema.parse(profile);
         return {
-          value: { item: inventoryItemSchema.parse(createdItem), profile: createdProfile },
+          value: { item: inventoryItemSchema.parse(inventoryWithUnitStatus(createdItem)), profile: createdProfile },
           entityId: createdItem.id,
           version: createdItem.version,
           compensate
@@ -1508,8 +1540,16 @@ export class ApplicationService {
     const parsed = updateInventoryItemSchema.parse(input) as UpdateInventoryInput;
     return this.mutate(ctx, "inventory.item.update", "inventory_item", itemId, async () => {
       await this.validateInventoryCategoryReferences(parsed.categoryNodeId);
+      if (parsed.kind !== undefined) {
+        const current = await this.ports.inventory.getItem(itemId);
+        if (!current) throw notFound("Inventory item", itemId);
+        if (parsed.kind !== current.kind) {
+          assertCompatibleInventoryUnit({ id: current.id, kind: parsed.kind, unit: current.unit }, "Cannot change inventory kind");
+        }
+      }
       const item = await this.ports.inventory.updateItem(itemId, parsed, expectedVersion, ctx);
-      return { value: item, entityId: item.id, version: item.version };
+      const value = inventoryWithUnitStatus(item);
+      return { value, entityId: value.id, version: value.version };
     });
   }
 
@@ -1527,8 +1567,8 @@ export class ApplicationService {
     const commandContext = { ...ctx, fingerprint: inventoryBulkUpdateFingerprint(canonical) };
     return this.mutateBulk(commandContext, async () => {
       const result = await this.ports.inventory.bulkUpdateItems(execution, commandContext);
-      const updated = result.updated.map((item) => inventoryItemSchema.parse(item)).sort((left, right) => left.id.localeCompare(right.id));
-      const unchanged = result.unchanged.map((item) => inventoryItemSchema.parse(item)).sort((left, right) => left.id.localeCompare(right.id));
+      const updated = result.updated.map((item) => inventoryWithUnitStatus(inventoryItemSchema.parse(item))).sort((left, right) => left.id.localeCompare(right.id));
+      const unchanged = result.unchanged.map((item) => inventoryWithUnitStatus(inventoryItemSchema.parse(item))).sort((left, right) => left.id.localeCompare(right.id));
       const targetIds = new Set(execution.targets.map((target) => target.itemId));
       const resultIds = [...updated, ...unchanged].map((item) => item.id);
       const resultIdSet = new Set(resultIds);
@@ -1543,8 +1583,11 @@ export class ApplicationService {
     const parsed = stockEventInputSchema.parse(input);
     if (parsed.type === "count") return this.recordPhysicalCount(parsed.itemId, parsed.quantity, ctx, parsed.unit, parsed.note);
     return this.mutate(ctx, `inventory.stock.${parsed.type}`, "inventory_item", parsed.itemId, async () => {
+      const current = await this.ports.inventory.getItem(parsed.itemId);
+      if (!current) throw notFound("Inventory item", parsed.itemId);
+      assertCompatibleInventoryUnit(current, `Cannot record ${parsed.type}`);
       const mutation = await this.ports.inventory.recordStockEvent(parsed, ctx);
-      return { value: mutation, entityId: mutation.item.id, version: mutation.item.version };
+      return { value: { ...mutation, item: inventoryWithUnitStatus(mutation.item) }, entityId: mutation.item.id, version: mutation.item.version };
     });
   }
 
@@ -1554,11 +1597,12 @@ export class ApplicationService {
     return this.mutate(ctx, "inventory.stock.count", "inventory_item", parsedId, async () => {
       const current = await this.ports.inventory.getItem(parsedId);
       if (!current) throw notFound("Inventory item", parsedId);
+      assertCompatibleInventoryUnit(current, "Cannot record a physical count");
       if (unit !== undefined && unit !== current.unit) throw new ApplicationError("validation", `Unit mismatch: item uses ${current.unit}, count uses ${unit}`);
       const value = this.ports.inventory.recordPhysicalCount
         ? await this.ports.inventory.recordPhysicalCount(parsedId, quantity, ctx, note)
         : await this.recordPhysicalCountFallback(parsedId, quantity, ctx, note);
-      return { value, entityId: value.item.id, version: value.item.version };
+      return { value: { ...value, item: inventoryWithUnitStatus(value.item) }, entityId: value.item.id, version: value.item.version };
     });
   }
 
@@ -1575,6 +1619,7 @@ export class ApplicationService {
     return this.mutate(commandCtx, "inventory.item.commission", "inventory_item", parsedId, async () => {
       const current = await this.ports.inventory.getItem(parsedId);
       if (!current) throw notFound("Inventory item", parsedId);
+      assertCompatibleInventoryUnit(current, "Cannot commission inventory");
       if (!COMMISSIONABLE_EVIDENCE.has(current.evidence.state)) {
         throw conflict("Only delivered or ordered inventory can be commissioned; record a physical count for other evidence states");
       }
@@ -1582,7 +1627,7 @@ export class ApplicationService {
         throw new ApplicationError("integrity_error", "This runtime does not support inventory commissioning");
       }
       const mutation = await this.ports.inventory.commissionItem(parsedId, parsed, expectedVersion, commandCtx);
-      return { value: mutation, entityId: mutation.item.id, version: mutation.item.version };
+      return { value: { ...mutation, item: inventoryWithUnitStatus(mutation.item) }, entityId: mutation.item.id, version: mutation.item.version };
     });
   }
 
@@ -1825,6 +1870,11 @@ export class ApplicationService {
       if (line === undefined) fieldErrors.push({ path: `reservations.${index}.bomLineLocalRef`, code: "unknown_bom_line", message: "Reservation references an unknown BOM line" });
       if (item === undefined) fieldErrors.push({ path: `reservations.${index}.itemId`, code: "inventory_not_found", message: "Reservation references an unknown inventory item" });
       if (line !== undefined && setupLine !== undefined && item !== undefined) {
+        if (!isUnitCompatibleWithItemKind(item.kind, item.unit)) {
+          const reason = unitCorrectionReason(item.kind, item.unit) ?? `unit '${item.unit}' is not recognized for kind '${item.kind}'`;
+          fieldErrors.push({ path: `reservations.${index}.itemId`, code: "incompatible_inventory_unit", message: `Inventory item needs unit correction before it can be used in project setup: ${reason}` });
+          continue;
+        }
         const approved = canReserveBomItem(setupLine, item);
         const conversion = bomCandidateQuantityConversion(setupLine, item);
         const factor = conversion?.requirement.quantity ?? 1;
@@ -1961,7 +2011,7 @@ export class ApplicationService {
       for (const reservation of preview.proposal.reservations) {
         const line = setupLines.find((candidate) => candidate.id === preview.proposal.bomLines.find((entry) => entry.localRef === reservation.bomLineLocalRef)?.id);
         const item = currentInventoryById.get(reservation.itemId);
-        if (line === undefined || item === undefined || !canReserveBomItem(line, item) || !CONFIRMED_EVIDENCE.has(item.evidence.state)) {
+        if (line === undefined || item === undefined || !isUnitCompatibleWithItemKind(item.kind, item.unit) || !canReserveBomItem(line, item) || !CONFIRMED_EVIDENCE.has(item.evidence.state)) {
           throw conflict("Project setup reservation basis is stale", { reason: "stale_basis", staleItems: [reservation.itemId], recoveryAction: "preview_project_setup", retryable: false, commitState: "not_committed" });
         }
       }
@@ -2290,6 +2340,7 @@ export class ApplicationService {
       }
       const item = await this.ports.inventory.getItem(parsed.itemId);
       if (item === null) throw notFound("Inventory item", parsed.itemId);
+      assertCompatibleInventoryUnit(item, "Cannot reserve stock");
       if (!canReserveBomItem(line, item)) {
         throw new ApplicationError("validation", "Reservation item must be the exact BOM item or an approved alternative");
       }
@@ -2313,6 +2364,7 @@ export class ApplicationService {
       for (const reservation of activeReservations) {
         const reservedItem = reservation.itemId === item.id ? item : await this.ports.inventory.getItem(reservation.itemId);
         if (reservedItem === null) throw new ApplicationError("integrity_error", `Reservation references missing inventory item '${reservation.itemId}'`);
+        assertCompatibleInventoryUnit(reservedItem, "Cannot evaluate existing reservation");
         activeUnits.add(reservedItem.unit);
         if (activeUnits.size > 1) {
           throw new ApplicationError("validation", `BOM line '${line.id}' cannot mix active reservation units`);
@@ -2472,11 +2524,12 @@ export class ApplicationService {
       await this.assertProjectActive(input.projectId);
       const item = await this.ports.inventory.getItem(itemId);
       if (item === null) throw notFound("Inventory item", itemId);
+      assertCompatibleInventoryUnit(item, "Cannot record usage");
       if (item.unit !== input.unit) {
         throw new ApplicationError("validation", `Unit mismatch: item uses ${item.unit}, usage uses ${input.unit}`);
       }
       const usage = await this.ports.projects.recordUsage({ ...input, itemId }, ctx);
-      return { value: usage, entityId: usage.item.id, version: usage.item.version };
+      return { value: { ...usage, item: inventoryWithUnitStatus(usage.item) }, entityId: usage.item.id, version: usage.item.version };
     });
   }
 

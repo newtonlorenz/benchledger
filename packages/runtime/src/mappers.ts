@@ -1,4 +1,4 @@
-import { bomSpecificationSchema } from "@benchledger/api-contract";
+import { bomSpecificationSchema, unitCorrectionReason } from "@benchledger/api-contract";
 import { canonicalProjectStatus } from "@benchledger/domain";
 import type {
   CreateInventoryItem, InventoryItem as ApiInventoryItem, StockEvent as ApiStockEvent,
@@ -294,10 +294,13 @@ export function apiInventoryFromNative(item: InventoryItem, balance: { readonly 
   const availableQuantity = isConfirmedEvidence(state) ? Math.max(0, balance.available) : 0;
   const allocatedQuantity = isConfirmedEvidence(state) ? Math.max(0, Math.min(quantity, quantity - availableQuantity)) : 0;
   const evidence = metadata.evidence ?? { state };
+  const kind = metadata.kind ?? mapCategoryToKind(item.category);
+  const unit = mapNativeUnitToApi(item.unit);
+  const correctionReason = unitCorrectionReason(kind, unit);
   return {
     id: item.id,
     name: item.name,
-    kind: metadata.kind ?? mapCategoryToKind(item.category),
+    kind,
     ...(item.categoryNodeId === undefined ? {} : { categoryNodeId: item.categoryNodeId }),
     ...(metadata.description === undefined && item.notes === undefined ? {} : { description: metadata.description ?? item.notes }),
     ...(item.manufacturer === undefined ? {} : { manufacturer: item.manufacturer }),
@@ -306,7 +309,9 @@ export function apiInventoryFromNative(item: InventoryItem, balance: { readonly 
     quantity,
     availableQuantity,
     allocatedQuantity,
-    unit: mapNativeUnitToApi(item.unit),
+    unit,
+    unitStatus: correctionReason === undefined ? "compatible" : "needs_correction",
+    ...(correctionReason === undefined ? {} : { unitCorrectionReason: correctionReason }),
     ...(metadata.location === undefined ? {} : { location: metadata.location }),
     ...(metadata.condition === undefined ? {} : { condition: metadata.condition }),
     ...(mapDomainDimensionsToApi(item.dimensions) === undefined ? {} : { dimensions: mapDomainDimensionsToApi(item.dimensions) }),

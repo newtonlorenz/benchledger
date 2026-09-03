@@ -1,4 +1,10 @@
 import { z } from "zod";
+import {
+  ITEM_KINDS,
+  QUANTITY_UNITS,
+  isUnitCompatibleWithItemKind,
+  unitCorrectionReason
+} from "./units.js";
 
 export const idSchema = z.string().min(1).max(160).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 export const correlationIdSchema = z.string().min(1).max(160).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
@@ -22,20 +28,10 @@ export const workspaceSecurityMutationSchema = z.discriminatedUnion("operation",
   z.object({ operation: z.literal("change_password"), currentPassword: workspacePasswordSchema, newPassword: workspacePasswordSchema, expectedVersion: z.number().int().positive() }).strict()
 ]);
 
-export const itemKindSchema = z.enum([
-  "printer",
-  "tool",
-  "accessory",
-  "consumable",
-  "electronic",
-  "fastener",
-  "filament",
-  "wire",
-  "adhesive",
-  "other"
-]);
+export const itemKindSchema = z.enum(ITEM_KINDS);
 
-export const quantityUnitSchema = z.enum(["each", "gram", "millimetre", "millilitre", "metre", "set"]);
+export const quantityUnitSchema = z.enum(QUANTITY_UNITS);
+export const inventoryUnitStatusSchema = z.enum(["compatible", "needs_correction"]);
 export const inventoryConditionSchema = z.enum(["new", "good", "worn", "needs_repair", "unknown"]);
 export const stockEvidenceSchema = z.enum([
   "physically_counted",
@@ -101,6 +97,9 @@ const inventoryItemShape = z.object({
   /** On-hand quantity currently reserved for projects; not depleted stock. */
   allocatedQuantity: z.number().finite().nonnegative().optional(),
   unit: quantityUnitSchema,
+  /** Derived compatibility state. Legacy mismatches remain readable but are not actionable. */
+  unitStatus: inventoryUnitStatusSchema.optional(),
+  unitCorrectionReason: z.string().max(500).optional(),
   location: z.string().max(240).optional(),
   condition: inventoryConditionSchema.optional(),
   dimensions: dimensionSchema.optional(),
@@ -202,7 +201,19 @@ function validateInventoryQuantityInvariant(value: { readonly quantity: number; 
   }
 }
 
-export const createInventoryItemSchema = createInventoryItemShape.superRefine(validateInventoryQuantityInvariant);
+function validateInventoryItemKindUnit(
+  value: { readonly kind: string; readonly unit: string },
+  ctx: z.RefinementCtx
+): void {
+  const reason = unitCorrectionReason(value.kind, value.unit);
+  if (reason !== undefined && !isUnitCompatibleWithItemKind(value.kind, value.unit)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["unit"], message: reason });
+  }
+}
+
+export const createInventoryItemSchema = createInventoryItemShape
+  .superRefine(validateInventoryQuantityInvariant)
+  .superRefine(validateInventoryItemKindUnit);
 
 /**
  * Commissioning is a deliberate evidence transition, not a generic item

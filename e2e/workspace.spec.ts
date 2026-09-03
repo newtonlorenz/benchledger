@@ -382,6 +382,47 @@ test("keeps project navigation and build progress discoverable on mobile", async
   })).toBe(true);
 });
 
+test("keeps realistic BOM rows readable without collisions on desktop and mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await signIn(page);
+  await page.getByRole("button", { name: /^Projects/ }).click();
+  const rows = page.locator(".bom-row");
+  await expect(rows.first()).toBeVisible();
+  await rows.first().locator(".bom-main strong").evaluate((element) => {
+    element.textContent = "Addressable LED illumination assembly with extra-long strain-relief routing and service access clearance";
+  });
+  await rows.first().locator(".bom-main > div > span").evaluate((element) => {
+    element.textContent = "Confirm voltage, connector orientation, cable bend radius, diffuser clearance, and mounting access before final assembly.";
+  });
+
+  const assertNoCollisions = async () => {
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    for (const row of await rows.all()) {
+      const rowSize = await row.evaluate((element) => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth, text: element.textContent, children: [...element.children].map((child) => ({ className: child.className, clientWidth: (child as HTMLElement).clientWidth, scrollWidth: (child as HTMLElement).scrollWidth, left: child.getBoundingClientRect().left, right: child.getBoundingClientRect().right })) }));
+      expect(rowSize.scrollWidth, JSON.stringify(rowSize)).toBeLessThanOrEqual(rowSize.clientWidth);
+      const boxes = await Promise.all([".bom-main", ".bom-quantity", ".bom-match", ".bom-expert"].map(async (selector) => {
+        const target = row.locator(selector);
+        return await target.count() > 0 ? target.boundingBox() : null;
+      }));
+      const visible = boxes.filter((box): box is NonNullable<typeof box> => box !== null);
+      for (let left = 0; left < visible.length; left += 1) for (let right = left + 1; right < visible.length; right += 1) {
+        const a = visible[left]!;
+        const b = visible[right]!;
+        const overlap = a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+        expect(overlap).toBe(false);
+      }
+    }
+  };
+
+  await assertNoCollisions();
+  await page.getByRole("button", { name: "Beginner view" }).click();
+  await assertNoCollisions();
+  await page.setViewportSize({ width: 768, height: 900 });
+  await assertNoCollisions();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await assertNoCollisions();
+});
+
 test("requires and persists the managed category and semantic kind for quick inventory add", async ({ page }) => {
   const categoryStatuses: number[] = [];
   page.on("response", (response) => {
@@ -394,8 +435,7 @@ test("requires and persists the managed category and semantic kind for quick inv
 
   const selectionDialog = page.getByRole("dialog", { name: "Add to inventory" });
   await selectionDialog.getByRole("combobox", { name: /Item type/u }).selectOption("tool");
-  await expect(selectionDialog.getByRole("button", { name: "Continue", exact: true })).toBeDisabled();
-  await selectionDialog.getByRole("combobox", { name: /Category/u }).selectOption("category-tools");
+  await expect(selectionDialog.getByRole("combobox", { name: /Category/u })).toHaveValue("category-tools");
   expect(categoryStatuses.length).toBeGreaterThan(0);
   expect(categoryStatuses).not.toContain(404);
   await expect(selectionDialog.getByRole("button", { name: "Continue", exact: true })).toBeEnabled();
