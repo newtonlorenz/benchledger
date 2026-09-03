@@ -27,10 +27,10 @@ function revisionIdFor(reference: ProjectRevisionReference | undefined, fallback
   return nonEmpty(reference?.id) ?? nonEmpty(fallback);
 }
 
-function revisionLabel(reference: ProjectRevisionReference | undefined, revisionId: string | undefined): string {
+function revisionLabel(reference: ProjectRevisionReference | undefined, revisionId: string | undefined, expert: boolean): string {
   if (reference?.name?.trim()) return reference.number === undefined ? reference.name.trim() : `r${String(reference.number).padStart(2, "0")} · ${reference.name.trim()}`;
   if (reference?.number !== undefined) return `r${String(reference.number).padStart(2, "0")}`;
-  return revisionId ?? "No current revision";
+  return expert ? revisionId ?? "No current revision" : revisionId ? "Current revision" : "No current revision";
 }
 
 function projectRevisionReference(project: Project): ProjectRevisionReference | undefined {
@@ -50,14 +50,14 @@ function workItemRevisionReference(item: ProjectWorkItem): ProjectRevisionRefere
  * current revision remains visible but disabled so the user can see why it
  * cannot receive a file yet.
  */
-export function artifactScopeChoices(project: Project): readonly ArtifactScopeChoice[] {
+export function artifactScopeChoices(project: Project, expert = false): readonly ArtifactScopeChoice[] {
   const projectRevision = projectRevisionReference(project);
   const projectRevisionId = revisionIdFor(projectRevision, project.serverRevisionId);
   const projectChoice: ArtifactScopeChoice = {
     key: projectRevisionId === undefined ? "project:none" : `project:${projectRevisionId}`,
     label: projectRevisionId === undefined
       ? "Project · No current revision"
-      : `Project · ${revisionLabel(projectRevision, projectRevisionId)} · ${projectRevisionId}`,
+      : `Project · ${revisionLabel(projectRevision, projectRevisionId, expert)}${expert ? ` · ${projectRevisionId}` : ""}`,
     target: projectRevisionId === undefined ? { kind: "all" } : { kind: "project", projectRevisionId },
     disabled: projectRevisionId === undefined,
     readOnly: false,
@@ -71,8 +71,8 @@ export function artifactScopeChoices(project: Project): readonly ArtifactScopeCh
       return {
         key: workItemRevisionId === undefined ? `work-item:${item.id}:none` : `work-item:${item.id}:${workItemRevisionId}`,
         label: workItemRevisionId === undefined
-          ? `Work item · ${item.name} · ${item.id} · No current revision`
-          : `Work item · ${item.name} · ${item.id} · ${revisionLabel(revision, workItemRevisionId)} · ${workItemRevisionId}`,
+          ? `Work item · ${item.name}${expert ? ` · ${item.id}` : ""} · No current revision`
+          : `Work item · ${item.name}${expert ? ` · ${item.id}` : ""} · ${revisionLabel(revision, workItemRevisionId, expert)}${expert ? ` · ${workItemRevisionId}` : ""}`,
         target: workItemRevisionId === undefined
           ? { kind: "all" }
           : { kind: "work-item", workItemId: item.id, workItemRevisionId },
@@ -103,19 +103,19 @@ export function artifactScopeKey(scope: ArtifactScope): string {
 }
 
 /** A plain-language identity for the currently visible scope. */
-export function artifactScopeIdentity(scope: ArtifactScope): string {
-  if (scope.kind === "project") return `Project · ${scope.projectRevisionId}`;
-  if (scope.kind === "work-item") return `Work item · ${scope.workItemId} · ${scope.workItemRevisionId}`;
+export function artifactScopeIdentity(scope: ArtifactScope, expert = false): string {
+  if (scope.kind === "project") return expert ? `Project · ${scope.projectRevisionId}` : "Project revision";
+  if (scope.kind === "work-item") return expert ? `Work item · ${scope.workItemId} · ${scope.workItemRevisionId}` : "Work item revision";
   return "All files · read-only";
 }
 
 /** Display the durable ancestry carried by one artifact row. */
-export function artifactIdentityLabel(artifact: Artifact): string {
+export function artifactIdentityLabel(artifact: Artifact, expert = false): string {
   if (artifact.workItemId !== undefined && artifact.workItemRevisionId !== undefined) {
-    return `Work item · ${artifact.workItemId} · ${artifact.workItemRevisionId}`;
+    return expert ? `Work item · ${artifact.workItemId} · ${artifact.workItemRevisionId}` : "Work item revision";
   }
-  if (artifact.projectRevisionId !== undefined) return `Project · ${artifact.projectRevisionId}`;
-  return "Unbound / legacy";
+  if (artifact.projectRevisionId !== undefined) return expert ? `Project · ${artifact.projectRevisionId}` : "Project revision";
+  return expert ? "Unbound / legacy" : "Not assigned to a revision";
 }
 
 export function artifactMatchesScope(artifact: Artifact, scope: ArtifactScope): boolean {

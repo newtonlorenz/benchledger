@@ -513,7 +513,8 @@ test("offers exact work-item scopes, keeps legacy files in All, and freezes uplo
   await expect(scope).toHaveValue(`project:${projectRevisionId}`);
   await expect(scope.locator("option")).toContainText(["Project", "Body", "Unbound notes", "All files (read-only)"]);
   await expect(scope.locator("option").filter({ hasText: "Unbound notes" })).toHaveAttribute("disabled", "");
-  await expect(page.locator(".file-scope-identity")).toContainText(`Project · ${projectRevisionId}`);
+  await expect(page.locator(".file-scope-identity")).toContainText("Project revision");
+  await expect(page.locator(".file-scope-identity")).not.toContainText(projectRevisionId);
 
   await scope.selectOption("all");
   await expect(page.locator(".file-scope-identity")).toContainText("All files · read-only");
@@ -521,9 +522,14 @@ test("offers exact work-item scopes, keeps legacy files in All, and freezes uplo
   await expect(page.getByRole("button", { name: "Choose a revision to upload" })).toBeDisabled();
 
   await scope.selectOption(`work-item:${workItemId}:${workItemRevisionId}`);
-  await expect(page.locator(".file-scope-identity")).toContainText(`Work item · ${workItemId} · ${workItemRevisionId}`);
+  await expect(page.locator(".file-scope-identity")).toContainText("Work item revision");
+  await expect(page.locator(".file-scope-identity")).not.toContainText(workItemId);
   await expect(page.getByRole("cell", { name: /body-existing\.step/u })).toBeVisible();
   await expect(page.getByRole("cell", { name: /legacy-scope-note\.md/u })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Beginner view" }).click();
+  await expect(page.locator(".file-scope-identity")).toContainText(`Work item · ${workItemId} · ${workItemRevisionId}`);
+  await expect(scope.locator("option").filter({ hasText: "Body" })).toContainText(workItemId);
 
   const beginBodies: Record<string, unknown>[] = [];
   let releaseFirstBegin: (() => void) | undefined;
