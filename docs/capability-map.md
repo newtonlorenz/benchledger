@@ -20,7 +20,7 @@ resource byte budget.
 | `benchledger://inventory/items/{itemId}` | One item with quantity, dimensions, links, and evidence | `inventory:read` |
 | `benchledger://inventory/categories/{categoryId}` | One user-managed category or subcategory | `inventory:read` |
 | `benchledger://inventory/items/{itemId}/product-profile` | Exact-product link for one physical item; non-confirming states stay explicit | `catalog:read` |
-| `benchledger://projects/{projectId}/context` | Bounded project brief and next actions | `projects:read` |
+| `benchledger://projects/{projectId}/context` | Bounded project brief, selected revision summary, and next actions | `projects:read` |
 | `benchledger://projects/{projectId}/revisions/{revisionId}` | One versioned planning revision | `projects:read` |
 | `benchledger://projects/{projectId}/revisions/{revisionId}/build-configurations` | Immutable exact build-setup snapshots for a revision | `projects:read` |
 | `benchledger://build-configurations/{buildConfigurationId}` | One build setup with copied facts and content hash | `projects:read` |
@@ -88,6 +88,7 @@ and invalid hashes. Mutating tools use optimistic versions where applicable.
 | Project setup | `preview_project_setup` | `projects:write` + `bom:write` | Preview metadata only; actor-owned 30-minute row, no graph/stock/audit/event mutation |
 | Project setup | `commit_project_setup` | `projects:write` + `bom:write` | Yes; exact preview, reservations, one aggregate audit, and idempotent replay |
 | BOM | `list_bom_lines`, `list_reservations`, `read_reservation`, `calculate_bom_gaps` (Ready/Check/Decide/Source plus exact missing specification decisions) | `bom:read` | No |
+| Inspections | `list_inspections`, `read_inspection` | `bom:read` | No; required Check lines only, with optional lines kept out of the default queue |
 | BOM | `create_bom_line`, `update_bom_line`, `retire_bom_line`, `restore_bom_line`, `create_reservation`, `release_reservation`, `record_usage` | `bom:write` | Yes |
 | Reconciliation | `read_reconciliation` | `bom:read` | No |
 | Reconciliation | `save_reconciliation_draft`, `commit_reconciliation` | `bom:write` | Draft save / commit |

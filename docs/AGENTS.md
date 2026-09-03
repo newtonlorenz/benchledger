@@ -128,6 +128,8 @@ them. Preview exact per-line before/after changes and unit coverage. MCP
 list/read/preview/commit parity is complete, including nested each↔piece
 mapping, refreshed before/after state, and project-scoped fail-closed access.
 There is no quick-complete path.
+Optional Check lines remain visible in the plan for explicit review, but they
+do not create default inspection actions.
 
 ## Minute 4–6: expert path
 
@@ -164,6 +166,9 @@ baselines; BOM lines and metadata remain editable through optimistic version
 checks. Updates pass the returned version; a conflict means “read again,” not
 “overwrite.” Reservations reduce available confirmed stock but are not
 consumption. Corrections and usage are append-only events.
+
+The bounded project context includes the selected current revision and its
+persisted summary without enumerating revision history.
 
 Gap and inspection candidates require an exact item ID or an explicit
 alternative. Broad kind/category constraints do not automatically nominate
