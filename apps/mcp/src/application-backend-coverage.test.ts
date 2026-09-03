@@ -470,19 +470,27 @@ describe("createApplicationBackend translation coverage", () => {
     service.getProjectRevision.mockResolvedValueOnce(apiRevision({ notes: richSummary }));
     const contextResult = await backend.projects.context({ projectId: "project-1" }, context);
     expect(contextResult.text).toContain("Work items: Base (part)");
+    expect(contextResult.text).toContain("Needs attention: 0 required items.");
     expect(contextResult.text).toContain(`Revision summary: ${richSummary}`);
     expect(contextResult).toMatchObject({ status: "building", blocked: { blocked: false, reasons: [] }, currentRevision: { id: "revision-1", summary: richSummary } });
     service.evaluateBomGaps.mockResolvedValueOnce({
       revisionId: "revision-1",
       lines: [
-        { lineId: "bom-blocked", name: "M3 inserts", optional: false, status: "missing", decision: "source", requiredQuantity: 4, suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 4, unit: "each", matchedItemIds: [], reasons: ["No confirmed stock covers the remaining quantity."], alternatives: [], candidates: [] },
+        { lineId: "bom-blocked", name: "M3 inserts", optional: false, status: "missing", decision: "source", requiredQuantity: 4, suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 4, unit: "each", matchedItemIds: [], reasons: ["No confirmed stock covers the remaining quantity.", "Supplier evidence is stale."], alternatives: [], candidates: [] },
+        { lineId: "bom-check", name: "Controller", optional: false, status: "inspect_first", decision: "check", requiredQuantity: 1, suppliedQuantity: 0, inspectQuantity: 1, missingQuantity: 0, unit: "each", matchedItemIds: [], reasons: ["Physical count is needed.", "Compatibility needs review."], alternatives: [], candidates: [] },
         { lineId: "bom-decide", name: "Power supply", optional: false, status: "specify_first", decision: "decide", missingDecisions: ["current_or_load", "connector"], requiredQuantity: 1, suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 1, unit: "each", matchedItemIds: [], reasons: [], alternatives: [], candidates: [] },
+        { lineId: "bom-optional", name: "Optional cover", optional: true, status: "missing", decision: "source", requiredQuantity: 1, suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 1, unit: "each", matchedItemIds: [], reasons: ["Optional only."], alternatives: [], candidates: [] },
       ],
-      totals: { requiredLines: 2, suppliedLines: 0, inspectFirstLines: 0, partialLines: 0, missingLines: 1, optionalLines: 0, readyLines: 0, checkLines: 0, decideLines: 1, sourceLines: 1 },
+      totals: { requiredLines: 3, suppliedLines: 0, inspectFirstLines: 1, partialLines: 0, missingLines: 1, optionalLines: 1, readyLines: 0, checkLines: 1, decideLines: 1, sourceLines: 1 },
     });
     const blockedContext = await backend.projects.context({ projectId: "project-1" }, context);
+    expect(blockedContext.text).toContain("Needs attention: 3 required items (1 Check, 1 Decide, 1 Source).");
+    expect(blockedContext.text).not.toContain("Blockers:");
     expect(blockedContext.blocked).toEqual({ blocked: true, reasons: [
       { source: "bom", projectRevisionId: "revision-1", bomLineId: "bom-blocked", decision: "source", reason: "No confirmed stock covers the remaining quantity." },
+      { source: "bom", projectRevisionId: "revision-1", bomLineId: "bom-blocked", decision: "source", reason: "Supplier evidence is stale." },
+      { source: "bom", projectRevisionId: "revision-1", bomLineId: "bom-check", decision: "check", reason: "Physical count is needed." },
+      { source: "bom", projectRevisionId: "revision-1", bomLineId: "bom-check", decision: "check", reason: "Compatibility needs review." },
       { source: "bom", projectRevisionId: "revision-1", bomLineId: "bom-decide", decision: "decide", reason: "Resolve: current_or_load, connector." },
     ] });
     service.getProject.mockResolvedValueOnce(apiProject({ currentRevisionId: undefined }));
