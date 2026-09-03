@@ -79,6 +79,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; fo
 .topbar-actions { min-width: 0; margin-left: auto; display: flex; align-items: center; gap: 12px; }
 .global-search, .field-search { min-width: 180px; display: flex; align-items: center; gap: 8px; padding: 0 11px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink-muted); background: var(--surface-strong); }
 .global-search { width: min(250px, 28vw); height: 38px; }
+.global-search:focus-within { outline: 3px solid oklch(67% 0.16 158 / .7); outline-offset: 2px; }
 .global-search input, .field-search input { width: 100%; min-width: 0; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: .82rem; }
 .global-search input::placeholder, .field-search input::placeholder { color: var(--ink-muted); }
 kbd { display: inline-block; padding: 1px 5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; color: var(--ink-muted); background: var(--surface-soft); font-size: .65rem; white-space: nowrap; }
@@ -261,6 +262,10 @@ kbd { display: inline-block; padding: 1px 5px; border: 1px solid var(--line); bo
 .dossier-facts dt { color: var(--ink-muted); font-size: .71rem; }.dossier-facts dd { margin: 0; color: var(--ink); font-size: .75rem; font-weight: 620; text-align: right; }
 .dossier-inventory-link { margin-top: 22px; }
 .project-select { min-height: 42px; max-width: 210px; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink-soft); background: var(--surface-strong); font-size: .78rem; }
+.project-view-switch { min-width: 0; display: inline-flex; padding: 3px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); }
+.project-view-switch button { min-height: 44px; padding: 0 12px; border: 0; border-radius: 5px; color: var(--ink-muted); background: transparent; font-size: .74rem; font-weight: 620; white-space: nowrap; cursor: pointer; }
+.project-view-switch button:hover { color: var(--ink); }
+.project-view-switch button.is-active { color: var(--moss-dark); background: var(--surface-strong); box-shadow: 0 1px 3px oklch(25% .03 174 / .12), inset 0 0 0 1px oklch(62% .08 158 / .28); }
 .dossier-workspace { min-width: 0; }
 .tab-list { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--line); }
 .tab-list button { min-height: 44px; display: inline-flex; align-items: center; gap: 7px; margin-bottom: -1px; padding: 0 13px; border: 0; border-bottom: 2px solid transparent; color: var(--ink-muted); background: transparent; font-size: .78rem; cursor: pointer; }
@@ -279,7 +284,7 @@ kbd { display: inline-block; padding: 1px 5px; border: 1px solid var(--line); bo
 .inspection-action { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: start; gap: 11px; padding: 13px; border: 1px solid var(--line); background: var(--surface); }
 .inspection-action-icon { width: 30px; height: 30px; display: grid; place-items: center; color: var(--slate); background: var(--slate-soft); }
 .inspection-action-body { min-width: 0; }
-.inspection-action-body > strong { display: block; font-size: .78rem; line-height: 1.35; }
+.inspection-action-body > strong { display: block; overflow-wrap: anywhere; font-size: .78rem; line-height: 1.35; }
 .inspection-candidate, .inspection-action-meta { display: block; margin-top: 4px; color: var(--ink-muted); font-size: .68rem; }
 .inspection-candidate b { color: var(--ink-soft); font-weight: 650; }
 .inspection-action-button { min-height: 38px; padding: 0 10px; font-size: .7rem; white-space: nowrap; }
@@ -329,6 +334,8 @@ kbd { display: inline-block; padding: 1px 5px; border: 1px solid var(--line); bo
   .inspection-panel-heading { align-items: flex-start; flex-direction: column; }
   .inspection-action { grid-template-columns: 30px minmax(0, 1fr); }
   .inspection-action-button { grid-column: 2; width: 100%; }
+  .project-view-switch { width: 100%; }
+  .project-view-switch button { min-width: 0; flex: 1; }
   .inspection-dialog { padding: 20px; }
   .inspection-dialog-fields { grid-template-columns: 1fr; }
 }

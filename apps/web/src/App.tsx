@@ -738,7 +738,7 @@ function App() {
             {page === "overview" && <OverviewPage items={items} projects={projects} expert={expert} sampleMode={sampleMode} onNavigate={navigate} onOpenProject={openProject} onSelectItem={setSelectedItemId} onNewProject={openNewProject} />}
             {page === "inventory" && <InventoryPage adapter={adapter} categories={categories} search={search} refreshKey={inventoryRefreshNonce} bulkSelectionResetKey={bulkSelectionResetNonce} onSearch={(value) => setSearch(value.slice(0, MAX_INVENTORY_SEARCH_LENGTH))} onSessionExpired={handleSessionExpiry} onPageItems={(pageItems) => setItems((current) => { const byId = new Map(current.map((item) => [item.id, item] as const)); pageItems.forEach((item) => byId.set(item.id, item)); return [...byId.values()]; })} onSelectItem={setSelectedItemId} onNewItem={() => { setReplacementFor(undefined); setShowNewItem(true); }} onBulkSelectionChange={(selection, onResult) => setBulkInventorySelection(selection.length ? { items: [...selection], onResult } : undefined)} />}
             {page === "projects" && selectedProject && <ProjectPage project={selectedProject} projects={visibleProjects} projectView={projectView} archivedProjectCount={archivedProjects.length} items={items} offers={offers} tab={projectTab} expert={expert} sampleMode={sampleMode} onTabChange={setProjectTab} onSelectProject={setSelectedProjectId} onProjectViewChange={(view) => { setProjectView(view); setSelectedProjectId((view === "archived" ? archivedProjects : projects)[0]?.id ?? ""); }} onOpenItem={setSelectedItemId} onNavigate={navigate} onToast={setToast} onNewProject={openNewProject} onArchive={archiveProject} onRestore={restoreProject} onRemove={removeProject} onNewRevision={() => setShowNewRevision(true)} onRetrySetup={pendingRevisionSetup?.projectId === selectedProject.id && pendingRevisionSetup.revisionId === selectedProject.serverRevisionId ? retryRevisionSetup : undefined} onAddBom={() => setShowAddBom(true)} onUpload={uploadArtifact} onReadReconciliation={adapter.readReconciliation} onSaveReconciliation={adapter.saveReconciliationDraft} onCommitReconciliation={adapter.commitReconciliation} onRefreshWorkspace={refreshWorkspace} onListInspections={adapter.listInspections} onReadInspection={adapter.readInspection} onPreviewInspection={adapter.previewInspectionCompletion} onConfirmInspection={adapter.commitInspectionCompletion} />}
-            {page === "projects" && !selectedProject && <section><div className="project-view-switch" role="group" aria-label="Project view"><button type="button" className={projectView === "active" ? "is-active" : ""} onClick={() => { setProjectView("active"); setSelectedProjectId(projects[0]?.id ?? ""); }}>Active projects</button><button type="button" className={projectView === "archived" ? "is-active" : ""} onClick={() => { setProjectView("archived"); setSelectedProjectId(archivedProjects[0]?.id ?? ""); }}>Archived ({archivedProjects.length})</button></div><EmptyState icon="folder" title={projectView === "archived" ? "No archived projects" : "No projects yet"} description={projectView === "archived" ? "Archived projects will appear here with their retained history." : "Start with a name and project goal. You can add parts and files after that."} {...(projectView === "active" ? { action: "Create first project", onAction: () => setShowNewProject(true) } : {})} /></section>}
+            {page === "projects" && !selectedProject && <section><div className="project-view-switch" role="group" aria-label="Project view"><button type="button" aria-pressed={projectView === "active"} className={projectView === "active" ? "is-active" : ""} onClick={() => { setProjectView("active"); setSelectedProjectId(projects[0]?.id ?? ""); }}>Active projects</button><button type="button" aria-pressed={projectView === "archived"} className={projectView === "archived" ? "is-active" : ""} onClick={() => { setProjectView("archived"); setSelectedProjectId(archivedProjects[0]?.id ?? ""); }}>Archived ({archivedProjects.length})</button></div><EmptyState icon="folder" title={projectView === "archived" ? "No archived projects" : "No projects yet"} description={projectView === "archived" ? "Archived projects will appear here with their retained history." : "Start with a name and project goal. You can add parts and files after that."} {...(projectView === "active" ? { action: "Create first project", onAction: () => setShowNewProject(true) } : {})} /></section>}
             {page === "capabilities" && <CapabilitiesPage expert={expert} onCopy={setToast} />}
             {page === "settings" && <><div className={workspaceAccess?.mode === "lan_open" ? "settings-page-lan-open" : undefined}><SettingsPage expert={expert} sampleMode={sampleMode} connection={connection} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} onRetryCategories={() => setCategoryReloadNonce((current) => current + 1)} onCreateCategory={createInventoryCategory} onUpdateCategory={updateInventoryCategory} onArchiveCategory={archiveInventoryCategory} hideLogout={workspaceAccess?.mode === "lan_open"} onExpert={() => setExpert((current) => !current)} onLogout={sampleMode ? returnToPrivateWorkspace : signOut} /></div>{workspaceAccess && !sampleMode && !workspaceAccess.demo && <div className="settings-layout"><WorkspaceAccessSection access={workspaceAccess} pendingRetry={adapter.getWorkspaceAccessRetry()} onUpdate={adapter.updateWorkspaceAccess} onChanged={setWorkspaceAccess} onClearRetry={adapter.clearWorkspaceAccessRetry} onRebootstrap={() => { setReloadNonce((current) => current + 1); }} /></div>}</>}
           </main>
@@ -757,11 +757,61 @@ function App() {
 }
 
 function Sidebar({ page, projectCount, sampleMode, onNavigate, mobileOpen, onClose }: { page: Page; projectCount: number; sampleMode: boolean; onNavigate: (page: Page) => void; mobileOpen: boolean; onClose: () => void }) {
+  const drawerRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const returnFocusRef = useRef<HTMLElement | undefined>(undefined);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+    closeButtonRef.current?.focus();
+  }, [mobileOpen]);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const desktop = window.matchMedia("(min-width: 801px)");
+    const closeAtDesktop = (event: MediaQueryListEvent) => {
+      if (event.matches) onClose();
+    };
+    desktop.addEventListener("change", closeAtDesktop);
+    return () => desktop.removeEventListener("change", closeAtDesktop);
+  }, [mobileOpen, onClose]);
+
+  const closeAndRestoreFocus = () => {
+    const returnFocus = returnFocusRef.current;
+    onClose();
+    window.requestAnimationFrame(() => returnFocus?.focus());
+  };
+
+  const keepMobileFocusInside = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (!mobileOpen) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeAndRestoreFocus();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = [...(drawerRef.current?.querySelectorAll<HTMLElement>(focusableOverlaySelector) ?? [])];
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (!first || !last) {
+      event.preventDefault();
+      drawerRef.current?.focus();
+    } else if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   return <>
-    {mobileOpen && <div className="nav-scrim" aria-hidden="true" onClick={onClose} />}
-    <aside className={`sidebar ${mobileOpen ? "is-open" : ""}`} aria-label="Primary navigation">
-      <div className="brand-lockup"><div className="brand-mark" aria-hidden="true"><span /><span /><span /></div><div><div className="wordmark">BenchLedger</div><div className="brand-caption">maker workspace</div></div><button className="icon-button sidebar-close" aria-label="Close navigation" onClick={onClose}><Icon name="close" size={18} /></button></div>
-      <div className="workspace-switcher"><span className="workspace-avatar">W</span><span><strong>Workbench</strong><small>{sampleMode ? "Sample workspace" : "Private workspace"}</small></span><Icon name="chevron-down" size={14} /></div>
+    {mobileOpen && <div className="nav-scrim" aria-hidden="true" onClick={closeAndRestoreFocus} />}
+    <aside ref={drawerRef} className={`sidebar ${mobileOpen ? "is-open" : ""}`} aria-label="Primary navigation" role={mobileOpen ? "dialog" : undefined} aria-modal={mobileOpen ? true : undefined} tabIndex={mobileOpen ? -1 : undefined} onKeyDown={keepMobileFocusInside}>
+      <div className="brand-lockup"><div className="brand-mark" aria-hidden="true"><span /><span /><span /></div><div><div className="wordmark">BenchLedger</div><div className="brand-caption">maker workspace</div></div><button ref={closeButtonRef} className="icon-button sidebar-close" aria-label="Close navigation" onClick={closeAndRestoreFocus}><Icon name="close" size={18} /></button></div>
+      <div className="workspace-switcher"><span className="workspace-avatar">W</span><span><strong>Workbench</strong><small>{sampleMode ? "Sample workspace" : "Private workspace"}</small></span></div>
       <nav className="nav-list">
         <span className="nav-label">Workspace</span>
         {(["overview", "inventory", "projects"] as Page[]).map((entry) => <button key={entry} className={`nav-item ${page === entry ? "is-active" : ""}`} onClick={() => onNavigate(entry)}><Icon name={pageCopy[entry].icon} size={18} /><span>{pageCopy[entry].label}</span>{entry === "projects" && <span className="nav-count">{projectCount}</span>}</button>)}
@@ -1506,7 +1556,7 @@ function ProjectPage({ project, projects, projectView, archivedProjectCount, ite
     onConfirmInspection: confirmInspection
   };
   return <InspectionContext.Provider value={inspectionContext}><>
-    <PageHeader eyebrow="Project" title={project.name} description={project.subtitle} action="New project" onAction={onNewProject}><div className="project-view-switch" role="group" aria-label="Project view"><button type="button" className={projectView === "active" ? "is-active" : ""} onClick={() => onProjectViewChange("active")}>Active projects</button><button type="button" className={projectView === "archived" ? "is-active" : ""} onClick={() => onProjectViewChange("archived")}>Archived ({archivedProjectCount})</button></div><select className="project-select" aria-label="Choose project" value={project.id} onChange={(event) => onSelectProject(event.target.value)}>{projects.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select>{project.status === "archived" ? <button className="button button-primary" onClick={() => setRestoreConfirmationOpen(true)}><Icon name="refresh" size={16} /> Restore project</button> : <button className="button button-secondary" onClick={() => setArchiveConfirmationOpen(true)}><Icon name="archive" size={16} /> Archive project</button>}{onRetrySetup && project.status !== "archived" && <button className="button button-secondary" onClick={onRetrySetup}><Icon name="refresh" size={16} /> Retry setup</button>}{project.status !== "archived" && <button className="button button-secondary" onClick={onNewRevision}><Icon name="plus" size={16} /> New revision</button>}</PageHeader>
+    <PageHeader eyebrow="Project" title={project.name} description={project.subtitle} action="New project" onAction={onNewProject}><div className="project-view-switch" role="group" aria-label="Project view"><button type="button" aria-pressed={projectView === "active"} className={projectView === "active" ? "is-active" : ""} onClick={() => onProjectViewChange("active")}>Active projects</button><button type="button" aria-pressed={projectView === "archived"} className={projectView === "archived" ? "is-active" : ""} onClick={() => onProjectViewChange("archived")}>Archived ({archivedProjectCount})</button></div><select className="project-select" aria-label="Choose project" value={project.id} onChange={(event) => onSelectProject(event.target.value)}>{projects.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select>{project.status === "archived" ? <button className="button button-primary" onClick={() => setRestoreConfirmationOpen(true)}><Icon name="refresh" size={16} /> Restore project</button> : <button className="button button-secondary" onClick={() => setArchiveConfirmationOpen(true)}><Icon name="archive" size={16} /> Archive project</button>}{onRetrySetup && project.status !== "archived" && <button className="button button-secondary" onClick={onRetrySetup}><Icon name="refresh" size={16} /> Retry setup</button>}{project.status !== "archived" && <button className="button button-secondary" onClick={onNewRevision}><Icon name="plus" size={16} /> New revision</button>}</PageHeader>
     {archiveConfirmationOpen && <Dialog title={`Archive ${project.name}?`} role="alertdialog" onClose={() => { if (!archiving) setArchiveConfirmationOpen(false); }}><p className="dialog-intro">This hides the project from active lists and releases its active reservations. Revisions, files, BOM, stock evidence, and audit history remain retained. Archive is reversible; restore returns it to idea without recreating reservations.</p><div className="dialog-actions"><button type="button" className="button button-quiet" onClick={() => setArchiveConfirmationOpen(false)} disabled={archiving}>Cancel</button><button type="button" className="button button-primary" onClick={() => { void confirmArchive(); }} disabled={archiving} aria-busy={archiving}>{archiving ? "Archiving…" : "Archive project"}</button></div></Dialog>}
     {restoreConfirmationOpen && <Dialog title={`Restore ${project.name}?`} role="alertdialog" onClose={() => { if (!restoring) setRestoreConfirmationOpen(false); }}><p className="dialog-intro">This moves the project to Idea. It does not recreate released reservations.</p><div className="dialog-actions"><button type="button" className="button button-quiet" onClick={() => setRestoreConfirmationOpen(false)} disabled={restoring}>Cancel</button><button type="button" className="button button-primary" onClick={() => { void confirmRestore(); }} disabled={restoring} aria-busy={restoring}>{restoring ? "Restoring…" : "Restore project"}</button></div></Dialog>}
     {removeConfirmationOpen && <Dialog title={`Remove ${project.name} from the workspace?`} role="alertdialog" onClose={() => { if (!removing) { setRemoveConfirmationOpen(false); setRemoveConfirmation(""); } }}><p className="dialog-intro"><strong>This action is irreversible.</strong> It removes this {project.status === "archived" ? "archived" : "active"} project from workspace lists. {project.status === "archived" ? "" : "Active reservations will be released. "} Its tombstone, revisions, files, reservations release evidence, and audit history remain retained for history, but the project cannot be restored.</p><label className="form-field" htmlFor="remove-project-confirmation"><span>Type <strong>{project.name}</strong> to confirm</span><input id="remove-project-confirmation" autoFocus value={removeConfirmation} onChange={(event) => setRemoveConfirmation(event.target.value)} disabled={removing} autoComplete="off" /></label><div className="dialog-actions"><button type="button" className="button button-quiet" onClick={() => { setRemoveConfirmationOpen(false); setRemoveConfirmation(""); }} disabled={removing}>Cancel</button><button type="button" className="button button-danger" onClick={() => { void confirmRemove(); }} disabled={removing || removeConfirmation !== project.name} aria-busy={removing}>{removing ? "Removing…" : "Remove from workspace"}</button></div></Dialog>}

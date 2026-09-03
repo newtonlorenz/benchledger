@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { InspectionQueuePanel, InspectionResultDialog, alternativeChanges, effectsLabel, formatObservedAt, formatQuantityConversion, gapQuantities, lineReferences, previewDescription } from "./inspection-ui";
+import { InspectionQueuePanel, InspectionResultDialog, alternativeChanges, effectsLabel, formatObservedAt, formatQuantityConversion, gapQuantities, inspectionActionAccessibleNames, lineReferences, previewDescription } from "./inspection-ui";
 import type { InspectionAction } from "./inspection-ui";
 
 function action(index: number): InspectionAction {
@@ -45,6 +45,16 @@ describe("Project Plan Checks", () => {
     expect(markup).toContain("Candidate item 1");
     expect(markup).toContain("1 affected BOM line");
     expect(markup).toContain("View all");
+  });
+
+  it("adds stable ordinals only when inspection names would otherwise collide", () => {
+    const first = action(1);
+    const duplicate = { ...action(4), question: first.question, candidate: { ...action(4).candidate, name: first.candidate.name } };
+    expect(inspectionActionAccessibleNames([first, action(2), duplicate])).toEqual([
+      `Check ${first.candidate.name}: ${first.question} (1 of 2)`,
+      "Check Candidate item 2: Count the candidate for requirement 2.",
+      `Check ${first.candidate.name}: ${first.question} (2 of 2)`
+    ]);
   });
 
   it("keeps expert action, line, item, evidence, predicate, unit, and effects traceability", () => {

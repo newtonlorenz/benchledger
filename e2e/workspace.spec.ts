@@ -17,6 +17,31 @@ function inventoryRecord(id: string, name: string, kind = "tool") {
   };
 }
 
+function inspectionAction(index: number) {
+  const lineId = `inspection-line-${index}`;
+  return {
+    id: `inspection-${index}`,
+    projectRevisionId: "synthetic-revision",
+    itemId: `inspection-item-${index}`,
+    itemVersion: 1,
+    kind: "physical_quantity",
+    normalizedPredicate: '{"kind":"physical_quantity"}',
+    question: `Count candidate ${index} for the project requirement.`,
+    itemUnit: "each",
+    expectedUnit: "each",
+    compatibility: "conditional",
+    lineIds: [lineId],
+    lineVersions: [{ lineId, version: 1 }],
+    version: 1,
+    candidate: { id: `inspection-item-${index}`, version: 1, name: `Candidate item ${index}`, unit: "each", evidence: { state: "delivered_uncounted", source: "label" } },
+    expected: { quantity: 1, unit: "each", lineIds: [lineId], lineRequirements: [{ lineId, quantity: 1, unit: "each" }] },
+    possibleResults: ["confirmed", "inconclusive"],
+    effects: [{ kind: "physical_quantity", description: "Updates physical quantity evidence." }],
+    basis: { itemVersion: 1, lineVersions: [{ lineId, version: 1 }] },
+    requiresHumanConfirmation: true
+  };
+}
+
 test("filters, edits, and physically counts evidence-aware inventory", async ({ page }) => {
   await signIn(page);
   const inventoryRequests: string[] = [];
@@ -817,23 +842,60 @@ test("shows exactly one accessible navigation surface at 390px", async ({ page }
   await page.setViewportSize({ width: 390, height: 844 });
   await signIn(page);
 
-  await expect(page.getByRole("button", { name: "Open navigation" })).toBeVisible();
+  const openNavigation = page.getByRole("button", { name: "Open navigation" });
+  await expect(openNavigation).toBeVisible();
   await expect(page.getByRole("button", { name: "Close navigation" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Open navigation" }).click();
-  await expect(page.getByRole("button", { name: "Close navigation" })).toBeVisible();
+  await openNavigation.click();
+  const mobileNavigation = page.getByRole("dialog", { name: "Primary navigation" });
+  const closeNavigation = page.getByRole("button", { name: "Close navigation" });
+  await expect(mobileNavigation).toBeVisible();
+  await expect(closeNavigation).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(closeNavigation).toBeFocused();
+  expect(await page.evaluate(() => document.activeElement?.tagName)).not.toBe("BODY");
   await expect(page.getByRole("button", { name: "Workbench", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Open navigation" })).toHaveCount(0);
   await expect(page.locator(".app-main")).toHaveAttribute("inert", "");
+  await expect(page.locator(".workspace-switcher svg")).toHaveCount(0);
+  expect(await page.locator(".workspace-switcher").evaluate((element) => ({ tag: element.tagName, role: element.getAttribute("role") }))).toEqual({ tag: "DIV", role: null });
 
-  await page.getByRole("button", { name: "Close navigation" }).click();
+  await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "Close navigation" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Open navigation" })).toBeVisible();
+  await expect(openNavigation).toBeFocused();
 
-  await page.getByRole("button", { name: "Open navigation" }).click();
+  await openNavigation.click();
+  await page.locator(".nav-scrim").click({ position: { x: 350, y: 400 } });
+  await expect(openNavigation).toBeFocused();
+
+  await openNavigation.click();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await expect(page.getByRole("complementary", { name: "Primary navigation" })).toBeVisible();
+  await expect(page.locator(".app-main")).not.toHaveAttribute("inert", "");
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  await page.getByLabel("Search inventory").focus();
+  const searchFocus = await page.locator(".global-search").evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { style: style.outlineStyle, width: Number.parseFloat(style.outlineWidth) };
+  });
+  expect(searchFocus.style).toBe("solid");
+  expect(searchFocus.width).toBeGreaterThanOrEqual(3);
+
+  await openNavigation.click();
   await page.getByRole("button", { name: /^Projects/ }).click();
   const projectTrigger = page.getByRole("button", { name: "New project" });
   await expect(projectTrigger).toBeVisible();
   expect(await page.evaluate(() => window.scrollX)).toBe(0);
+
+  const projectViews = page.getByRole("group", { name: "Project view" });
+  await expect(projectViews.getByRole("button", { name: "Active projects", pressed: true })).toBeVisible();
+  await expect(projectViews.getByRole("button", { name: /^Archived/, pressed: false })).toBeVisible();
+  expect(await projectViews.evaluate((element) => {
+    const buttons = [...element.querySelectorAll("button")];
+    return element.scrollWidth <= element.clientWidth && buttons.every((button) => button.getBoundingClientRect().height >= 44);
+  })).toBe(true);
 
   await page.getByLabel("Search inventory").fill("ESP32");
   await expect(page.getByRole("heading", { name: "Review inventory." })).toBeVisible();
@@ -843,6 +905,43 @@ test("shows exactly one accessible navigation surface at 390px", async ({ page }
   });
   expect(horizontalScroll).toBe(0);
   await expect(page.getByRole("button", { name: "Open account settings" })).toBeVisible();
+});
+
+test("keeps desktop navigation visible and non-modal", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await signIn(page);
+
+  await expect(page.getByRole("complementary", { name: "Primary navigation" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open navigation" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Close navigation" })).toHaveCount(0);
+});
+
+test("gives project checks contextual names and a reversible mobile expansion", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await signIn(page);
+  const actions = [1, 2, 3, 4].map(inspectionAction);
+  actions[3] = { ...actions[3]!, question: actions[0]!.question, candidate: { ...actions[3]!.candidate, name: actions[0]!.candidate.name } };
+  await page.route("**/api/v1/project-revisions/*/inspections", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: { revisionId: "synthetic-revision", data: actions, total: actions.length, limit: 200 } }) });
+  });
+
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: /^Projects/ }).click();
+  const checks = page.getByRole("heading", { name: "Check before you build" }).locator("xpath=ancestor::section[1]");
+  await expect(checks.getByRole("button", { name: "Check Candidate item 1: Count candidate 1 for the project requirement. (1 of 2)" })).toBeVisible();
+  await expect(checks.getByRole("button", { name: "Check Candidate item 2: Count candidate 2 for the project requirement." })).toBeVisible();
+  await expect(checks.getByRole("button", { name: "Check Candidate item 1: Count candidate 1 for the project requirement. (2 of 2)" })).toHaveCount(0);
+
+  const viewAll = checks.getByRole("button", { name: "View all" });
+  await viewAll.click();
+  const showLess = checks.getByRole("button", { name: "Show less" });
+  await expect(showLess).toBeFocused();
+  await expect(checks.getByRole("button", { name: "Check Candidate item 1: Count candidate 1 for the project requirement. (2 of 2)" })).toBeVisible();
+  await showLess.click();
+  await expect(viewAll).toBeFocused();
+  await expect(checks.getByRole("button", { name: "Check Candidate item 1: Count candidate 1 for the project requirement. (2 of 2)" })).toHaveCount(0);
+  expect(await checks.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
 
 test("creates, edits, and archives a managed category hierarchy", async ({ page }) => {
