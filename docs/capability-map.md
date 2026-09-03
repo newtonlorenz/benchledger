@@ -44,6 +44,17 @@ reservation identity, including its durable project revision, BOM line, item,
 quantity/unit, status, and version. Project-scoped tokens must prove the
 revision or reservation ancestry before dispatch.
 
+Inventory units are semantic as well as numeric. New inventory creates use the
+shared kind policy and reject incompatible pairs (for example, a tool measured
+in grams); defaults are `each` for equipment and general items, `gram` for
+filament, `metre` for wire, and `millilitre` for adhesive. Inventory reads
+expose `unitStatus: "compatible"` or `"needs_correction"` plus a
+`unitCorrectionReason` when an older persisted row does not fit the policy.
+Those legacy rows remain visible with their original provenance and quantity,
+but do not contribute to confident BOM matching, reservation, usage, project
+setup, or reconciliation decisions. Requirement-side BOM units and explicit
+package conversions remain independent of this item-kind policy.
+
 ## Browser session authentication
 
 Browser session access is configured separately from MCP authorization. An

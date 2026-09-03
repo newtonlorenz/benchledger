@@ -111,6 +111,16 @@ status and shows an explicit mismatch or conversion diagnostic; offline/sample
 fallback uses the shared resolver and fails closed. These candidates remain
 Check until evidence and compatibility are confirmed.
 
+This conversion rule is separate from the semantic unit policy for inventory
+items. New creates use a lightweight default by kind (`each` for printers,
+tools, accessories, electronics, fasteners, consumables, and `other`; `gram`
+for filament; `metre` for wire; `millilitre` for adhesive) and reject an
+incompatible kind/unit pair. Older rows are not rewritten: reads expose
+`unitStatus: "needs_correction"` and a reason while preserving their quantity,
+evidence, and provenance. Such rows are excluded from confident matching,
+reservation, usage, project setup, and reconciliation until corrected through
+an explicit evidence-bearing workflow.
+
 Confirmed stock is consumed by allocation arithmetic, so two projects cannot
 silently reserve the same available quantity. If no confirmed candidate covers a
 fully specified required line, the agent may prepare a shopping proposal. It

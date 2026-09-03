@@ -78,9 +78,9 @@ function makePorts(): ServicePorts & {
     ["filament-1", makeProfile()],
   ]);
   const configurations = new Map<string, BuildConfigurationSnapshot>();
-  const inventoryItems = new Map<string, { id: string; kind: "filament" | "printer"; name: string }>([
-    ["filament-1", { id: "filament-1", kind: "filament", name: "PETG spool" }],
-    ["printer-1", { id: "printer-1", kind: "printer", name: "H2D bench" }],
+  const inventoryItems = new Map<string, { id: string; kind: "filament" | "printer"; name: string; unit: "gram" | "each" }>([
+    ["filament-1", { id: "filament-1", kind: "filament", name: "PETG spool", unit: "gram" }],
+    ["printer-1", { id: "printer-1", kind: "printer", name: "H2D bench", unit: "each" }],
   ]);
   const revision = { id: "revision-1", projectId: "project-1", number: 1, name: "Initial", status: "concept", createdAt: timestamp, version: 1 } as const;
   const secondRevision = { id: "revision-2", projectId: "project-1", number: 2, name: "Second", status: "concept", createdAt: timestamp, version: 1 } as const;
@@ -105,7 +105,7 @@ function makePorts(): ServicePorts & {
       listItems: async () => ({ data: [], limit: 200 }),
       getItem: async (id: string) => {
         const item = inventoryItems.get(id);
-        return item === undefined ? null : ({ id: item.id, name: item.name, kind: item.kind } as never);
+        return item === undefined ? null : ({ id: item.id, name: item.name, kind: item.kind, unit: item.unit } as never);
       },
       createItem: async () => { throw new Error("not implemented"); },
       updateItem: async () => { throw new Error("not implemented"); },
@@ -329,6 +329,20 @@ describe("catalog and build configuration application services", () => {
     expect(same.data.contentSha256).toBe(created.data.contentSha256);
     const superseding = await service.createBuildConfiguration("revision-1", { ...buildInput, supersedesSnapshotId: created.data.id }, context);
     expect(superseding.data.contentSha256).toBe(created.data.contentSha256);
+  });
+
+  it("rejects legacy-invalid printer and filament units before snapshot creation", async () => {
+    for (const invalidId of ["printer-1", "filament-1"] as const) {
+      const ports = makePorts();
+      const getItem = ports.inventory.getItem;
+      ports.inventory.getItem = async (id) => {
+        const current = await getItem(id);
+        return id === invalidId && current ? { ...current, unit: "millilitre" } : current;
+      };
+      await expect(new ApplicationService(ports).createBuildConfiguration("revision-1", buildInput, context))
+        .rejects.toMatchObject({ code: "validation", message: expect.stringMatching(/needs unit correction/i) });
+      expect(ports.catalogStore.configurations.size).toBe(0);
+    }
   });
 
   it("snapshots an explicitly unlinked physical filament without catalog or profile writes", async () => {

@@ -69,6 +69,41 @@ function expectInvalid(action: () => unknown, message?: RegExp): void {
 }
 
 describe("MCP validation boundary", () => {
+  it("accepts a default semantic unit for every inventory kind and rejects invalid pairs", () => {
+    const defaults = {
+      printer: "piece",
+      tool: "piece",
+      accessory: "piece",
+      consumable: "piece",
+      electronic: "piece",
+      fastener: "piece",
+      filament: "gram",
+      wire: "metre",
+      adhesive: "millilitre",
+      other: "piece",
+    } as const;
+    for (const [category, unit] of Object.entries(defaults)) {
+      expect(inventoryCreate({
+        name: `${category} item`,
+        category,
+        quantity: { value: 1, unit },
+        evidence: { state: "unknown", source: "test", recordedAt: "2026-09-03T00:00:00.000Z" },
+      }).quantity.unit).toBe(unit);
+    }
+    expectInvalid(() => inventoryCreate({
+      name: "Measured tool",
+      category: "tool",
+      quantity: { value: 1, unit: "metre" },
+      evidence: { state: "unknown", source: "test", recordedAt: "2026-09-03T00:00:00.000Z" },
+    }), /incompatible.*tool/i);
+    expectInvalid(() => inventoryCreate({
+      name: "Measured printer",
+      category: "printer",
+      quantity: { value: 1, unit: "gram" },
+      evidence: { state: "unknown", source: "test", recordedAt: "2026-09-03T00:00:00.000Z" },
+    }), /incompatible.*printer/i);
+  });
+
   it("accepts exact or explicitly physical-only filament selections, but no ambiguous partial identity", () => {
     const base = {
       projectRevisionId: "revision-1",

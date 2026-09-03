@@ -54,9 +54,12 @@ test("removes an archived project only after exact-name confirmation and hides i
   await page.getByRole("button", { name: /^Projects(?: \d+)?$/u }).click();
   await expect(page.getByRole("heading", { name: "Retained Archive E2E", exact: true })).toBeVisible();
 
+  await expect(page.locator(".page-header").getByRole("button", { name: "Delete from workspace", exact: true })).toHaveCount(0);
+  await page.getByText("Project settings", { exact: true }).click();
   await page.getByRole("button", { name: "Delete from workspace", exact: true }).click();
   const dialog = page.getByRole("alertdialog", { name: "Remove Retained Archive E2E from the workspace?" });
   await expect(dialog).toContainText("This action is irreversible.");
+  await expect(dialog).toContainText("archived project");
   const removeButton = dialog.getByRole("button", { name: "Remove from workspace", exact: true });
   await expect(removeButton).toBeDisabled();
   await dialog.getByLabel("Type Retained Archive E2E to confirm").fill("retained archive e2e");

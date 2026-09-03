@@ -41,8 +41,7 @@ import type {
   InspectionObservation as ApiInspectionObservation,
   BomGap as ApiBomGap,
 } from "@benchledger/api-contract";
-import { canonicalProjectLifecycle } from "@benchledger/api-contract";
-import { bomSpecificationSchema } from "@benchledger/api-contract";
+import { canonicalProjectLifecycle, bomSpecificationSchema, unitCorrectionReason } from "@benchledger/api-contract";
 import { deriveProjectBlocked } from "@benchledger/domain";
 import { McpAdapterError } from "./errors.js";
 import { McpAdapter } from "./adapter.js";
@@ -1221,6 +1220,7 @@ function toMcpInventoryItem(item: ApiInventoryItem): InventoryItem {
     ?? (item.evidence.state === "physically_counted" || item.evidence.state === "commissioned"
       ? Math.max(0, Math.min(item.quantity, item.quantity - item.availableQuantity))
       : 0);
+  const correctionReason = unitCorrectionReason(item.kind, item.unit);
   return {
     id: item.id,
     name: item.name,
@@ -1228,6 +1228,8 @@ function toMcpInventoryItem(item: ApiInventoryItem): InventoryItem {
     quantity: toQuantity(item.quantity, item.unit),
     availableQuantity: toQuantity(item.availableQuantity, item.unit),
     allocatedQuantity: toQuantity(allocatedQuantity, item.unit),
+    unitStatus: correctionReason === undefined ? "compatible" : "needs_correction",
+    ...(correctionReason === undefined ? {} : { unitCorrectionReason: correctionReason }),
     availability: toMcpAvailability(item),
     evidence: toMcpEvidence(item),
     ...(item.categoryNodeId === undefined ? {} : { categoryNodeId: item.categoryNodeId }),

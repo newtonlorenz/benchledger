@@ -154,6 +154,43 @@ describe("ApplicationService", () => {
     expect(matchesBomConstraints(candidate, { kind: 42 } as unknown as Record<string, string>)).toBe(false);
   });
 
+  it("rejects invalid new pairs and excludes legacy pairs from matching and stock use", async () => {
+    const legacy = item({ id: "legacy-tool-metre", name: "Legacy tool", kind: "tool", unit: "metre" });
+    const ports = fakePorts(legacy);
+    const line: BomLine = {
+      id: "legacy-tool-line", revisionId: "rev-1", name: legacy.name, itemId: legacy.id,
+      requiredQuantity: 1, unit: "metre", optional: false, constraints: {}, alternatives: [],
+      createdAt: legacy.createdAt, updatedAt: legacy.updatedAt, version: 1,
+    };
+    ports.projects.listBomLines = async () => [line];
+    ports.projects.listReservations = async () => [];
+    const service = new ApplicationService(ports);
+
+    await expect(service.getInventoryItem(legacy.id)).resolves.toMatchObject({ unitStatus: "needs_correction", unitCorrectionReason: expect.stringMatching(/tool items use/i) });
+    await expect(service.createInventoryItem({ name: "New tool", kind: "tool", quantity: 1, unit: "metre", tags: [], links: [], evidence: { state: "unknown" } }, context)).rejects.toThrow(/tool items use/i);
+    await expect(service.evaluateBomGaps("rev-1")).resolves.toMatchObject({
+      lines: [{ status: "inspect_first", matchedItemIds: [legacy.id], candidates: [{ itemId: legacy.id, inspectQuantity: 0, reason: expect.stringMatching(/unit needs correction/i) }] }]
+    });
+    await expect(service.recordUsage({ projectId: "project-1", itemId: legacy.id, quantity: 1, unit: "metre" }, context)).rejects.toMatchObject({ code: "validation", message: expect.stringMatching(/needs unit correction/i) });
+    await expect(service.createReservation("rev-1", { lineId: line.id, itemId: legacy.id, quantity: 1 }, context)).rejects.toMatchObject({ code: "validation", message: expect.stringMatching(/needs unit correction/i) });
+    await expect(Promise.resolve().then(() => buildReconciliationDocument({
+      projectId: "project-1", projectRevisionId: "rev-1", lines: [line],
+      reservations: [{ id: "legacy-reservation", lineId: line.id, itemId: legacy.id, quantity: 1, status: "active", unit: legacy.unit, version: 1 }],
+      items: [legacy],
+    }, [], false))).rejects.toThrow(/needs unit correction/i);
+
+    const validLongTail = item({ id: "generic-grams", name: "Loose material", kind: "other", unit: "gram" });
+    const updatePorts = fakePorts(validLongTail);
+    let updateCalled = false;
+    updatePorts.inventory.updateItem = async () => {
+      updateCalled = true;
+      return validLongTail;
+    };
+    await expect(new ApplicationService(updatePorts).updateInventoryItem(validLongTail.id, { kind: "tool" }, validLongTail.version, context))
+      .rejects.toMatchObject({ code: "validation", message: expect.stringMatching(/needs unit correction/i) });
+    expect(updateCalled).toBe(false);
+  });
+
   it("serves inventory reads, not-found responses, and bounded stock-event pages", async () => {
     const ports = fakePorts();
     let inventoryQuery: unknown;
@@ -1295,6 +1332,22 @@ describe("ApplicationService", () => {
     })]);
   });
 
+  it("keeps a fully supplied exact match ready when an invalid alternative is also recorded", async () => {
+    const exact = item({ id: "exact-controller", name: "Controller", kind: "electronic", unit: "each", quantity: 1, availableQuantity: 1 });
+    const invalidAlternative = item({ id: "legacy-tool-metres", name: "Legacy alternative", kind: "tool", unit: "metre", quantity: 2, availableQuantity: 2 });
+    const ports = fakePorts(exact);
+    ports.inventory.listItems = async () => ({ data: [exact, invalidAlternative], limit: 200 });
+    const service = new ApplicationService(ports);
+    await service.createBomLine("rev-1", {
+      name: "Controller", itemId: exact.id, requiredQuantity: 1, unit: "each", optional: false,
+      alternatives: [{ itemId: invalidAlternative.id, compatible: "confirmed" }], constraints: {},
+    }, context);
+
+    await expect(service.evaluateBomGaps("rev-1")).resolves.toMatchObject({
+      lines: [{ status: "supplied", decision: "ready", suppliedQuantity: 1, inspectQuantity: 0, missingQuantity: 0 }],
+    });
+  });
+
   it("reports exact, zero-stock confirmed, and uncertain candidate facts without aggregate inference", async () => {
     const exact = item({ id: "exact-board", kind: "electronic", name: "Exact board", quantity: 1, availableQuantity: 1, unit: "each" });
     const zeroStockAlternative = item({ id: "zero-stock-alternative", kind: "electronic", name: "Confirmed alternative", quantity: 0, availableQuantity: 0, unit: "each" });
@@ -2075,7 +2128,7 @@ describe("ApplicationService", () => {
       constraints: {}, alternatives: [], createdAt: "2026-09-02T00:00:00.000Z", updatedAt: "2026-09-02T00:00:00.000Z", version: 1
     };
     const eachItem = item({ id: "reconcile-each", unit: "each", quantity: 10, availableQuantity: 0 });
-    const setItem = item({ id: "reconcile-set", unit: "set", quantity: 2, availableQuantity: 0 });
+    const setItem = item({ id: "reconcile-set", kind: "consumable", unit: "set", quantity: 2, availableQuantity: 0 });
     const setReservation = { id: "reconcile-set-reservation", lineId: line.id, itemId: setItem.id, quantity: 2, status: "active" as const, unit: "set" as const, version: 1 };
     const eachReservation = { id: "reconcile-each-reservation", lineId: line.id, itemId: eachItem.id, quantity: 1, status: "active" as const, unit: "each" as const, version: 1 };
     const source: ReconciliationSourceSnapshot = { projectId: "project-1", projectRevisionId: "rev-1", lines: [line], reservations: [setReservation], items: [eachItem, setItem] };
@@ -2089,7 +2142,7 @@ describe("ApplicationService", () => {
 
   it("rejects a direct reservation that would mix active reservation units on one BOM line", async () => {
     const eachItem = item({ id: "reservation-each", unit: "each", quantity: 20, availableQuantity: 20 });
-    const setItem = item({ id: "reservation-set", unit: "set", quantity: 2, availableQuantity: 2 });
+    const setItem = item({ id: "reservation-set", kind: "consumable", unit: "set", quantity: 2, availableQuantity: 2 });
     const ports = fakePorts(eachItem);
     ports.inventory.listItems = async () => ({ data: [eachItem, setItem], limit: 200 });
     ports.inventory.getItem = async (id) => id === eachItem.id ? eachItem : id === setItem.id ? setItem : null;
@@ -2105,7 +2158,7 @@ describe("ApplicationService", () => {
 
   it("reports mixed active reservation units as a setup preview validation error", async () => {
     const eachItem = item({ id: "setup-each", unit: "each", quantity: 20, availableQuantity: 20 });
-    const setItem = item({ id: "setup-set", unit: "set", quantity: 2, availableQuantity: 2 });
+    const setItem = item({ id: "setup-set", kind: "consumable", unit: "set", quantity: 2, availableQuantity: 2 });
     const ports = fakePorts(eachItem);
     ports.inventory.listItems = async () => ({ data: [eachItem, setItem], limit: 200 });
     ports.inventory.getItem = async (id) => id === eachItem.id ? eachItem : id === setItem.id ? setItem : null;

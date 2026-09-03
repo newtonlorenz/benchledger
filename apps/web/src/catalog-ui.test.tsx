@@ -290,6 +290,8 @@ describe("exact-product language and setup summary", () => {
     expect(buildItemEligibility(unlinkedPrinter, "Printers")).toMatchObject({ eligible: false, reason: expect.stringContaining("exact printer") });
     expect(buildItemEligibility(exactPrinter, "Printers")).toMatchObject({ eligible: true });
     expect(buildItemEligibility(exactFilament, "Filament")).toMatchObject({ eligible: true });
+    expect(buildItemEligibility({ ...exactFilament, unitStatus: "needs_correction", unitCorrectionReason: "Filament needs a compatible unit." }, "Filament"))
+      .toMatchObject({ eligible: false, reason: "Filament needs a compatible unit." });
     const markup = renderToStaticMarkup(<OwnedItemCombobox category="Filament" items={[delivered]} value={delivered} onSelect={() => undefined} label="Owned filament" />);
     expect(markup).toContain("Not eligible");
     expect(markup).toContain("physical count");

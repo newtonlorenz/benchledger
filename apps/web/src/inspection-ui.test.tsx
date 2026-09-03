@@ -67,6 +67,12 @@ describe("Project Plan Checks", () => {
     expect(markup).not.toContain("Server preview");
     expect(markup).not.toContain("Confirm result");
     expect(markup).not.toContain("Quick complete");
+    expect(markup).toContain("How did you check?");
+    expect(markup).toContain("Physical check");
+    expect(markup).not.toContain("Source ID");
+
+    const expertMarkup = renderToStaticMarkup(<InspectionResultDialog action={action(1)} expert onClose={() => undefined} />);
+    expect(expertMarkup).toContain("Source ID");
   });
 
   it("offers explicit confirmed compatibility and conversion evidence fields without inferring either", () => {

@@ -48,6 +48,7 @@ type ServerHealth = { status: "ok" | "degraded"; service: string; version: strin
 type ServerInventoryItem = {
   id: string; name: string; kind: string; categoryNodeId?: string; description?: string; manufacturer?: string; model?: string; sku?: string;
   quantity: number; availableQuantity: number; unit: string; location?: string; condition?: string;
+  unitStatus?: "compatible" | "needs_correction"; unitCorrectionReason?: string;
   dimensions?: { lengthMm?: number; widthMm?: number; heightMm?: number; diameterMm?: number; measured?: boolean; uncertaintyMm?: number };
   tags: string[];
   links: Array<{ supplier: string; url: string; label?: string; currentPriceMinor?: number; currency?: string; observedAt?: string; packageQuantity?: number }>;
@@ -949,6 +950,8 @@ export function mapInventoryItem(item: ServerInventoryItem): InventoryItem {
     },
     version: item.version,
     ...(item.evidence.observedAt ? { lastCounted: item.evidence.observedAt.slice(0, 10) } : {}), accent: mapAccent(category), serverUnit: item.unit,
+    ...(item.unitStatus ? { unitStatus: item.unitStatus } : {}),
+    ...(item.unitCorrectionReason ? { unitCorrectionReason: item.unitCorrectionReason } : {}),
     ...(catalogProduct ? { catalogProduct } : {}), ...(productProfile ? { productProfile } : {})
   };
 }

@@ -141,6 +141,9 @@ export interface InventoryItem {
   quantity: Quantity;
   availableQuantity?: Quantity;
   allocatedQuantity?: Quantity;
+  /** Derived semantic-unit state; legacy mismatches remain visible for correction. */
+  unitStatus?: "compatible" | "needs_correction";
+  unitCorrectionReason?: string;
   availability: Availability;
   evidence: EvidenceSummary;
   description?: string;

@@ -111,6 +111,8 @@ describe("inventory and dimension mapper edges", () => {
     }
     const projected = apiInventoryFromNative({ ...nativeItem, source: { benchLedger: { kind: "filament", description: "metadata description", sku: "S", location: "L", condition: "new", tags: ["petg"], links: [], evidence: { state: "commissioned" } } } }, { onHand: 8, available: 6 }, 2);
     expect(projected).toMatchObject({ kind: "filament", description: "metadata description", sku: "S", location: "L", condition: "new", tags: ["petg"], quantity: 8, availableQuantity: 6, allocatedQuantity: 2, unit: "metre", dimensions: { lengthMm: 200 } });
+    expect(projected.unitStatus).toBe("compatible");
+    expect(apiInventoryFromNative(nativeItem, { onHand: 3, available: 2 }, 4)).toMatchObject({ kind: "electronic", unit: "metre", unitStatus: "needs_correction", unitCorrectionReason: expect.stringMatching(/electronic items use/i) });
   });
 });
 

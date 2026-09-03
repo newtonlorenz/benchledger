@@ -437,6 +437,7 @@ function hasConfirmedPhysicalEvidence(item: InventoryItem): boolean {
 /** Return the user-facing reason a physical item cannot be used for setup. */
 export function buildItemEligibility(item: InventoryItem, category: "Printers" | "Filament"): BuildItemEligibility {
   if (item.category !== category) return { eligible: false, reason: `Choose a ${category === "Printers" ? "printer" : "filament"} inventory item.` };
+  if (item.unitStatus === "needs_correction") return { eligible: false, reason: item.unitCorrectionReason ?? "Correct this item's unit before using it in a build setup." };
   if (category === "Printers") {
     return item.catalogProduct
       ? { eligible: true }

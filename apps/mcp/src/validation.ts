@@ -15,6 +15,8 @@ import {
   commitProjectSetupSchema,
   inspectionObservationSchema,
   commitInspectionCompletionSchema,
+  isUnitCompatibleWithItemKind,
+  unitCorrectionReason,
 } from "@benchledger/api-contract";
 import { fromApiQuantityConversion, parseMcpQuantityConversion, toApiQuantityConversion } from "./quantity-conversion.js";
 import { BOM_CONSTRAINT_KEYS } from "./types.js";
@@ -155,6 +157,27 @@ function optionalEnum<T extends string>(value: unknown, label: string, values: r
 
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const categoryIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
+
+function apiInventoryKind(category: string): "printer" | "tool" | "accessory" | "consumable" | "electronic" | "fastener" | "filament" | "wire" | "adhesive" | "other" {
+  if (["printer", "tool", "accessory", "consumable", "electronic", "fastener", "filament", "wire", "adhesive", "other"].includes(category)) {
+    return category as ReturnType<typeof apiInventoryKind>;
+  }
+  if (category === "printer_accessory" || category === "printer_part") return "accessory";
+  if (category === "electronics" || category === "electrical") return "electronic";
+  return "other";
+}
+
+function apiInventoryUnit(unit: Quantity["unit"]): "each" | "gram" | "millimetre" | "millilitre" | "metre" | "set" {
+  return unit === "piece" ? "each" : unit === "roll" || unit === "set" ? "set" : unit;
+}
+
+function validateInventoryKindUnit(category: string, unit: Quantity["unit"], label: string): void {
+  const kind = apiInventoryKind(category);
+  const apiUnit = apiInventoryUnit(unit);
+  if (isUnitCompatibleWithItemKind(kind, apiUnit)) return;
+  const reason = unitCorrectionReason(kind, apiUnit) ?? `unit '${apiUnit}' is not recognized for kind '${kind}'`;
+  fail(`${label}.unit is incompatible with ${kind}: ${reason}`);
+}
 
 export function id(value: unknown, label: string): string {
   const result = stringValue(value, label, { max: 128 });
@@ -571,6 +594,7 @@ export function inventoryCreate(value: unknown): InventoryCreateInput {
     quantity: quantity(input.quantity, "arguments.quantity"),
     evidence: evidence(input.evidence, "arguments.evidence"),
   };
+  validateInventoryKindUnit(result.category, result.quantity.unit, "arguments.quantity");
   result.categoryNodeId = input.categoryNodeId === undefined ? undefined : categoryId(input.categoryNodeId, "arguments.categoryNodeId");
   const text = {} as Record<string, string | undefined>;
   textFields(input, "arguments", text);
