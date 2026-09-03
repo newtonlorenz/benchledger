@@ -351,11 +351,36 @@ test("keeps inventory quantity and status columns usable on mobile", async ({ pa
   await expect(table.getByLabel("Select all loaded inventory items")).toBeVisible();
   await expect(table.getByRole("columnheader", { name: "Quantity", exact: true })).toBeVisible();
   await expect(table.getByRole("columnheader", { name: "Status", exact: true })).toBeVisible();
+  expect(await table.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return rect.left >= 0 && rect.right <= window.innerWidth && element.scrollWidth <= element.clientWidth;
+  })).toBe(true);
   const horizontalScroll = await page.evaluate(() => {
     window.scrollTo(500, 0);
     return window.scrollX;
   });
   expect(horizontalScroll).toBe(0);
+});
+
+test("keeps project navigation and build progress discoverable on mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await signIn(page);
+  await expect(page.getByRole("button", { name: "Beginner view" })).toBeVisible();
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: /^Projects/ }).click();
+
+  const buildPath = page.getByRole("region", { name: "Build progress" });
+  await expect(buildPath).toBeVisible();
+  expect(await buildPath.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+
+  const tabs = page.getByRole("tablist", { name: "Project workspace" });
+  await expect(tabs.getByRole("tab", { name: /^Plan/ })).toBeVisible();
+  await expect(tabs.getByRole("tab", { name: /^Files/ })).toBeVisible();
+  await expect(tabs.getByRole("tab", { name: /^Shopping list/ })).toBeVisible();
+  expect(await tabs.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return rect.left >= 0 && rect.right <= window.innerWidth && element.scrollWidth <= element.clientWidth;
+  })).toBe(true);
 });
 
 test("requires and persists the managed category and semantic kind for quick inventory add", async ({ page }) => {
