@@ -144,7 +144,9 @@ candidate quantities remain in requirement units while reasons retain
 capacity, allocation, and overage diagnostics. Missing or invalid conversions,
 and conditional or unknown compatibility, remain Check and are never buyable or
 reservable. Valid converted reservations use whole inventory `set` quantities
-and read back as `set`.
+and read back as `set`. Gap and inspection candidates come only from an exact
+`itemId` or an explicit alternative; broad kind/category constraints do not
+silently nominate unrelated inventory.
 
 Build-configuration filament selections use a strict union. The existing exact
 branch retains `itemId` plus exact catalog product/profile linkage. The

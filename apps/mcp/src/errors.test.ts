@@ -162,6 +162,9 @@ describe("MCP error boundary", () => {
     for (const code of ["validation", "invalid_cursor", "quota_exceeded", "unsupported_media"]) {
       expect(mapBackendError(codedError(code))).toMatchObject({ code: "INVALID_ARGUMENT", message: "The request arguments are invalid." });
     }
+    const schemaError = new Error("private schema detail");
+    Object.assign(schemaError, { name: "ZodError", issues: [{ path: ["project", "name"] }] });
+    expect(mapBackendError(schemaError)).toMatchObject({ code: "INVALID_ARGUMENT", message: "The request arguments are invalid." });
     expect(mapBackendError(new Error("secret SQL details"))).toMatchObject({ code: "BACKEND_ERROR", message: "The application service could not complete this operation." });
     expect(mapBackendError({ code: "FORBIDDEN" })).toMatchObject({ code: "BACKEND_ERROR" });
     expect(mapBackendError(null)).toMatchObject({ code: "BACKEND_ERROR" });

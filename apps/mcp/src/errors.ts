@@ -124,7 +124,7 @@ export function mapBackendError(error: unknown): McpAdapterError {
   if (isMcpAdapterError(error)) return error;
 
   if (error instanceof Error) {
-    const candidate = error as Error & { code?: unknown; statusCode?: unknown };
+    const candidate = error as Error & { code?: unknown; statusCode?: unknown; issues?: unknown };
     // ApplicationService uses lower-case domain error codes while HTTP
     // adapters commonly expose an upper-case/status-code variant. Normalize
     // both at the MCP boundary so conflicts and validation failures are not
@@ -140,7 +140,7 @@ export function mapBackendError(error: unknown): McpAdapterError {
     if (candidate.code === "FORBIDDEN" || candidate.code === "forbidden" || candidate.statusCode === 403) {
       return new McpAdapterError("FORBIDDEN", "The current token is not allowed to perform this action.");
     }
-    if (candidate.code === "validation" || candidate.code === "invalid_cursor" || candidate.code === "quota_exceeded" || candidate.code === "unsupported_media") {
+    if (candidate.code === "validation" || candidate.code === "invalid_cursor" || candidate.code === "quota_exceeded" || candidate.code === "unsupported_media" || (candidate.name === "ZodError" && Array.isArray(candidate.issues))) {
       return new McpAdapterError("INVALID_ARGUMENT", "The request arguments are invalid.");
     }
   }

@@ -31,6 +31,12 @@ appropriate to run read-only smoke checks such as `/api/v1/health`,
 read-token MCP discovery when credentials are already configured in the caller's
 secret store.
 
+For end-to-end acceptance, test the two entry points independently: people use
+the browser workspace (`lan_open` or a password entered in the UI), while agents
+use scoped MCP bearer tokens. Browser automation may exercise authenticated UI
+flows with synthetic records, but credentials must come from the runner's secret
+store and must not appear in commands, URLs, screenshots, traces, or logs.
+
 Do not record the exact host address in source-controlled files. Do not restart
 containers, rebuild images, run imports, mutate data, rotate credentials, change
 Compose files on the host, or inspect private volumes unless the maintainer gives

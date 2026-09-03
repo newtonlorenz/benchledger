@@ -1323,9 +1323,10 @@ function toApiProjectCreate(input: ProjectCreateInput): CreateProject {
 
 function toApiProjectWithInitialRevisionCreate(input: ProjectWithInitialRevisionCreateInput): CreateProjectWithInitialRevision {
   const summary = input.revisionSummary ?? "Planning revision";
+  const revisionName = summary.length <= 240 ? summary : "Initial planning revision";
   return {
     project: { ...toApiProjectCreate(input), ...(input.projectId === undefined ? {} : { id: input.projectId }) },
-    revision: { name: summary, status: "concept", notes: summary, ...(input.revisionId === undefined ? {} : { id: input.revisionId }) },
+    revision: { name: revisionName, status: "concept", notes: summary, ...(input.revisionId === undefined ? {} : { id: input.revisionId }) },
   };
 }
 

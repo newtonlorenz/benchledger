@@ -120,11 +120,7 @@ export function matchesBomConstraints(item: InventoryItem, constraints: Readonly
   });
 }
 
-function hasInventoryMatchConstraints(constraints: Readonly<Record<string, BomConstraintValue | undefined>> | undefined): boolean {
-  return Object.keys(constraints ?? {}).some((key) => SUPPORTED_BOM_CONSTRAINT_KEYS.has(key));
-}
-
-type BomCandidateKind = "exact" | "confirmed_alternative" | "uncertain_alternative" | "constraint_match";
+type BomCandidateKind = "exact" | "confirmed_alternative" | "uncertain_alternative";
 
 interface BomCandidate {
   readonly item: InventoryItem;
@@ -183,7 +179,6 @@ function bomCandidateUsesWholeSets(line: BomLine, item: InventoryItem): boolean 
 
 function bomCandidateCompatibility(line: BomLine, candidate: BomCandidate): BomGapCandidate["compatibility"] {
   if (candidate.kind === "exact") return "confirmed";
-  if (candidate.kind === "constraint_match") return "unknown";
   return bomCandidateAlternative(line, candidate.item.id)?.compatible ?? "unknown";
 }
 
@@ -192,8 +187,7 @@ function bomCandidateReason(line: BomLine, candidate: BomCandidate): string {
   const base = alternative?.reason
     ?? (candidate.kind === "exact" ? "Exact inventory item declared by the BOM."
       : candidate.kind === "confirmed_alternative" ? "Explicitly confirmed BOM alternative."
-        : candidate.kind === "uncertain_alternative" ? "Alternative compatibility is not explicitly confirmed."
-          : "Matched the BOM constraints; compatibility is not explicitly confirmed.");
+      : "Alternative compatibility is not explicitly confirmed.");
   if (candidate.item.unit === line.unit) return base;
   const conversion = bomCandidateQuantityConversion(line, candidate.item);
   if (conversion === undefined) return `${base} No valid one-set conversion from ${candidate.item.unit} to ${line.unit} is recorded; inspect before use.`;
@@ -202,9 +196,8 @@ function bomCandidateReason(line: BomLine, candidate: BomCandidate): string {
 
 /**
  * Resolve a stock row to the relationship explicitly declared by the BOM.
- * An item that merely happens to share a unit is not a candidate. Constraint
- * matches are retained for inspection, but cannot be treated as supplied or
- * reserved until a concrete inventory identity is attached to the line.
+ * An item that merely happens to satisfy a descriptive constraint is not a
+ * candidate: discovery requires an explicit item identity or alternative.
  */
 function bomCandidateKind(line: BomLine, item: InventoryItem): BomCandidateKind | undefined {
   const alternatives = line.alternatives.filter((alternative) => alternative.itemId === item.id);
@@ -218,7 +211,6 @@ function bomCandidateKind(line: BomLine, item: InventoryItem): BomCandidateKind 
   }
   if (alternatives.some((alternative) => alternative.compatible === "confirmed")) return "confirmed_alternative";
   if (alternatives.length > 0) return "uncertain_alternative";
-  if (line.itemId === undefined && hasInventoryMatchConstraints(line.constraints)) return "constraint_match";
   return undefined;
 }
 
@@ -300,9 +292,8 @@ function compareStableId(left: string, right: string): number {
 /**
  * BOM evaluation is an allocation report, so a line must have a stable place
  * in the allocation order even when an adapter returns rows in a different
- * order. Exact references take precedence over approved alternatives, which
- * take precedence over inferred/constraint matches; IDs then provide the
- * deterministic tie-breaker.
+ * order. Exact references take precedence over approved alternatives; IDs then
+ * provide the deterministic tie-breaker.
  */
 function bomLineAllocationPriority(line: BomLine): number {
   if (line.itemId !== undefined) return 0;
@@ -317,7 +308,7 @@ function compareBomLinesForAllocation(left: BomLine, right: BomLine): number {
 }
 
 function compareBomCandidates(left: BomCandidate, right: BomCandidate): number {
-  const priority = (kind: BomCandidateKind): number => kind === "exact" ? 0 : kind === "confirmed_alternative" ? 1 : kind === "uncertain_alternative" ? 2 : 3;
+  const priority = (kind: BomCandidateKind): number => kind === "exact" ? 0 : kind === "confirmed_alternative" ? 1 : 2;
   return priority(left.kind) - priority(right.kind) || compareStableId(left.item.id, right.item.id);
 }
 
@@ -563,8 +554,8 @@ function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], active: 
   for (const line of lines) {
     const candidates = active
       // Explicit identities are retained across units so the gap can explain
-      // why an alternative is blocked. Descriptive/constraint-only matches
-      // remain same-unit to avoid inventing cross-unit candidates.
+      // why an alternative is blocked. Constraint-only matches are not
+      // candidates: there is no discovery opt-in in the current BOM contract.
       .filter((item) => matchesBomConstraints(item, line.constraints))
       .flatMap((item): readonly BomCandidate[] => {
         const kind = bomCandidateKind(line, item);
@@ -742,7 +733,6 @@ function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], active: 
       ...(decision === "decide" ? [`Specify ${specification.missingDecisions.join(" and ")} before sourcing this requirement.`] : []),
       ...(decision !== "decide" && missingQuantity > 0 ? ["No confirmed stock covers the remaining quantity."] : []),
       ...(decision !== "decide" && candidates.length === 0 ? ["No matching inventory item was found for this line."] : []),
-      ...(line.itemId === undefined && line.alternatives.length === 0 && hasInventoryMatchConstraints(line.constraints) ? ["Potential matches were selected using the line constraints."] : [])
     ];
     return bomGapSchema.parse({
       lineId: line.id,

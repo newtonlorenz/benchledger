@@ -716,7 +716,7 @@ export function projectCreate(value: unknown): ProjectCreateInput {
   const input = record(value, "arguments");
   keys(input, ["name", "description"], "arguments");
   return {
-    name: stringValue(input.name, "arguments.name", { max: 256 }),
+    name: stringValue(input.name, "arguments.name", { max: 240 }),
     description: optionalString(input.description, "arguments.description"),
   };
 }
@@ -725,7 +725,7 @@ export function projectWithInitialRevisionCreate(value: unknown): ProjectWithIni
   const input = record(value, "arguments");
   keys(input, ["name", "description", "projectId", "revisionId", "revisionSummary"], "arguments");
   const result: ProjectWithInitialRevisionCreateInput = {
-    name: stringValue(input.name, "arguments.name", { max: 256 }),
+    name: stringValue(input.name, "arguments.name", { max: 240 }),
     description: optionalString(input.description, "arguments.description"),
     revisionSummary: optionalString(input.revisionSummary, "arguments.revisionSummary", 2000),
   };
@@ -739,7 +739,7 @@ export function projectUpdate(value: unknown): ProjectUpdateInput {
   keys(input, ["projectId", "expectedVersion", "name", "description", "status"], "arguments");
   const result: ProjectUpdateInput = { projectId: id(input.projectId, "arguments.projectId") };
   result.expectedVersion = optionalInteger(input.expectedVersion, "arguments.expectedVersion");
-  result.name = optionalString(input.name, "arguments.name", 256);
+  result.name = optionalString(input.name, "arguments.name", 240);
   result.description = optionalString(input.description, "arguments.description");
   result.status = optionalEnum(input.status, "arguments.status", ["idea", "planned", "ready", "building", "validating", "complete", "archived"] as const);
   return result;
