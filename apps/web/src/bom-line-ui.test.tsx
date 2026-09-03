@@ -79,5 +79,12 @@ describe("BOM line version and expert context", () => {
     const anonymousB = { ...anonymousA, id: "spool-b" };
     expect(inventoryCandidateLabel(anonymousA, [anonymousA, anonymousB])).toEqual({ name: "PLA Basic", discriminator: "Physical item 1 of 2" });
     expect(inventoryCandidateLabel(anonymousB, [anonymousA, anonymousB])).toEqual({ name: "PLA Basic", discriminator: "Physical item 2 of 2" });
+    const sameA = { ...base, id: "petg-a", name: "PETG Basic" };
+    const sameB = { ...sameA, id: "petg-b" };
+    const sameC = { ...sameA, id: "petg-c" };
+    const labels = [sameA, sameB, sameC].map((item) => inventoryCandidateLabel(item, [sameA, sameB, sameC]).discriminator);
+    expect(new Set(labels).size).toBe(3);
+    expect(labels).toEqual(["Shelf A · Physical item 1 of 3", "Shelf A · Physical item 2 of 3", "Shelf A · Physical item 3 of 3"]);
+    expect(inventoryDiscriminator({ ...sameA, location: "Unassigned", variant: "PETG Basic" })).toBe("Physical item");
   });
 });

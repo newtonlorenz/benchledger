@@ -12,6 +12,7 @@ import type {
 import { buildSetupSummary, catalogProductLabel, exactProductLabel, isUnknownFilamentSelection } from "./domain";
 import type { CatalogProductDraft, CatalogProductPage, CatalogSearchOptions, ExactInventoryInput } from "./api";
 import { Icon } from "./icons";
+import { inventoryCandidateLabel, inventoryCandidateText } from "./inventory-identity";
 
 export type ComboboxKey = "ArrowDown" | "ArrowUp" | "Home" | "End" | "Enter" | "Escape";
 
@@ -420,8 +421,14 @@ export function CatalogProductCreateForm({ kind, onCreate, onCancel }: CatalogPr
   </form>;
 }
 
-function ownedItemLabel(item: InventoryItem): string {
-  return item.catalogProduct ? catalogProductDisplayName(item.catalogProduct) : `${item.name} · Exact product unknown`;
+export function ownedItemLabel(item: InventoryItem, items: readonly InventoryItem[]): string {
+  if (!item.catalogProduct) return `${inventoryCandidateText(item, items)} · Exact product unknown`;
+  const catalogName = catalogProductDisplayName(item.catalogProduct);
+  const identity = inventoryCandidateLabel(item, items);
+  if (identity.discriminator) return `${catalogName} · ${identity.discriminator}`;
+  const catalogKey = catalogName.toLocaleLowerCase();
+  const itemKey = identity.name.toLocaleLowerCase();
+  return catalogKey.includes(itemKey) || itemKey.includes(catalogKey) ? catalogName : `${catalogName} · ${identity.name}`;
 }
 
 export interface BuildItemEligibility {
@@ -478,8 +485,8 @@ export function OwnedItemCombobox({ category, items, value, onSelect, label }: O
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
-  const candidates = useMemo(() => items.filter((item) => item.category === category && (!query.trim() || `${item.name} ${item.variant} ${item.manufacturer ?? ""} ${item.catalogProduct ? catalogProductDisplayName(item.catalogProduct) : ""}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))), [category, items, query]);
-  const displayValue = value ? ownedItemLabel(value) : query;
+  const candidates = useMemo(() => items.filter((item) => item.category === category && (!query.trim() || `${item.name} ${item.variant} ${item.manufacturer ?? ""} ${item.catalogProduct ? catalogProductDisplayName(item.catalogProduct) : ""} ${inventoryCandidateText(item, items)}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))), [category, items, query]);
+  const displayValue = value ? ownedItemLabel(value, items) : query;
   const activeId = open && candidates.length ? `${listId}-option-${active}` : undefined;
   const choose = (item: InventoryItem) => {
     if (!buildItemEligibility(item, category).eligible) return;
@@ -493,7 +500,7 @@ export function OwnedItemCombobox({ category, items, value, onSelect, label }: O
     const next = reduceComboboxKey({ activeIndex: active, open: true }, event.key as ComboboxKey, candidates.length);
     setActive(next.activeIndex); setOpen(next.open);
     if (event.key === "Enter" && candidates[next.activeIndex]) choose(candidates[next.activeIndex]!);
-  }} onBlur={() => window.setTimeout(() => setOpen(false), 120)} /></div></label>{open && <div className="catalog-listbox" id={listId} role="listbox" aria-label={`${label} results`}>{candidates.length ? candidates.map((item, index) => { const eligibility = buildItemEligibility(item, category); return <button id={`${listId}-option-${index}`} type="button" role="option" aria-selected={index === active} aria-disabled={!eligibility.eligible} disabled={!eligibility.eligible} className={`catalog-option ${index === active ? "is-active" : ""} ${eligibility.eligible ? "" : "is-ineligible"}`} key={item.id} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(item)}><span className="catalog-option-copy"><strong>{ownedItemLabel(item)}</strong><small>{item.quantity.toLocaleString()} {item.unit} · {item.catalogProduct ? exactProductLabel(item) : "Exact product unknown"}{eligibility.eligible ? " · Eligible" : ` · Not eligible: ${eligibility.reason}`}</small></span><Icon name={eligibility.eligible ? "chevron-right" : "warning"} size={15} /></button>; }) : <p className="catalog-empty">No owned {category === "Printers" ? "printers" : "filament"} match that search.</p>}</div>}{value && <div className="catalog-selected"><span className="catalog-selected-label">Owned item</span><strong>{ownedItemLabel(value)}</strong><small>{selectedProductLabel}</small>{selectedEligibility && !selectedEligibility.eligible && <p className="catalog-selection-error" role="alert">Not eligible: {selectedEligibility.reason}</p>}</div>}</div>;
+  }} onBlur={() => window.setTimeout(() => setOpen(false), 120)} /></div></label>{open && <div className="catalog-listbox" id={listId} role="listbox" aria-label={`${label} results`}>{candidates.length ? candidates.map((item, index) => { const eligibility = buildItemEligibility(item, category); return <button id={`${listId}-option-${index}`} type="button" role="option" aria-selected={index === active} aria-disabled={!eligibility.eligible} disabled={!eligibility.eligible} className={`catalog-option ${index === active ? "is-active" : ""} ${eligibility.eligible ? "" : "is-ineligible"}`} key={item.id} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(item)}><span className="catalog-option-copy"><strong>{ownedItemLabel(item, items)}</strong><small>{item.quantity.toLocaleString()} {item.unit} · {item.catalogProduct ? exactProductLabel(item) : "Exact product unknown"}{eligibility.eligible ? " · Eligible" : ` · Not eligible: ${eligibility.reason}`}</small></span><Icon name={eligibility.eligible ? "chevron-right" : "warning"} size={15} /></button>; }) : <p className="catalog-empty">No owned {category === "Printers" ? "printers" : "filament"} match that search.</p>}</div>}{value && <div className="catalog-selected"><span className="catalog-selected-label">Owned item</span><strong>{ownedItemLabel(value, items)}</strong><small>{selectedProductLabel}</small>{selectedEligibility && !selectedEligibility.eligible && <p className="catalog-selection-error" role="alert">Not eligible: {selectedEligibility.reason}</p>}</div>}</div>;
 }
 
 export interface SetupSummaryProps {

@@ -46,7 +46,7 @@ test("filters, edits, and physically counts evidence-aware inventory", async ({ 
   await page.getByLabel("Filter inventory by availability").selectOption("available");
   await page.getByLabel("Search inventory").fill("ESP32");
   await expect(page.locator(".inventory-page-status")).toContainText("Showing 1 of 1 items");
-  const espRow = page.getByRole("row").filter({ has: page.getByRole("button", { name: "ESP32 development board electronic" }) });
+  const espRow = page.getByRole("row").filter({ has: page.getByRole("button", { name: "ESP32 development board", exact: true }) });
   await expect(espRow).toBeVisible();
   expect(inventoryRequests.some((value) => {
     const url = new URL(value);
@@ -59,9 +59,9 @@ test("filters, edits, and physically counts evidence-aware inventory", async ({ 
   })).toBe(true);
   await expect(espRow).toContainText("Ready to use");
   await expect(espRow).not.toContainText("synthetic-demo");
-  await expect(page.getByRole("button", { name: "Bambu Lab H2D printer" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Bambu Lab H2D", exact: true })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "ESP32 development board electronic" }).click();
+  await page.getByRole("button", { name: "ESP32 development board", exact: true }).click();
   const drawer = page.getByRole("dialog", { name: "ESP32 development board" });
   await expect(drawer.getByText("Provenance", { exact: true })).toHaveCount(0);
   await expect(drawer).toContainText("Ready to use");
@@ -494,7 +494,7 @@ test("guides beginners through one blank physical-count action", async ({ page }
   await signIn(page);
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
   await page.getByLabel("Search inventory").fill("Dupont jumper wire assortment");
-  await page.getByRole("button", { name: "Dupont jumper wire assortment wire" }).click();
+  await page.getByRole("button", { name: "Dupont jumper wire assortment", exact: true }).click();
 
   const drawer = page.getByRole("dialog", { name: "Dupont jumper wire assortment" });
   await expect(drawer.getByLabel("Counted quantity")).toHaveValue("");
@@ -548,7 +548,7 @@ test("keeps the physical-count field aligned after commissioning delivered stock
   await page.getByRole("button", { name: "Beginner view" }).click();
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
   await page.getByLabel("Search inventory").fill("Dupont jumper wire assortment");
-  await page.getByRole("button", { name: "Dupont jumper wire assortment wire" }).click();
+  await page.getByRole("button", { name: "Dupont jumper wire assortment", exact: true }).click();
 
   const drawer = page.getByRole("dialog", { name: "Dupont jumper wire assortment" });
   await drawer.getByLabel("Observed quantity").fill("7");
@@ -598,6 +598,10 @@ test("creates a project atomically and finalizes a revisioned artifact", async (
 
   await expect(page.getByRole("heading", { name: "E2E enclosure" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Plan 0" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "No requirements are recorded yet.", exact: true })).toBeVisible();
+  await expect(page.getByText("Add the materials, parts, and files that this build needs.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add requirements", exact: true })).toBeVisible();
+  await expect(page.getByText("Every recorded requirement is covered by confirmed stock.", { exact: true })).toHaveCount(0);
   await page.getByRole("tab", { name: "Files 0" }).click();
   await page.getByLabel("Choose files to upload").setInputFiles({
     name: "e2e-enclosure.step",
@@ -615,6 +619,10 @@ test("creates a project atomically and finalizes a revisioned artifact", async (
   expect(uploadBodies[0]).not.toHaveProperty("revisionId");
   expect(uploadBodies[0]).not.toHaveProperty("workItemId");
   expect(uploadBodies[0]).not.toHaveProperty("workItemRevisionId");
+  await page.getByRole("button", { name: "Workbench", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Add requirements for E2E enclosure.", exact: true })).toBeVisible();
+  await expect(page.getByText("No requirements are recorded yet. Add the materials, parts, and files that this build needs.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Every recorded requirement is covered by confirmed stock.", { exact: true })).toHaveCount(0);
 });
 
 test("offers exact work-item scopes, keeps legacy files in All, and freezes upload targets", async ({ page }) => {

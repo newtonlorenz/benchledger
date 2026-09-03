@@ -1085,7 +1085,7 @@ describe("web data mappers", () => {
         id: `item-${index}`,
         category: expected.category,
         accent: expected.accent,
-        variant: index === 0 ? "Model variant" : index === 1 ? "SKU variant" : expected.kind,
+        variant: index === 0 ? "Model variant" : index === 1 ? "SKU variant" : "",
         unit: index % 3 === 0 ? "g" : index % 3 === 1 ? "m" : "each",
         description: index === 2 ? "No description recorded." : `Description ${index}`,
         location: index === 3 ? "Unassigned" : `Location ${index}`,
@@ -1105,6 +1105,7 @@ describe("web data mappers", () => {
     expect(mapInventoryItem(serverItem({ quantity: 2, availableQuantity: 5, evidence: { state: "physically_counted" } }))).toMatchObject({ reserved: 0, state: "available" });
     expect(mapInventoryItem(serverItem({ quantity: 2, availableQuantity: 0, evidence: { state: "commissioned" } }))).toMatchObject({ reserved: 2, state: "reserved", evidence: "commissioned" });
     expect(mapInventoryItem(serverItem({ quantity: 0, availableQuantity: 0, evidence: { state: "physically_counted" } }))).toMatchObject({ reserved: 0, state: "depleted" });
+    expect(mapInventoryItem(serverItem({ name: "ESP32", kind: "electronic" }))).toMatchObject({ name: "ESP32", variant: "" });
     expect(mapInventoryItem(serverItem({
       kind: "electronic",
       availableQuantity: 2,

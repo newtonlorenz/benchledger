@@ -934,7 +934,7 @@ export function mapInventoryItem(item: ServerInventoryItem): InventoryItem {
   } : undefined;
   return {
     id: item.id, name: item.name, kind: item.kind, category, ...(item.categoryNodeId ? { categoryNodeId: item.categoryNodeId } : {}),
-    variant: item.model ?? item.sku ?? item.kind,
+    variant: item.model ?? item.sku ?? "",
     ...(item.model ? { model: item.model } : {}),
     description: item.description?.trim() || "No description recorded.", quantity: item.quantity, availableQuantity: item.availableQuantity, unit: mapUnit(item.unit),
     reserved: confirmed ? Math.max(item.quantity - item.availableQuantity, 0) : 0,
