@@ -383,6 +383,11 @@ test("keeps project navigation and build progress discoverable on mobile", async
 });
 
 test("requires and persists the managed category and semantic kind for quick inventory add", async ({ page }) => {
+  const categoryStatuses: number[] = [];
+  page.on("response", (response) => {
+    const url = new URL(response.url());
+    if (response.request().method() === "GET" && url.pathname === "/api/v1/inventory/categories") categoryStatuses.push(response.status());
+  });
   await signIn(page);
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
   await page.getByRole("button", { name: "Add item", exact: true }).click();
@@ -391,6 +396,9 @@ test("requires and persists the managed category and semantic kind for quick inv
   await selectionDialog.getByRole("combobox", { name: /Item type/u }).selectOption("tool");
   await expect(selectionDialog.getByRole("button", { name: "Continue", exact: true })).toBeDisabled();
   await selectionDialog.getByRole("combobox", { name: /Category/u }).selectOption("category-tools");
+  expect(categoryStatuses.length).toBeGreaterThan(0);
+  expect(categoryStatuses).not.toContain(404);
+  await expect(selectionDialog.getByRole("button", { name: "Continue", exact: true })).toBeEnabled();
   await selectionDialog.getByRole("button", { name: "Continue", exact: true }).click();
 
   const quickDialog = page.getByRole("dialog", { name: "Add an inventory item" });
@@ -408,6 +416,28 @@ test("requires and persists the managed category and semantic kind for quick inv
   });
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.locator(".table-item").filter({ hasText: "E2E quick category item" })).toBeVisible();
+});
+
+test("shows a truthful non-overlapping close-out capability boundary on mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await signIn(page);
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: /^Projects/ }).click();
+  await page.getByRole("tab", { name: /^Close out/ }).click();
+
+  const unavailable = page.locator(".reconciliation-load-error");
+  await expect(unavailable).toHaveAttribute("role", "alert");
+  await expect(unavailable).toContainText("This runtime does not support post-project reconciliation");
+  const back = unavailable.getByRole("button", { name: "Back to plan" });
+  await expect(back).toBeVisible();
+  expect(await unavailable.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  const [messageBox, buttonBox] = await Promise.all([
+    unavailable.locator("strong").boundingBox(),
+    back.boundingBox(),
+  ]);
+  expect(messageBox).not.toBeNull();
+  expect(buttonBox).not.toBeNull();
+  expect(buttonBox!.y).toBeGreaterThanOrEqual(messageBox!.y + messageBox!.height);
 });
 
 test("guides beginners through one blank physical-count action", async ({ page }) => {
