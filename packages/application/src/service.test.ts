@@ -1127,7 +1127,7 @@ describe("ApplicationService", () => {
     });
   });
 
-  it("keeps a constraints-only candidate inspect-first so evaluation agrees with reservation", async () => {
+  it("does not discover a constraint-only candidate without an explicit opt-in", async () => {
     const ports = fakePorts();
     const candidate = item({ id: "constraint-board", name: "ESP32 board", kind: "electronic", unit: "each" });
     ports.inventory.listItems = async () => ({ data: [candidate], limit: 200 });
@@ -1137,8 +1137,48 @@ describe("ApplicationService", () => {
 
     const result = await service.evaluateBomGaps("rev-1");
 
-    expect(result.lines[0]).toMatchObject({ status: "inspect_first", suppliedQuantity: 0, inspectQuantity: 1, missingQuantity: 0, matchedItemIds: [candidate.id] });
+    expect(result.lines[0]).toMatchObject({ status: "missing", suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 1, matchedItemIds: [] });
     await expect(service.createReservation("rev-1", { lineId: "bom-1", itemId: candidate.id, quantity: 1 }, context)).rejects.toMatchObject({ code: "validation" });
+  });
+
+  it("keeps broad kind/category false positives out of gaps and inspections", async () => {
+    const candidate = (id: string, name: string, kind: InventoryItem["kind"]): InventoryItem => item({
+      id, name, kind, unit: "each", quantity: 1, availableQuantity: 0,
+      evidence: { state: "delivered_uncounted", source: "synthetic-fitzroy-feedback" },
+    });
+    const inventory = [
+      candidate("psu", "12 V power supply", "electronic"),
+      candidate("faston", "Faston terminal", "electronic"),
+      candidate("low-voltage-wire", "Low-voltage wire", "electronic"),
+      candidate("flux", "Soldering flux", "adhesive"),
+      candidate("concrete-paste", "Concrete paste", "adhesive"),
+      candidate("paint", "Acrylic paint", "adhesive"),
+      candidate("desolder-wick", "Desoldering wick", "adhesive"),
+      candidate("petg", "PETG filament", "filament"),
+      candidate("pla", "PLA filament", "filament"),
+      candidate("carrier", "Electronics carrier board", "electronic"),
+      candidate("speaker", "Speaker", "electronic"),
+      candidate("unrelated-board", "Arduino board", "electronic"),
+    ];
+    const ports = fakePorts(inventory[0]);
+    ports.inventory.listItems = async () => ({ data: inventory, limit: 200, total: inventory.length });
+    ports.inventory.getItem = async (id) => inventory.find((entry) => entry.id === id) ?? null;
+    const service = new ApplicationService(ports);
+    const lines = [
+      ["wire-line", "Low-voltage wire", "electronic"],
+      ["flux-line", "Flux", "adhesive"],
+      ["petg-line", "PETG filament", "filament"],
+      ["carrier-line", "Electronics carrier", "electronic"],
+    ] as const;
+    for (const [id, name, kind] of lines) {
+      await service.createBomLine("rev-1", { id, name, requiredQuantity: 1, unit: "each", optional: false, constraints: { kind }, alternatives: [] }, context);
+    }
+
+    const gaps = await service.evaluateBomGaps("rev-1");
+    expect(gaps.lines.every((gap) => gap.matchedItemIds.length === 0 && gap.inspectQuantity === 0)).toBe(true);
+
+    const inspections = await service.listInspections("rev-1");
+    expect(inspections.data).toEqual([]);
   });
 
   it.each(["conditional", "unknown"] as const)("keeps %s alternatives inspect-first and never reserves them", async (compatibility) => {

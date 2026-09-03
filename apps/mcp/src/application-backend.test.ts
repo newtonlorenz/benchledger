@@ -245,9 +245,15 @@ describe("createApplicationBackend", () => {
   });
 
   it("maps the atomic project-and-revision application command", async () => {
-    const backend = createApplicationBackend(serviceStub());
-    const result = await backend.projects.createWithInitialRevision({ name: "Atomic project", revisionSummary: "Initial plan" }, context);
+    const service = serviceStub() as ApplicationService & Record<string, any>;
+    service.createProjectWithInitialRevision = vi.fn(service.createProjectWithInitialRevision);
+    const backend = createApplicationBackend(service);
+    const longSummary = `Build intent: ${"detailed planning context ".repeat(10)}🛠️`;
+    const result = await backend.projects.createWithInitialRevision({ name: "Atomic project", revisionSummary: longSummary }, context);
     expect(result).toMatchObject({ id: "project-atomic", project: { id: "project-atomic" }, revision: { id: "revision-atomic", projectId: "project-atomic" }, auditId: "audit-atomic", replayed: false });
+    expect(service.createProjectWithInitialRevision).toHaveBeenCalledWith(expect.objectContaining({
+      revision: expect.objectContaining({ name: "Initial planning revision", notes: longSummary }),
+    }), expect.anything());
   });
 
   it("maps the atomic inventory/profile application command with one mutation", async () => {

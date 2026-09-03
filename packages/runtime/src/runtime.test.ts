@@ -196,7 +196,7 @@ describe("production runtime mappings", () => {
     expect((await service.listInspections(revision.data.id)).data.find((action) => action.id === conversionAction.id)).toBeUndefined();
   });
 
-  it("promotes a constraint-only compatibility match to an explicit alternative", async () => {
+  it("does not promote a constraint-only match to an explicit alternative", async () => {
     const runtime = await makeRuntime();
     const service = new ApplicationService(runtime.ports);
     const item = await service.createInventoryItem({
@@ -209,25 +209,10 @@ describe("production runtime mappings", () => {
       id: "inspection-constraint-line", name: "Controller board", requiredQuantity: 1, unit: "each", optional: false,
       constraints: { kind: "electronic", model: "ESP32-C3" }, alternatives: [],
     }, context());
-    const action = (await service.listInspections(revision.data.id)).data.find((candidate) => candidate.kind === "compatibility");
-    expect(action).toMatchObject({ itemId: item.data.id, lineIds: [line.data.id], compatibility: "unknown" });
-    if (action === undefined) throw new Error("expected constraint compatibility action");
-
-    const preview = await service.previewInspectionCompletion(revision.data.id, {
-      actionId: action.id,
-      observation: { result: "confirmed", source: "human inspection", observedAt: "2026-09-02T01:00:00.000Z" },
-    }, context({ actor: "inspection-human" }));
-    expect(preview.before.lines[0]?.alternatives).toEqual([]);
-    expect(preview.after.lines[0]?.alternatives).toEqual([{ itemId: item.data.id, compatible: "confirmed", reason: `Confirmed by inspection ${action.id}` }]);
-    const committed = await service.commitInspectionCompletion(revision.data.id, {
-      actionId: action.id, previewId: preview.id, expectedPreviewVersion: preview.version,
-      contentSha256: preview.contentSha256, confirmed: true,
-    }, context({ actor: "inspection-human", idempotencyKey: "inspection-constraint-commit" }));
-    expect(committed.data.evidence.result).toBe("confirmed");
-    expect((await service.listBomLines(revision.data.id)).find((candidate) => candidate.id === line.data.id)).toMatchObject({
-      version: 2, alternatives: [{ itemId: item.data.id, compatible: "confirmed" }],
-    });
     expect((await service.listInspections(revision.data.id)).data).toEqual([]);
+    expect((await service.listBomLines(revision.data.id)).find((candidate) => candidate.id === line.data.id)).toMatchObject({
+      version: 1, alternatives: [],
+    });
   });
 
   it("rolls back multi-line compatibility changes when audited commit fails", async () => {
@@ -379,7 +364,7 @@ describe("production runtime mappings", () => {
         project: { id: "setup-stale-project", name: "Stale setup", status: "planned" },
         revision: { id: "setup-stale-revision", name: "Initial", status: "concept" },
         workItems: [],
-        bomLines: [{ localRef: "line", id: "setup-stale-line", name: "Constraint match", requiredQuantity: 1, unit: "each", optional: false, constraints: { kind: "fastener" }, alternatives: [] }],
+        bomLines: [{ localRef: "line", id: "setup-stale-line", name: "Constraint match", itemId: "setup-defence-stock", requiredQuantity: 1, unit: "each", optional: false, constraints: { kind: "fastener" }, alternatives: [] }],
         reservations: []
       }, context({ actor: "setup-stale-agent" }));
       await runtime.ports.inventory.updateItem("setup-defence-stock", { location: "Moved" }, 1, context());

@@ -46,6 +46,11 @@ Initialize, then discover capabilities:
 The response includes the available tools, scopes, evidence vocabulary,
 approval boundaries, and the artifact-transfer rule.
 
+If the capability resource names a tool missing from the client's callable
+tool list, refresh or reconnect the MCP client. Some hosts cache `tools/list`
+for an agent session; do not replace an available atomic operation with dozens
+of writes because the client is stale.
+
 ## 2. Refresh before deciding (minute 1–2)
 
 Start a project conversation with:
@@ -162,7 +167,9 @@ quantities stay in requirement units, while candidate reasons retain conversion
 capacity, allocation, and overage diagnostics. Missing/invalid conversions and
 conditional or unknown alternatives remain Check and are never buyable or
 reservable. Valid converted reservations are whole-number inventory `set`s and
-read back as `set`.
+read back as `set`. Only an exact `itemId` or an explicit alternative becomes a
+gap or inspection candidate; kind/category constraints alone are descriptive,
+not automatic inventory discovery.
 
 Optional lines remain separately identified and never authorize Source. A BOM
 line may record `constraints.specification` with a required `status`, resolved

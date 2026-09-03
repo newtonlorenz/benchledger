@@ -46,6 +46,14 @@ describe("inspection queue derivation", () => {
     expect(deriveInspectionActions("revision-1", noAction, [line()], [item()])).toEqual([]);
   });
 
+  it("does not reintroduce legacy constraint-only candidates into inspections", () => {
+    const legacyConstraintCandidate = {
+      itemId: "item-1", relationship: "constraint_match" as const, compatibility: "unknown" as const,
+      availableQuantity: 1, suppliedQuantity: 0, inspectQuantity: 1, reason: "Legacy broad constraint match",
+    };
+    expect(deriveInspectionActions("revision-1", [gap({ candidates: [legacyConstraintCandidate] })], [line()], [item()])).toEqual([]);
+  });
+
   it("skips retired or missing line and inventory candidates", () => {
     const retiredLine = line({ id: "retired-line", retiredAt: "2026-09-01T00:00:00.000Z" });
     const missingLineGap = gap({ lineId: "missing-line" });

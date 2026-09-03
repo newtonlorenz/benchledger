@@ -59,6 +59,10 @@ resource templates, stock vocabulary, artifact transfer, and approval boundary.
 The adapter is model-neutral; do not assume a particular model, prompt format,
 or autonomous agent runtime.
 
+If the capability document names a tool that the client does not expose, refresh
+or reconnect that MCP client before falling back to smaller writes. Some hosts
+cache `tools/list` for the lifetime of an agent session.
+
 ## Minute 1–2: refresh and inspect
 
 Call `refresh_context` before a recommendation or write, then:
@@ -160,6 +164,11 @@ baselines; BOM lines and metadata remain editable through optimistic version
 checks. Updates pass the returned version; a conflict means “read again,” not
 “overwrite.” Reservations reduce available confirmed stock but are not
 consumption. Corrections and usage are append-only events.
+
+Gap and inspection candidates require an exact item ID or an explicit
+alternative. Broad kind/category constraints do not automatically nominate
+inventory; add the intended candidate explicitly when a physical check is
+needed.
 
 `create_project_with_initial_revision` accepts optional caller-provided
 `projectId` and `revisionId` values as stable record identities. They are not

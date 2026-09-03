@@ -61,7 +61,7 @@ describe("MemoryInventory", () => {
       project: { id: "memory-stale-project", name: "Stale candidate setup", status: "planned" },
       revision: { id: "memory-stale-revision", name: "Initial", status: "concept" },
       workItems: [],
-      bomLines: [{ localRef: "board", id: "memory-stale-line", name: "Any board", requiredQuantity: 1, unit: "each", optional: false, constraints: { kind: "electronic" }, alternatives: [] }],
+      bomLines: [{ localRef: "board", id: "memory-stale-line", name: "Any board", itemId: "memory-stale-candidate", requiredQuantity: 1, unit: "each", optional: false, constraints: { kind: "electronic" }, alternatives: [] }],
       reservations: []
     }, context);
     expect(preview.affectedInventory.map((row) => row.itemId)).toEqual(["memory-stale-candidate"]);
@@ -146,7 +146,7 @@ describe("MemoryInventory", () => {
     await expect(runtime.ports.projects.getProject("memory-setup-errors-project")).resolves.toBeNull();
   });
 
-  it("binds every matching candidate when more than 48 inventory rows affect a setup", async () => {
+  it("does not bind broad constraint-only candidates into a setup", async () => {
     const stamp = { createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1 };
     const runtime = createMemoryRuntime(Array.from({ length: 49 }, (_, index) => ({
       id: `setup-many-candidate-${index}`, name: `Candidate ${index}`, kind: "fastener", quantity: 1,
@@ -160,8 +160,8 @@ describe("MemoryInventory", () => {
       bomLines: [{ localRef: "fastener", id: "setup-many-line", name: "Any fastener", requiredQuantity: 1, unit: "each", optional: false, constraints: { kind: "fastener" }, alternatives: [] }],
       reservations: []
     }, { actor: "setup-many-agent", source: "api", correlationId: "setup-many", scopes: new Set(["projects:write", "bom:write"]) });
-    expect(preview.affectedInventory).toHaveLength(49);
-    expect(preview.gaps.lines[0]?.matchedItemIds).toHaveLength(49);
+    expect(preview.affectedInventory).toHaveLength(0);
+    expect(preview.gaps.lines[0]?.matchedItemIds).toEqual([]);
   });
 
   it("compensates setup graph and allocation when the enclosing audit fails", async () => {

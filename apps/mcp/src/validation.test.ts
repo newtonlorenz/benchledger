@@ -284,6 +284,8 @@ describe("MCP validation boundary", () => {
     expect(revisionRead({ revisionId: "lamp-r1" })).toEqual({ revisionId: "lamp-r1" });
     expectInvalid(() => projectList({ status: "done" }));
     expectInvalid(() => projectCreate({ name: "" }));
+    expectInvalid(() => projectCreate({ name: "x".repeat(241) }));
+    expectInvalid(() => projectWithInitialRevisionCreate({ name: "x".repeat(241) }));
     expectInvalid(() => projectWithInitialRevisionCreate({ name: "Lamp", projectId: "bad/id" }));
     expectInvalid(() => workItemCreate({ projectId: "lamp", name: "Base", kind: "printer" }));
     expectInvalid(() => projectUpdate({ projectId: "lamp", expectedVersion: 2, status: "paused" }));

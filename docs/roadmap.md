@@ -111,8 +111,10 @@ preview/commit patterns; do not create a parallel MCP or web implementation.
   alternatives, and candidate reasons. Connected web readiness remains driven
   by the server gap response, while the offline fallback uses the shared
   conversion resolver and fails closed on mismatches. The complete maker
-  quantity/profile contract and migrations remain. Depends on inventory
-  category, catalog, and stock semantics.
+  quantity/profile contract and migrations remain. Gap and inspection
+  candidates now require exact item IDs or explicit alternatives, eliminating
+  broad kind/category false positives while preserving explicit set-to-piece
+  conversions. Depends on inventory category, catalog, and stock semantics.
 
 Dependency gate: land search and specification state before changing shopping
 output; package/unit migrations precede reliable component reservations.

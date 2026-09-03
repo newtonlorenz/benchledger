@@ -140,6 +140,10 @@ export function deriveInspectionActions(
     const line = lineById.get(gap.lineId);
     if (line === undefined || line.retiredAt !== undefined) continue;
     for (const candidate of gap.candidates) {
+      // Older gap snapshots may still carry the legacy constraint-only
+      // relationship. It has no explicit human-approved identity and must
+      // never re-enter the inspection queue through a persisted/read path.
+      if (candidate.relationship === "constraint_match") continue;
       const item = itemById.get(candidate.itemId);
       if (item === undefined || item.retiredAt !== undefined) continue;
       const crossUnit = item.unit !== line.unit;
