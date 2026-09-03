@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { InventoryDrawer, ProjectExpertContext, ProjectFiles } from "./App";
 import type { Artifact, Project } from "./domain";
 import { inventory } from "./mock-data";
-import { artifactIdentityLabel, artifactScopeChoices, artifactScopeIdentity, defaultArtifactScope, filterArtifactsForScope } from "./artifact-scope";
+import { artifactIdentityLabel, artifactRevisionLabel, artifactScopeChoices, artifactScopeIdentity, defaultArtifactScope, filterArtifactsForScope } from "./artifact-scope";
 
 const project: Project = {
   id: "project-lamp",
@@ -81,7 +81,7 @@ describe("artifact scope selection", () => {
   });
 
   it("keeps raw artifact ancestry and hashes out of beginner file views", () => {
-    const markup = renderToStaticMarkup(<ProjectFiles project={{ ...project, allArtifacts: [artifact("project-current", { projectRevisionId: "project-r7" }), artifact("legacy")] }} expert={false} sampleMode={false} onUpload={async () => undefined} />);
+    const markup = renderToStaticMarkup(<ProjectFiles project={{ ...project, allArtifacts: [artifact("project-current", { projectRevisionId: "project-r7", revision: "opaque-artifact-revision" }), artifact("legacy")] }} expert={false} sampleMode={false} onUpload={async () => undefined} />);
     expect(markup).toContain("Project · r07 · Current fit");
     expect(markup).toContain("Project revision");
     expect(markup).not.toContain("projectRevisionId=");
@@ -89,6 +89,11 @@ describe("artifact scope selection", () => {
     expect(markup).not.toContain("Body · work-body");
     expect(markup).not.toContain("SHA-256");
     expect(markup).not.toContain("Unbound / legacy");
+    expect(markup).toContain("Recorded revision");
+    expect(markup).not.toContain("opaque-artifact-revision");
+    expect(artifactRevisionLabel(artifact("friendly"))).toBe("r07");
+    expect(artifactRevisionLabel(artifact("caller-id", { projectRevisionId: "r07", revision: "r07" }))).toBe("Recorded revision");
+    expect(artifactRevisionLabel(artifact("opaque", { projectRevisionId: "project-r7", revision: "opaque-artifact-revision" }), true)).toBe("opaque-artifact-revision");
   });
 
   it("keeps the unassigned inventory label plain for beginners and diagnostic for experts", () => {

@@ -118,6 +118,17 @@ export function artifactIdentityLabel(artifact: Artifact, expert = false): strin
   return expert ? "Unbound / legacy" : "Not assigned to a revision";
 }
 
+/** Keep durable revision IDs available in expert mode without leaking them into the beginner table. */
+export function artifactRevisionLabel(artifact: Artifact, expert = false): string {
+  if (expert) return artifact.revision;
+  const revision = artifact.revision.trim();
+  if (revision === artifact.projectRevisionId || revision === artifact.workItemRevisionId) return "Recorded revision";
+  if (/^r\d+(?:\s*·.*)?$/iu.test(revision)) return artifact.revision;
+  return artifact.projectRevisionId !== undefined || artifact.workItemRevisionId !== undefined
+    ? "Recorded revision"
+    : "Not assigned";
+}
+
 export function artifactMatchesScope(artifact: Artifact, scope: ArtifactScope): boolean {
   if (scope.kind === "all") return true;
   if (scope.kind === "project") return artifact.workItemId === undefined && artifact.projectRevisionId === scope.projectRevisionId;

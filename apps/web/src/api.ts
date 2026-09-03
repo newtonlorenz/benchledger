@@ -1148,6 +1148,7 @@ function mapGapEvaluation(value: ServerGapEvaluation | undefined, bom: readonly 
     if (Math.abs(quantities.reduce((total, quantity) => total + quantity, 0) - requiredQuantity) > 1e-9) return invalidGapEvaluation();
     const isZero = (quantity: number): boolean => Math.abs(quantity) <= 1e-9;
     const isRequired = (quantity: number): boolean => Math.abs(quantity - requiredQuantity) <= 1e-9;
+    const hasMatchedCandidate = Array.isArray(line.matchedItemIds) && line.matchedItemIds.length > 0;
     const expectedDecision = status === "supplied"
       ? "ready"
       : status === "inspect_first"
@@ -1163,7 +1164,7 @@ function mapGapEvaluation(value: ServerGapEvaluation | undefined, bom: readonly 
     if ((decision === "ready" || decision === "source") && missingDecisions.length > 0) return invalidGapEvaluation();
     if (status === "supplied" && (!isRequired(line.suppliedQuantity) || !isZero(line.inspectQuantity) || !isZero(line.missingQuantity))) return invalidGapEvaluation();
     if (status === "inspect_first" && (
-      (isZero(line.inspectQuantity) && (!isZero(line.suppliedQuantity) || !isRequired(line.missingQuantity)))
+      (isZero(line.inspectQuantity) && (!isZero(line.suppliedQuantity) || !isRequired(line.missingQuantity) || !hasMatchedCandidate))
       || (!isZero(line.inspectQuantity) && line.suppliedQuantity > 0 && line.missingQuantity > 0)
     )) return invalidGapEvaluation();
     if (status === "specify_first" && (!isZero(line.suppliedQuantity) || !isZero(line.inspectQuantity) || !isRequired(line.missingQuantity))) return invalidGapEvaluation();
