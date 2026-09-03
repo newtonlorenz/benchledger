@@ -427,6 +427,33 @@ describe("authenticated BenchLedger API adapter", () => {
     await expect(createWorkspaceAdapter().loadWorkspace()).rejects.toMatchObject({ kind: "server", status: 502, code: "invalid_gap_evaluation" });
   });
 
+  it("keeps unresolved cross-unit alternatives in Check even when no quantity can be converted yet", async () => {
+    const bom = { id: "bom-wire", revisionId: "revision-1", name: "Hook-up wire", requiredQuantity: 1, unit: "metre", optional: false, constraints: {}, alternatives: [{ itemId: "wire-reel", compatible: "confirmed", reason: "Use the stocked reel after confirming its usable length." }], createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 };
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "0.1.0", demo: false, now: "2026-08-30T10:00:00.000Z" }))
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", source: "ui", scopes: ["read", "write"] }))
+      .mockResolvedValueOnce(jsonResponse({
+        source: "api",
+        fetchedAt: "2026-08-30T10:00:00.000Z",
+        inventory: [],
+        projects: [serverProject({ currentRevision: serverRevision({
+          bom: [bom],
+          gapEvaluation: {
+            lines: [{ lineId: "bom-wire", status: "inspect_first", decision: "check", missingDecisions: [], suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 1, matchedItemIds: ["wire-reel"], reasons: ["Confirm a conversion before allocating the stocked reel."] }],
+            totals: { requiredLines: 1, optionalLines: 0, readyLines: 0, checkLines: 1, decideLines: 0, sourceLines: 0, partialLines: 0, missingLines: 0 },
+          },
+        }) })],
+        offers: [],
+      }));
+
+    const snapshot = await createWorkspaceAdapter().loadWorkspace();
+
+    expect(snapshot.projects[0]?.gapEvaluation).toMatchObject({
+      lines: [{ lineId: "bom-wire", status: "inspect_first", decision: "check", inspectQuantity: 0, missingQuantity: 1 }],
+      totals: { checkLines: 1, sourceLines: 0 },
+    });
+  });
+
   it("preserves LED resistor decisions from canonical connected gaps", async () => {
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "0.1.0", demo: false, now: "2026-08-30T10:00:00.000Z" }))

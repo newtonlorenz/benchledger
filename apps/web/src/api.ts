@@ -1162,7 +1162,10 @@ function mapGapEvaluation(value: ServerGapEvaluation | undefined, bom: readonly 
     if (decision !== expectedDecision || (decision === "decide" && missingDecisions.length === 0)) return invalidGapEvaluation();
     if ((decision === "ready" || decision === "source") && missingDecisions.length > 0) return invalidGapEvaluation();
     if (status === "supplied" && (!isRequired(line.suppliedQuantity) || !isZero(line.inspectQuantity) || !isZero(line.missingQuantity))) return invalidGapEvaluation();
-    if (status === "inspect_first" && (isZero(line.inspectQuantity) || (line.suppliedQuantity > 0 && line.missingQuantity > 0))) return invalidGapEvaluation();
+    if (status === "inspect_first" && (
+      (isZero(line.inspectQuantity) && (!isZero(line.suppliedQuantity) || !isRequired(line.missingQuantity)))
+      || (!isZero(line.inspectQuantity) && line.suppliedQuantity > 0 && line.missingQuantity > 0)
+    )) return invalidGapEvaluation();
     if (status === "specify_first" && (!isZero(line.suppliedQuantity) || !isZero(line.inspectQuantity) || !isRequired(line.missingQuantity))) return invalidGapEvaluation();
     if (status === "partially_supplied" && (isZero(line.suppliedQuantity) || isZero(line.missingQuantity))) return invalidGapEvaluation();
     if ((status === "missing" || status === "optional") && (!isZero(line.suppliedQuantity) || !isZero(line.inspectQuantity) || !isRequired(line.missingQuantity))) return invalidGapEvaluation();
