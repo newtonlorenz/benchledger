@@ -897,7 +897,8 @@ test("shows exactly one accessible navigation surface at 390px", async ({ page }
     return element.scrollWidth <= element.clientWidth && buttons.every((button) => button.getBoundingClientRect().height >= 44);
   })).toBe(true);
 
-  await page.getByLabel("Search inventory").fill("ESP32");
+  await page.getByRole("button", { name: "Search inventory" }).click();
+  await page.getByRole("textbox", { name: "Search inventory" }).fill("ESP32");
   await expect(page.getByRole("heading", { name: "Review inventory." })).toBeVisible();
   const horizontalScroll = await page.evaluate(() => {
     window.scrollTo(500, 0);

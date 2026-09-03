@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useId, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import type * as React from "react";
 import { ApiError, createSampleWorkspaceAdapter, createWorkspaceAdapter, MAX_INVENTORY_SEARCH_LENGTH } from "./api";
@@ -149,6 +149,8 @@ function App() {
   const [categoriesError, setCategoriesError] = useState<string>();
   const catalogSearchSequence = useRef(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchLauncherRef = useRef<HTMLButtonElement>(null);
+  const searchHandoffRef = useRef(false);
   const newProjectTriggerRef = useRef<HTMLButtonElement>(null);
 
   const bootstrapWorkspace = async () => {
@@ -224,12 +226,26 @@ function App() {
     const focusSearch = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        searchInputRef.current?.focus();
+        if (page === "inventory") searchInputRef.current?.focus();
+        else {
+          searchLauncherRef.current?.focus();
+          launchInventorySearch();
+        }
       }
     };
     window.addEventListener("keydown", focusSearch);
     return () => window.removeEventListener("keydown", focusSearch);
-  }, []);
+  }, [page]);
+
+  useLayoutEffect(() => {
+    if (page !== "inventory" || !searchHandoffRef.current) return;
+    searchHandoffRef.current = false;
+    const input = searchInputRef.current;
+    if (!input) return;
+    input.focus();
+    const caret = input.value.length;
+    input.setSelectionRange(caret, caret);
+  }, [page]);
 
   const visibleProjects = projectView === "archived" ? archivedProjects : projects;
   const selectedProject = visibleProjects.find((project) => project.id === selectedProjectId) ?? visibleProjects[0];
@@ -249,8 +265,12 @@ function App() {
     setMobileNav(false);
   };
 
-  const searchInventory = (value: string) => {
-    setSearch(value.slice(0, MAX_INVENTORY_SEARCH_LENGTH));
+  const launchInventorySearch = () => {
+    if (page === "inventory") {
+      searchInputRef.current?.focus();
+      return;
+    }
+    searchHandoffRef.current = true;
     navigate("inventory");
   };
 
@@ -719,12 +739,11 @@ function App() {
             </button>
             <div className="breadcrumb"><span>BenchLedger</span><Icon name="chevron-right" size={14} /><strong>{pageCopy[page].label}</strong></div>
             <div className="topbar-actions">
-              <label className="global-search">
+              {page !== "inventory" && <button ref={searchLauncherRef} type="button" className="global-search" onClick={launchInventorySearch} aria-label="Search inventory">
                 <Icon name="search" size={17} />
-                <span className="sr-only">Search inventory</span>
-                <input ref={searchInputRef} value={search} maxLength={MAX_INVENTORY_SEARCH_LENGTH} onChange={(event) => searchInventory(event.target.value)} placeholder="Search inventory" aria-label="Search inventory" />
+                <span className="global-search-text">Search inventory</span>
                 <kbd>⌘ K</kbd>
-              </label>
+              </button>}
               <button className={`mode-toggle ${expert ? "is-expert" : ""}`} onClick={() => setExpert((current) => !current)} aria-pressed={expert}>
                 <span className="mode-dot" /> {expert ? "Expert details" : "Beginner view"}
               </button>
@@ -736,7 +755,7 @@ function App() {
 
           <main className="content" id="main-content">
             {page === "overview" && <OverviewPage items={items} projects={projects} expert={expert} sampleMode={sampleMode} onNavigate={navigate} onOpenProject={openProject} onSelectItem={setSelectedItemId} onNewProject={openNewProject} />}
-            {page === "inventory" && <InventoryPage adapter={adapter} categories={categories} search={search} refreshKey={inventoryRefreshNonce} bulkSelectionResetKey={bulkSelectionResetNonce} onSearch={(value) => setSearch(value.slice(0, MAX_INVENTORY_SEARCH_LENGTH))} onSessionExpired={handleSessionExpiry} onPageItems={(pageItems) => setItems((current) => { const byId = new Map(current.map((item) => [item.id, item] as const)); pageItems.forEach((item) => byId.set(item.id, item)); return [...byId.values()]; })} onSelectItem={setSelectedItemId} onNewItem={() => { setReplacementFor(undefined); setShowNewItem(true); }} onBulkSelectionChange={(selection, onResult) => setBulkInventorySelection(selection.length ? { items: [...selection], onResult } : undefined)} />}
+            {page === "inventory" && <InventoryPage adapter={adapter} categories={categories} search={search} searchInputRef={searchInputRef} refreshKey={inventoryRefreshNonce} bulkSelectionResetKey={bulkSelectionResetNonce} onSearch={(value) => setSearch(value.slice(0, MAX_INVENTORY_SEARCH_LENGTH))} onSessionExpired={handleSessionExpiry} onPageItems={(pageItems) => setItems((current) => { const byId = new Map(current.map((item) => [item.id, item] as const)); pageItems.forEach((item) => byId.set(item.id, item)); return [...byId.values()]; })} onSelectItem={setSelectedItemId} onNewItem={() => { setReplacementFor(undefined); setShowNewItem(true); }} onBulkSelectionChange={(selection, onResult) => setBulkInventorySelection(selection.length ? { items: [...selection], onResult } : undefined)} />}
             {page === "projects" && selectedProject && <ProjectPage project={selectedProject} projects={visibleProjects} projectView={projectView} archivedProjectCount={archivedProjects.length} items={items} offers={offers} tab={projectTab} expert={expert} sampleMode={sampleMode} onTabChange={setProjectTab} onSelectProject={setSelectedProjectId} onProjectViewChange={(view) => { setProjectView(view); setSelectedProjectId((view === "archived" ? archivedProjects : projects)[0]?.id ?? ""); }} onOpenItem={setSelectedItemId} onNavigate={navigate} onToast={setToast} onNewProject={openNewProject} onArchive={archiveProject} onRestore={restoreProject} onRemove={removeProject} onNewRevision={() => setShowNewRevision(true)} onRetrySetup={pendingRevisionSetup?.projectId === selectedProject.id && pendingRevisionSetup.revisionId === selectedProject.serverRevisionId ? retryRevisionSetup : undefined} onAddBom={() => setShowAddBom(true)} onUpload={uploadArtifact} onReadReconciliation={adapter.readReconciliation} onSaveReconciliation={adapter.saveReconciliationDraft} onCommitReconciliation={adapter.commitReconciliation} onRefreshWorkspace={refreshWorkspace} onListInspections={adapter.listInspections} onReadInspection={adapter.readInspection} onPreviewInspection={adapter.previewInspectionCompletion} onConfirmInspection={adapter.commitInspectionCompletion} />}
             {page === "projects" && !selectedProject && <section><div className="project-view-switch" role="group" aria-label="Project view"><button type="button" aria-pressed={projectView === "active"} className={projectView === "active" ? "is-active" : ""} onClick={() => { setProjectView("active"); setSelectedProjectId(projects[0]?.id ?? ""); }}>Active projects</button><button type="button" aria-pressed={projectView === "archived"} className={projectView === "archived" ? "is-active" : ""} onClick={() => { setProjectView("archived"); setSelectedProjectId(archivedProjects[0]?.id ?? ""); }}>Archived ({archivedProjects.length})</button></div><EmptyState icon="folder" title={projectView === "archived" ? "No archived projects" : "No projects yet"} description={projectView === "archived" ? "Archived projects will appear here with their retained history." : "Start with a name and project goal. You can add parts and files after that."} {...(projectView === "active" ? { action: "Create first project", onAction: () => setShowNewProject(true) } : {})} /></section>}
             {page === "capabilities" && <CapabilitiesPage expert={expert} onCopy={setToast} />}
@@ -948,7 +967,7 @@ function hasObservedInventoryVersion(item: InventoryItem): item is VersionedInve
   return typeof item.version === "number" && Number.isSafeInteger(item.version) && item.version > 0;
 }
 
-function InventoryPage({ adapter, categories, search, refreshKey, bulkSelectionResetKey, onSearch, onSessionExpired, onPageItems, onSelectItem, onNewItem, onBulkSelectionChange }: { adapter: WorkspaceAdapter; categories: readonly ManagedInventoryCategory[]; search: string; refreshKey: number; bulkSelectionResetKey: number; onSearch: (value: string) => void; onSessionExpired: (error: unknown) => void; onPageItems: (items: readonly InventoryItem[]) => void; onSelectItem: (id: string) => void; onNewItem: () => void; onBulkSelectionChange: (items: readonly VersionedInventoryItem[], onResult: (result: InventoryBulkUpdateResult) => void) => void }) {
+function InventoryPage({ adapter, categories, search, searchInputRef, refreshKey, bulkSelectionResetKey, onSearch, onSessionExpired, onPageItems, onSelectItem, onNewItem, onBulkSelectionChange }: { adapter: WorkspaceAdapter; categories: readonly ManagedInventoryCategory[]; search: string; searchInputRef: React.RefObject<HTMLInputElement | null>; refreshKey: number; bulkSelectionResetKey: number; onSearch: (value: string) => void; onSessionExpired: (error: unknown) => void; onPageItems: (items: readonly InventoryItem[]) => void; onSelectItem: (id: string) => void; onNewItem: () => void; onBulkSelectionChange: (items: readonly VersionedInventoryItem[], onResult: (result: InventoryBulkUpdateResult) => void) => void }) {
   const initialUrlState = readInventoryUrlState();
   const [categoryNodeId, setCategoryNodeId] = useState(initialUrlState.categoryNodeId);
   const [kind, setKind] = useState<InventoryKindQuery | "All">(initialUrlState.kind);
@@ -965,6 +984,7 @@ function InventoryPage({ adapter, categories, search, refreshKey, bulkSelectionR
   const [selectedTargets, setSelectedTargets] = useState<Map<string, number>>(() => new Map());
   const [selectionNotice, setSelectionNotice] = useState<string>();
   const selectAllRef = useRef<HTMLInputElement>(null);
+  const selectedTargetsRef = useRef(selectedTargets);
   const requestSequence = useRef(0);
   const baseQuery: InventoryListQuery = {
     limit: 25,
@@ -977,6 +997,10 @@ function InventoryPage({ adapter, categories, search, refreshKey, bulkSelectionR
   const filterKey = `${search}|${categoryNodeId}|${kind}|${evidence}|${availability}`;
   const previousFilterKey = useRef(filterKey);
 
+  // Capture the selection from the current render before a filter change
+  // resets it. Empty selections do not need a disruptive status message.
+  selectedTargetsRef.current = selectedTargets;
+
   const loadedSelectedCount = pageItems.reduce((count, item) => count + (selectedTargets.has(item.id) ? 1 : 0), 0);
   const allLoadedSelected = pageItems.length > 0 && loadedSelectedCount === pageItems.length;
   const unversionedItem = pageItems.find((item) => !hasObservedInventoryVersion(item));
@@ -985,8 +1009,9 @@ function InventoryPage({ adapter, categories, search, refreshKey, bulkSelectionR
   useEffect(() => {
     const changed = previousFilterKey.current !== filterKey;
     previousFilterKey.current = filterKey;
+    const hadSelection = selectedTargetsRef.current.size > 0;
     setSelectedTargets(new Map());
-    setSelectionNotice(changed ? "Selection cleared because the search or filters changed." : undefined);
+    setSelectionNotice(changed && hadSelection ? "Selection cleared because the search or filters changed." : undefined);
     onBulkSelectionChange([], () => undefined);
   // The parent callback is an inline state bridge; filter primitives define the reset boundary.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1160,7 +1185,7 @@ function InventoryPage({ adapter, categories, search, refreshKey, bulkSelectionR
     <PageHeader eyebrow="Inventory" title="Review inventory." description="Check tools, materials, components, quantities, and evidence." action="Add item" onAction={onNewItem} />
     <section className="surface inventory-section">
       <div className="inventory-toolbar" aria-label="Inventory filters">
-        <label className="field-search"><Icon name="search" size={17} /><span className="sr-only">Filter inventory</span><input value={search} maxLength={MAX_INVENTORY_SEARCH_LENGTH} onChange={(event) => onSearch(event.target.value)} placeholder="Search name, model, tag, or location" /></label>
+        <label className="field-search"><Icon name="search" size={17} /><span className="sr-only">Search inventory</span><input ref={searchInputRef} aria-label="Search inventory" value={search} maxLength={MAX_INVENTORY_SEARCH_LENGTH} onChange={(event) => onSearch(event.target.value)} placeholder="Search name, model, tag, or location" /></label>
         <div className="inventory-filter-grid">
           <InventoryFilter label="Category" value={categoryNodeId} onChange={setCategoryNodeId} options={[{ value: "", label: "All categories" }, ...inventoryCategoryFilterOptions(categories), { value: UNASSIGNED_CATEGORY_FILTER, label: "Unassigned items" }]} />
           <InventoryFilter label="Kind" value={kind} onChange={(value) => setKind(value as InventoryKindQuery | "All")} options={[{ value: "All", label: "All kinds" }, ...inventoryKindOptions]} />
@@ -1186,7 +1211,7 @@ export function managedInventoryLabel(categories: readonly ManagedInventoryCateg
 }
 
 function InventoryTable({ items, categories, selectedIds, selectAllRef, allLoadedSelected, hasUnversionedLoaded, onToggleAll, onToggleSelected, onSelectItem }: { items: InventoryItem[]; categories: readonly ManagedInventoryCategory[]; selectedIds: ReadonlySet<string>; selectAllRef: React.RefObject<HTMLInputElement | null>; allLoadedSelected: boolean; hasUnversionedLoaded: boolean; onToggleAll: () => void; onToggleSelected: (id: string) => void; onSelectItem: (id: string) => void }) {
-  return <div className="table-scroll"><table className="data-table inventory-table"><caption className="sr-only">Inventory items</caption><thead><tr><th scope="col" className="select-column"><input ref={selectAllRef} type="checkbox" className="inventory-checkbox" checked={allLoadedSelected} onChange={onToggleAll} disabled={hasUnversionedLoaded} aria-describedby={hasUnversionedLoaded ? "inventory-version-notice" : undefined} aria-label="Select all loaded inventory items" /></th><th scope="col">Item</th><th scope="col">Category</th><th scope="col">Quantity</th><th scope="col">Status</th><th scope="col">Location</th><th scope="col"><span className="sr-only">Open</span></th></tr></thead><tbody>{items.map((item) => { const categoryLabel = managedInventoryLabel(categories, item); const versionAvailable = hasObservedInventoryVersion(item); const versionNoticeId = `inventory-version-${item.id}`; const identity = inventoryCandidateLabel(item, items); const identityText = inventoryCandidateText(item, items); return <tr key={item.id}><td className="select-column"><input type="checkbox" className="inventory-checkbox" checked={selectedIds.has(item.id)} onChange={() => onToggleSelected(item.id)} disabled={!versionAvailable} aria-describedby={!versionAvailable ? versionNoticeId : undefined} aria-label={`Select ${identityText}`} />{!versionAvailable && <span id={versionNoticeId} className="sr-only">Cannot select for bulk edit because this row has no positive observed version. Reload inventory first.</span>}</td><td><button className="table-item" onClick={() => onSelectItem(item.id)}><span className={`item-glyph accent-${item.accent}`}><Icon name={categoryIcons[item.category]} size={16} /></span><span><strong>{identity.name}</strong>{identity.discriminator ? <small>{identity.discriminator}</small> : item.variant ? <small>{item.variant}</small> : null}{(item.category === "Filament" || item.category === "Printers") && <small className={`exact-product-state ${isExactProductConfirmed(item) ? "is-confirmed" : ""}`}>{exactProductLabel(item)}</small>}</span></button></td><td><span className="category-label"><Icon name={categoryIcons[item.category]} size={14} />{categoryLabel}</span></td><td className="quantity-cell"><strong>{formatQuantity(Math.max(item.quantity - item.reserved, 0), item.unit)}</strong>{item.reserved > 0 && <small>{formatQuantity(item.reserved, item.unit)} reserved</small>}</td><td><StatusPill state={displayedInventoryState(item)} /></td><td><span className="location-label"><Icon name="archive" size={14} />{item.location}</span></td><td><button className="row-open" onClick={() => onSelectItem(item.id)} aria-label={`Open ${identityText}`}><Icon name="chevron-right" size={17} /></button></td></tr>; })}</tbody></table></div>;
+  return <div className="table-scroll"><table className="data-table inventory-table"><caption className="sr-only">Inventory items</caption><thead><tr><th scope="col" className="select-column"><label className="inventory-checkbox-hit"><input ref={selectAllRef} type="checkbox" className="inventory-checkbox" checked={allLoadedSelected} onChange={onToggleAll} disabled={hasUnversionedLoaded} aria-describedby={hasUnversionedLoaded ? "inventory-version-notice" : undefined} aria-label="Select all loaded inventory items" /></label></th><th scope="col">Item</th><th scope="col">Category</th><th scope="col">Quantity</th><th scope="col">Status</th><th scope="col">Location</th><th scope="col"><span className="sr-only">Open</span></th></tr></thead><tbody>{items.map((item) => { const categoryLabel = managedInventoryLabel(categories, item); const versionAvailable = hasObservedInventoryVersion(item); const versionNoticeId = `inventory-version-${item.id}`; const identity = inventoryCandidateLabel(item, items); const identityText = inventoryCandidateText(item, items); return <tr key={item.id}><td className="select-column"><label className="inventory-checkbox-hit"><input type="checkbox" className="inventory-checkbox" checked={selectedIds.has(item.id)} onChange={() => onToggleSelected(item.id)} disabled={!versionAvailable} aria-describedby={!versionAvailable ? versionNoticeId : undefined} aria-label={`Select ${identityText}`} /></label>{!versionAvailable && <span id={versionNoticeId} className="sr-only">Cannot select for bulk edit because this row has no positive observed version. Reload inventory first.</span>}</td><td><button className="table-item" onClick={() => onSelectItem(item.id)}><span className={`item-glyph accent-${item.accent}`}><Icon name={categoryIcons[item.category]} size={16} /></span><span><strong>{identity.name}</strong>{identity.discriminator ? <small>{identity.discriminator}</small> : item.variant ? <small>{item.variant}</small> : null}{(item.category === "Filament" || item.category === "Printers") && <small className={`exact-product-state ${isExactProductConfirmed(item) ? "is-confirmed" : ""}`}>{exactProductLabel(item)}</small>}</span></button></td><td><span className="category-label"><Icon name={categoryIcons[item.category]} size={14} />{categoryLabel}</span></td><td className="quantity-cell"><strong>{formatQuantity(Math.max(item.quantity - item.reserved, 0), item.unit)}</strong>{item.reserved > 0 && <small>{formatQuantity(item.reserved, item.unit)} reserved</small>}</td><td><StatusPill state={displayedInventoryState(item)} /></td><td><span className="location-label"><Icon name="archive" size={14} />{item.location}</span></td><td><button className="row-open" onClick={() => onSelectItem(item.id)} aria-label={`Open ${identityText}`}><Icon name="chevron-right" size={17} /></button></td></tr>; })}</tbody></table></div>;
 }
 
 type BulkInventoryOutcome = {
@@ -1686,9 +1711,34 @@ export function ProjectFiles({ project, expert, sampleMode, onUpload, archived =
     {expert && <details className="expert-detail file-manifest-detail"><summary>Show manifest details</summary><div className="manifest-grid"><span>Binding</span><strong>{bindingLabel}</strong><span>Scope</span><strong>{artifactScopeIdentity(scope, true)}</strong><span>Retention</span><strong>Older revision files remain auditable when the service records them.</strong><span>Preview</span><strong>Browser-safe text and image previews only.</strong></div></details>}
   </section>;
 }
-function ShoppingList({ project, summary, offers, expert, onToast, onBackToPlan }: { project: Project; summary: ReturnType<typeof calculateProjectSummary>; offers: typeof fixtureOffers; expert: boolean; onToast: (message: string) => void; onBackToPlan: () => void }) {
+type ShoppingOffer = (typeof fixtureOffers)[number];
+type ShoppingRow = { readonly line: BomLineStatus; readonly offers: readonly ShoppingOffer[] };
+
+/** Keep the copied proposal empty when there are no required Source rows. */
+export function shoppingDraftText(rows: readonly ShoppingRow[]): string {
+  return rows.map(({ line, offers: lineOffers }) => {
+    const selectedOffer = lineOffers.find((offer) => offer.preferred) ?? lineOffers[0];
+    const unit = line.gap?.unit ?? line.line.unit;
+    const required = line.gap?.requiredQuantity ?? line.line.required;
+    return `${line.line.label}: ${formatQuantity(line.remaining || required, unit)}${selectedOffer ? ` · ${selectedOffer.supplier} · ${formatMoney(selectedOffer.priceMinor, selectedOffer.currency)}` : ""}`;
+  }).join("\n");
+}
+
+/** Only an explicitly recorded HTTP(S) URL may become a supplier link. */
+export function recordedOfferUrl(offer: Pick<ShoppingOffer, "url">): string | undefined {
+  const value = typeof offer.url === "string" ? offer.url.trim() : "";
+  if (!value || !/^https?:\/\//iu.test(value)) return undefined;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function ShoppingList({ project: _project, summary, offers, expert, onToast, onBackToPlan }: { project: Project; summary: ReturnType<typeof calculateProjectSummary>; offers: typeof fixtureOffers; expert: boolean; onToast: (message: string) => void; onBackToPlan: () => void }) {
   const missing = shoppingEligibleLines(summary);
-  const rows = missing.map((line) => {
+  const rows: ShoppingRow[] = missing.map((line) => {
     // Connected candidate relationships are authoritative. This keeps an
     // uncertain/conditional substitute out of a Source row's offers even if
     // an old fixture happens to use that inventory id.
@@ -1701,13 +1751,9 @@ function ShoppingList({ project, summary, offers, expert, onToast, onBackToPlan 
   });
   const totalsByCurrency = sumMoneyByCurrency(selectedOffers);
   const currencies = Object.keys(totalsByCurrency).sort() as Array<(typeof selectedOffers)[number]["currency"]>;
-  const draftList = rows.length ? rows.map(({ line, offers: lineOffers }) => {
-    const selectedOffer = lineOffers.find((offer) => offer.preferred) ?? lineOffers[0];
-    const unit = line.gap?.unit ?? line.line.unit;
-    const required = line.gap?.requiredQuantity ?? line.line.required;
-    return `${line.line.label}: ${formatQuantity(line.remaining || required, unit)}${selectedOffer ? ` · ${selectedOffer.supplier} · ${formatMoney(selectedOffer.priceMinor, selectedOffer.currency)}` : ""}`;
-  }).join("\n") : "Nothing is ready to source.";
+  const draftList = shoppingDraftText(rows);
   const copyDraftList = async () => {
+    if (summary.readinessUnavailable || rows.length === 0) return;
     if (!navigator.clipboard?.writeText) {
       onToast("Copy is unavailable in this browser. Select the list manually instead.");
       return;
@@ -1720,7 +1766,7 @@ function ShoppingList({ project, summary, offers, expert, onToast, onBackToPlan 
     }
   };
   const emptyState = shoppingEmptyState(summary);
-  return <section className="surface shopping-section"><div className="shopping-header"><div><span className="eyebrow">Shopping proposal</span><h2>Review required items</h2><p>Each price is a recorded observation. BenchLedger does not place orders.</p></div><div className="shopping-total" aria-label="Estimated total by currency"><span>Estimated total</span>{currencies.length ? <div className="shopping-total-values">{currencies.map((currency) => <span className="shopping-total-line" key={currency}><strong>{formatMoney(totalsByCurrency[currency] ?? 0, currency)}</strong><small>{currency}</small></span>)}</div> : <strong className="shopping-total-empty">No priced offers</strong>}<small>{rows.length} required Source line{rows.length === 1 ? "" : "s"}</small></div></div>{summary.readinessUnavailable ? <EmptyState icon="warning" title={emptyState.title} description={emptyState.description} action="Back to plan" onAction={onBackToPlan} /> : rows.length ? <div className="shopping-list">{rows.map(({ line, offers: lineOffers }) => { const unit = line.gap?.unit ?? line.line.unit; const required = line.gap?.requiredQuantity ?? line.line.required; return <div className="shopping-row" key={line.line.id}><div className="shopping-item"><span className="bom-state-mark mark-bad">!</span><div><strong>{line.line.label}</strong><span>{formatQuantity(line.remaining || required, unit)} required</span></div></div><div className="offer-stack">{lineOffers.length ? lineOffers.map((offer) => <a className={`offer-row ${offer.preferred ? "is-preferred" : ""}`} href={offer.url} target="_blank" rel="noreferrer" key={offer.id}><span className="offer-supplier">{offer.preferred && <Icon name="check-circle" size={14} />}{offer.supplier}</span><span className="offer-title">{offer.title}<small>{offer.pack} · price recorded {offer.observed}</small></span><strong>{formatMoney(offer.priceMinor, offer.currency)}</strong><span className="offer-eta">{offer.eta}</span><Icon name="external" size={14} /></a>) : <div className="offer-empty"><Icon name="info" size={15} /> No supplier offer is recorded.</div>}</div></div>; })}</div> : <EmptyState icon="check-circle" title={emptyState.title} description={emptyState.description} action="Back to plan" onAction={onBackToPlan} />}{expert && <details className="expert-detail offer-notes"><summary>Offer matching rules</summary><p>BenchLedger uses exact or confirmed-alternative candidates from canonical readiness. Check and Decide lines never enter this proposal. Each offer retains its supplier, source currency, package quantity, and observation date. An offer is never purchase authority.</p></details>}<div className="shopping-actions"><button className="button button-secondary" onClick={() => { void copyDraftList(); }} disabled={summary.readinessUnavailable}><Icon name="copy" size={16} /> Copy draft list</button></div></section>;
+  return <section className="surface shopping-section"><div className="shopping-header"><div><span className="eyebrow">Shopping proposal</span><h2>Review required items</h2><p>Each price is a recorded observation. BenchLedger does not place orders.</p></div><div className="shopping-total" aria-label="Estimated total by currency"><span>Estimated total</span>{currencies.length ? <div className="shopping-total-values">{currencies.map((currency) => <span className="shopping-total-line" key={currency}><strong>{formatMoney(totalsByCurrency[currency] ?? 0, currency)}</strong><small>{currency}</small></span>)}</div> : <strong className="shopping-total-empty">No priced offers</strong>}<small>{rows.length} required Source line{rows.length === 1 ? "" : "s"}</small></div></div>{summary.readinessUnavailable ? <EmptyState icon="warning" title={emptyState.title} description={emptyState.description} /> : rows.length ? <div className="shopping-list">{rows.map(({ line, offers: lineOffers }) => { const unit = line.gap?.unit ?? line.line.unit; const required = line.gap?.requiredQuantity ?? line.line.required; return <div className="shopping-row" key={line.line.id}><div className="shopping-item"><span className="bom-state-mark mark-bad">!</span><div><strong>{line.line.label}</strong><span>{formatQuantity(line.remaining || required, unit)} required</span></div></div><div className="offer-stack">{lineOffers.length ? lineOffers.map((offer) => { const url = recordedOfferUrl(offer); const content = <><span className="offer-supplier">{offer.preferred && <Icon name="check-circle" size={14} />}{offer.supplier}</span><span className="offer-title">{offer.title}<small>{offer.pack} · price recorded {offer.observed}</small></span><strong>{formatMoney(offer.priceMinor, offer.currency)}</strong><span className="offer-eta">{offer.eta}</span>{url && <Icon name="external" size={14} />}</>; return url ? <a className={`offer-row ${offer.preferred ? "is-preferred" : ""}`} href={url} target="_blank" rel="noreferrer" key={offer.id}>{content}</a> : <div className={`offer-row offer-row-unlinked ${offer.preferred ? "is-preferred" : ""}`} key={offer.id}>{content}</div>; }) : <div className="offer-empty"><Icon name="info" size={15} /><span>No supplier offer is recorded. Copy the draft list and source this item outside BenchLedger.</span></div>}</div></div>; })}</div> : <EmptyState icon="check-circle" title={emptyState.title} description={emptyState.description} />}{expert && <details className="expert-detail offer-notes"><summary>Offer matching rules</summary><p>BenchLedger uses exact or confirmed-alternative candidates from canonical readiness. Check and Decide lines never enter this proposal. Each offer retains its supplier, source currency, package quantity, and observation date. An offer is never purchase authority.</p></details>}<div className="shopping-actions"><button className="button button-secondary" onClick={() => { void copyDraftList(); }} disabled={summary.readinessUnavailable || rows.length === 0}><Icon name="copy" size={16} /> Copy draft list</button><button type="button" className="button button-quiet" onClick={onBackToPlan}>Back to plan<Icon name="arrow-left" size={16} /></button></div></section>;
 }
 
  function CapabilitiesPage({ expert, onCopy }: { expert: boolean; onCopy: (message: string) => void }) {
