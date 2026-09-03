@@ -192,7 +192,7 @@ const outcomeOptions: readonly { kind: ReconciliationOutcomeKind; label: string;
   { kind: "damaged_lost", label: "Damaged or lost", description: "No longer available for this project." },
   { kind: "usable_leftover", label: "Usable leftover", description: "Remaining material or parts you can use later." },
   { kind: "converted_asset", label: "Made a reusable asset", description: "Turned into a new tracked workshop item." },
-  { kind: "reviewed_no_change", label: "Reviewed — no change", description: "Use only when this line has zero active reservations and needs no stock change." }
+  { kind: "reviewed_no_change", label: "Reviewed — no change", description: "Use only when no stock was set aside for this line and no stock change is needed." }
 ];
 
 const evidenceOptions: readonly { value: ReconciliationEvidenceState; label: string }[] = [
@@ -293,6 +293,11 @@ export function reconciliationCanCommit(model: ReconciliationViewModel): boolean
   return model.lines.every((line) => summarizeReconciliationLine(line).complete);
 }
 
+export function reconciliationCommitErrorMessage(expert: boolean, error: unknown): string {
+  if (expert && error instanceof Error) return error.message;
+  return "The stock update was not confirmed. Try again. BenchLedger will check the saved result before it applies anything twice.";
+}
+
 export function reconciliationCanRequestPreview(model: ReconciliationViewModel): boolean {
   return model.status === "draft" && model.lines.every((line) => summarizeReconciliationLine(line).complete);
 }
@@ -329,8 +334,8 @@ function outcomeTone(summary: ReconciliationLineSummary): string {
 
 function outcomeSummary(summary: ReconciliationLineSummary, unit: string): string {
   if (summary.overageQuantity > EPSILON) return `${formatQuantity(summary.overageQuantity, unit)} too much assigned`;
-  if (summary.unaccountedQuantity > EPSILON) return `${formatQuantity(summary.unaccountedQuantity, unit)} still to account for`;
-  if (summary.invalidOutcome) return "Choose an outcome and add its evidence";
+  if (summary.unaccountedQuantity > EPSILON) return `${formatQuantity(summary.unaccountedQuantity, unit)} still to record`;
+  if (summary.invalidOutcome) return "Choose what happened and say how you checked it";
   return "Fully accounted";
 }
 
@@ -441,7 +446,7 @@ export function ReconciliationUI({ model, expert = false, onExpertChange, confir
     try {
       await onRequestPreview(model);
     } catch (caught: unknown) {
-      setLocalError(caught instanceof Error ? caught.message : "The server preview could not be generated.");
+      setLocalError(expert && caught instanceof Error ? caught.message : "Stock changes could not be prepared. Try again.");
     } finally {
       setPreviewPending(false);
     }
@@ -456,7 +461,7 @@ export function ReconciliationUI({ model, expert = false, onExpertChange, confir
       await onConfirmCommit(model);
       setConfirmationOpen(false);
     } catch (caught: unknown) {
-      setLocalError(caught instanceof Error ? caught.message : "The close-out could not be committed.");
+      setLocalError(reconciliationCommitErrorMessage(expert, caught));
     } finally {
       setCommitPending(false);
     }
@@ -465,26 +470,26 @@ export function ReconciliationUI({ model, expert = false, onExpertChange, confir
   return <section className="reconciliation-shell" aria-labelledby={headingId}>
     <header className="reconciliation-header">
       <div>
-        <span className="eyebrow">Project close-out</span>
-        <h1 id={headingId}>Reconcile {model.projectName}</h1>
-        <p>Review what happened to each reserved requirement. Nothing changes in inventory until you approve the final close-out.</p>
+        <span className="eyebrow">Update used stock</span>
+        <h1 id={headingId}>Update used stock for {model.projectName}</h1>
+        <p>Review what happened to the stock set aside for this build. The project status does not change.</p>
       </div>
       <div className="reconciliation-header-actions">
-        <span className={`reconciliation-status ${model.status === "committed" ? "is-committed" : ""}`}><span className="reconciliation-status-dot" />{model.status === "committed" ? "Committed" : "Draft review"}</span>
+        <span className={`reconciliation-status ${model.status === "committed" ? "is-committed" : ""}`}><span className="reconciliation-status-dot" />{model.status === "committed" ? "Saved" : "In progress"}</span>
         {onExpertChange && <button type="button" className={`mode-toggle reconciliation-mode-toggle ${expert ? "is-expert" : ""}`} aria-pressed={expert} onClick={() => onExpertChange(!expert)}><span className="mode-dot" />{expert ? "Expert details" : "Beginner view"}</button>}
       </div>
     </header>
 
-    {model.status === "committed" && <div className="reconciliation-committed" role="status"><Icon name="check-circle" size={19} /><div><strong>Project close-out committed</strong><span>{model.committedAt ? `Committed ${formatDate(model.committedAt)}.` : "The final inventory changes are recorded."}</span></div>{model.trace?.replayed && <span className="reconciliation-replay-pill">Retry replayed safely</span>}</div>}
+    {model.status === "committed" && <div className="reconciliation-committed" role="status"><Icon name="check-circle" size={19} /><div><strong>Stock update saved</strong><span>{model.committedAt ? `Saved ${formatDate(model.committedAt)}. The project status did not change.` : "The stock changes are recorded. The project status did not change."}</span></div>{expert && model.trace?.replayed && <span className="reconciliation-replay-pill">Retry replayed safely</span>}</div>}
 
     {localError && <p className="reconciliation-error" role="alert"><Icon name="warning" size={16} />{localError}</p>}
-    {model.error && <p className="reconciliation-error" role="alert"><Icon name="warning" size={16} />{model.error}</p>}
+    {model.error && <p className="reconciliation-error" role="alert"><Icon name="warning" size={16} />{expert ? model.error : "The used-stock update could not be loaded. Try again."}</p>}
 
-    <div className="reconciliation-progress" aria-label="Reconciliation progress">
-      <div className="reconciliation-progress-copy"><span className="eyebrow">Reserved requirement review</span><strong>{activeLine ? activeLineInQueue ? `Reserved requirement ${(activeQueueIndex + 1)} of ${model.lines.length}` : "Unreserved requirement (optional context)" : "No reserved requirements"}</strong><span>{allLinesComplete ? "Every reserved requirement is accounted for" : "Review reserved requirements; unreserved requirements need no review."}</span></div>
+    <div className="reconciliation-progress" aria-label="Used stock update progress">
+      <div className="reconciliation-progress-copy"><span className="eyebrow">Stock review</span><strong>{activeLine ? activeLineInQueue ? `Requirement ${(activeQueueIndex + 1)} of ${model.lines.length}` : "Other requirement" : "No stock was set aside"}</strong><span>{allLinesComplete ? "Every selected item is recorded" : "Review selected items; other requirements need no update."}</span></div>
       <div className="reconciliation-progress-track" aria-hidden="true"><span style={{ width: model.lines.length ? `${((model.lines.filter((line) => summarizeReconciliationLine(line).complete).length / model.lines.length) * 100).toFixed(2)}%` : "0%" }} /></div>
-      <span className="reconciliation-progress-count">{model.lines.filter((line) => summarizeReconciliationLine(line).complete).length}/{model.lines.length} complete</span>
-      {availableLines.length > 0 && <button type="button" className="button button-quiet" aria-pressed={showAllRequirements} onClick={() => { setShowAllRequirements((current) => !current); setActiveIndex(0); }}>{showAllRequirements ? "Show reserved only" : "Show all requirements"}</button>}
+      <span className="reconciliation-progress-count">{model.lines.filter((line) => summarizeReconciliationLine(line).complete).length}/{model.lines.length} recorded</span>
+      {availableLines.length > 0 && <button type="button" className="button button-quiet" aria-pressed={showAllRequirements} onClick={() => { setShowAllRequirements((current) => !current); setActiveIndex(0); }}>{showAllRequirements ? "Show selected stock only" : "Show all requirements"}</button>}
     </div>
 
     {activeLine && activeSummary ? <>
@@ -502,44 +507,44 @@ export function ReconciliationUI({ model, expert = false, onExpertChange, confir
 
       <article className="reconciliation-line" aria-labelledby={lineHeadingId}>
         <div className="reconciliation-line-heading">
-          <div><span className="eyebrow">{activeLineInQueue ? "Reserved requirement" : "Unreserved requirement · optional context"}</span><h2 id={lineHeadingId}>{activeLine.name}</h2><p>{activeLine.itemLabel}{activeLine.itemKind ? ` · ${activeLine.itemKind}` : ""}</p></div>
+          <div><span className="eyebrow">{activeLineInQueue ? "Selected stock" : "Other requirement"}</span><h2 id={lineHeadingId}>{activeLine.name}</h2><p>{activeLine.itemLabel}{activeLine.itemKind ? ` · ${activeLine.itemKind}` : ""}</p></div>
           <span className={`reconciliation-line-state ${outcomeTone(activeSummary)}`}>{outcomeSummary(activeSummary, activeLine.unit)}</span>
         </div>
 
         <div className="reconciliation-quantity-strip" aria-label={`${activeLine.name} quantities`}>
           <div><span>Planned</span><strong>{formatQuantity(activeLine.plannedQuantity, activeLine.plannedUnit)}</strong><small>From this revision</small></div>
-          <div><span>Reserved</span><strong>{formatQuantity(activeLine.reservedQuantity, activeLine.unit)}</strong><small>{activeLine.reservations?.length ? `${activeLine.reservations.length} reservation${activeLine.reservations.length === 1 ? "" : "s"}` : "Held for this build"}</small></div>
-          <div className={activeSummary.unaccountedQuantity > EPSILON ? "is-pending" : "is-ready"}><span>Unaccounted</span><strong>{formatQuantity(activeSummary.unaccountedQuantity, activeLine.unit)}</strong><small>{activeSummary.overageQuantity > EPSILON ? "Over the reservation" : activeSummary.unaccountedQuantity > EPSILON ? "Allocate an outcome" : "Ready for preview"}</small></div>
+          <div><span>Set aside</span><strong>{formatQuantity(activeLine.reservedQuantity, activeLine.unit)}</strong><small>{activeLine.reservations?.length ? `${activeLine.reservations.length} selected item${activeLine.reservations.length === 1 ? "" : "s"}` : "Held for this build"}</small></div>
+          <div className={activeSummary.unaccountedQuantity > EPSILON ? "is-pending" : "is-ready"}><span>Still to record</span><strong>{formatQuantity(activeSummary.unaccountedQuantity, activeLine.unit)}</strong><small>{activeSummary.overageQuantity > EPSILON ? "Over the selected amount" : activeSummary.unaccountedQuantity > EPSILON ? "Record what happened" : "Ready to review"}</small></div>
         </div>
 
         {expert && <details className="reconciliation-expert" open><summary><span>Expert trace for this line</span><Icon name="chevron-down" size={15} /></summary><div className="reconciliation-expert-grid"><div><span>BOM line</span><code>{activeLine.bomLineId}</code></div><div><span>Line version</span><code>{activeLine.version ?? "Not recorded"}</code></div><div><span>Reservations</span><code>{activeLine.reservations?.map((reservation) => `${reservation.id} v${reservation.version ?? "?"}`).join(" · ") || "Not recorded"}</code></div><div><span>Item IDs</span><code>{activeLine.reservations?.map((reservation) => reservation.itemId).join(" · ") || "Not recorded"}</code></div></div></details>}
 
-        <div className="reconciliation-outcomes-heading"><div><span className="eyebrow">What happened?</span><p>Split this reservation across as many explicit outcomes as needed.</p></div><button type="button" className="button button-secondary" onClick={addOutcome} disabled={model.status !== "draft"}><Icon name="plus" size={16} />Add outcome</button></div>
+        <div className="reconciliation-outcomes-heading"><div><span className="eyebrow">What happened</span><p>Record each way this stock was used.</p></div><button type="button" className="button button-secondary" onClick={addOutcome} disabled={model.status !== "draft"}><Icon name="plus" size={16} />Add result</button></div>
 
         <div className="reconciliation-outcomes">
-          {activeLine.outcomes.length === 0 && <div className="reconciliation-no-outcome"><Icon name="clipboard" size={21} /><div><strong>{activeLineInQueue ? "No outcome selected yet" : "No review needed"}</strong><span>{activeLineInQueue ? "Choose what happened before moving to the next line. Only a line with zero active reservations can use “Reviewed — no change”. Active reservations need an explicit outcome." : "This requirement has no active reservation, so it is not part of close-out. Record an outcome only if you want to keep an explicit review in the draft."}</span></div></div>}
+          {activeLine.outcomes.length === 0 && <div className="reconciliation-no-outcome"><Icon name="clipboard" size={21} /><div><strong>{activeLineInQueue ? "No result recorded yet" : "No update needed"}</strong><span>{activeLineInQueue ? "Choose what happened before moving to the next item. Stock set aside for this build needs a result." : "This item was not set aside for this build. Record a result only if you want to keep a note."}</span></div></div>}
           {activeLine.outcomes.map((outcome, outcomeIndex) => <OutcomeEditor key={outcome.id} outcome={outcome} index={outcomeIndex} line={activeLine} expert={expert} onChange={(update) => updateOutcome(outcome.id, update)} onRemove={() => removeOutcome(outcome.id)} />)}
         </div>
 
-        {activeSummary.overageQuantity > EPSILON && <p className="reconciliation-inline-warning" role="alert"><Icon name="warning" size={16} />This line is over-accounted. Reduce an outcome quantity before requesting a preview.</p>}
+        {activeSummary.overageQuantity > EPSILON && <p className="reconciliation-inline-warning" role="alert"><Icon name="warning" size={16} />The recorded total is greater than the amount set aside. Reduce a result quantity before you review the changes.</p>}
       </article>
-    </> : <div className="reconciliation-empty"><Icon name="clipboard" size={23} /><h2>Nothing reserved for close-out</h2><p>This revision has no active reservations to reconcile. Unreserved requirements do not need review.</p></div>}
+    </> : <div className="reconciliation-empty"><Icon name="clipboard" size={23} /><h2>Nothing was set aside for this build</h2><p>No stock was set aside for this revision. Items not set aside do not need an update.</p></div>}
 
     <section className="reconciliation-preview" aria-labelledby={`${headingId}-preview`}>
-      <div className="reconciliation-section-heading"><div><span className="eyebrow">Before anything changes</span><h2 id={`${headingId}-preview`}>Server preview</h2><p>The server calculates the exact reservation, stock, and asset changes from this review.</p></div>{allLinesComplete && model.status === "draft" && <button type="button" className="button button-secondary" onClick={() => { void requestPreview(); }} disabled={previewPending}>{previewPending ? "Preparing preview…" : model.preview ? "Refresh preview" : "Preview changes"}<Icon name="arrow-right" size={16} /></button>}</div>
-      {!allLinesComplete && <div className="reconciliation-preview-empty"><Icon name="info" size={17} /><span>Finish every reserved requirement, including evidence for each outcome, to request a server preview. Unreserved requirements shown for context need no review.</span></div>}
-      {allLinesComplete && !model.preview && <div className="reconciliation-preview-empty"><Icon name="clock" size={17} /><span>{model.lines.length === 0 ? "No reserved requirements need review. Request a server preview to confirm there are no inventory changes." : "No preview yet. Request one when the reserved requirement review is complete."}</span></div>}
+      <div className="reconciliation-section-heading"><div><span className="eyebrow">Before anything changes</span><h2 id={`${headingId}-preview`}>Review stock changes</h2><p>Check the stock and reusable items that will change.</p></div>{allLinesComplete && model.status === "draft" && <button type="button" className="button button-secondary" onClick={() => { void requestPreview(); }} disabled={previewPending}>{previewPending ? "Preparing review…" : model.preview ? "Refresh review" : "Review changes"}<Icon name="arrow-right" size={16} /></button>}</div>
+      {!allLinesComplete && <div className="reconciliation-preview-empty"><Icon name="info" size={17} /><span>Still to record: add each selected item's result and how you checked it before reviewing stock changes.</span></div>}
+      {allLinesComplete && !model.preview && <div className="reconciliation-preview-empty"><Icon name="clock" size={17} /><span>{model.lines.length === 0 ? "No selected stock needs an update. Request a review to confirm there are no inventory changes." : "No review yet. Request one when the selected stock review is complete."}</span></div>}
       {model.preview && <PreviewDetails preview={model.preview} expert={expert} />}
     </section>
 
     <footer className="reconciliation-footer">
-      <div><span className="eyebrow">Final step</span><strong>{model.status === "committed" ? "This close-out is complete" : canCommit ? model.lines.length === 0 ? "Ready to close — no reserved changes" : "Ready to close the project" : "Review and preview before closing"}</strong><p>{model.status === "committed" ? "The committed receipt remains available in the project history." : canCommit ? model.lines.length === 0 ? "The server preview confirms that no active reservations need settlement." : "Check the server preview, then confirm the inventory changes." : "Commit stays locked until every reserved quantity is explicitly accounted for and a fresh server preview is present. Unreserved requirements do not block close-out."}</p></div>
-      <div className="reconciliation-footer-actions"><span className="reconciliation-lock-note" aria-live="polite"><Icon name={canCommit ? "check-circle" : "info"} size={15} />{canCommit ? "Preview checked" : previewCurrent && model.preview ? "Review incomplete" : "Preview required"}</span><button type="button" className="button button-primary" onClick={() => setConfirmationOpen(true)} disabled={!canCommit || model.status !== "draft"}>{model.status === "committed" ? "Committed" : "Confirm close-out"}<Icon name="arrow-right" size={16} /></button></div>
+      <div><span className="eyebrow">Apply update</span><strong>{model.status === "committed" ? "Stock update saved" : canCommit ? "Ready to update stock" : "Review before applying"}</strong><p>{model.status === "committed" ? "The stock update is recorded. The project status did not change." : canCommit ? model.lines.length === 0 ? "The review confirms that no selected stock needs an update." : "Check the stock changes, then apply them." : "Record each selected item's result and review the stock changes before applying them."}</p></div>
+      <div className="reconciliation-footer-actions"><span className="reconciliation-lock-note" aria-live="polite"><Icon name={canCommit ? "check-circle" : "info"} size={15} />{canCommit ? "Review checked" : previewCurrent && model.preview ? "Review incomplete" : "Review required"}</span><button type="button" className="button button-primary" onClick={() => setConfirmationOpen(true)} disabled={!canCommit || model.status !== "draft"}>{model.status === "committed" ? "Stock update saved" : "Apply stock changes"}<Icon name="arrow-right" size={16} /></button></div>
     </footer>
 
     {expert && <details className="reconciliation-expert reconciliation-global-expert" open><summary><span>Project-level evidence and replay</span><Icon name="chevron-down" size={15} /></summary><div className="reconciliation-expert-grid"><div><span>Project revision</span><code>{model.projectRevisionId}</code></div><div><span>Draft</span><code>{model.trace?.draftId ?? "Not recorded"} {model.trace?.draftVersion !== undefined ? `v${model.trace.draftVersion}` : ""}</code></div><div><span>Basis hash</span><code>{model.trace?.basisHash ?? "Not recorded"}</code></div><div><span>Audit ID</span><code>{model.trace?.auditId ?? "Not recorded"}</code></div><div><span>Replay state</span><code>{model.trace?.replayed === true ? "Replayed idempotently" : model.trace?.replayed === false ? "First commit" : "Not recorded"}</code></div><div><span>Deterministic event IDs</span><code>{model.trace?.deterministicEventIds?.join(" · ") || "Shown in preview"}</code></div></div></details>}
 
-    {confirmationOpen && <div className="reconciliation-confirm-scrim" role="presentation"><form className="reconciliation-confirm" role="dialog" aria-modal="true" aria-labelledby={`${headingId}-confirm`} onSubmit={(event) => { void commit(event); }}><div className="reconciliation-confirm-icon"><Icon name="warning" size={21} /></div><span className="eyebrow">One explicit commit</span><h2 id={`${headingId}-confirm`}>Commit this close-out?</h2><p>This will settle the reviewed reservations and apply the server preview to inventory. It can’t be edited as a draft afterward.</p><div className="reconciliation-confirm-summary"><strong>{model.lines.length === 0 ? "No reserved requirements reviewed" : `${model.lines.length} requirement${model.lines.length === 1 ? "" : "s"} reviewed`}</strong><span>{model.preview?.stockChanges.length ?? 0} stock changes · {model.preview?.createdAssets.length ?? 0} reusable assets</span></div><div className="dialog-actions"><button type="button" className="button button-quiet" onClick={() => setConfirmationOpen(false)} disabled={commitPending}>Go back</button><button type="submit" className="button button-primary" disabled={commitPending}>{commitPending ? "Committing…" : "Yes, commit close-out"}<Icon name="check" size={16} /></button></div></form></div>}
+    {confirmationOpen && <div className="reconciliation-confirm-scrim" role="presentation"><form className="reconciliation-confirm" role="dialog" aria-modal="true" aria-labelledby={`${headingId}-confirm`} onSubmit={(event) => { void commit(event); }}><div className="reconciliation-confirm-icon"><Icon name="warning" size={21} /></div><span className="eyebrow">Final approval</span><h2 id={`${headingId}-confirm`}>Apply these changes?</h2><p>This records the reviewed stock update. The project status does not change. You cannot edit this review afterward.</p><div className="reconciliation-confirm-summary"><strong>{model.lines.length === 0 ? "No requirements reviewed" : `${model.lines.length} requirement${model.lines.length === 1 ? "" : "s"} reviewed`}</strong><span>{model.preview?.stockChanges.length ?? 0} stock change{model.preview?.stockChanges.length === 1 ? "" : "s"} · {model.preview?.createdAssets.length ?? 0} reusable item{model.preview?.createdAssets.length === 1 ? "" : "s"}</span></div><div className="dialog-actions"><button type="button" className="button button-quiet" onClick={() => setConfirmationOpen(false)} disabled={commitPending}>Go back</button><button type="submit" className="button button-primary" disabled={commitPending}>{commitPending ? "Applying…" : "Apply stock changes"}<Icon name="check" size={16} /></button></div></form></div>}
   </section>;
 }
 
@@ -600,15 +605,15 @@ function OutcomeEditor({ outcome, index, line, expert, onChange, onRemove }: Out
   };
 
   return <article className={`reconciliation-outcome ${valid ? "is-valid" : "is-incomplete"}`}>
-    <div className="reconciliation-outcome-top"><span className="reconciliation-outcome-number">{index + 1}</span><div className="reconciliation-outcome-title"><span className="eyebrow">Outcome {index + 1}</span><strong>{outcome.kind ? outcomeLabel(outcome.kind) : "Choose an outcome"}</strong></div><button type="button" className="icon-button reconciliation-remove" aria-label={`Remove outcome ${index + 1}`} onClick={onRemove}><Icon name="close" size={17} /></button></div>
+    <div className="reconciliation-outcome-top"><span className="reconciliation-outcome-number">{index + 1}</span><div className="reconciliation-outcome-title"><span className="eyebrow">Result {index + 1}</span><strong>{outcome.kind ? outcomeLabel(outcome.kind) : "Choose what happened"}</strong></div><button type="button" className="icon-button reconciliation-remove" aria-label={`Remove result ${index + 1}`} onClick={onRemove}><Icon name="close" size={17} /></button></div>
     <div className="reconciliation-outcome-fields">
-      <label className="form-field"><span id={outcomeLabelId}>Outcome</span><select aria-labelledby={outcomeLabelId} value={outcome.kind ?? ""} onChange={(event) => chooseKind(event.target.value as ReconciliationOutcomeKind | "")}><option value="" disabled>Choose what happened</option>{outcomeOptions.map((option) => <option key={option.kind} value={option.kind}>{option.label}</option>)}</select></label>
-      <label className="form-field reconciliation-quantity-field"><span>Quantity</span><div className="reconciliation-input-with-unit"><input type="number" min="0" step="any" inputMode="decimal" value={outcome.quantity === 0 ? "" : outcome.quantity} aria-label={`Quantity for outcome ${index + 1}`} onChange={(event) => updateNumber(event, (quantity) => patch({ quantity }))} /><span>{line.unit}</span></div></label>
+      <label className="form-field"><span id={outcomeLabelId}>What happened</span><select aria-labelledby={outcomeLabelId} value={outcome.kind ?? ""} onChange={(event) => chooseKind(event.target.value as ReconciliationOutcomeKind | "")}><option value="" disabled>Choose what happened</option>{outcomeOptions.map((option) => <option key={option.kind} value={option.kind}>{option.label}</option>)}</select></label>
+      <label className="form-field reconciliation-quantity-field"><span>Quantity</span><div className="reconciliation-input-with-unit"><input type="number" min="0" step="any" inputMode="decimal" value={outcome.quantity === 0 ? "" : outcome.quantity} aria-label={`Quantity for result ${index + 1}`} onChange={(event) => updateNumber(event, (quantity) => patch({ quantity }))} /><span>{line.unit}</span></div></label>
     </div>
-    {outcome.kind !== "reviewed_no_change" && reservations.length > 0 && <label className="form-field reconciliation-reservation-field"><span>Reserved item</span><select aria-label={`Reservation for outcome ${index + 1}`} value={outcome.reservationId ?? ""} onChange={(event) => chooseReservation(event.target.value)}><option value="">Choose a reservation</option>{reservations.map((reservation) => <option key={reservation.id} value={reservation.id}>{reservation.itemLabel ?? reservation.itemId} · {formatQuantity(reservation.quantity, reservation.unit)}</option>)}</select></label>}
+    {outcome.kind !== "reviewed_no_change" && reservations.length > 0 && <label className="form-field reconciliation-reservation-field"><span>Stock item</span><select aria-label={`Stock item for result ${index + 1}`} value={outcome.reservationId ?? ""} onChange={(event) => chooseReservation(event.target.value)}><option value="">Choose a stock item</option>{reservations.map((reservation) => <option key={reservation.id} value={reservation.id}>{reservation.itemLabel ?? reservation.itemId} · {formatQuantity(reservation.quantity, reservation.unit)}</option>)}</select></label>}
     {outcome.kind && <p className="reconciliation-outcome-help">{outcomeOptions.find((option) => option.kind === outcome.kind)?.description}</p>}
-    <details className="reconciliation-evidence" open><summary><span id={evidenceLabelId}>Evidence for this outcome</span><span className={outcome.evidence.state ? "is-recorded" : "is-needed"}>{outcome.evidence.state ? evidenceLabel(outcome.evidence.state) : "Required"}</span></summary><div className="reconciliation-evidence-fields">
-      <label className="form-field"><span>Evidence state</span><select aria-label={`Evidence state for outcome ${index + 1}`} value={outcome.evidence.state ?? ""} onChange={(event) => { const state = event.target.value as ReconciliationEvidenceState | ""; if (state) patchEvidence({ state }); }}><option value="" disabled>Choose evidence</option>{evidenceOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+    <details className="reconciliation-evidence" open><summary><span id={evidenceLabelId}>{expert ? "Evidence details" : "How did you check this?"}</span><span className={outcome.evidence.state ? "is-recorded" : "is-needed"}>{outcome.evidence.state ? evidenceLabel(outcome.evidence.state) : "Required"}</span></summary><div className="reconciliation-evidence-fields">
+      <label className="form-field"><span>{expert ? "Evidence state" : "How did you check?"}</span><select aria-label={`${expert ? "Evidence state" : "How did you check"} for result ${index + 1}`} value={outcome.evidence.state ?? ""} onChange={(event) => { const state = event.target.value as ReconciliationEvidenceState | ""; if (state) patchEvidence({ state }); }}><option value="" disabled>Choose how you checked</option>{evidenceOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
       <label className="form-field"><span>Source <small>(optional)</small></span><input value={outcome.evidence.source ?? ""} maxLength={500} placeholder="Physical check, build notes, or project log" onChange={(event) => patchEvidence({ source: event.target.value })} /></label>
       <label className="form-field"><span>Observed <small>(optional)</small></span><input type="datetime-local" value={outcome.evidence.observedAt ?? ""} onChange={(event) => patchEvidence({ observedAt: event.target.value })} /></label>
       <label className="form-field reconciliation-evidence-note"><span>Note <small>(optional)</small></span><textarea rows={2} maxLength={2000} value={outcome.evidence.note ?? ""} placeholder="What did you observe?" onChange={(event) => patchEvidence({ note: event.target.value })} /></label>
@@ -623,11 +628,11 @@ function PreviewDetails({ preview, expert }: { preview: ReconciliationPreviewVie
   const reservationChanges = preview.reservationChanges;
   const createdAssets = preview.createdAssets;
   return <div className="reconciliation-preview-details">
-    <div className="reconciliation-preview-summary"><div><strong>{stockChanges.length + reservationChanges.length + createdAssets.length}</strong><span>planned changes</span></div><div><strong>{stockChanges.length}</strong><span>stock events</span></div><div><strong>{createdAssets.length}</strong><span>new assets</span></div>{preview.generatedAt && <small>Generated {formatDate(preview.generatedAt)}</small>}</div>
-    {preview.lines.length > 0 && <div className="reconciliation-preview-block"><h3>Line check</h3><div className="reconciliation-preview-lines">{preview.lines.map((line) => <div key={line.bomLineId}><span>{line.bomLineId}</span><strong>{formatQuantity(line.accountedQuantity, line.unit ?? "units")}</strong><small>{line.unaccountedQuantity > EPSILON ? `${formatQuantity(line.unaccountedQuantity, line.unit ?? "units")} unaccounted` : `${line.outcomeCount} outcome${line.outcomeCount === 1 ? "" : "s"}`}</small></div>)}</div></div>}
-    {reservationChanges.length > 0 && <div className="reconciliation-preview-block"><h3>Reservation settlement</h3><ul className="reconciliation-preview-list">{reservationChanges.map((change) => <li key={`${change.reservationId}-${change.toStatus}`}><span>{change.reservationId}</span><strong>{change.fromStatus} → {change.toStatus}</strong><small>{formatQuantity(change.quantity, change.unit)}</small></li>)}</ul></div>}
-    {stockChanges.length > 0 && <div className="reconciliation-preview-block"><h3>Inventory changes</h3><ul className="reconciliation-preview-list">{stockChanges.map((change) => <li key={change.eventKey}><span>{change.itemLabel ?? change.itemId}</span><strong>{change.kind === "consume" ? "Consume" : change.kind === "release" ? "Release" : "Loss"} {formatQuantity(change.quantity, change.unit)}</strong>{expert ? <code>{change.eventKey}</code> : <small>{change.afterAvailable !== undefined ? `${formatQuantity(change.afterAvailable, change.unit)} available after` : "Server-calculated event"}</small>}</li>)}</ul></div>}
-    {createdAssets.length > 0 && <div className="reconciliation-preview-block"><h3>Reusable assets</h3><ul className="reconciliation-preview-list">{createdAssets.map((asset) => <li key={asset.itemId}><span>{asset.name}</span><strong>{formatQuantity(asset.quantity, asset.unit)}</strong><small>{asset.kind} · {asset.itemId}</small></li>)}</ul></div>}
+    <div className="reconciliation-preview-summary"><div><strong>{stockChanges.length + reservationChanges.length + createdAssets.length}</strong><span>changes to apply</span></div><div><strong>{stockChanges.length}</strong><span>stock changes</span></div><div><strong>{createdAssets.length}</strong><span>reusable items</span></div>{preview.generatedAt && <small>Generated {formatDate(preview.generatedAt)}</small>}</div>
+    {expert && preview.lines.length > 0 && <div className="reconciliation-preview-block"><h3>Line check</h3><div className="reconciliation-preview-lines">{preview.lines.map((line) => <div key={line.bomLineId}><span>{line.bomLineId}</span><strong>{formatQuantity(line.accountedQuantity, line.unit ?? "units")}</strong><small>{line.unaccountedQuantity > EPSILON ? `${formatQuantity(line.unaccountedQuantity, line.unit ?? "units")} unaccounted` : `${line.outcomeCount} outcome${line.outcomeCount === 1 ? "" : "s"}`}</small></div>)}</div></div>}
+    {expert && reservationChanges.length > 0 && <div className="reconciliation-preview-block"><h3>Reservation settlement</h3><ul className="reconciliation-preview-list">{reservationChanges.map((change) => <li key={`${change.reservationId}-${change.toStatus}`}><span>{change.reservationId}</span><strong>{change.fromStatus} → {change.toStatus}</strong><small>{formatQuantity(change.quantity, change.unit)}</small></li>)}</ul></div>}
+    {stockChanges.length > 0 && <div className="reconciliation-preview-block"><h3>Review stock changes</h3><ul className="reconciliation-preview-list">{stockChanges.map((change) => <li key={change.eventKey}><span>{change.itemLabel ?? change.itemId}</span><strong>{change.kind === "consume" ? "Consume" : change.kind === "release" ? "Release" : "Loss"} {formatQuantity(change.quantity, change.unit)}</strong>{expert ? <code>{change.eventKey}</code> : <small>{change.afterAvailable !== undefined ? `${formatQuantity(change.afterAvailable, change.unit)} available after` : "Calculated from this review"}</small>}</li>)}</ul></div>}
+    {createdAssets.length > 0 && <div className="reconciliation-preview-block"><h3>Reusable items</h3><ul className="reconciliation-preview-list">{createdAssets.map((asset) => <li key={asset.itemId}><span>{asset.name}</span><strong>{formatQuantity(asset.quantity, asset.unit)}</strong><small>{expert ? `${asset.kind} · ${asset.itemId}` : asset.kind}</small></li>)}</ul></div>}
     {expert && preview.basisHash && <p className="reconciliation-preview-hash"><span>Preview basis hash</span><code>{preview.basisHash}</code></p>}
   </div>;
 }

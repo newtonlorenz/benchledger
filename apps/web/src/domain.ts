@@ -457,15 +457,15 @@ export type StockLabelTone = "good" | "warn" | "muted" | "bad" | "info";
 export function getStockLabel(state: StockState): { label: string; tone: StockLabelTone } {
   switch (state) {
     case "available":
-      return { label: "Ready to use", tone: "good" };
+      return { label: "Ready", tone: "good" };
     case "inspect-first":
-      return { label: "Check quantity", tone: "warn" };
+      return { label: "Check", tone: "warn" };
     case "ordered-unverified":
-      return { label: "Ordered, not verified", tone: "muted" };
+      return { label: "Check", tone: "warn" };
     case "reserved":
-      return { label: "Reserved", tone: "warn" };
+      return { label: "Check", tone: "warn" };
     case "depleted":
-      return { label: "Need to buy", tone: "bad" };
+      return { label: "Source", tone: "bad" };
   }
 }
 
@@ -743,7 +743,7 @@ export function shoppingEmptyState(summary: ProjectSummary): { title: string; de
   if (summary.readinessUnavailable) {
     return {
       title: "Readiness needs to reload",
-      description: "Inventory changed, but canonical project readiness is unavailable. Reload before preparing a shopping proposal.",
+      description: "Inventory changed, but the latest stock results are unavailable. Reload before preparing a shopping proposal.",
     };
   }
   if (summary.decideLines > 0 || summary.checkLines > 0 || summary.optionalLines > 0) {
@@ -891,15 +891,15 @@ export function calculateProjectSummary(project: Project, items: InventoryItem[]
 export function getLineLabel(state: BomLineStatus["state"]): { label: string; tone: StockLabelTone } {
   switch (state) {
     case "ready":
-      return { label: "Ready to use", tone: "good" };
+      return { label: "Ready", tone: "good" };
     case "inspect-first":
-      return { label: "Check quantity", tone: "warn" };
+      return { label: "Check", tone: "warn" };
     case "specify-first":
-      return { label: "Specify first", tone: "warn" };
+      return { label: "Decide", tone: "info" };
     case "partial":
-      return { label: "Partly covered", tone: "warn" };
+      return { label: "Source", tone: "bad" };
     case "missing":
-      return { label: "Need to buy", tone: "bad" };
+      return { label: "Source", tone: "bad" };
     case "optional":
       return { label: "Optional", tone: "muted" };
   }
@@ -912,4 +912,4 @@ export function countByState(items: InventoryItem[]): Record<StockState, number>
   );
 }
 
-export const railSteps = ["Idea", "Setup", "BOM", "Reuse / inspect / buy", "Files", "Validate"] as const;
+export const railSteps = ["Idea", "Setup", "Requirements", "Stock decisions", "Files", "Validate"] as const;

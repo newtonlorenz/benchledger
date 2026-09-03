@@ -127,13 +127,18 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   await expect(revisionDialog).toBeVisible();
   await revisionDialog.getByLabel("Revision name").fill("Exact setup capture");
 
-  const printerPicker = revisionDialog.getByRole("combobox", { name: "Owned printer" });
+  await expect(revisionDialog.getByText("BenchLedger saves the selected build setup with the new revision.", { exact: false })).toBeVisible();
+  await expect(revisionDialog.getByText("The previous revision stays unchanged. The new revision becomes current.", { exact: false })).toBeVisible();
+  await expect(revisionDialog.getByText("Printer (required)", { exact: true })).toBeVisible();
+  await expect(revisionDialog.getByText("Filament (optional)", { exact: true })).toBeVisible();
+  await expect(revisionDialog).not.toContainText("immutable snapshot");
+  const printerPicker = revisionDialog.getByRole("combobox", { name: "Printer (required)" });
   await printerPicker.click();
   const ownedPrinter = revisionDialog.getByRole("option").filter({ hasText: "H2D" }).filter({ hasText: "2 each" }).filter({ hasText: "Exact product confirmed" });
   await expect(ownedPrinter).toHaveCount(1);
   await ownedPrinter.click();
 
-  const filamentPicker = revisionDialog.getByRole("combobox", { name: "Owned filament" });
+  const filamentPicker = revisionDialog.getByRole("combobox", { name: "Filament (optional)" });
   await filamentPicker.click();
   const ownedFilament = revisionDialog.getByRole("option").filter({ hasText: "PETG HF" }).filter({ hasText: "777 g" }).filter({ hasText: "Exact product confirmed" });
   await expect(ownedFilament).toHaveCount(1);
@@ -164,7 +169,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
       && response.status() === 201
       && /\/api\/v1\/project-revisions\/[^/]+\/build-configurations$/u.test(url.pathname);
   });
-  await revisionDialog.getByRole("button", { name: "Create revision & save setup", exact: true }).click();
+  await revisionDialog.getByRole("button", { name: "Create revision", exact: true }).click();
   const [createdRevisionResponse, createdSnapshotResponse] = await Promise.all([revisionResponse, snapshotResponse]);
   const createdRevisionBody = await createdRevisionResponse.json() as { data?: { id?: string; projectId?: string } };
   const snapshotBody = await createdSnapshotResponse.json() as { data?: Record<string, unknown> };

@@ -57,7 +57,7 @@ describe("BOM line version and expert context", () => {
     };
 
     const markup = renderToStaticMarkup(<BomLineRow line={status} expert={false} onOpenItem={() => undefined} />);
-    expect(markup).toContain("Unit needs correction");
+    expect(markup).toContain("Fix unit");
     expect(markup).toContain("tool items use each");
     expect(markup).toContain("No safe match");
   });

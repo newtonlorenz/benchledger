@@ -509,6 +509,7 @@ export interface SetupSummaryProps {
   printer?: InventoryItem | undefined;
   filament?: InventoryItem | undefined;
   expert: boolean;
+  heading?: string;
 }
 
 function setupSnapshotField(value: unknown, key: string): string | undefined {
@@ -535,7 +536,7 @@ function physicalEvidenceSummary(value: unknown): string | undefined {
   ].filter((part): part is string => Boolean(part)).join(" · ");
 }
 
-export function BuildSetupSummary({ input, printer, filament, expert }: SetupSummaryProps) {
+export function BuildSetupSummary({ input, printer, filament, expert, heading = "Setup summary" }: SetupSummaryProps) {
   const persisted = input as BuildConfigInput & {
     contentSha256?: string;
     contentHash?: string;
@@ -563,7 +564,7 @@ export function BuildSetupSummary({ input, printer, filament, expert }: SetupSum
     physicalEvidenceSummary(filamentSnapshot) ?? filament?.productProfile?.linkState ?? setupSnapshotField(filamentSnapshot, "linkState") ?? "not linked"
   ].join(" · ");
   const unknownFilament = isUnknownFilamentSelection(input, filament);
-  return <section className="setup-summary" aria-label="Build setup summary"><div className="setup-summary-heading"><span className="eyebrow">Setup summary</span>{expert && <span className="expert-badge">Expert details</span>}</div><p>{buildSetupSummary(input, printer, filament)}</p>{unknownFilament && <div className="setup-blockers" role="status"><strong>Exact product unknown</strong><span>Design open</span><p>Blocker: confirm the physical filament identity before production approval.</p></div>}{expert && <details className="expert-detail setup-expert-detail"><summary>Show IDs, versions, evidence &amp; unknowns</summary><div className="detail-grid"><div><span>Revision ID</span><code>{persisted.projectRevisionId ?? "Not recorded"}</code></div><div><span>Printer ID</span><code>{printerId ?? "Not selected"}</code></div><div><span>Filament ID</span><code>{filamentId ?? "Not selected"}</code></div><div><span>Printer product</span><code>{printerProductId ?? "Exact product not confirmed"}</code></div><div><span>Filament product</span><code>{filamentProductId ?? "Exact product unknown"}</code></div><div><span>Versions</span><code>{versions || "Not recorded"}</code></div><div><span>Evidence</span><code>{evidence}</code></div><div><span>Content hash</span><code>{[persisted.contentSha256, persisted.contentHash, printer?.catalogProduct?.contentHash, filament?.catalogProduct?.contentHash].filter(Boolean).join(" · ") || "Not recorded"}</code></div><div><span>Unknowns</span><code>{input.unknowns.join(" · ") || "None recorded"}</code></div></div></details>}</section>;
+  return <section className="setup-summary" aria-label="Build setup summary"><div className="setup-summary-heading"><span className="eyebrow">{heading}</span>{expert && <span className="expert-badge">Expert details</span>}</div><p>{buildSetupSummary(input, printer, filament)}</p>{unknownFilament && <div className="setup-blockers" role="status"><strong>Exact product unknown</strong><span>Design open</span><p>Blocker: confirm the physical filament identity before production approval.</p></div>}{expert && <details className="expert-detail setup-expert-detail"><summary>Show IDs, versions, evidence &amp; unknowns</summary><div className="detail-grid"><div><span>Revision ID</span><code>{persisted.projectRevisionId ?? "Not recorded"}</code></div><div><span>Printer ID</span><code>{printerId ?? "Not selected"}</code></div><div><span>Filament ID</span><code>{filamentId ?? "Not selected"}</code></div><div><span>Printer product</span><code>{printerProductId ?? "Exact product not confirmed"}</code></div><div><span>Filament product</span><code>{filamentProductId ?? "Exact product unknown"}</code></div><div><span>Versions</span><code>{versions || "Not recorded"}</code></div><div><span>Evidence</span><code>{evidence}</code></div><div><span>Content hash</span><code>{[persisted.contentSha256, persisted.contentHash, printer?.catalogProduct?.contentHash, filament?.catalogProduct?.contentHash].filter(Boolean).join(" · ") || "Not recorded"}</code></div><div><span>Unknowns</span><code>{input.unknowns.join(" · ") || "None recorded"}</code></div></div></details>}</section>;
 }
 
 export interface CatalogInventoryFlowProps {

@@ -4,11 +4,12 @@ import {
   ReconciliationUI,
   reconciliationCanCommit,
   reconciliationCanRequestPreview,
+  reconciliationCommitErrorMessage,
   summarizeReconciliationLine
 } from "./reconciliation-ui";
 import type { ReconciliationViewModel } from "./reconciliation-ui";
 
-describe("reconciliation close-out flow", () => {
+describe("finish build flow", () => {
   it("moves from explicit line review to server preview and confirmation while keeping expert trace behind disclosure", () => {
     const initial: ReconciliationViewModel = {
       projectId: "project-lamp",
@@ -32,12 +33,17 @@ describe("reconciliation close-out flow", () => {
     );
 
     const reviewMarkup = render(initial);
-    expect(reviewMarkup).toContain("No outcome selected yet");
+    expect(reviewMarkup).toContain("Update used stock for Bench lamp");
+    expect(reviewMarkup).toContain("No result recorded yet");
     expect(reviewMarkup).toContain("Choose what happened");
-    expect(reviewMarkup).toContain("Only a line with zero active reservations can use");
+    expect(reviewMarkup).toContain("Stock set aside for this build needs a result.");
+    expect(reviewMarkup).toContain("Still to record");
+    expect(reviewMarkup).toContain("Review stock changes");
+    expect(reviewMarkup).toContain("Still to record: add each selected item");
     expect(reviewMarkup).not.toContain("An untouched reservation still needs");
-    expect(reviewMarkup).toContain("Finish every reserved requirement, including evidence");
-    expect(reviewMarkup).toContain("disabled=\"\">Confirm close-out");
+    expect(reviewMarkup).toContain("disabled=\"\">Apply stock changes");
+    const beginnerText = reviewMarkup.replace(/<[^>]*>/gu, " ");
+    expect(beginnerText).not.toMatch(/reconcil|reservation|commit|replay|settlement|basis hash|BOM line|source ID|evidence state|audit ID/iu);
 
     const reviewed: ReconciliationViewModel = {
       ...initial,
@@ -76,10 +82,16 @@ describe("reconciliation close-out flow", () => {
     expect(reconciliationCanCommit(previewed)).toBe(true);
 
     const beginnerConfirmationMarkup = render(previewed, { confirmationOpen: true });
-    expect(beginnerConfirmationMarkup).toContain("Server preview");
-    expect(beginnerConfirmationMarkup).toContain("Commit this close-out?");
-    expect(beginnerConfirmationMarkup).toContain("Yes, commit close-out");
+    expect(beginnerConfirmationMarkup).toContain("Review stock changes");
+    expect(beginnerConfirmationMarkup).toContain("Apply these changes?");
+    expect(beginnerConfirmationMarkup).toContain("Apply stock changes");
+    expect(beginnerConfirmationMarkup).toContain("2 requirements reviewed");
+    expect(beginnerConfirmationMarkup).toContain("The project status does not change.");
     expect(beginnerConfirmationMarkup).not.toContain("BOM line");
+    expect(beginnerConfirmationMarkup).not.toContain("Basis hash");
+    expect(beginnerConfirmationMarkup).not.toContain("Reservation settlement");
+    expect(beginnerConfirmationMarkup).not.toContain("reconcile-event-filament");
+    expect(beginnerConfirmationMarkup).not.toContain("Source ID");
 
     const expertConfirmationMarkup = render(previewed, { expert: true, confirmationOpen: true });
     expect(expertConfirmationMarkup).toContain("BOM line");
@@ -147,8 +159,15 @@ describe("reconciliation close-out flow", () => {
     };
     const markup = renderToStaticMarkup(<ReconciliationUI model={model} confirmationOpen={false} onChange={() => undefined} onRequestPreview={() => undefined} onConfirmCommit={() => undefined} />);
     expect(markup).toContain("Show all requirements");
-    expect(markup).toContain("Review reserved requirements; unreserved requirements need no review.");
+    expect(markup).toContain("Review selected items; other requirements need no update.");
     expect(markup).not.toContain("Optional context component");
+  });
+
+  it("uses uncertainty-safe beginner wording when applying stock changes is not confirmed", () => {
+    const message = reconciliationCommitErrorMessage(false, new TypeError("response lost after commit"));
+    expect(message).toBe("The stock update was not confirmed. Try again. BenchLedger will check the saved result before it applies anything twice.");
+    expect(message).not.toContain("Nothing was changed");
+    expect(reconciliationCommitErrorMessage(true, new Error("server trace"))).toBe("server trace");
   });
 
   it("allows an empty reservation queue to request a preview and commit without inventing review work", () => {
@@ -180,15 +199,16 @@ describe("reconciliation close-out flow", () => {
     expect(reconciliationCanCommit(previewed)).toBe(true);
 
     const pendingMarkup = renderToStaticMarkup(<ReconciliationUI model={model} confirmationOpen={false} onChange={() => undefined} onRequestPreview={() => undefined} onConfirmCommit={() => undefined} />);
-    expect(pendingMarkup).toContain("Preview changes");
-    expect(pendingMarkup).toContain("No reserved requirements need review. Request a server preview");
-    expect(pendingMarkup).toContain("disabled=\"\">Confirm close-out");
+    expect(pendingMarkup).toContain("Review changes");
+    expect(pendingMarkup).toContain("No selected stock needs an update. Request a review");
+    expect(pendingMarkup).toContain("disabled=\"\">Apply stock changes");
 
     const readyMarkup = renderToStaticMarkup(<ReconciliationUI model={previewed} confirmationOpen onChange={() => undefined} onRequestPreview={() => undefined} onConfirmCommit={() => undefined} />);
-    expect(readyMarkup).toContain("Ready to close — no reserved changes");
-    expect(readyMarkup).toContain("No reserved requirements reviewed");
-    expect(readyMarkup).toContain("Yes, commit close-out");
-    expect(readyMarkup).not.toContain("disabled=\"\">Confirm close-out");
+    expect(readyMarkup).toContain("Ready to update stock");
+    expect(readyMarkup).toContain("No requirements reviewed");
+    expect(readyMarkup).toContain("Apply these changes?");
+    expect(readyMarkup).toContain("Apply stock changes");
+    expect(readyMarkup).not.toContain("disabled=\"\">Apply stock changes");
   });
 
   it("keeps an incomplete active reservation blocked from preview and commit", () => {
@@ -213,5 +233,28 @@ describe("reconciliation close-out flow", () => {
     };
     expect(reconciliationCanRequestPreview(model)).toBe(false);
     expect(reconciliationCanCommit(model)).toBe(false);
+  });
+
+  it("explains an over-recorded result without internal accounting terms", () => {
+    const model: ReconciliationViewModel = {
+      projectId: "project-overage",
+      projectName: "Overage check",
+      projectRevisionId: "revision-overage",
+      status: "draft",
+      lines: [{
+        id: "line-overage",
+        bomLineId: "bom-overage",
+        name: "Filament",
+        itemLabel: "PETG spool",
+        plannedQuantity: 2,
+        plannedUnit: "gram",
+        reservedQuantity: 2,
+        unit: "gram",
+        outcomes: [{ id: "result-overage", kind: "consumed", quantity: 3, unit: "gram", evidence: { state: "consumed" } }],
+      }],
+    };
+    const markup = renderToStaticMarkup(<ReconciliationUI model={model} onChange={() => undefined} onRequestPreview={() => undefined} onConfirmCommit={() => undefined} />);
+    expect(markup).toContain("The recorded total is greater than the amount set aside. Reduce a result quantity before you review the changes.");
+    expect(markup).not.toContain("over-accounted");
   });
 });

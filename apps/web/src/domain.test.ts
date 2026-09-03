@@ -19,11 +19,11 @@ import type { BomLine, BomLineStatus, InventoryItem, Project } from "./domain";
 
 describe("BenchLedger beginner-friendly domain language", () => {
   it("translates evidence states into language a first-time maker can understand", () => {
-    expect(getStockLabel("available")).toEqual({ label: "Ready to use", tone: "good" });
-    expect(getStockLabel("inspect-first")).toEqual({ label: "Check quantity", tone: "warn" });
-    expect(getStockLabel("ordered-unverified")).toEqual({ label: "Ordered, not verified", tone: "muted" });
-    expect(getStockLabel("reserved")).toEqual({ label: "Reserved", tone: "warn" });
-    expect(getStockLabel("depleted")).toEqual({ label: "Need to buy", tone: "bad" });
+    expect(getStockLabel("available")).toEqual({ label: "Ready", tone: "good" });
+    expect(getStockLabel("inspect-first")).toEqual({ label: "Check", tone: "warn" });
+    expect(getStockLabel("ordered-unverified")).toEqual({ label: "Check", tone: "warn" });
+    expect(getStockLabel("reserved")).toEqual({ label: "Check", tone: "warn" });
+    expect(getStockLabel("depleted")).toEqual({ label: "Source", tone: "bad" });
   });
 
   it("filters inventory by the words a maker is likely to use", () => {
@@ -200,7 +200,7 @@ describe("BenchLedger beginner-friendly domain language", () => {
     ]);
     expect(summary.lineStatuses[0]).toMatchObject({ missingDecisions: ["voltage", "connector"] });
     expect(summary).toMatchObject({ decideLines: 1, sourceLines: 1, checkLines: 2, optionalLines: 1 });
-    expect(getLineLabel("specify-first")).toEqual({ label: "Specify first", tone: "warn" });
+    expect(getLineLabel("specify-first")).toEqual({ label: "Decide", tone: "info" });
   });
 
   it("uses the shared resolver for LED resistor decisions in offline/sample fallback", () => {
@@ -425,10 +425,10 @@ describe("BenchLedger beginner-friendly domain language", () => {
   });
 
   it("labels every BOM outcome for the beginner-facing UI", () => {
-    expect(getLineLabel("ready")).toEqual({ label: "Ready to use", tone: "good" });
-    expect(getLineLabel("inspect-first")).toEqual({ label: "Check quantity", tone: "warn" });
-    expect(getLineLabel("partial")).toEqual({ label: "Partly covered", tone: "warn" });
-    expect(getLineLabel("missing")).toEqual({ label: "Need to buy", tone: "bad" });
+    expect(getLineLabel("ready")).toEqual({ label: "Ready", tone: "good" });
+    expect(getLineLabel("inspect-first")).toEqual({ label: "Check", tone: "warn" });
+    expect(getLineLabel("partial")).toEqual({ label: "Source", tone: "bad" });
+    expect(getLineLabel("missing")).toEqual({ label: "Source", tone: "bad" });
     expect(getLineLabel("optional")).toEqual({ label: "Optional", tone: "muted" });
   });
 

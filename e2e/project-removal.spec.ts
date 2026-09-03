@@ -93,11 +93,14 @@ test.describe("restore confirmation", () => {
     await page.getByRole("button", { name: /^Projects(?: \d+)?$/u }).click();
     await expect(page.getByRole("heading", { name: "Retained Archive E2E", exact: true })).toBeVisible();
 
-    const restoreButton = page.locator(".page-header").getByRole("button", { name: "Restore project", exact: true });
+    await page.getByText("Project settings", { exact: true }).click();
+    await expect(page.locator("#main-content")).not.toContainText(/reservation|tombstone|audit/iu);
+    const restoreButton = page.getByRole("button", { name: "Restore project", exact: true });
     await restoreButton.click();
     expect(harness.restoreRequests()).toBe(0);
     const dialog = page.getByRole("alertdialog", { name: "Restore Retained Archive E2E?" });
-    await expect(dialog).toContainText("This moves the project to Idea. It does not recreate released reservations.");
+    await expect(dialog).toContainText("This moves the project to Idea. Stock released when it was archived will not be set aside again.");
+    await expect(dialog).not.toContainText(/reservation|tombstone|audit/iu);
     await expect(dialog.getByRole("button", { name: "Close dialog" })).toBeFocused();
     await expect(dialog.getByRole("button", { name: "Cancel", exact: true })).toBeVisible();
     await expect(dialog.getByRole("button", { name: "Restore project", exact: true })).toBeVisible();
@@ -109,7 +112,7 @@ test.describe("restore confirmation", () => {
     await restoreButton.click();
     await page.getByRole("alertdialog", { name: "Restore Retained Archive E2E?" }).getByRole("button", { name: "Restore project", exact: true }).click();
     expect(harness.restoreRequests()).toBe(1);
-    await expect(page.getByText("Retained Archive E2E was restored to Idea. Released reservations were not recreated.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Retained Archive E2E was restored to Idea. Previously released stock was not set aside again.", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Archive project", exact: true })).toBeVisible();
   });
 });
@@ -122,10 +125,12 @@ test("removes an archived project only after exact-name confirmation and hides i
 
   await expect(page.locator(".page-header").getByRole("button", { name: "Delete from workspace", exact: true })).toHaveCount(0);
   await page.getByText("Project settings", { exact: true }).click();
-  await page.getByRole("button", { name: "Delete from workspace", exact: true }).click();
+  await expect(page.locator("#main-content")).not.toContainText(/reservation|tombstone|audit/iu);
+  await page.getByRole("button", { name: "Remove from workspace", exact: true }).click();
   const dialog = page.getByRole("alertdialog", { name: "Remove Retained Archive E2E from the workspace?" });
   await expect(dialog).toContainText("This action is irreversible.");
   await expect(dialog).toContainText("archived project");
+  await expect(dialog).not.toContainText(/reservation|tombstone|audit/iu);
   const removeButton = dialog.getByRole("button", { name: "Remove from workspace", exact: true });
   await expect(removeButton).toBeDisabled();
   await dialog.getByLabel("Type Retained Archive E2E to confirm").fill("retained archive e2e");

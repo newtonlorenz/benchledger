@@ -781,6 +781,81 @@ describe("authenticated BenchLedger API adapter", () => {
     expect(body).not.toHaveProperty("revisionId");
   });
 
+  it("reuses a build-setup command key when the response is lost after commit", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-build-retry" });
+    const snapshot = {
+      id: "build-config-replayed", projectRevisionId: "revision-build-retry",
+      printerItemSnapshot: { itemId: "printer-1", catalogProductId: "printer-product-1" },
+      filamentSelections: [], activeHotend: "Not recorded", nozzle: "Not recorded", plate: "Not recorded",
+      accessories: [], firmware: "Not recorded", slicer: "Not recorded", profile: "Not recorded",
+      calibration: "Not recorded", explicitUnknowns: [], contentSha256: "b".repeat(64),
+      createdAt: "2026-08-30T10:00:00.000Z"
+    };
+    const requestBodies: string[] = [];
+    const requestKeys: string[] = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ data: {
+        project: { id: "project-build-retry", name: "Build", description: "A build", status: "idea", currentRevisionId: "revision-build-retry", createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 },
+        revision: { id: "revision-build-retry", projectId: "project-build-retry", number: 1, name: "Initial", status: "concept", createdAt: "2026-08-30T10:00:00.000Z", version: 1 }
+      } }))
+      .mockImplementationOnce(async (_input, init) => {
+        requestBodies.push(String(init?.body));
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        return Promise.reject(new TypeError("response lost after commit"));
+      })
+      .mockImplementationOnce(async (_input, init) => {
+        requestBodies.push(String(init?.body));
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        return jsonResponse({ data: snapshot, replayed: true });
+      })
+      .mockImplementationOnce(async (_input, init) => {
+        requestBodies.push(String(init?.body));
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        return jsonResponse({ data: { ...snapshot, id: "build-config-intentional" } });
+      });
+    const adapter = createWorkspaceAdapter();
+    const project = await adapter.createProject({ name: "Build", description: "A build" });
+    const input = { printerItemId: "printer-1", printerProductId: "printer-product-1", accessories: [], unknowns: [] };
+
+    await expect(adapter.createBuildConfigSnapshot(project.id, "revision-build-retry", input)).rejects.toMatchObject({ kind: "offline" });
+    await expect(adapter.createBuildConfigSnapshot(project.id, "revision-build-retry", input)).resolves.toMatchObject({ id: "build-config-replayed" });
+
+    await expect(adapter.createBuildConfigSnapshot(project.id, "revision-build-retry", input)).resolves.toMatchObject({ id: "build-config-intentional" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(requestBodies[1]).toBe(requestBodies[0]);
+    expect(requestKeys[1]).toBe(requestKeys[0]);
+    expect(requestKeys[0]).toMatch(/^web-build-config-/);
+    expect(requestKeys[2]).not.toBe(requestKeys[0]);
+  });
+
+  it("releases a build-setup command key after a known rejection", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-build-known" });
+    const projectResponse = { data: {
+      project: { id: "project-build-known", name: "Build", description: "A build", status: "idea", currentRevisionId: "revision-build-known", createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 },
+      revision: { id: "revision-build-known", projectId: "project-build-known", number: 1, name: "Initial", status: "concept", createdAt: "2026-08-30T10:00:00.000Z", version: 1 }
+    } };
+    const snapshot = {
+      id: "build-config-after-known", projectRevisionId: "revision-build-known",
+      printerItemSnapshot: { itemId: "printer-1", catalogProductId: "printer-product-1" },
+      filamentSelections: [], activeHotend: "Not recorded", nozzle: "Not recorded", plate: "Not recorded",
+      accessories: [], firmware: "Not recorded", slicer: "Not recorded", profile: "Not recorded",
+      calibration: "Not recorded", explicitUnknowns: [], contentSha256: "c".repeat(64), createdAt: "2026-08-30T10:00:00.000Z"
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(projectResponse))
+      .mockResolvedValueOnce(jsonResponse({ error: { message: "setup rejected" } }, 400))
+      .mockResolvedValueOnce(jsonResponse({ data: snapshot }));
+    const adapter = createWorkspaceAdapter();
+    const project = await adapter.createProject({ name: "Build", description: "A build" });
+    const input = { printerItemId: "printer-1", printerProductId: "printer-product-1", accessories: [], unknowns: [] };
+
+    await expect(adapter.createBuildConfigSnapshot(project.id, "revision-build-known", input)).rejects.toMatchObject({ kind: "validation", status: 400 });
+    const rejectedKey = new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("idempotency-key");
+    await expect(adapter.createBuildConfigSnapshot(project.id, "revision-build-known", input)).resolves.toMatchObject({ id: "build-config-after-known" });
+    expect(new Headers(fetchMock.mock.calls[2]?.[1]?.headers).get("idempotency-key")).not.toBe(rejectedKey);
+  });
+
   it("posts an eligible physical filament as an explicit unknown identity", async () => {
     vi.stubGlobal("document", { cookie: "forge_csrf=csrf-build-unknown" });
     const snapshot = {

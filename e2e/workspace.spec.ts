@@ -82,14 +82,14 @@ test("filters, edits, and physically counts evidence-aware inventory", async ({ 
       && url.searchParams.get("unassigned") === "true"
       && url.searchParams.get("limit") === "25";
   })).toBe(true);
-  await expect(espRow).toContainText("Ready to use");
+  await expect(espRow).toContainText("Ready");
   await expect(espRow).not.toContainText("synthetic-demo");
   await expect(page.getByRole("button", { name: "Bambu Lab H2D", exact: true })).toHaveCount(0);
 
   await page.getByRole("button", { name: "ESP32 development board", exact: true }).click();
   const drawer = page.getByRole("dialog", { name: "ESP32 development board" });
   await expect(drawer.getByText("Provenance", { exact: true })).toHaveCount(0);
-  await expect(drawer).toContainText("Ready to use");
+  await expect(drawer).toContainText("Ready");
   await expect(drawer).not.toContainText("synthetic-demo");
 
   await drawer.getByRole("button", { name: "Edit item" }).click();
@@ -493,16 +493,17 @@ test("requires and persists the managed category and semantic kind for quick inv
   await expect(page.locator(".table-item").filter({ hasText: "E2E quick category item" })).toBeVisible();
 });
 
-test("shows a truthful non-overlapping close-out capability boundary on mobile", async ({ page }) => {
+test("shows a truthful non-overlapping used-stock capability boundary on mobile", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await signIn(page);
   await page.getByRole("button", { name: "Open navigation" }).click();
   await page.getByRole("button", { name: /^Projects/ }).click();
-  await page.getByRole("tab", { name: /^Close out/ }).click();
+  await page.getByRole("tab", { name: /^Update used stock/ }).click();
 
   const unavailable = page.locator(".reconciliation-load-error");
   await expect(unavailable).toHaveAttribute("role", "alert");
-  await expect(unavailable).toContainText("This runtime does not support post-project reconciliation");
+  await expect(unavailable).toContainText("Used-stock updates are not available on this service version. Update the service, then try again.");
+  await expect(unavailable).not.toContainText(/reconcil|close.?out/iu);
   const back = unavailable.getByRole("button", { name: "Back to plan" });
   await expect(back).toBeVisible();
   expect(await unavailable.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
@@ -625,7 +626,7 @@ test("creates a project atomically and finalizes a revisioned artifact", async (
   await expect(page.getByRole("tab", { name: "Plan 0" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "No requirements are recorded yet.", exact: true })).toBeVisible();
   await expect(page.getByText("Add the materials, parts, and files that this build needs.", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Add requirements", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add first requirement", exact: true })).toBeVisible();
   await expect(page.getByText("Every recorded requirement is covered by confirmed stock.", { exact: true })).toHaveCount(0);
   await page.getByRole("tab", { name: "Files 0" }).click();
   await page.getByLabel("Choose files to upload").setInputFiles({
@@ -753,11 +754,13 @@ test("archives a project into the explicit Archived view and restores it", async
   await createDialog.getByRole("button", { name: "Create project" }).click();
   await expect(page.getByRole("heading", { name: "E2E retirement project", exact: true })).toBeVisible();
 
+  await page.getByText("Project settings", { exact: true }).click();
   const archiveTrigger = page.getByRole("button", { name: "Archive project", exact: true });
   await archiveTrigger.click();
   const confirmation = page.getByRole("alertdialog", { name: "Archive E2E retirement project?" });
   await expect(confirmation).toContainText("hides the project from active lists");
-  await expect(confirmation).toContainText("history remain retained");
+  await expect(confirmation).toContainText("project history are kept");
+  await expect(confirmation).not.toContainText(/reservation|tombstone|audit/iu);
   await confirmation.getByRole("button", { name: "Cancel" }).click();
   await expect(archiveTrigger).toBeVisible();
 
@@ -769,12 +772,13 @@ test("archives a project into the explicit Archived view and restores it", async
   await expect(page.getByRole("combobox", { name: "Choose project" }).getByRole("option", { name: "E2E retirement project", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: /^Archived \(/ }).click();
   await expect(page.getByRole("heading", { name: "E2E retirement project" })).toBeVisible();
-  await expect(page.locator(".archive-notice")).toContainText("revisions, files, BOM, stock evidence, and audit history remain retained");
+  await expect(page.locator(".archive-notice")).toContainText("revisions, files, requirements, stock records, and project history were kept");
+  await expect(page.locator(".archive-notice")).not.toContainText(/reservation|tombstone|audit/iu);
 
   await page.getByRole("button", { name: "Restore project", exact: true }).click();
   await page.getByRole("alertdialog", { name: "Restore E2E retirement project?" }).getByRole("button", { name: "Restore project", exact: true }).click();
   await expect(page.getByRole("heading", { name: "E2E retirement project", exact: true })).toBeVisible();
-  await expect(page.getByText("E2E retirement project was restored to Idea. Released reservations were not recreated.", { exact: true })).toBeVisible();
+  await expect(page.getByText("E2E retirement project was restored to Idea. Previously released stock was not set aside again.", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Active projects", exact: true })).toHaveClass(/is-active/u);
   await expect(page.getByRole("combobox", { name: "Choose project" }).getByRole("option", { name: "E2E retirement project", exact: true })).toHaveCount(1);
 });

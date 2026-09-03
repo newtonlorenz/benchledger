@@ -1593,6 +1593,11 @@ type PendingRevisionCommand = {
   readonly body: RevisionRequestBody;
 };
 
+type PendingBuildConfigCommand = {
+  readonly key: string;
+  readonly body: UnknownRecord;
+};
+
 type ExactInventoryRequestBody = ReturnType<typeof exactInventoryCompoundBody>;
 type PendingExactInventoryCommand = {
   readonly key: string;
@@ -1653,6 +1658,10 @@ function revisionCommandId(projectId: string, body: RevisionRequestBody): string
   // project/body pair. It is intentionally not derived from the project
   // alone, so a later revision cannot inherit an earlier key.
   return `${projectId}\u0000${JSON.stringify(body)}`;
+}
+
+function buildConfigCommandId(projectId: string, revisionId: string, body: UnknownRecord): string {
+  return `${projectId}\u0000${revisionId}\u0000${JSON.stringify(body)}`;
 }
 
 function categoryCommandId(action: string, id: string | undefined, body: UnknownRecord): string {
@@ -2512,6 +2521,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
   const inventoryCache = new Map<string, InventoryItem>();
   const projectCache = new Map<string, Project>();
   const pendingRevisionCommands = new Map<string, PendingRevisionCommand>();
+  const pendingBuildConfigCommands = new Map<string, PendingBuildConfigCommand>();
   const pendingProjectCommands = new Map<string, PendingProjectCommand>();
   const pendingProjectRemovalCommands = new Map<string, PendingProjectRemovalCommand>();
   const pendingExactInventoryCommands = new Map<string, PendingExactInventoryCommand>();
@@ -3126,15 +3136,26 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       if (!token) throw new ApiError("Your session needs a fresh CSRF token before saving build setup", { kind: "csrf", status: 403 });
       const current = projectCache.get(projectId);
       if (!current || current.serverRevisionId !== revisionId) throw new ApiError("Create or reload the project revision before saving build setup", { kind: "validation", status: 409 });
-      const payload = await request<unknown>(`/project-revisions/${encodeURIComponent(revisionId)}/build-configurations`, {
-        method: "POST",
-        headers: { "Idempotency-Key": idempotencyKey("build-config") },
-        body: JSON.stringify(canonicalBuildConfigurationBody(revisionId, input))
-      }, token);
-      const snapshot = mapBuildConfigSnapshot(responseValue(payload), projectId, revisionId, input);
-      const updated = { ...current, buildConfigSnapshot: snapshot };
-      projectCache.set(projectId, updated);
-      return snapshot;
+      const body = canonicalBuildConfigurationBody(revisionId, input);
+      const commandId = buildConfigCommandId(projectId, revisionId, body);
+      const pending = pendingBuildConfigCommands.get(commandId);
+      const command = pending ?? { key: idempotencyKey("build-config"), body };
+      if (pending === undefined) pendingBuildConfigCommands.set(commandId, command);
+      try {
+        const payload = await request<unknown>(`/project-revisions/${encodeURIComponent(revisionId)}/build-configurations`, {
+          method: "POST",
+          headers: { "Idempotency-Key": command.key },
+          body: JSON.stringify(command.body)
+        }, token);
+        const snapshot = mapBuildConfigSnapshot(responseValue(payload), projectId, revisionId, input);
+        const updated = { ...current, buildConfigSnapshot: snapshot };
+        projectCache.set(projectId, updated);
+        if (pendingBuildConfigCommands.get(commandId)?.key === command.key) pendingBuildConfigCommands.delete(commandId);
+        return snapshot;
+      } catch (error: unknown) {
+        if (!mutationFailureIsAmbiguous(error) && pendingBuildConfigCommands.get(commandId)?.key === command.key) pendingBuildConfigCommands.delete(commandId);
+        throw error;
+      }
     },
     async createBomLine(projectId, input) {
       const token = csrfToken ?? cookieValue("forge_csrf");
