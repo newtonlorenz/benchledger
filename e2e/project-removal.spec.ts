@@ -48,6 +48,72 @@ async function mockRemovalWorkspace(page: Page): Promise<{ readonly deleteReques
   return { deleteRequest: () => deleted };
 }
 
+async function mockRestoreWorkspace(page: Page): Promise<{ readonly restoreRequests: () => number }> {
+  let restoreRequests = 0;
+  await page.route("**/api/v1/auth/access", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ mode: "lan_open", passwordConfigured: false, version: 1 }) });
+  });
+  await page.route("**/api/v1/auth/lan-session", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: true, actor: "e2e", csrfToken: "csrf-restore-e2e", expiresAt: "2026-09-01T18:00:00.000Z" }) });
+  });
+  await page.route("**/api/v1/auth/session", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: true, actor: "e2e", source: "ui", scopes: ["read", "write"] }) });
+  });
+  await page.route("**/api/v1/health", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok", service: "benchledger", version: "e2e", demo: false, now: "2026-09-01T10:00:00.000Z" }) });
+  });
+  await page.route("**/api/v1/workspace", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ source: "api", fetchedAt: "2026-09-01T10:00:00.000Z", inventory: [], projects: [], offers: [] }) });
+  });
+  await page.route("**/api/v1/projects**", async (route) => {
+    if (route.request().method() === "POST" && new URL(route.request().url()).pathname.endsWith("/projects/project-removal-e2e/restore")) {
+      restoreRequests += 1;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: { ...project, status: "idea", version: 5, updatedAt: "2026-09-01T10:01:00.000Z" }, audit: { id: "audit-restore-e2e" }, correlationId: "correlation-restore-e2e", replayed: false }) });
+      return;
+    }
+    if (route.request().method() !== "GET") return route.continue();
+    const requestUrl = new URL(route.request().url());
+    const archived = requestUrl.searchParams.get("status") === "archived";
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: archived ? [project] : [], limit: 200, total: archived ? 1 : 0 }) });
+  });
+  await page.route("**/api/v1/inventory/categories*", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [], limit: 200, total: 0 }) });
+  });
+  return { restoreRequests: () => restoreRequests };
+}
+
+test.describe("restore confirmation", () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test("restores an archived project only after confirmation", async ({ page }) => {
+    const harness = await mockRestoreWorkspace(page);
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open navigation" }).click();
+    await page.getByRole("button", { name: /^Projects(?: \d+)?$/u }).click();
+    await expect(page.getByRole("heading", { name: "Retained Archive E2E", exact: true })).toBeVisible();
+
+    const restoreButton = page.locator(".page-header").getByRole("button", { name: "Restore project", exact: true });
+    await restoreButton.click();
+    expect(harness.restoreRequests()).toBe(0);
+    const dialog = page.getByRole("alertdialog", { name: "Restore Retained Archive E2E?" });
+    await expect(dialog).toContainText("This moves the project to Idea. It does not recreate released reservations.");
+    await expect(dialog.getByRole("button", { name: "Close dialog" })).toBeFocused();
+    await expect(dialog.getByRole("button", { name: "Cancel", exact: true })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Restore project", exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(restoreButton).toBeFocused();
+    expect(harness.restoreRequests()).toBe(0);
+
+    await restoreButton.click();
+    await page.getByRole("alertdialog", { name: "Restore Retained Archive E2E?" }).getByRole("button", { name: "Restore project", exact: true }).click();
+    expect(harness.restoreRequests()).toBe(1);
+    await expect(page.getByText("Retained Archive E2E was restored to Idea. Released reservations were not recreated.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Archive project", exact: true })).toBeVisible();
+  });
+});
+
 test("removes an archived project only after exact-name confirmation and hides it from Archived", async ({ page }) => {
   const harness = await mockRemovalWorkspace(page);
   await page.goto("/");

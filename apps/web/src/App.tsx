@@ -315,7 +315,7 @@ function App() {
       setProjects((current) => [restored, ...current.filter((candidate) => candidate.id !== restored.id)]);
       setProjectView("active");
       setSelectedProjectId(restored.id);
-      setToast("Project restored to idea. Its history remains intact; released reservations were not recreated.");
+      setToast(`${project.name} was restored to Idea. Released reservations were not recreated.`);
     } catch (error: unknown) {
       handleMutationError(error, "restoring that project");
       throw error;
@@ -1406,6 +1406,8 @@ function ProjectPage({ project, projects, projectView, archivedProjectCount, ite
   const [reconciliationError, setReconciliationError] = useState<string>();
   const [archiveConfirmationOpen, setArchiveConfirmationOpen] = useState(false);
   const [archiving, setArchiving] = useState(false);
+  const [restoreConfirmationOpen, setRestoreConfirmationOpen] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const [removeConfirmationOpen, setRemoveConfirmationOpen] = useState(false);
   const [removeConfirmation, setRemoveConfirmation] = useState("");
   const [removing, setRemoving] = useState(false);
@@ -1495,6 +1497,19 @@ function ProjectPage({ project, projects, projectView, archivedProjectCount, ite
       setArchiving(false);
     }
   };
+  const confirmRestore = async () => {
+    if (restoring) return;
+    setRestoring(true);
+    try {
+      await onRestore(project);
+      setRestoreConfirmationOpen(false);
+    } catch {
+      // The parent reports the actionable error; keep the confirmation open
+      // so the user can retry without losing the selected project.
+    } finally {
+      setRestoring(false);
+    }
+  };
   const confirmRemove = async () => {
     if (removing || removeConfirmation !== project.name) return;
     setRemoving(true);
@@ -1517,8 +1532,9 @@ function ProjectPage({ project, projects, projectView, archivedProjectCount, ite
     onConfirmInspection: confirmInspection
   };
   return <InspectionContext.Provider value={inspectionContext}><>
-    <PageHeader eyebrow="Project" title={project.name} description={project.subtitle} action="New project" onAction={onNewProject}><div className="project-view-switch" role="group" aria-label="Project view"><button type="button" className={projectView === "active" ? "is-active" : ""} onClick={() => onProjectViewChange("active")}>Active projects</button><button type="button" className={projectView === "archived" ? "is-active" : ""} onClick={() => onProjectViewChange("archived")}>Archived ({archivedProjectCount})</button></div><select className="project-select" aria-label="Choose project" value={project.id} onChange={(event) => onSelectProject(event.target.value)}>{projects.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select>{project.status === "archived" ? <button className="button button-primary" onClick={() => { void onRestore(project); }}><Icon name="refresh" size={16} /> Restore project</button> : <button className="button button-secondary" onClick={() => setArchiveConfirmationOpen(true)}><Icon name="archive" size={16} /> Archive project</button>}{onRetrySetup && project.status !== "archived" && <button className="button button-secondary" onClick={onRetrySetup}><Icon name="refresh" size={16} /> Retry setup</button>}{project.status !== "archived" && <button className="button button-secondary" onClick={onNewRevision}><Icon name="plus" size={16} /> New revision</button>}</PageHeader>
+    <PageHeader eyebrow="Project" title={project.name} description={project.subtitle} action="New project" onAction={onNewProject}><div className="project-view-switch" role="group" aria-label="Project view"><button type="button" className={projectView === "active" ? "is-active" : ""} onClick={() => onProjectViewChange("active")}>Active projects</button><button type="button" className={projectView === "archived" ? "is-active" : ""} onClick={() => onProjectViewChange("archived")}>Archived ({archivedProjectCount})</button></div><select className="project-select" aria-label="Choose project" value={project.id} onChange={(event) => onSelectProject(event.target.value)}>{projects.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select>{project.status === "archived" ? <button className="button button-primary" onClick={() => setRestoreConfirmationOpen(true)}><Icon name="refresh" size={16} /> Restore project</button> : <button className="button button-secondary" onClick={() => setArchiveConfirmationOpen(true)}><Icon name="archive" size={16} /> Archive project</button>}{onRetrySetup && project.status !== "archived" && <button className="button button-secondary" onClick={onRetrySetup}><Icon name="refresh" size={16} /> Retry setup</button>}{project.status !== "archived" && <button className="button button-secondary" onClick={onNewRevision}><Icon name="plus" size={16} /> New revision</button>}</PageHeader>
     {archiveConfirmationOpen && <Dialog title={`Archive ${project.name}?`} role="alertdialog" onClose={() => { if (!archiving) setArchiveConfirmationOpen(false); }}><p className="dialog-intro">This hides the project from active lists and releases its active reservations. Revisions, files, BOM, stock evidence, and audit history remain retained. Archive is reversible; restore returns it to idea without recreating reservations.</p><div className="dialog-actions"><button type="button" className="button button-quiet" onClick={() => setArchiveConfirmationOpen(false)} disabled={archiving}>Cancel</button><button type="button" className="button button-primary" onClick={() => { void confirmArchive(); }} disabled={archiving} aria-busy={archiving}>{archiving ? "Archiving…" : "Archive project"}</button></div></Dialog>}
+    {restoreConfirmationOpen && <Dialog title={`Restore ${project.name}?`} role="alertdialog" onClose={() => { if (!restoring) setRestoreConfirmationOpen(false); }}><p className="dialog-intro">This moves the project to Idea. It does not recreate released reservations.</p><div className="dialog-actions"><button type="button" className="button button-quiet" onClick={() => setRestoreConfirmationOpen(false)} disabled={restoring}>Cancel</button><button type="button" className="button button-primary" onClick={() => { void confirmRestore(); }} disabled={restoring} aria-busy={restoring}>{restoring ? "Restoring…" : "Restore project"}</button></div></Dialog>}
     {removeConfirmationOpen && <Dialog title={`Remove ${project.name} from the workspace?`} role="alertdialog" onClose={() => { if (!removing) { setRemoveConfirmationOpen(false); setRemoveConfirmation(""); } }}><p className="dialog-intro"><strong>This action is irreversible.</strong> It removes this {project.status === "archived" ? "archived" : "active"} project from workspace lists. {project.status === "archived" ? "" : "Active reservations will be released. "} Its tombstone, revisions, files, reservations release evidence, and audit history remain retained for history, but the project cannot be restored.</p><label className="form-field" htmlFor="remove-project-confirmation"><span>Type <strong>{project.name}</strong> to confirm</span><input id="remove-project-confirmation" autoFocus value={removeConfirmation} onChange={(event) => setRemoveConfirmation(event.target.value)} disabled={removing} autoComplete="off" /></label><div className="dialog-actions"><button type="button" className="button button-quiet" onClick={() => { setRemoveConfirmationOpen(false); setRemoveConfirmation(""); }} disabled={removing}>Cancel</button><button type="button" className="button button-danger" onClick={() => { void confirmRemove(); }} disabled={removing || removeConfirmation !== project.name} aria-busy={removing}>{removing ? "Removing…" : "Remove from workspace"}</button></div></Dialog>}
     {project.status === "archived" && <div className="archive-notice" role="status"><Icon name="archive" size={17} /><span><strong>Archived project</strong> Hidden from active lists. Active reservations were released; revisions, files, BOM, stock evidence, and audit history remain retained. Restore is reversible and returns the project to idea without recreating reservations.</span></div>}
     <details className="project-actions"><summary>Project settings <Icon name="chevron-down" size={14} /></summary><div><span>Archive keeps revisions and audit history available. Removing a project keeps its tombstone but cannot be undone.</span><button className="button button-danger" onClick={() => { setRemoveConfirmation(""); setRemoveConfirmationOpen(true); }}><Icon name="close" size={16} /> Delete from workspace</button></div></details>
