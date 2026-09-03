@@ -136,8 +136,11 @@ and retain all revisions, artifacts, BOM, and audits. Use `restore_project` to
 return one to `idea`; released reservations are never recreated. Never send legacy values such as
 `active`, `planning`, `paused`, `validation` or `retired`; the public boundary
 rejects them. `blocked` is derived from actionable reasons and is not a lifecycle
-value. Project lifecycle changes do not advance or reset the separate revision
-evidence ladder from `concept` through `production approved`.
+value. Human-readable project context also includes a compact `Needs attention`
+line counting unique required BOM lines by `Check`, `Decide`, and `Source`;
+optional lines and duplicate reasons are excluded from that line. Project
+lifecycle changes do not advance or reset the separate revision evidence ladder
+from `concept` through `production approved`.
 
 ## 3. Ask the simple question first (minute 2–4)
 

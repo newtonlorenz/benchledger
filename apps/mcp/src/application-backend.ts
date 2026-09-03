@@ -559,11 +559,12 @@ export function createApplicationBackend(service: ApplicationService, options: P
         const blocked = project.currentRevisionId === undefined
           ? { blocked: false, reasons: [] }
           : projectBlockedFromBom(project.currentRevisionId, await service.evaluateBomGaps(project.currentRevisionId));
+        const needsAttention = projectNeedsAttentionLine(blocked);
         const text = [
           `Project: ${project.name}`,
           `Status: ${project.status}`,
           `Blocked: ${blocked.blocked ? "yes" : "no"}`,
-          ...(blocked.reasons.length === 0 ? [] : [`Blockers: ${blocked.reasons.length}`]),
+          needsAttention,
           project.description === undefined ? undefined : `Description: ${project.description}`,
           `Work items: ${workItems.map((item) => `${item.name} (${item.kind})`).join(", ") || "none recorded"}`,
           project.currentRevisionId === undefined ? "Current revision: not selected" : `Current revision: ${project.currentRevisionId}`,
@@ -1615,6 +1616,23 @@ function projectBlockedFromBom(projectRevisionId: string, evaluation: { readonly
     return (line.reasons.length > 0 ? line.reasons : [fallback]).map((reason) => ({ source: "bom" as const, projectRevisionId, bomLineId: line.lineId, decision, reason }));
   });
   return { blocked: deriveProjectBlocked(reasons.map((reason) => reason.reason)).blocked, reasons };
+}
+
+function projectNeedsAttentionLine(blocked: ProjectBlocked): string {
+  const decisionsByLine = new Map<string, ProjectBlocked["reasons"][number]["decision"]>();
+  for (const reason of blocked.reasons) {
+    if (!decisionsByLine.has(reason.bomLineId)) decisionsByLine.set(reason.bomLineId, reason.decision);
+  }
+  const counts = { check: 0, decide: 0, source: 0 };
+  for (const decision of decisionsByLine.values()) counts[decision] += 1;
+  const total = counts.check + counts.decide + counts.source;
+  if (total === 0) return "Needs attention: 0 required items.";
+  const categories = ([
+    [counts.check, "Check"],
+    [counts.decide, "Decide"],
+    [counts.source, "Source"],
+  ] as const).filter(([count]) => count > 0).map(([count, label]) => `${count} ${label}`);
+  return `Needs attention: ${total} required ${total === 1 ? "item" : "items"} (${categories.join(", ")}).`;
 }
 
 function toApiReservation(input: ReservationInput): CreateReservation {
