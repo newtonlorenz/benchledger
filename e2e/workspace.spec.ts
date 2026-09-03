@@ -61,10 +61,9 @@ test("filters, edits, and physically counts evidence-aware inventory", async ({ 
 
   await page.getByRole("button", { name: "ESP32 development board electronic" }).click();
   const drawer = page.getByRole("dialog", { name: "ESP32 development board" });
-  await expect(drawer.getByText("Provenance", { exact: true })).toBeVisible();
-  await expect(drawer).toContainText("Physically counted");
-  await expect(drawer).toContainText("Source");
-  await expect(drawer).toContainText("synthetic-demo");
+  await expect(drawer.getByText("Provenance", { exact: true })).toHaveCount(0);
+  await expect(drawer).toContainText("Ready to use");
+  await expect(drawer).not.toContainText("synthetic-demo");
 
   await drawer.getByRole("button", { name: "Edit item" }).click();
   await drawer.getByLabel("Name").fill("Temporary name");
@@ -90,9 +89,9 @@ test("filters, edits, and physically counts evidence-aware inventory", async ({ 
   await expect(drawer).toContainText("Electronics drawer 2");
   await expect(drawer.locator(".drawer-header .eyebrow")).toHaveText("Electronics");
 
-  await drawer.getByLabel("Physical count").fill("3");
-  await drawer.getByRole("button", { name: "Save physical count" }).click();
-  await expect(drawer.getByRole("status")).toContainText("Saved 3 pieces as the verified on-hand quantity.");
+  await drawer.getByLabel("Counted quantity").fill("3");
+  await drawer.getByRole("button", { name: "Confirm physical count" }).click();
+  await expect(drawer.getByRole("status")).toContainText("Confirmed 3 pieces as the on-hand quantity.");
 
   await page.route("**/api/v1/inventory/*", async (route) => {
     if (route.request().method() !== "PATCH") return route.continue();
@@ -411,8 +410,22 @@ test("requires and persists the managed category and semantic kind for quick inv
   await expect(page.locator(".table-item").filter({ hasText: "E2E quick category item" })).toBeVisible();
 });
 
+test("guides beginners through one blank physical-count action", async ({ page }) => {
+  await signIn(page);
+  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await page.getByLabel("Search inventory").fill("Dupont jumper wire assortment");
+  await page.getByRole("button", { name: "Dupont jumper wire assortment wire" }).click();
+
+  const drawer = page.getByRole("dialog", { name: "Dupont jumper wire assortment" });
+  await expect(drawer.getByLabel("Counted quantity")).toHaveValue("");
+  await expect(drawer.getByRole("button", { name: "Confirm physical count" })).toHaveCount(1);
+  await expect(drawer.getByLabel("Observed quantity")).toHaveCount(0);
+  await expect(drawer.getByText("Provenance", { exact: true })).toHaveCount(0);
+});
+
 test("keeps the physical-count field aligned after commissioning delivered stock", async ({ page }) => {
   await signIn(page);
+  await page.getByRole("button", { name: "Beginner view" }).click();
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
   await page.getByLabel("Search inventory").fill("Dupont jumper wire assortment");
   await page.getByRole("button", { name: "Dupont jumper wire assortment wire" }).click();
@@ -423,7 +436,7 @@ test("keeps the physical-count field aligned after commissioning delivered stock
   await drawer.getByLabel("Observed", { exact: true }).fill("2026-09-01T12:00");
   await drawer.getByRole("button", { name: "Commission stock" }).click();
 
-  await expect(drawer.getByLabel("Physical count")).toHaveValue("7");
+  await expect(drawer.getByLabel("Counted quantity")).toHaveValue("7");
 });
 
 test("creates a project atomically and finalizes a revisioned artifact", async ({ page }) => {
