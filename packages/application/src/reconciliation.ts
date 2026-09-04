@@ -51,14 +51,12 @@ function nonNegative(value: number, label: string): void {
   if (!Number.isFinite(value) || value < 0) throw new ApplicationError("validation", `${label} must be zero or greater`);
 }
 
-function assertReconciliationRole(line: Pick<BomLine, "id" | "role">, kind: ReconciliationOutcome["kind"]): void {
-  const destructive = kind === "consumed" || kind === "damaged_lost" || kind === "converted_asset";
-  if (!destructive) return;
+function assertReconciliationRole(line: Pick<BomLine, "id" | "role">): void {
   if (line.role === undefined || line.role === null) {
     throw new ApplicationError("validation", `BOM line '${line.id}' has no requirement role; review it as consumed or reusable before reconciliation`);
   }
   if (line.role === "reusable") {
-    throw new ApplicationError("validation", `Reusable BOM line '${line.id}' cannot be consumed or lost during reconciliation; return the owned item instead`);
+    throw new ApplicationError("validation", `Reusable BOM line '${line.id}' cannot be reconciled; only consumed requirements may be reconciled`);
   }
 }
 
@@ -137,6 +135,9 @@ function stockChangesFor(
   const outcomes: Array<{ readonly outcome: ReconciliationOutcome; readonly reservation: ReconciliationReservationSource; readonly lineId: string; readonly index: number }> = [];
   const createdAssets: ReconciliationPreview["createdAssets"] = [];
   for (const line of normalizedLines) {
+    const sourceLine = snapshot.lines.find((candidate) => candidate.id === line.bomLineId);
+    if (sourceLine === undefined) throw new ApplicationError("not_found", `BOM line '${line.bomLineId}' was not found`);
+    assertReconciliationRole(sourceLine);
     const activeReservedQuantity = [...reservations.values()]
       .filter((reservation) => reservation.lineId === line.bomLineId && reservation.status === "active")
       .reduce((sum, reservation) => sum + reservation.quantity, 0);
@@ -149,14 +150,10 @@ function stockChangesFor(
         if (outcome.quantity !== 0 || outcome.reservationId !== undefined || outcome.itemId !== undefined || outcome.convertedAsset !== undefined) {
           throw new ApplicationError("validation", "reviewed_no_change must have zero quantity and no reservation, item, or asset");
         }
-        const lineRecord = snapshot.lines.find((candidate) => candidate.id === line.bomLineId);
-        if (lineRecord !== undefined && outcome.unit !== lineRecord.unit) throw new ApplicationError("validation", `BOM line '${line.bomLineId}' uses ${lineRecord.unit}, outcome uses ${outcome.unit}`);
+        if (outcome.unit !== sourceLine.unit) throw new ApplicationError("validation", `BOM line '${line.bomLineId}' uses ${sourceLine.unit}, outcome uses ${outcome.unit}`);
         continue;
       }
       if (outcome.reservationId === undefined) throw new ApplicationError("validation", `${outcome.kind} requires a reservation`);
-      const sourceLine = snapshot.lines.find((candidate) => candidate.id === line.bomLineId);
-      if (sourceLine === undefined) throw new ApplicationError("not_found", `BOM line '${line.bomLineId}' was not found`);
-      assertReconciliationRole(sourceLine, outcome.kind);
       const reservation = reservations.get(outcome.reservationId);
       if (reservation === undefined) throw new ApplicationError("not_found", `Reservation '${outcome.reservationId}' was not found`);
       if (reservation.lineId !== line.bomLineId) throw new ApplicationError("validation", `Reservation '${reservation.id}' does not belong to BOM line '${line.bomLineId}'`);

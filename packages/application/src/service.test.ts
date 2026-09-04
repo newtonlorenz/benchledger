@@ -2137,7 +2137,7 @@ describe("ApplicationService", () => {
 
   it("allows reviewed_no_change only as the sole outcome on an unreserved line", () => {
     const line: BomLine = {
-      id: "bom-reconcile", revisionId: "rev-1", name: "Unused filament", requiredQuantity: 100, unit: "gram", optional: false,
+      id: "bom-reconcile", revisionId: "rev-1", name: "Unused filament", role: "consumed", requiredQuantity: 100, unit: "gram", optional: false,
       constraints: {}, alternatives: [], createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1
     };
     const noChange: ReconciliationLine = {
@@ -2151,6 +2151,39 @@ describe("ApplicationService", () => {
     expect(() => buildReconciliationDocument(reservedSource, [noChange], false)).toThrow(/sole outcome.*zero active reserved quantity/i);
     const consumed = { kind: "consumed" as const, reservationId: active.id, itemId: active.itemId, quantity: 100, unit: "gram" as const, evidence: { state: "consumed" as const } };
     expect(() => buildReconciliationDocument(reservedSource, [{ ...noChange, outcomes: [noChange.outcomes[0]!, consumed] }], false)).toThrow(/sole outcome.*zero active reserved quantity/i);
+  });
+
+  it.each([
+    ["returned", null],
+    ["usable_leftover", null],
+    ["returned", "reusable"],
+    ["usable_leftover", "reusable"]
+  ] as const)("rejects %s reconciliation for a %s-role BOM line", (kind, role) => {
+    const line: BomLine = {
+      id: `bom-reconcile-${kind}-${role ?? "legacy"}`, revisionId: "rev-reconcile-role", name: "Reviewed stock", role, requiredQuantity: 100, unit: "gram", optional: false,
+      constraints: {}, alternatives: [], createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1
+    };
+    const reservedItem = item({ id: `reconcile-${kind}-${role ?? "legacy"}`, quantity: 100, availableQuantity: 0 });
+    const reservation = { id: `reservation-${kind}-${role ?? "legacy"}`, lineId: line.id, itemId: reservedItem.id, quantity: 100, status: "active" as const, unit: "gram" as const, version: 1 };
+    const source: ReconciliationSourceSnapshot = { projectId: "project-reconcile-role", projectRevisionId: "rev-reconcile-role", lines: [line], reservations: [reservation], items: [reservedItem] };
+    const outcome: ReconciliationLine = {
+      bomLineId: line.id, outcomes: [{ kind, reservationId: reservation.id, itemId: reservation.itemId, quantity: 100, unit: "gram", evidence: { state: "physically_counted" } }]
+    };
+
+    expect(() => buildReconciliationDocument(source, [outcome], false)).toThrow(/role|only consumed/i);
+  });
+
+  it.each([null, "reusable"] as const)("rejects reviewed_no_change for a %s-role BOM line", (role) => {
+    const line: BomLine = {
+      id: `bom-reconcile-no-change-${role ?? "legacy"}`, revisionId: "rev-reconcile-role", name: "Unreviewed stock", role, requiredQuantity: 100, unit: "gram", optional: false,
+      constraints: {}, alternatives: [], createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1
+    };
+    const source: ReconciliationSourceSnapshot = { projectId: "project-reconcile-role", projectRevisionId: "rev-reconcile-role", lines: [line], reservations: [], items: [item()] };
+    const outcome: ReconciliationLine = {
+      bomLineId: line.id, outcomes: [{ kind: "reviewed_no_change", quantity: 0, unit: "gram", evidence: { state: "physically_counted" } }]
+    };
+
+    expect(() => buildReconciliationDocument(source, [outcome], false)).toThrow(/role|only consumed/i);
   });
 
   it("completes close-out from active reservations without reviewing every zero-reservation BOM line", () => {

@@ -113,6 +113,15 @@ function outcomeStockKind(kind: ReconciliationOutcomeKind): Extract<StockEventKi
   return undefined;
 }
 
+function assertConsumedRole(line: Pick<BomLine, "id" | "role">): void {
+  if (line.role === undefined || line.role === null) {
+    fail("reconciliation_role_required", `BOM line ${line.id} has no requirement role; review it as consumed or reusable before reconciliation`);
+  }
+  if (line.role === "reusable") {
+    fail("reconciliation_reusable_consumption", `Reusable BOM line ${line.id} cannot be reconciled; only consumed requirements may be reconciled`);
+  }
+}
+
 /**
  * Validate and plan a complete close-out without mutating any state. Complete
  * means every active reservation is accounted for; BOM lines with no active
@@ -147,6 +156,7 @@ export function planReconciliation(
     const line = lineById.get(lineInput.bomLineId);
     if (line === undefined) fail("reconciliation_unknown_line", `BOM line ${lineInput.bomLineId} does not belong to revision ${source.revisionId}`);
     if (lineInput.outcomes.length === 0) fail("reconciliation_no_outcome", `BOM line ${lineInput.bomLineId} has no explicit outcome`);
+    assertConsumedRole(line);
 
     const lineReservations = source.reservations.filter((reservation) => reservation.bomLineId === lineInput.bomLineId);
     const activeReservations = lineReservations.filter((reservation) => reservation.status === "active");
@@ -179,14 +189,6 @@ export function planReconciliation(
         fail("reconciliation_invalid_reservation", `Reservation ${outcome.reservationId} does not belong to BOM line ${line.id}`);
       }
       if (reservation.status !== "active") fail("reconciliation_reservation_not_active", `Reservation ${reservation.id} is already ${reservation.status}`);
-      if (outcomeStockKind(outcome.kind) !== undefined) {
-        if (line.role === undefined || line.role === null) {
-          fail("reconciliation_role_required", `BOM line ${line.id} has no requirement role; review it as consumed or reusable before reconciliation`);
-        }
-        if (line.role === "reusable") {
-          fail("reconciliation_reusable_consumption", `Reusable BOM line ${line.id} cannot be consumed or lost during reconciliation`);
-        }
-      }
       if (outcome.itemId !== undefined && outcome.itemId !== reservation.itemId) fail("reconciliation_invalid_item", `Outcome item does not match reservation ${reservation.id}`);
       const snapshot = inventoryById.get(reservation.itemId);
       if (snapshot === undefined) fail("reconciliation_inventory_not_found", `Inventory item ${reservation.itemId} was not found`);
