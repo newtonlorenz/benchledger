@@ -320,7 +320,7 @@ export const stockEventSchema = stockEventInputSchema.extend({
 
 export const usageInputSchema = z.object({
   itemId: idSchema,
-  reservationId: idSchema.optional(),
+  reservationId: idSchema,
   quantity: z.number().finite().positive(),
   unit: quantityUnitSchema,
   note: z.string().max(2000).optional()
@@ -350,6 +350,7 @@ export function canonicalProjectLifecycle(value: unknown): ProjectLifecycleValue
   }
 }
 export const workItemKindSchema = z.enum(["part", "assembly", "electronics", "firmware", "document", "other"]);
+export const fabricationRouteSchema = z.enum(["printed", "ready_made", "none", "undecided"]);
 export const revisionStatusSchema = z.enum([
   "concept", "CAD complete", "DFAM reviewed", "mesh validated", "slicer validated",
   "test printed", "fit/function verified", "production approved"
@@ -418,17 +419,40 @@ export const projectRevisionSchema = z.object({
   name: z.string().min(1).max(240),
   notes: z.string().max(10000).optional(),
   status: revisionStatusSchema,
+  /** The intended manufacturing route is separate from lifecycle/evidence. */
+  /** Canonical reads always expose the route; legacy rows are projected as undecided. */
+  fabricationRoute: fabricationRouteSchema,
+  /** Null is a deliberate clear; omission means inherit on a new revision. */
+  intendedPrinterItemId: idSchema.nullable().optional(),
   createdAt: isoDateSchema,
   version: z.number().int().positive()
 }).strict();
 
-export const createProjectRevisionSchema = projectRevisionSchema.pick({ name: true, notes: true, status: true }).extend({ id: idSchema.optional() }).strict();
+export const createProjectRevisionSchema = projectRevisionSchema.pick({ name: true, notes: true, status: true, intendedPrinterItemId: true }).extend({
+  id: idSchema.optional(),
+  fabricationRoute: fabricationRouteSchema.optional()
+}).strict().refine((value) => value.intendedPrinterItemId === undefined || value.intendedPrinterItemId === null || value.fabricationRoute === undefined || value.fabricationRoute === "printed", {
+  path: ["intendedPrinterItemId"],
+  message: "intendedPrinterItemId requires a printed fabricationRoute"
+});
+export const updateProjectRevisionSchema = z.object({
+  fabricationRoute: fabricationRouteSchema.optional(),
+  intendedPrinterItemId: idSchema.nullable().optional()
+}).strict()
+  .refine((value) => value.fabricationRoute !== undefined || value.intendedPrinterItemId !== undefined, { message: "at least one revision planning field must change" })
+  .refine((value) => value.intendedPrinterItemId === undefined || value.intendedPrinterItemId === null || value.fabricationRoute === undefined || value.fabricationRoute === "printed", {
+    path: ["intendedPrinterItemId"],
+    message: "intendedPrinterItemId requires a printed fabricationRoute"
+  });
 
 /** A project and its first versioned planning baseline are created atomically. */
 export const createProjectWithInitialRevisionSchema = z.object({
   project: createProjectSchema,
   revision: createProjectRevisionSchema
-}).strict();
+}).strict().refine((value) => value.revision.intendedPrinterItemId === undefined || value.revision.intendedPrinterItemId === null || value.revision.fabricationRoute === "printed", {
+  path: ["revision", "intendedPrinterItemId"],
+  message: "intendedPrinterItemId requires a printed fabricationRoute"
+});
 
 /**
  * Safe, machine-readable conflicts returned by the atomic project setup
@@ -449,7 +473,9 @@ export const projectWithInitialRevisionSchema = z.object({
   revision: projectRevisionSchema
 }).strict();
 
-export const workItemRevisionSchema = projectRevisionSchema.extend({ workItemId: idSchema }).strict();
+/** Work-item revisions retain the shared legacy shape; fabrication planning
+ * belongs to project revisions and is not required for work-item responses. */
+export const workItemRevisionSchema = projectRevisionSchema.extend({ workItemId: idSchema, fabricationRoute: fabricationRouteSchema.optional() }).strict();
 export const createWorkItemRevisionSchema = z.object({
   id: idSchema.optional(),
   name: z.string().min(1).max(240),
@@ -553,6 +579,12 @@ export const bomSpecificationSchema = z.object({
   }
 });
 
+/** Whether a BOM requirement depletes stock when it is used, or remains an
+ * owned/reusable item. `null` is retained for legacy rows whose intent was
+ * never recorded; callers must review those rows instead of inferring a role. */
+export const bomLineRoleSchema = z.enum(["consumed", "reusable"]);
+export const bomRequirementRoleSchema = bomLineRoleSchema;
+
 export const bomConstraintsSchema = z.object({
   kind: z.string().optional(),
   manufacturer: z.string().optional(),
@@ -568,6 +600,7 @@ const bomLineShape = z.object({
   revisionId: idSchema,
   name: z.string().min(1).max(240),
   itemId: idSchema.optional(),
+  role: bomLineRoleSchema.nullable().optional(),
   requiredQuantity: z.number().finite().positive(),
   unit: quantityUnitSchema,
   optional: z.boolean(),
@@ -583,7 +616,7 @@ const bomLineShape = z.object({
 export const bomLineSchema = bomLineShape;
 
 const createBomLineShape = bomLineShape.pick({
-  name: true, itemId: true, requiredQuantity: true, unit: true, optional: true,
+  name: true, itemId: true, role: true, requiredQuantity: true, unit: true, optional: true,
   constraints: true, alternatives: true, notes: true
 }).extend({ id: idSchema.optional() }).strict();
 export const createBomLineSchema = createBomLineShape;
@@ -609,6 +642,7 @@ const projectSetupBomLineSchema = z.object({
   id: idSchema.optional(),
   name: z.string().trim().min(1).max(240),
   itemId: idSchema.optional(),
+  role: bomLineRoleSchema.nullable().optional(),
   requiredQuantity: z.number().finite().positive(),
   unit: quantityUnitSchema,
   optional: z.boolean().default(false),
@@ -1519,7 +1553,8 @@ export const reconciliationBasisBomLineSchema = z.object({
   bomLineId: idSchema,
   version: z.number().int().positive(),
   requiredQuantity: z.number().finite().positive(),
-  unit: quantityUnitSchema
+  unit: quantityUnitSchema,
+  role: bomLineRoleSchema.nullable().optional()
 }).strict();
 
 export const reconciliationBasisSchema = z.object({

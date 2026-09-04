@@ -156,7 +156,7 @@ async function mockWorkspaceAccess(page: Page) {
 test("completes the LAN-open to password and back access journey without exposing secrets", async ({ page }) => {
   const harness = await mockWorkspaceAccess(page);
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Review build status." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What are you making?", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Open account settings" }).click();
   await expect(page.getByRole("heading", { name: "Workspace access" })).toBeVisible();
   await expect(page.getByText("LAN open", { exact: true })).toBeVisible();
@@ -175,8 +175,7 @@ test("completes the LAN-open to password and back access journey without exposin
   await expect(page.getByLabel("Workspace password")).toBeVisible();
   await page.getByLabel("Workspace password").fill("new-password-please");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("heading", { name: "Review build status." })).toBeVisible();
-  await page.getByRole("button", { name: "Open account settings" }).click();
+  await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
 
   await page.getByLabel("Current workspace password", { exact: true }).fill("new-password-please");
   await page.getByLabel("New workspace password", { exact: true }).fill("replacement-password");
@@ -196,8 +195,8 @@ test("completes the LAN-open to password and back access journey without exposin
 
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
   await page.getByRole("button", { name: "Add item", exact: true }).click();
-  await page.getByLabel("Item type (required)").selectOption("tool");
-  await page.getByLabel("Category (required)").selectOption("category-tools");
+  await page.getByLabel("What are you adding?").selectOption("tool");
+  await expect(page.getByLabel("Category (required)")).toHaveCount(0);
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByLabel("Name", { exact: true }).fill("LAN-open write check");
   await page.getByRole("button", { name: "Add item", exact: true }).last().click();
@@ -324,9 +323,8 @@ test("replays a lost disable response after LAN bootstrap", async ({ page }) => 
   expect(harness.state()).toMatchObject({ mode: "lan_open", version: 3, signedIn: false });
 
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Review build status." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
   expect(harness.state().lanSessionCount).toBeGreaterThanOrEqual(2);
-  await page.getByRole("button", { name: "Open account settings" }).click();
   await expect(page.getByRole("form", { name: "Enable workspace password" })).toHaveCount(0);
   await expect(page.getByLabel("Current workspace password to retry disabling protection")).toBeVisible();
   await page.getByLabel("Current workspace password to retry disabling protection").fill("disable-password-please");

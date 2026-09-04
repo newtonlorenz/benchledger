@@ -215,6 +215,7 @@ describe("project BOM domain", () => {
       id: `b-closeout-${index + 1}`,
       revisionId: "r-closeout",
       name: `Fitzroy Cafe part ${index + 1}`,
+      role: "consumed",
       quantity: 1,
       unit: "board"
     }));

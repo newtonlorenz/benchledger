@@ -179,6 +179,14 @@ export function planReconciliation(
         fail("reconciliation_invalid_reservation", `Reservation ${outcome.reservationId} does not belong to BOM line ${line.id}`);
       }
       if (reservation.status !== "active") fail("reconciliation_reservation_not_active", `Reservation ${reservation.id} is already ${reservation.status}`);
+      if (outcomeStockKind(outcome.kind) !== undefined) {
+        if (line.role === undefined || line.role === null) {
+          fail("reconciliation_role_required", `BOM line ${line.id} has no requirement role; review it as consumed or reusable before reconciliation`);
+        }
+        if (line.role === "reusable") {
+          fail("reconciliation_reusable_consumption", `Reusable BOM line ${line.id} cannot be consumed or lost during reconciliation`);
+        }
+      }
       if (outcome.itemId !== undefined && outcome.itemId !== reservation.itemId) fail("reconciliation_invalid_item", `Outcome item does not match reservation ${reservation.id}`);
       const snapshot = inventoryById.get(reservation.itemId);
       if (snapshot === undefined) fail("reconciliation_inventory_not_found", `Inventory item ${reservation.itemId} was not found`);

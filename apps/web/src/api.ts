@@ -9,6 +9,7 @@ import type {
   BuildConfigInput,
   BuildFilamentSelection,
   BuildConfigSnapshot,
+  FabricationRoute,
   CatalogKind,
   CatalogProduct,
   CurrencyCode,
@@ -75,16 +76,16 @@ type ServerWorkItem = {
   version: number;
 };
 type ServerBomAlternative = { itemId: string; reason?: string; compatible?: string; quantityConversion?: unknown };
-type ServerBomLine = { id: string; revisionId: string; name: string; itemId?: string; requiredQuantity: number; unit: string; optional: boolean; constraints?: Record<string, unknown>; alternatives?: ServerBomAlternative[]; notes?: string; createdAt: string; updatedAt: string; version: number };
+type ServerBomLine = { id: string; revisionId: string; name: string; itemId?: string; requiredQuantity: number; unit: string; role?: string | null; optional: boolean; constraints?: Record<string, unknown>; alternatives?: ServerBomAlternative[]; notes?: string; createdAt: string; updatedAt: string; version: number };
 type ServerGapCandidate = { itemId: string; relationship: string; compatibility: string; availableQuantity: number; suppliedQuantity: number; inspectQuantity: number; reason: string };
 type ServerGapLine = { lineId: string; name?: string; optional?: boolean; status: string; decision?: string; missingDecisions?: string[]; requiredQuantity?: number; unit?: string; suppliedQuantity: number; inspectQuantity: number; missingQuantity: number; matchedItemIds: string[]; reasons: string[]; alternatives?: ServerBomAlternative[]; candidates?: ServerGapCandidate[] };
 type ServerGapEvaluation = { lines: ServerGapLine[]; totals: { requiredLines: number; optionalLines: number; readyLines?: number; checkLines?: number; decideLines?: number; sourceLines?: number; partialLines: number; missingLines: number } };
 type ServerArtifact = { id: string; projectId: string; workItemId?: string; revisionId?: string; projectRevisionId?: string; workItemRevisionId?: string; role: string; filename: string; mediaType: string; byteSize: number; sha256: string; author?: string; source?: string; machineBinding?: Record<string, string>; currentCandidate: boolean; retired: boolean; createdAt: string; version: number };
-type ServerRevision = { id: string; projectId: string; number: number; name: string; notes?: string; status: string; createdAt: string; version: number; workItemId?: string; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; gapEvaluation?: ServerGapEvaluation; inspections?: unknown[]; buildConfigSnapshot?: unknown; buildConfiguration?: unknown };
+type ServerRevision = { id: string; projectId: string; number: number; name: string; notes?: string; status: string; fabricationRoute?: FabricationRoute; intendedPrinterItemId?: string | null; createdAt: string; version: number; workItemId?: string; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; gapEvaluation?: ServerGapEvaluation; inspections?: unknown[]; buildConfigSnapshot?: unknown; buildConfiguration?: unknown };
 type ServerProject = { id: string; name: string; description?: string; status: string; currentRevisionId?: string; createdAt: string; updatedAt: string; version: number; removedAt?: string; removedBy?: string; lastLifecycleStatus?: string; workItems?: ServerWorkItem[]; projectRevisions?: ServerRevision[]; revisions?: ServerRevision[]; workItemRevisions?: ServerRevision[]; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; currentRevision?: ServerRevision };
 type ServerProjectTombstone = { id: string; name: string; removedAt: string; removedBy: string; lastLifecycleStatus: string; releasedReservationIds: string[]; version: number; auditId?: string };
 type ServerOffer = { id: string; itemId?: string; name: string; supplier: string; url: string; priceMinor: number; currency: CurrencyCode; packageQuantity?: number; observedAt: string; staleAfterDays?: number; version: number };
-type ServerWorkspace = { inventory: ServerInventoryItem[]; projects: ServerProject[]; offers: ServerOffer[]; source: "api"; fetchedAt: string };
+type ServerWorkspace = { inventory: ServerInventoryItem[]; projects: ServerProject[]; offers: ServerOffer[]; source: "api"; fetchedAt: string; capabilities?: unknown };
 type ServerUploadSession = { id: string; artifactId: string; expiresAt: string; maxBytes: number; uploadUrl: string; status: "pending" | "finalized" | "expired" };
 type ServerReconciliationEvidence = { state: string; source?: string; sourceId?: string; observedAt?: string; note?: string; condition?: string; uncertainty?: number };
 type ServerReconciliationConvertedAsset = { id?: string; name: string; kind: string; quantity: number; unit: string; location?: string; tags?: string[]; links?: unknown[]; evidence?: ServerReconciliationEvidence };
@@ -102,8 +103,11 @@ type ServerReconciliationPreview = { lines: ServerReconciliationPreviewLine[]; r
 type ServerReconciliationDraft = { id: string; projectId: string; projectRevisionId: string; status: "draft" | "committed"; version: number; lines: ServerReconciliationLine[]; basis: ServerReconciliationBasis; preview: ServerReconciliationPreview; createdAt: string; updatedAt: string; committedAt?: string; commitId?: string; auditId?: string };
 type ServerReconciliationCommit = { id: string; projectId: string; projectRevisionId: string; draftId: string; status: "committed"; basis: ServerReconciliationBasis; lines: ServerReconciliationLine[]; stockChanges: Array<ServerReconciliationPreviewStockChange & { eventId: string }>; reservationChanges: Array<ServerReconciliationPreviewReservationChange & { version: number }>; createdAssets: ServerInventoryItem[]; committedAt: string; auditId?: string };
 type ServerReservation = { id: string; lineId: string; itemId: string; quantity: number; status: string; version: number; unit?: string };
-export type RevisionInput = { name: string; notes?: string; status?: string; buildConfig?: BuildConfigInput };
-export type BomInput = { name: string; requiredQuantity: number; unit: BomLine["unit"]; itemId?: string; optional?: boolean; note?: string };
+export type RevisionInput = { name: string; notes?: string; status?: string; fabricationRoute?: FabricationRoute; intendedPrinterItemId?: string | null; buildConfig?: BuildConfigInput };
+export type ProjectRevisionUpdateInput = { fabricationRoute?: FabricationRoute; intendedPrinterItemId?: string | null };
+export type ProjectCreateInput = Pick<Project, "name" | "description"> & { fabricationRoute?: FabricationRoute; intendedPrinterItemId?: string };
+export type BomInput = { name: string; requiredQuantity: number; unit: BomLine["unit"]; role?: NonNullable<BomLine["role"]>; itemId?: string; optional?: boolean; note?: string };
+export type InventoryCreateInput = { name: string; category: InventoryItem["category"]; categoryNodeId?: string; kind?: string; quantity: number; unit: InventoryItem["unit"]; description?: string; manufacturer?: string; model?: string; sku?: string; location?: string };
 export type InventoryUpdateInput = Pick<InventoryItem, "name" | "description" | "manufacturer" | "location" | "sku" | "tags"> & { model: string; categoryNodeId?: string | null };
 export type InventoryCommissionInput = {
   quantity: number;
@@ -189,7 +193,7 @@ export interface WorkspaceAccessUpdateResult {
   session?: LoginResult;
 }
 export interface SessionResult { authenticated: true; actor: string; source?: string; scopes: string[]; projectIds?: string[] }
-export interface WorkspaceSnapshot { inventory: InventoryItem[]; projects: Project[]; offers: Offer[]; source: "api" | "synthetic"; fetchedAt: string; health?: ServerHealth }
+export interface WorkspaceSnapshot { inventory: InventoryItem[]; projects: Project[]; offers: Offer[]; source: "api" | "synthetic"; fetchedAt: string; health?: ServerHealth; capabilities?: readonly string[] }
 export interface InventoryCategoryPage { data: readonly ManagedInventoryCategory[]; nextCursor?: string; limit: number; total?: number }
 export type InventoryKindQuery = "printer" | "tool" | "accessory" | "consumable" | "electronic" | "fastener" | "filament" | "wire" | "adhesive" | "other";
 export interface InventoryListQuery {
@@ -256,7 +260,7 @@ export interface WorkspaceAdapter {
   recordCount(itemId: string, quantity: number): Promise<InventoryItem>;
   commissionInventoryItem(itemId: string, input: InventoryCommissionInput, expectedVersion: number): Promise<InventoryItem>;
   updateInventoryItem(itemId: string, input: Partial<InventoryUpdateInput>, expectedVersion?: number): Promise<InventoryItem>;
-  createInventoryItem(input: { name: string; category: InventoryItem["category"]; categoryNodeId?: string; kind?: string; quantity: number; unit: InventoryItem["unit"] }): Promise<InventoryItem>;
+  createInventoryItem(input: InventoryCreateInput): Promise<InventoryItem>;
   listInventoryCategories(options?: { includeArchived?: boolean; limit?: number; cursor?: string }): Promise<InventoryCategoryPage>;
   createInventoryCategory(input: CategoryCreateInput): Promise<ManagedInventoryCategory>;
   updateInventoryCategory(id: string, input: CategoryUpdateInput, expectedVersion: number): Promise<ManagedInventoryCategory>;
@@ -265,7 +269,8 @@ export interface WorkspaceAdapter {
   listCatalogProductPage?(kind: CatalogKind, query?: string, options?: CatalogSearchOptions): Promise<CatalogProductPage>;
   createCatalogProduct(input: CatalogProductDraft): Promise<CatalogProduct>;
   createExactInventoryItem(input: ExactInventoryInput): Promise<InventoryItem>;
-  createProject(input: Pick<Project, "name" | "description">): Promise<Project>;
+  linkExactInventoryItem(itemId: string, input: ExactInventoryInput, expectedProfileVersion?: number): Promise<InventoryItem>;
+  createProject(input: ProjectCreateInput): Promise<Project>;
   previewProjectSetup(input: ProjectSetupProposalInput): Promise<ProjectSetupPreviewResult>;
   commitProjectSetup(input: ProjectSetupCommitInput): Promise<ProjectSetupCommitResult>;
   listInspections(revisionId: string): Promise<InspectionAction[]>;
@@ -276,8 +281,10 @@ export interface WorkspaceAdapter {
   restoreProject(projectId: string, expectedVersion?: number): Promise<Project>;
   removeProject(projectId: string, expectedVersion?: number): Promise<Project>;
   createRevision(projectId: string, input: RevisionInput): Promise<Project>;
+  updateProjectRevision(revisionId: string, input: ProjectRevisionUpdateInput, expectedVersion?: number): Promise<Project>;
   createBuildConfigSnapshot(projectId: string, revisionId: string, input: BuildConfigInput): Promise<BuildConfigSnapshot>;
   createBomLine(projectId: string, input: BomInput): Promise<Project>;
+  updateBomLineRole(projectId: string, lineId: string, role: NonNullable<BomLine["role"]>, expectedVersion: number): Promise<Project>;
   /** Read one exact scope, or all project artifacts when scope is omitted. */
   listArtifacts(projectId: string, scope?: ArtifactUploadTarget): Promise<Artifact[]>;
   uploadArtifact(projectId: string, file: File, role: string, target?: ArtifactUploadTarget): Promise<Project>;
@@ -598,6 +605,7 @@ export function mapInventoryProductProfile(value: unknown, fallbackItemId?: stri
     ...(profileId ? { id: profileId } : {}),
     ...(inventoryItemId ? { inventoryItemId } : {}),
     ...(catalogProductId ? { catalogProductId } : {}),
+    ...(record.profileType === "filament_spool" || record.profileType === "printer_asset" ? { profileType: record.profileType } : {}),
     linkState,
     ...(hasFilament ? { filament } : {}),
     ...(hasPrinter ? { printer } : {}),
@@ -1082,6 +1090,7 @@ function mapBomAlternative(value: unknown): BomAlternative | undefined {
 export function mapBomLine(line: ServerBomLine): BomLine {
   const constraints = mapBomConstraints(line.constraints);
   const alternatives = (line.alternatives ?? []).map(mapBomAlternative).filter((alternative): alternative is BomAlternative => alternative !== undefined);
+  const role = line.role === null ? null : line.role === "consumed" || line.role === "reusable" ? line.role : undefined;
   return {
     id: line.id,
     version: line.version,
@@ -1090,6 +1099,7 @@ export function mapBomLine(line: ServerBomLine): BomLine {
     required: line.requiredQuantity,
     unit: mapUnit(line.unit),
     serverUnit: line.unit,
+    ...(role === null ? { role: null } : role === undefined ? {} : { role }),
     optional: line.optional,
     ...(constraints === undefined ? {} : { constraints }),
     ...(alternatives.length > 0 ? { alternatives } : {}),
@@ -1152,17 +1162,19 @@ function mapGapEvaluation(value: ServerGapEvaluation | undefined, bom: readonly 
     const isZero = (quantity: number): boolean => Math.abs(quantity) <= 1e-9;
     const isRequired = (quantity: number): boolean => Math.abs(quantity - requiredQuantity) <= 1e-9;
     const hasMatchedCandidate = Array.isArray(line.matchedItemIds) && line.matchedItemIds.length > 0;
-    const expectedDecision = status === "supplied"
-      ? "ready"
-      : status === "inspect_first"
-        ? "check"
-        : status === "specify_first"
-          ? "decide"
-          : status === "partially_supplied"
-            ? line.inspectQuantity > 0 ? "check" : "source"
-            : status === "missing"
-              ? "source"
-              : missingDecisions.length > 0 ? "decide" : "source";
+    const expectedDecision = bomLine.role === null
+      ? "check"
+      : status === "supplied"
+        ? "ready"
+        : status === "inspect_first"
+          ? "check"
+          : status === "specify_first"
+            ? "decide"
+            : status === "partially_supplied"
+              ? line.inspectQuantity > 0 ? "check" : "source"
+              : status === "missing"
+                ? "source"
+                : missingDecisions.length > 0 ? "decide" : "source";
     if (decision !== expectedDecision || (decision === "decide" && missingDecisions.length === 0)) return invalidGapEvaluation();
     if ((decision === "ready" || decision === "source") && missingDecisions.length > 0) return invalidGapEvaluation();
     if (status === "supplied" && (!isRequired(line.suppliedQuantity) || !isZero(line.inspectQuantity) || !isZero(line.missingQuantity))) return invalidGapEvaluation();
@@ -1403,16 +1415,39 @@ function mapProject(project: ServerProject): Project {
     notes: revision?.notes ? [revision.notes] : [],
     accent: status === "complete" ? "blue" : "orange",
     ...(revision?.id ?? project.currentRevisionId ? { serverRevisionId: revision?.id ?? project.currentRevisionId } : {}),
+    ...(revision?.version === undefined ? {} : { serverRevisionVersion: revision.version }),
     ...(projectRevisions.length === 0 ? {} : { projectRevisions }),
     ...(workItems.length === 0 ? {} : { workItems }),
     ...(allArtifacts.length === 0 ? {} : { allArtifacts }),
     ...(gapEvaluation === undefined ? {} : { gapEvaluation }),
     ...(inspectionActions.length === 0 ? {} : { inspectionActions }),
+    ...(revision?.fabricationRoute === undefined ? {} : { fabricationRoute: revision.fabricationRoute }),
+    ...(revision?.intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId: revision.intendedPrinterItemId }),
     ...(buildConfigSnapshot ? { buildConfigSnapshot } : {}),
     ...(project.removedAt === undefined ? {} : { removedAt: project.removedAt }),
     ...(project.removedBy === undefined ? {} : { removedBy: project.removedBy }),
     ...(project.lastLifecycleStatus === undefined ? {} : { lastLifecycleStatus: canonicalProjectLifecycle(project.lastLifecycleStatus) })
   };
+}
+
+function withoutRevisionScopedProjectState(project: Project): Project {
+  const {
+    currentRevision: _currentRevision,
+    railStep: _railStep,
+    bom: _bom,
+    artifacts: _artifacts,
+    notes: _notes,
+    serverRevisionId: _serverRevisionId,
+    serverRevisionVersion: _serverRevisionVersion,
+    gapEvaluation: _gapEvaluation,
+    readinessUnavailable: _readinessUnavailable,
+    inspectionActions: _inspectionActions,
+    fabricationRoute: _fabricationRoute,
+    intendedPrinterItemId: _intendedPrinterItemId,
+    buildConfigSnapshot: _buildConfigSnapshot,
+    ...projectState
+  } = project;
+  return projectState as Project;
 }
 
 function mapOffer(offer: ServerOffer): Offer {
@@ -1570,11 +1605,13 @@ type RevisionRequestBody = {
   readonly name: string;
   readonly notes?: string;
   readonly status: string;
+  readonly fabricationRoute?: FabricationRoute;
+  readonly intendedPrinterItemId?: string | null;
 };
 
 type ProjectRequestBody = {
   readonly project: { readonly name: string; readonly description: string; readonly status: "idea" };
-  readonly revision: { readonly name: "Initial concept"; readonly status: "concept" };
+  readonly revision: { readonly name: "Initial concept"; readonly status: "concept"; readonly fabricationRoute?: FabricationRoute; readonly intendedPrinterItemId?: string };
 };
 
 type PendingProjectCommand = {
@@ -1596,6 +1633,11 @@ type PendingRevisionCommand = {
 type PendingBuildConfigCommand = {
   readonly key: string;
   readonly body: UnknownRecord;
+};
+
+type PendingBomRoleCommand = {
+  readonly key: string;
+  readonly body: { readonly role: NonNullable<BomLine["role"]> };
 };
 
 type ExactInventoryRequestBody = ReturnType<typeof exactInventoryCompoundBody>;
@@ -1632,14 +1674,21 @@ function revisionRequestBody(input: RevisionInput): RevisionRequestBody {
   return {
     name: input.name,
     ...(input.notes ? { notes: input.notes } : {}),
-    status: input.status ?? "concept"
+    status: input.status ?? "concept",
+    ...(input.fabricationRoute === undefined ? {} : { fabricationRoute: input.fabricationRoute }),
+    ...(input.intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId: input.intendedPrinterItemId })
   };
 }
 
-function projectRequestBody(input: Pick<Project, "name" | "description">): ProjectRequestBody {
+function projectRequestBody(input: ProjectCreateInput): ProjectRequestBody {
   return {
     project: { name: input.name, description: input.description, status: "idea" },
-    revision: { name: "Initial concept", status: "concept" }
+    revision: {
+      name: "Initial concept",
+      status: "concept",
+      ...(input.fabricationRoute === undefined ? {} : { fabricationRoute: input.fabricationRoute }),
+      ...(input.intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId: input.intendedPrinterItemId })
+    }
   };
 }
 
@@ -1658,6 +1707,10 @@ function revisionCommandId(projectId: string, body: RevisionRequestBody): string
   // project/body pair. It is intentionally not derived from the project
   // alone, so a later revision cannot inherit an earlier key.
   return `${projectId}\u0000${JSON.stringify(body)}`;
+}
+
+function bomRoleCommandId(projectId: string, lineId: string, role: NonNullable<BomLine["role"]>, expectedVersion: number): string {
+  return `${projectId}\u0000${lineId}\u0000${role}\u0000${expectedVersion}`;
 }
 
 function buildConfigCommandId(projectId: string, revisionId: string, body: UnknownRecord): string {
@@ -1732,11 +1785,16 @@ type PendingInventoryCommand = {
   readonly body: InventoryRequestBody;
 };
 
-function inventoryRequestBody(input: { name: string; category: InventoryItem["category"]; categoryNodeId?: string; kind?: string; quantity: number; unit: InventoryItem["unit"] }): UnknownRecord {
+function inventoryRequestBody(input: InventoryCreateInput): UnknownRecord {
   return {
     name: input.name,
     kind: input.kind ?? serverItemKind(input.category),
     ...(input.categoryNodeId ? { categoryNodeId: input.categoryNodeId } : {}),
+    ...(input.description?.trim() ? { description: input.description.trim() } : {}),
+    ...(input.manufacturer?.trim() ? { manufacturer: input.manufacturer.trim() } : {}),
+    ...(input.model?.trim() ? { model: input.model.trim() } : {}),
+    ...(input.sku?.trim() ? { sku: input.sku.trim() } : {}),
+    ...(input.location?.trim() ? { location: input.location.trim() } : {}),
     quantity: input.quantity,
     unit: serverQuantityUnit(input.unit),
     tags: [input.category.toLowerCase()],
@@ -2100,7 +2158,7 @@ function syntheticSnapshot(): WorkspaceSnapshot {
     // so clients never have to invent a version for a bulk target.
     version: typeof item.version === "number" && Number.isSafeInteger(item.version) && item.version > 0 ? item.version : 1
   }));
-  return { inventory, projects: structuredClone(fallbackProjects), offers: structuredClone(fallbackOffers), source: "synthetic", fetchedAt: new Date().toISOString() };
+  return { inventory, projects: structuredClone(fallbackProjects), offers: structuredClone(fallbackOffers), source: "synthetic", fetchedAt: new Date().toISOString(), capabilities: [] };
 }
 
 function compareInventoryItems(left: Pick<InventoryItem, "name" | "id">, right: Pick<InventoryItem, "name" | "id">): number {
@@ -2205,15 +2263,28 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     };
   };
   const buildConfigs = new Map<string, BuildConfigSnapshot>();
-  const nextRevision = (project: Project, input: RevisionInput): Project => ({
-    ...project,
-    currentRevision: input.name,
-    railStep: railStepFor(input.status ?? "concept"),
-    bom: [],
-    artifacts: [],
-    notes: input.notes ? [input.notes] : [],
-    serverRevisionId: `sample-revision-${Date.now()}`
-  });
+  const nextRevision = (project: Project, input: RevisionInput): Project => {
+    const effectiveRoute = input.fabricationRoute ?? project.fabricationRoute ?? (project.intendedPrinterItemId ? "printed" : "undecided");
+    if (input.intendedPrinterItemId !== undefined && input.intendedPrinterItemId !== null && effectiveRoute !== "printed") {
+      throw new ApiError("The intended printer requires the printed fabrication route", { kind: "validation", status: 400 });
+    }
+    const hasPrinterField = Object.prototype.hasOwnProperty.call(input, "intendedPrinterItemId");
+    const intendedPrinterItemId = effectiveRoute === "printed"
+      ? (hasPrinterField ? input.intendedPrinterItemId ?? null : project.intendedPrinterItemId ?? null)
+      : null;
+    return {
+      ...withoutRevisionScopedProjectState(project),
+      currentRevision: input.name,
+      railStep: railStepFor(input.status ?? "concept"),
+      bom: [],
+      artifacts: [],
+      notes: input.notes ? [input.notes] : [],
+      serverRevisionId: `sample-revision-${Date.now()}`,
+      serverRevisionVersion: 1,
+      fabricationRoute: effectiveRoute,
+      intendedPrinterItemId
+    };
+  };
   return {
     clearAuthenticatedState() {},
     async checkHealth() { return { status: "ok", service: "benchledger", version: "sample", demo: true, now: new Date().toISOString() }; },
@@ -2314,7 +2385,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     },
     async createInventoryItem(input) {
       const kind = input.kind ?? serverItemKind(input.category);
-      const item: InventoryItem = { id: `sample-item-${Date.now()}`, name: input.name, kind, category: mapCategory(kind), ...(input.categoryNodeId ? { categoryNodeId: input.categoryNodeId } : {}), variant: "Variant not recorded", description: "Sample inventory item.", quantity: input.quantity, availableQuantity: 0, unit: input.unit, reserved: 0, state: "inspect-first", evidence: "delivered", provenance: { source: "sample workspace" }, location: "Unassigned", tags: [input.category.toLowerCase()], compatibility: [], accent: mapAccent(input.category), version: 1 };
+      const item: InventoryItem = { id: `sample-item-${Date.now()}`, name: input.name, kind, category: mapCategory(kind), ...(input.categoryNodeId ? { categoryNodeId: input.categoryNodeId } : {}), variant: input.model?.trim() || "Variant not recorded", ...(input.model?.trim() ? { model: input.model.trim() } : {}), description: input.description?.trim() || "No description recorded.", quantity: input.quantity, availableQuantity: 0, unit: input.unit, reserved: 0, state: "inspect-first", evidence: "delivered", serverEvidence: "unknown", provenance: { source: "sample workspace" }, location: input.location?.trim() || "Unassigned", ...(input.manufacturer?.trim() ? { manufacturer: input.manufacturer.trim() } : {}), ...(input.sku?.trim() ? { sku: input.sku.trim() } : {}), tags: [input.category.toLowerCase()], compatibility: [], accent: mapAccent(input.category), version: 1 };
       state.inventory = [item, ...state.inventory];
       return item;
     },
@@ -2406,8 +2477,27 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
       state.inventory = [item, ...state.inventory];
       return { ...item, ...(item.productProfile ? { productProfile: { ...item.productProfile } } : {}) };
     },
+    async linkExactInventoryItem(itemId, input) {
+      const current = state.inventory.find((item) => item.id === itemId);
+      if (!current) throw new ApiError("Inventory item not found.", { kind: "validation", status: 404 });
+      const linked: InventoryItem = {
+        ...current,
+        catalogProduct: { ...input.product },
+        productProfile: {
+          inventoryItemId: itemId,
+          catalogProductId: input.product.id,
+          profileType: input.category === "Filament" ? "filament_spool" : "printer_asset",
+          linkState: input.linkState,
+          ...(input.filament ? { filament: { ...input.filament } } : {}),
+          ...(input.printer ? { printer: { ...input.printer } } : {}),
+          version: (current.productProfile?.version ?? 0) + 1,
+        },
+      };
+      state.inventory = state.inventory.map((item) => item.id === itemId ? linked : item);
+      return linked;
+    },
     async createProject(input) {
-      const project: Project = { id: `sample-project-${Date.now()}`, name: input.name, description: input.description, subtitle: "A new maker project", status: "idea", updated: "Just now", currentRevision: "r01", workItem: "First work item", railStep: 0, bom: [], artifacts: [], notes: [], accent: "orange", serverRevisionId: `sample-revision-${Date.now()}` };
+      const project: Project = { id: `sample-project-${Date.now()}`, name: input.name, description: input.description, subtitle: "A new maker project", status: "idea", updated: "Just now", currentRevision: "r01", workItem: "First work item", railStep: 0, bom: [], artifacts: [], notes: [], accent: "orange", serverRevisionId: `sample-revision-${Date.now()}`, serverRevisionVersion: 1, ...(input.fabricationRoute === undefined ? {} : { fabricationRoute: input.fabricationRoute }), ...(input.intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId: input.intendedPrinterItemId }) };
       state.projects = [project, ...state.projects];
       return project;
     },
@@ -2461,6 +2551,32 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
       state.projects = state.projects.map((candidate) => candidate.id === projectId ? updated : candidate);
       return updated;
     },
+    async updateProjectRevision(revisionId, input, expectedVersion) {
+      const current = state.projects.find((candidate) => candidate.serverRevisionId === revisionId);
+      if (!current) throw new ApiError("Revision not found", { kind: "validation", status: 404 });
+      const currentVersion = current.serverRevisionVersion ?? 1;
+      if (expectedVersion !== undefined && expectedVersion !== currentVersion) throw new ApiError("This revision changed; reload before updating its build approach", { kind: "validation", status: 409, code: "version_conflict" });
+      const route = input.fabricationRoute ?? current.fabricationRoute ?? (current.intendedPrinterItemId ? "printed" : "undecided");
+      const hasPrinterField = Object.prototype.hasOwnProperty.call(input, "intendedPrinterItemId");
+      if (hasPrinterField && input.intendedPrinterItemId !== undefined && input.intendedPrinterItemId !== null && route !== "printed") {
+        throw new ApiError("The intended printer requires the printed fabrication route", { kind: "validation", status: 400 });
+      }
+      const intendedPrinterItemId = route === "printed"
+        ? (hasPrinterField ? input.intendedPrinterItemId ?? null : current.intendedPrinterItemId ?? null)
+        : null;
+      if (input.intendedPrinterItemId !== undefined && input.intendedPrinterItemId !== null && route !== "printed") {
+        throw new ApiError("The intended printer requires the printed fabrication route", { kind: "validation", status: 400 });
+      }
+      const { fabricationRoute: _priorRoute, intendedPrinterItemId: _priorPrinter, serverRevisionVersion: _priorVersion, ...withoutApproach } = current;
+      const updated: Project = {
+        ...withoutApproach,
+        fabricationRoute: route,
+        intendedPrinterItemId,
+        serverRevisionVersion: currentVersion + 1
+      };
+      state.projects = state.projects.map((candidate) => candidate.id === current.id ? updated : candidate);
+      return structuredClone(updated);
+    },
     async createBuildConfigSnapshot(projectId, revisionId, input) {
       const project = state.projects.find((candidate) => candidate.id === projectId);
       if (!project || project.serverRevisionId !== revisionId) throw new ApiError("Revision not found", { kind: "validation", status: 404 });
@@ -2471,10 +2587,20 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     async createBomLine(projectId, input) {
       const project = state.projects.find((candidate) => candidate.id === projectId);
       if (!project) throw new ApiError("Project not found", { kind: "validation", status: 404 });
-      const line: BomLine = { id: `sample-bom-${Date.now()}`, version: 1, label: input.name, required: input.requiredQuantity, unit: input.unit, optional: input.optional ?? false, ...(input.itemId ? { itemId: input.itemId } : {}), ...(input.note ? { note: input.note } : {}) };
+      const line: BomLine = { id: `sample-bom-${Date.now()}`, version: 1, label: input.name, required: input.requiredQuantity, unit: input.unit, ...(input.role === undefined ? {} : { role: input.role }), optional: input.optional ?? false, ...(input.itemId ? { itemId: input.itemId } : {}), ...(input.note ? { note: input.note } : {}) };
       const updated = { ...project, bom: [...project.bom, line] };
       state.projects = state.projects.map((candidate) => candidate.id === projectId ? updated : candidate);
       return updated;
+    },
+    async updateBomLineRole(projectId, lineId, role, expectedVersion) {
+      const project = state.projects.find((candidate) => candidate.id === projectId);
+      if (!project) throw new ApiError("Project not found", { kind: "validation", status: 404 });
+      const line = project.bom.find((candidate) => candidate.id === lineId);
+      if (!line) throw new ApiError("Requirement not found", { kind: "validation", status: 404 });
+      if (line.version !== expectedVersion) throw new ApiError("This requirement changed; reload and try again", { kind: "validation", status: 409, code: "version_conflict" });
+      const updated = { ...project, bom: project.bom.map((candidate) => candidate.id === lineId ? { ...candidate, role, version: candidate.version + 1 } : candidate) };
+      state.projects = state.projects.map((candidate) => candidate.id === projectId ? updated : candidate);
+      return structuredClone(updated);
     },
     async listArtifacts(projectId, scope) {
       const project = state.projects.find((candidate) => candidate.id === projectId);
@@ -2522,6 +2648,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
   const projectCache = new Map<string, Project>();
   const pendingRevisionCommands = new Map<string, PendingRevisionCommand>();
   const pendingBuildConfigCommands = new Map<string, PendingBuildConfigCommand>();
+  const pendingBomRoleCommands = new Map<string, PendingBomRoleCommand>();
   const pendingProjectCommands = new Map<string, PendingProjectCommand>();
   const pendingProjectRemovalCommands = new Map<string, PendingProjectRemovalCommand>();
   const pendingExactInventoryCommands = new Map<string, PendingExactInventoryCommand>();
@@ -2677,7 +2804,8 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       const mappedProjects = workspace.projects.map(mapProject);
       projectCache.clear();
       mappedProjects.forEach((project) => projectCache.set(project.id, project));
-      return { inventory: mappedInventory, projects: mappedProjects, offers: workspace.offers.map(mapOffer), source: "api", fetchedAt: workspace.fetchedAt || new Date().toISOString(), health: currentHealth };
+      const capabilities = Array.isArray(workspace.capabilities) ? workspace.capabilities.filter((action): action is string => typeof action === "string") : [];
+      return { inventory: mappedInventory, projects: mappedProjects, offers: workspace.offers.map(mapOffer), source: "api", fetchedAt: workspace.fetchedAt || new Date().toISOString(), health: currentHealth, capabilities };
     },
     async listArchivedProjects() {
       const payload = await request<unknown>("/projects?status=archived&limit=200");
@@ -2950,6 +3078,22 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         throw error;
       }
     },
+    async linkExactInventoryItem(itemId, input, expectedProfileVersion) {
+      const token = csrfToken ?? cookieValue("forge_csrf");
+      if (!token) throw new ApiError("Your session needs a fresh CSRF token before linking an exact product", { kind: "csrf", status: 403 });
+      const payload = await request<{ data?: unknown }>(`/inventory/${encodeURIComponent(itemId)}/product-profile`, {
+        method: "PUT",
+        headers: expectedProfileVersion === undefined ? {} : { "If-Match": String(expectedProfileVersion) },
+        body: JSON.stringify(exactInventoryProfileBody(input)),
+      }, token);
+      const profile = mapInventoryProductProfile(mutationData(payload), itemId);
+      if (!profile) throw new ApiError("The service returned an incomplete exact product profile", { kind: "server", status: 502 });
+      const current = inventoryCache.get(itemId);
+      if (!current) throw new ApiError("Reload inventory before linking this product", { kind: "validation", status: 409 });
+      const linked = { ...current, catalogProduct: { ...input.product }, productProfile: profile };
+      inventoryCache.set(itemId, linked);
+      return linked;
+    },
     async createProject(input) {
       const token = csrfToken ?? cookieValue("forge_csrf");
       if (!token) throw new ApiError("Your session needs a fresh CSRF token before creating a project", { kind: "csrf", status: 403 });
@@ -3049,8 +3193,21 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       try {
         const payload = await request<{ data: ServerRevision }>(`/projects/${encodeURIComponent(projectId)}/revisions`, { method: "POST", headers: { "Idempotency-Key": command.key }, body: JSON.stringify(command.body) }, token);
         const revision = mutationData(payload);
-        const { gapEvaluation: _staleGapEvaluation, ...currentWithoutGaps } = current;
-        const project = { ...currentWithoutGaps, currentRevision: `r${String(revision.number).padStart(2, "0")}`, serverRevisionId: revision.id, railStep: railStepFor(revision.status), bom: [], artifacts: [], notes: revision.notes ? [revision.notes] : [] };
+        const project: Project = {
+          ...withoutRevisionScopedProjectState(current),
+          currentRevision: `r${String(revision.number).padStart(2, "0")}`,
+          serverRevisionId: revision.id,
+          serverRevisionVersion: revision.version,
+          railStep: railStepFor(revision.status),
+          bom: (revision.bom ?? []).map(mapBomLine),
+          artifacts: (revision.artifacts ?? []).map((artifact) => mapArtifact(artifact, revision, { projectRevisionId: revision.id })),
+          notes: revision.notes ? [revision.notes] : [],
+          ...(revision.fabricationRoute === undefined ? {} : { fabricationRoute: revision.fabricationRoute }),
+          ...(revision.intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId: revision.intendedPrinterItemId }),
+          ...(revision.buildConfigSnapshot === undefined && revision.buildConfiguration === undefined
+            ? {}
+            : { buildConfigSnapshot: mapBuildConfigSnapshot(responseValue(revision.buildConfigSnapshot ?? revision.buildConfiguration), projectId, revision.id, { accessories: [], unknowns: [] }) })
+        };
         projectCache.set(projectId, project);
         // A successful response resolves this logical command. The next
         // intentional revision receives a new key, even if its fields match.
@@ -3060,6 +3217,33 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         if (!mutationFailureIsAmbiguous(error) && pendingRevisionCommands.get(commandId)?.key === command.key) pendingRevisionCommands.delete(commandId);
         throw error;
       }
+    },
+    async updateProjectRevision(revisionId, input, expectedVersion) {
+      const token = csrfToken ?? cookieValue("forge_csrf");
+      if (!token) throw new ApiError("Your session needs a fresh CSRF token before changing a build approach", { kind: "csrf", status: 403 });
+      const current = [...projectCache.values()].find((project) => project.serverRevisionId === revisionId);
+      if (!current) throw new ApiError("The project is not available in this workspace snapshot", { kind: "validation", status: 409 });
+      const version = expectedVersion ?? current.serverRevisionVersion;
+      if (version === undefined) throw new ApiError("Reload the project before changing its build approach", { kind: "validation", status: 400 });
+      const body: ProjectRevisionUpdateInput = {
+        ...(input.fabricationRoute === undefined ? {} : { fabricationRoute: input.fabricationRoute }),
+        ...(input.intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId: input.intendedPrinterItemId })
+      };
+      const payload = await request<{ data?: ServerRevision }>(`/project-revisions/${encodeURIComponent(revisionId)}`, {
+        method: "PATCH",
+        headers: { "If-Match": String(version), "Idempotency-Key": idempotencyKey("revision-approach") },
+        body: JSON.stringify(body)
+      }, token);
+      const revision = mutationData(payload);
+      const { fabricationRoute: _priorRoute, intendedPrinterItemId: _priorPrinter, serverRevisionVersion: _priorVersion, ...withoutApproach } = current;
+      const updated: Project = {
+        ...withoutApproach,
+        ...(revision.fabricationRoute === undefined ? {} : { fabricationRoute: revision.fabricationRoute }),
+        ...(revision.intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId: revision.intendedPrinterItemId }),
+        ...(revision.version === undefined ? {} : { serverRevisionVersion: revision.version })
+      };
+      projectCache.set(updated.id, updated);
+      return updated;
     },
     async readReconciliation(projectId, revisionId) {
       const current = projectCache.get(projectId);
@@ -3163,7 +3347,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       const current = projectCache.get(projectId);
       const revisionId = current?.serverRevisionId;
       if (!revisionId) throw new ApiError("Create a project revision before adding a requirement", { kind: "validation", status: 409 });
-      const payload = await request<{ data: ServerBomLine }>(`/project-revisions/${encodeURIComponent(revisionId)}/bom`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey("bom") }, body: JSON.stringify({ name: input.name, requiredQuantity: input.requiredQuantity, unit: input.unit === "g" ? "gram" : input.unit === "m" ? "metre" : input.unit, ...(input.itemId ? { itemId: input.itemId } : {}), optional: input.optional ?? false, constraints: {}, alternatives: [], ...(input.note ? { notes: input.note } : {}) }) }, token);
+      const payload = await request<{ data: ServerBomLine }>(`/project-revisions/${encodeURIComponent(revisionId)}/bom`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey("bom") }, body: JSON.stringify({ name: input.name, requiredQuantity: input.requiredQuantity, unit: input.unit === "g" ? "gram" : input.unit === "m" ? "metre" : input.unit, ...(input.role === undefined ? {} : { role: input.role }), ...(input.itemId ? { itemId: input.itemId } : {}), optional: input.optional ?? false, constraints: {}, alternatives: [], ...(input.note ? { notes: input.note } : {}) }) }, token);
       const line = mutationData(payload);
       if (!current) throw new ApiError("The project is not available in this workspace snapshot", { kind: "validation", status: 409 });
       const nextBom = [...current.bom, mapBomLine(line)];
@@ -3171,6 +3355,43 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       const project = { ...current, bom: nextBom, ...(gapEvaluation === undefined ? {} : { gapEvaluation }) };
       projectCache.set(projectId, project);
       return project;
+    },
+    async updateBomLineRole(projectId, lineId, role, expectedVersion) {
+      const token = csrfToken ?? cookieValue("forge_csrf");
+      if (!token) throw new ApiError("Your session needs a fresh CSRF token before updating a requirement", { kind: "csrf", status: 403 });
+      const current = projectCache.get(projectId);
+      if (!current?.serverRevisionId || !current.bom.some((line) => line.id === lineId)) throw new ApiError("The requirement is not available in this workspace snapshot", { kind: "validation", status: 409 });
+      const commandId = bomRoleCommandId(projectId, lineId, role, expectedVersion);
+      const pending = pendingBomRoleCommands.get(commandId);
+      const command = pending ?? { key: idempotencyKey("bom-role"), body: { role } };
+      if (pending === undefined) pendingBomRoleCommands.set(commandId, command);
+      let line: BomLine;
+      try {
+        const payload = await request<{ data?: ServerBomLine }>(`/bom-lines/${encodeURIComponent(lineId)}`, {
+          method: "PATCH",
+          headers: { "If-Match": String(expectedVersion), "Idempotency-Key": command.key },
+          body: JSON.stringify(command.body)
+        }, token);
+        line = mapBomLine(mutationData(payload));
+        if (pendingBomRoleCommands.get(commandId)?.key === command.key) pendingBomRoleCommands.delete(commandId);
+      } catch (error: unknown) {
+        if (!mutationFailureIsAmbiguous(error) && pendingBomRoleCommands.get(commandId)?.key === command.key) pendingBomRoleCommands.delete(commandId);
+        throw error;
+      }
+      const bom = current.bom.map((candidate) => candidate.id === line.id ? line : candidate);
+      const { gapEvaluation: _staleGaps, readinessUnavailable: _staleReadiness, ...stableCurrent } = current;
+      const committed: Project = { ...stableCurrent, bom };
+      projectCache.set(projectId, committed);
+      try {
+        const gapEvaluation = mapGapEvaluation(await request<ServerGapEvaluation>(`/project-revisions/${encodeURIComponent(current.serverRevisionId)}/gaps`), bom);
+        const refreshed: Project = { ...committed, ...(gapEvaluation === undefined ? {} : { gapEvaluation }) };
+        projectCache.set(projectId, refreshed);
+        return refreshed;
+      } catch {
+        const unavailable: Project = { ...committed, readinessUnavailable: true };
+        projectCache.set(projectId, unavailable);
+        return unavailable;
+      }
     },
     async listArtifacts(projectId, scope) {
       const params = new URLSearchParams();

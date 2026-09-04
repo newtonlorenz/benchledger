@@ -121,5 +121,7 @@ describe("shopping proposal surface", () => {
       />,
     );
     expect(linkedMarkup).toContain(`href="${offer.url}"`);
+    expect(linkedMarkup).toContain("Opens in a new tab.");
+    expect(unlinkedMarkup).not.toContain("Opens in a new tab.");
   });
 });

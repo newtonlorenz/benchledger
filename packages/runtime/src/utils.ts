@@ -32,7 +32,9 @@ export function mapPersistenceError(error: unknown): never {
     if (error.code.includes("duplicate") || error.code.includes("insufficient") || error.code.includes("negative") || error.code.includes("over_allocation") || error.code.includes("not_active") || error.code.includes("active_reservation") || error.code.includes("version_conflict") || error.code.includes("ancestry_conflict") || error.code.includes("category_in_use") || error.code.includes("category_has_children") || error.code === "project_archived" || error.code === "project_not_archived") {
       throw new ApplicationError("conflict", error.message);
     }
-    if (error.code.startsWith("invalid_")) throw new ApplicationError("validation", error.message);
+    if (error.code.startsWith("invalid_") || error.code === "reservation_required" || error.code === "bom_line_role_required" || error.code === "reusable_requirement_not_reservable" || error.code === "reusable_requirement_not_consumable") {
+      throw new ApplicationError("validation", error.message);
+    }
     throw new ApplicationError("integrity_error", "The stored record could not be updated safely");
   }
   if (error instanceof Error) {

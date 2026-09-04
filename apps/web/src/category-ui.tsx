@@ -80,6 +80,8 @@ interface CategoryManagerProps {
   readonly onCreate: (input: CategoryCreateInput) => Promise<ManagedInventoryCategory | undefined>;
   readonly onUpdate: (id: string, input: CategoryUpdateInput, expectedVersion: number) => Promise<ManagedInventoryCategory | undefined>;
   readonly onArchive: (id: string, expectedVersion: number) => Promise<ManagedInventoryCategory | undefined>;
+  /** Render without a second surface when the manager is embedded in Settings. */
+  readonly embedded?: boolean;
 }
 
 interface CategoryFormProps {
@@ -195,7 +197,7 @@ function CategoryRow({ category, parent, onEdit, onAddChild, onArchive, disabled
  * Settings manager for the user taxonomy. Parentage is deliberately absent
  * from edit controls: the API treats it as immutable after creation.
  */
-export function CategoryManager({ categories, onCreate, onUpdate, onArchive }: CategoryManagerProps) {
+export function CategoryManager({ categories, onCreate, onUpdate, onArchive, embedded = false }: CategoryManagerProps) {
   const tree = categoryTree(categories);
   const [createParentId, setCreateParentId] = useState<string | null | undefined>();
   const [editingId, setEditingId] = useState<string>();
@@ -272,8 +274,8 @@ export function CategoryManager({ categories, onCreate, onUpdate, onArchive }: C
     }
   };
 
-  return <section ref={managerRef} className="surface settings-section category-manager" aria-labelledby="category-manager-title" tabIndex={-1}>
-    <div className="category-manager-heading"><div><span className="eyebrow">Inventory taxonomy</span><h2 id="category-manager-title">Manage inventory categories</h2><p>Use categories and one-level subcategories to describe where an item belongs. Existing items can remain unassigned.</p></div><button type="button" className="button button-primary" onClick={() => { setEditingId(undefined); setCreateParentId(null); }} disabled={createParentId !== undefined || archivingId !== undefined}><Icon name="plus" size={16} />New category</button></div>
+  return <section ref={managerRef} className={`${embedded ? "" : "surface settings-section "}category-manager${embedded ? " category-manager-embedded" : ""}`} aria-labelledby="category-manager-title" tabIndex={-1}>
+    <div className="category-manager-heading"><div><span className="eyebrow">Inventory taxonomy</span><h2 id="category-manager-title">Manage inventory categories</h2><p>Use categories and one-level subcategories to describe where an item belongs. Existing items can remain unassigned.</p><small className="category-manager-explanation">Categories organize your workspace. Item type controls stock rules.</small></div><button type="button" className="button button-primary" onClick={() => { setEditingId(undefined); setCreateParentId(null); }} disabled={createParentId !== undefined || archivingId !== undefined}><Icon name="plus" size={16} />New category</button></div>
     {message && <p className="category-manager-message" role="status">{message}</p>}
     {error && <p className="category-manager-error" role="alert">{error}</p>}
     {createParentId === null && <CategoryForm title="Create top-level category" submitLabel="Add category" onSubmit={create} onCancel={() => setCreateParentId(undefined)} />}

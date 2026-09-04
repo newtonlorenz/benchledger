@@ -3,6 +3,7 @@ import { DomainError, assertNonNegativeQuantity, assertPositiveQuantity } from "
 import { classifyAvailability } from "./stock.js";
 import { isLedResistorRequirement, resolveBomSpecification, type ResolvedBomSpecification } from "./specification.js";
 import { cloneBomAlternativeQuantityConversion, resolveBomAlternativeQuantity } from "./quantity-conversion.js";
+import { isFabricationRoute, type FabricationRoute } from "./fabrication-route.js";
 import type {
   AvailabilityClass,
   BomCandidate,
@@ -84,6 +85,9 @@ export interface NewProjectRevision {
   number: number;
   label?: string;
   status?: RevisionStatus;
+  fabricationRoute?: FabricationRoute;
+  /** Null deliberately clears an inherited printer assignment. */
+  intendedPrinterItemId?: string | null;
   machineId?: string;
   material?: string;
   notes?: string;
@@ -94,6 +98,9 @@ export interface NewProjectRevision {
 export function createProjectRevision(input: NewProjectRevision): ProjectRevision {
   if (!input.projectId.trim()) throw new DomainError("invalid_project_id", "revision projectId is required");
   if (!Number.isInteger(input.number) || input.number < 1) throw new DomainError("invalid_revision_number", "revision number must be a positive integer");
+  if (input.fabricationRoute !== undefined && !isFabricationRoute(input.fabricationRoute)) throw new DomainError("invalid_fabrication_route", "fabrication route is not supported");
+  if (input.intendedPrinterItemId !== undefined && input.intendedPrinterItemId !== null && (input.fabricationRoute ?? "undecided") !== "printed") throw new DomainError("invalid_printer_route", "an intended printer requires the printed fabrication route");
+  if (input.intendedPrinterItemId !== undefined && input.intendedPrinterItemId !== null && !input.intendedPrinterItemId.trim()) throw new DomainError("invalid_printer_item_id", "intended printer item ID cannot be empty");
   const createdAt = input.createdAt ?? nowIso();
   return {
     id: input.id ?? createId("project-revision"),
@@ -101,6 +108,8 @@ export function createProjectRevision(input: NewProjectRevision): ProjectRevisio
     number: input.number,
     label: input.label ?? `r${String(input.number).padStart(2, "0")}`,
     status: input.status ?? "concept",
+    fabricationRoute: input.fabricationRoute ?? "undecided",
+    intendedPrinterItemId: input.intendedPrinterItemId ?? null,
     ...(input.machineId === undefined ? {} : { machineId: input.machineId }),
     ...(input.material === undefined ? {} : { material: input.material }),
     ...(input.notes === undefined ? {} : { notes: input.notes }),
@@ -146,6 +155,7 @@ export interface NewBomLine {
   name: string;
   quantity: number;
   unit: BomLine["unit"];
+  role?: BomLine["role"];
   required?: boolean;
   optional?: boolean;
   itemId?: string;
@@ -159,6 +169,9 @@ export function createBomLine(input: NewBomLine): BomLine {
   if (!input.revisionId.trim()) throw new DomainError("invalid_revision_id", "BOM line revisionId is required");
   if (!input.name.trim()) throw new DomainError("invalid_bom_name", "BOM line name is required");
   assertPositiveQuantity(input.quantity, "BOM line quantity");
+  if (input.constraints?.category === "printer") {
+    throw new DomainError("printer_requirement_not_allowed", "Printers are selected through build configuration, not BOM requirements");
+  }
   const rawSpecification = input.constraints?.specification;
   const resolvedSpecification = resolveBomSpecification({ name: input.name, constraints: input.constraints });
   if (isLedResistorRequirement(input.name) && rawSpecification?.status === "sufficient" && !resolvedSpecification.sufficient) {
@@ -173,6 +186,7 @@ export function createBomLine(input: NewBomLine): BomLine {
     name: input.name.trim(),
     quantity: input.quantity,
     unit: input.unit,
+    ...(input.role === undefined ? {} : { role: input.role }),
     required: input.required ?? !input.optional,
     ...(input.optional === undefined ? {} : { optional: input.optional }),
     ...(input.itemId === undefined ? {} : { itemId: input.itemId }),

@@ -2,10 +2,10 @@ import type { z } from "zod";
 import type {
   artifactSchema, auditEventSchema, beginUploadSchema, bomGapCandidateSchema, bomGapSchema, bomLineSchema, createBomLineSchema,
   commissionInventoryItemSchema, createInventoryItemSchema, createOfferSchema, createProjectRevisionSchema,
-  createProjectSchema, createProjectWithInitialRevisionSchema, projectCreationConflictDetailsSchema, createReservationSchema, createWorkItemRevisionSchema, removeProjectSchema, projectTombstoneSchema,
+  createProjectSchema, createProjectWithInitialRevisionSchema, projectCreationConflictDetailsSchema, createReservationSchema, createWorkItemRevisionSchema, removeProjectSchema, projectTombstoneSchema, updateProjectRevisionSchema,
   createWorkItemSchema, dimensionSchema, healthSchema, inventoryItemSchema,
   inventoryListQuerySchema, inventoryCategoryListQuerySchema, inventoryCategorySchema, createInventoryCategorySchema, updateInventoryCategorySchema, offerSchema, projectRevisionSchema, projectSchema, projectWithInitialRevisionSchema,
-  readinessSchema, reservationSchema, stockEventInputSchema, stockEventSchema,
+  readinessSchema, reservationSchema, stockEventInputSchema, stockEventSchema, bomLineRoleSchema, bomRequirementRoleSchema,
   updateBomLineSchema, updateInventoryItemSchema, updateProjectSchema, usageInputSchema,
   uploadSessionSchema, workItemRevisionSchema, workItemSchema, artifactScopeSchema, artifactListQuerySchema,
   artifactBuildConfigurationBindingSchema, bomSpecificationDecisionSchema, bomSpecificationSchema, buildConfigurationSnapshotSchema, catalogProductSchema,
@@ -71,12 +71,15 @@ export type WorkItem = z.infer<typeof workItemSchema>;
 export type CreateWorkItem = z.infer<typeof createWorkItemSchema>;
 export type ProjectRevision = z.infer<typeof projectRevisionSchema>;
 export type CreateProjectRevision = z.infer<typeof createProjectRevisionSchema>;
+export type UpdateProjectRevision = z.infer<typeof updateProjectRevisionSchema>;
 export type CreateProjectWithInitialRevision = z.infer<typeof createProjectWithInitialRevisionSchema>;
 export type ProjectCreationConflictDetails = z.infer<typeof projectCreationConflictDetailsSchema>;
 export type ProjectWithInitialRevision = z.infer<typeof projectWithInitialRevisionSchema>;
 export type WorkItemRevision = z.infer<typeof workItemRevisionSchema>;
 export type CreateWorkItemRevision = z.infer<typeof createWorkItemRevisionSchema>;
 export type BomLine = z.infer<typeof bomLineSchema>;
+export type BomLineRole = z.infer<typeof bomLineRoleSchema>;
+export type BomRequirementRole = z.infer<typeof bomRequirementRoleSchema>;
 export type BomAlternative = z.infer<typeof bomAlternativeSchema>;
 export type QuantityConversionEvidenceBasis = z.infer<typeof quantityConversionEvidenceBasisSchema>;
 export type QuantityConversionEvidence = z.infer<typeof quantityConversionEvidenceSchema>;

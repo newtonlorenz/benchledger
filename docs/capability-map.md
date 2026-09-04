@@ -95,7 +95,7 @@ and invalid hashes. Mutating tools use optimistic versions where applicable.
 | Catalog | `search_catalog_products`, `read_catalog_product`, `read_inventory_product_profile` | `catalog:read` | No |
 | Catalog | `create_catalog_product`, `update_catalog_product`, `link_inventory_product_profile` | `catalog:write` | Yes |
 | Projects | `list_projects`, `list_removed_projects`, `read_removed_project_history`, `read_project`, `read_work_item`, `read_project_revision`, `read_work_item_revision` | `projects:read` | No |
-| Projects | `create_project`, `create_project_with_initial_revision`, `update_project`, `archive_project`, `restore_project`, `remove_project`, `retire_project` (compatibility alias), `create_work_item`, `create_project_revision`, `create_work_item_revision` | `projects:write` | Yes; atomic initial setup accepts stable caller IDs |
+| Projects | `create_project`, `create_project_with_initial_revision`, `update_project`, `archive_project`, `restore_project`, `remove_project`, `retire_project` (compatibility alias), `create_work_item`, `create_project_revision`, `update_project_revision`, `create_work_item_revision` | `projects:write` | Yes; revision route/printer planning is narrow and versioned; atomic initial setup accepts stable caller IDs |
 | Project setup | `preview_project_setup` | `projects:write` + `bom:write` | Preview metadata only; actor-owned 30-minute row, no graph/stock/audit/event mutation |
 | Project setup | `commit_project_setup` | `projects:write` + `bom:write` | Yes; exact preview, reservations, one aggregate audit, and idempotent replay |
 | BOM | `list_bom_lines`, `list_reservations`, `read_reservation`, `calculate_bom_gaps` (Ready/Check/Decide/Source plus exact missing specification decisions) | `bom:read` | No |
@@ -129,6 +129,16 @@ hides the project and descendants from ordinary reads, and retains only
 explicit tombstone/history access. Use bounded `list_removed_projects` and
 `read_removed_project_history` pages with their opaque continuation cursors;
 project-scoped tokens cannot enumerate the workspace-global tombstone list.
+
+Each project revision exposes a canonical planning-only `fabricationRoute`:
+`printed`, `ready_made`, `none`, or `undecided`. An optional
+`intendedPrinterItemId` is valid only for `printed` when non-null and identifies owned
+planning equipment; it is never a BOM line or immutable build configuration.
+Later revisions carry forward the current route and printer when omitted. Pass
+`null` to deliberately clear the printer assignment; storage retains that explicit
+clear. `update_project_revision` changes only these fields and requires the current
+`expectedVersion`. Legacy rows read as `undecided`; reads always include the non-null
+route.
 Project context returns the canonical lifecycle plus structured BOM blocker
 reasons containing the revision, line, decision and explanation. The separate
 revision evidence ladder (`concept` through `production
@@ -159,6 +169,13 @@ reservable. Valid converted reservations use whole inventory `set` quantities
 and read back as `set`. Gap and inspection candidates come only from an exact
 `itemId` or an explicit alternative; broad kind/category constraints do not
 silently nominate unrelated inventory.
+
+Each BOM requirement may declare a nullable `role`: `consumed` means that use
+depletes reserved stock, while `reusable` means the item remains owned after
+use. A `null` or omitted role is retained legacy intent that requires human
+review. Only `consumed` lines may be reserved, recorded as usage, or included
+in reconciliation; reusable and legacy-null lines cannot authorize those stock
+changes. Printers remain exact build-configuration selections, not BOM stock.
 
 Build-configuration filament selections use a strict union. The existing exact
 branch retains `itemId` plus exact catalog product/profile linkage. The

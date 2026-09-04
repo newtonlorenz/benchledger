@@ -10,7 +10,7 @@ import {
   createProjectRevisionSchema, createProjectSchema, createReservationSchema,
   createProjectWithInitialRevisionSchema, createWorkItemRevisionSchema, createWorkItemSchema, healthSchema,
   inventoryBulkUpdateSchema, inventoryCategoryListQuerySchema, inventoryListQuerySchema, stockEventInputSchema, updateBomLineSchema,
-  updateInventoryCategorySchema, updateInventoryItemSchema, updateProjectSchema, usageInputSchema,
+  updateInventoryCategorySchema, updateInventoryItemSchema, updateProjectSchema, updateProjectRevisionSchema, usageInputSchema,
   createCatalogProductSchema, updateCatalogProductSchema,
   createInventoryProductProfileSchema, createInventoryWithProductProfileSchema, updateInventoryProductProfileSchema,
   createBuildConfigurationSnapshotSchema, saveReconciliationDraftSchema, commitReconciliationSchema,
@@ -653,6 +653,47 @@ function jsonOpenApi(version: string): Record<string, unknown> {
     { name: "cursor", in: "query", required: false, schema: { type: "string", maxLength: 200 } }
   ];
   const projectLifecycleValues = ["idea", "planned", "ready", "building", "validating", "complete", "archived"];
+  const fabricationRouteSchema = {
+    type: "string",
+    enum: ["printed", "ready_made", "none", "undecided"],
+    description: "Planning-only manufacturing route. An intended printer is valid only with printed."
+  };
+  const projectRevisionSchema = {
+    type: "object", additionalProperties: false,
+    required: ["id", "projectId", "number", "name", "status", "fabricationRoute", "createdAt", "version"],
+    properties: {
+      id: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+      projectId: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+      number: { type: "integer", minimum: 1 },
+      name: { type: "string", minLength: 1, maxLength: 240 },
+      notes: { type: "string", maxLength: 10000 },
+      status: { type: "string", enum: ["concept", "CAD complete", "DFAM reviewed", "mesh validated", "slicer validated", "test printed", "fit/function verified", "production approved"] },
+      fabricationRoute: fabricationRouteSchema,
+      intendedPrinterItemId: { oneOf: [{ type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" }, { type: "null" }], description: "Planning-only owned printer item; null is an explicit clear and omission means no field was supplied." },
+      createdAt: { type: "string", format: "date-time" },
+      version: { type: "integer", minimum: 1 }
+    }
+  };
+  const createProjectRevisionSchema = {
+    type: "object", additionalProperties: false, required: ["name", "status"],
+    properties: {
+      id: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+      name: { type: "string", minLength: 1, maxLength: 240 },
+      notes: { type: "string", maxLength: 10000 },
+      status: { type: "string", enum: ["concept", "CAD complete", "DFAM reviewed", "mesh validated", "slicer validated", "test printed", "fit/function verified", "production approved"] },
+      fabricationRoute: fabricationRouteSchema,
+      intendedPrinterItemId: { oneOf: [{ type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" }, { type: "null" }], description: "Planning-only owned printer item; omit to inherit, or pass null to explicitly clear. A non-null value requires fabricationRoute=printed." }
+    },
+    description: "When omitted, fabricationRoute and intendedPrinterItemId carry forward from the current revision. A printer assignment requires printed."
+  };
+  const updateProjectRevisionSchema = {
+    type: "object", additionalProperties: false, minProperties: 1,
+    properties: {
+      fabricationRoute: fabricationRouteSchema,
+      intendedPrinterItemId: { oneOf: [{ type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" }, { type: "null" }], description: "Planning-only owned printer item; null clears the assignment. A non-null value requires fabricationRoute=printed." }
+    },
+    description: "Narrow planning update; lifecycle, evidence, BOM, and build configuration are unchanged."
+  };
   const createProjectWithInitialRevisionSchema = {
     type: "object", additionalProperties: false, required: ["project", "revision"],
     properties: {
@@ -671,7 +712,9 @@ function jsonOpenApi(version: string): Record<string, unknown> {
           id: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$", description: "Optional caller-provided stable initial revision identifier. It must not already exist." },
           name: { type: "string", minLength: 1, maxLength: 240 },
           notes: { type: "string", maxLength: 10000 },
-          status: { type: "string", enum: ["concept", "CAD complete", "DFAM reviewed", "mesh validated", "slicer validated", "test printed", "fit/function verified", "production approved"] }
+          status: { type: "string", enum: ["concept", "CAD complete", "DFAM reviewed", "mesh validated", "slicer validated", "test printed", "fit/function verified", "production approved"] },
+          fabricationRoute: fabricationRouteSchema,
+          intendedPrinterItemId: { oneOf: [{ type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" }, { type: "null" }], description: "Planning-only owned printer item; omit to leave unassigned, or pass null to explicitly clear. A non-null value requires fabricationRoute=printed." }
         }
       }
     }
@@ -707,9 +750,9 @@ function jsonOpenApi(version: string): Record<string, unknown> {
     type: "object", additionalProperties: false, required: ["project", "revision", "bomLines"],
     properties: {
       project: { type: "object", additionalProperties: false, required: ["name", "status"], properties: { id: { type: "string", minLength: 1, maxLength: 160 }, name: { type: "string", minLength: 1, maxLength: 240 }, description: { type: "string", maxLength: 5000 }, status: { $ref: "#/components/schemas/ProjectLifecycle" } } },
-      revision: { type: "object", additionalProperties: false, required: ["name", "status"], properties: { id: { type: "string", minLength: 1, maxLength: 160 }, name: { type: "string", minLength: 1, maxLength: 240 }, notes: { type: "string", maxLength: 10000 }, status: { type: "string" } } },
+      revision: { type: "object", additionalProperties: false, required: ["name", "status"], properties: { id: { type: "string", minLength: 1, maxLength: 160 }, name: { type: "string", minLength: 1, maxLength: 240 }, notes: { type: "string", maxLength: 10000 }, status: { type: "string" }, fabricationRoute: fabricationRouteSchema, intendedPrinterItemId: { oneOf: [{ type: "string", minLength: 1, maxLength: 160 }, { type: "null" }] } } },
       workItems: { type: "array", maxItems: 6, default: [], items: { type: "object", additionalProperties: false, required: ["localRef", "name", "kind", "revision"], properties: { localRef: { type: "string", minLength: 1, maxLength: 160 }, id: { type: "string", minLength: 1, maxLength: 160 }, name: { type: "string", minLength: 1, maxLength: 240 }, kind: { type: "string" }, description: { type: "string", maxLength: 5000 }, revision: { type: "object", additionalProperties: false, required: ["name", "status"], properties: { id: { type: "string", minLength: 1, maxLength: 160 }, name: { type: "string", minLength: 1, maxLength: 240 }, notes: { type: "string", maxLength: 10000 }, status: { type: "string" } } } } } },
-      bomLines: { type: "array", minItems: 1, maxItems: 24, items: { type: "object", additionalProperties: false, required: ["localRef", "name", "requiredQuantity", "unit"], properties: { localRef: { type: "string", minLength: 1, maxLength: 160 }, revisionLocalRef: { type: "string", minLength: 1, maxLength: 160 }, id: { type: "string", minLength: 1, maxLength: 160 }, name: { type: "string", minLength: 1, maxLength: 240 }, itemId: { type: "string", minLength: 1, maxLength: 160 }, requiredQuantity: { type: "number", exclusiveMinimum: 0 }, unit: { type: "string" }, optional: { type: "boolean", default: false }, constraints: { type: "object", additionalProperties: false, properties: { kind: { type: "string" }, manufacturer: { type: "string" }, model: { type: "string" }, sku: { type: "string" }, tag: { type: "string" }, nameIncludes: { type: "string" }, specification: { type: "object", additionalProperties: true } } }, alternatives: { type: "array", maxItems: 20, items: { type: "object", additionalProperties: false, required: ["itemId"], properties: { itemId: { type: "string", minLength: 1, maxLength: 160 }, reason: { type: "string", maxLength: 1000 }, compatible: { type: "string", enum: ["confirmed", "conditional", "unknown"] } } } }, notes: { type: "string", maxLength: 2000 } } } },
+      bomLines: { type: "array", minItems: 1, maxItems: 24, items: { type: "object", additionalProperties: false, required: ["localRef", "name", "requiredQuantity", "unit"], properties: { localRef: { type: "string", minLength: 1, maxLength: 160 }, revisionLocalRef: { type: "string", minLength: 1, maxLength: 160 }, id: { type: "string", minLength: 1, maxLength: 160 }, name: { type: "string", minLength: 1, maxLength: 240 }, itemId: { type: "string", minLength: 1, maxLength: 160 }, role: { anyOf: [{ type: "string", enum: ["consumed", "reusable"] }, { type: "null" }] }, requiredQuantity: { type: "number", exclusiveMinimum: 0 }, unit: { type: "string" }, optional: { type: "boolean", default: false }, constraints: { type: "object", additionalProperties: false, properties: { kind: { type: "string" }, manufacturer: { type: "string" }, model: { type: "string" }, sku: { type: "string" }, tag: { type: "string" }, nameIncludes: { type: "string" }, specification: { type: "object", additionalProperties: true } } }, alternatives: { type: "array", maxItems: 20, items: { type: "object", additionalProperties: false, required: ["itemId"], properties: { itemId: { type: "string", minLength: 1, maxLength: 160 }, reason: { type: "string", maxLength: 1000 }, compatible: { type: "string", enum: ["confirmed", "conditional", "unknown"] } } } }, notes: { type: "string", maxLength: 2000 } } } },
       reservations: { type: "array", maxItems: 48, default: [], items: { type: "object", additionalProperties: false, required: ["localRef", "bomLineLocalRef", "itemId", "quantity"], properties: { localRef: { type: "string", minLength: 1, maxLength: 160 }, bomLineLocalRef: { type: "string", minLength: 1, maxLength: 160 }, id: { type: "string", minLength: 1, maxLength: 160 }, itemId: { type: "string", minLength: 1, maxLength: 160 }, quantity: { type: "number", exclusiveMinimum: 0 }, unit: { type: "string" } } } }
     }
   };
@@ -724,6 +767,78 @@ function jsonOpenApi(version: string): Record<string, unknown> {
     }
   };
   const artifactIdSchema = { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" };
+  const bomRoleSchema = {
+    oneOf: [
+      { type: "string", enum: ["consumed", "reusable"] },
+      { type: "null" }
+    ],
+    description: "Null is retained for legacy requirements whose stock role was not recorded; it must be reviewed before use."
+  };
+  const bomSpecificationSchema = {
+    type: "object", additionalProperties: false, required: ["status"],
+    properties: {
+      status: { type: "string", enum: ["sufficient", "insufficient"] },
+      decisions: {
+        type: "object", additionalProperties: false,
+        properties: {
+          identity: { type: "string", minLength: 1, maxLength: 240 }, purpose: { type: "string", minLength: 1, maxLength: 240 },
+          voltage: { type: "string", minLength: 1, maxLength: 240 }, current_or_load: { type: "string", minLength: 1, maxLength: 240 },
+          connector: { type: "string", minLength: 1, maxLength: 240 }, compatibility: { type: "string", minLength: 1, maxLength: 240 },
+          dimensions: { type: "string", minLength: 1, maxLength: 240 }, resistance: { type: "string", minLength: 1, maxLength: 240 },
+          power_rating: { type: "string", minLength: 1, maxLength: 240 }
+        }
+      },
+      missingDecisions: { type: "array", minItems: 1, maxItems: 9, uniqueItems: true, items: { type: "string", enum: ["identity", "purpose", "voltage", "current_or_load", "connector", "compatibility", "dimensions", "resistance", "power_rating"] } }
+    },
+    description: "Insufficient specifications must name missing decisions; sufficient specifications must record at least one decision."
+  };
+  const bomConstraintsSchema = {
+    type: "object", additionalProperties: false,
+    properties: {
+      kind: { type: "string" }, manufacturer: { type: "string" }, model: { type: "string" }, sku: { type: "string" },
+      tag: { type: "string" }, nameIncludes: { type: "string" }, specification: bomSpecificationSchema
+    }
+  };
+  const bomQuantityConversionSchema = {
+    type: "object", additionalProperties: false, required: ["inventory", "requirement", "evidence"],
+    properties: {
+      inventory: { type: "object", additionalProperties: false, required: ["quantity", "unit"], properties: { quantity: { const: 1 }, unit: { const: "set" } } },
+      requirement: { type: "object", additionalProperties: false, required: ["quantity", "unit"], properties: { quantity: { type: "integer", minimum: 1 }, unit: { const: "each" } } },
+      evidence: {
+        type: "object", additionalProperties: false, required: ["basis", "observedAt"],
+        properties: {
+          basis: { type: "string", enum: ["package_label", "manufacturer_spec", "physical_count", "user_assertion"] },
+          observedAt: { type: "string", format: "date-time" }, source: { type: "string", maxLength: 500 }, sourceId: { type: "string", maxLength: 500 }, note: { type: "string", maxLength: 1000 }
+        }
+      }
+    }
+  };
+  const bomAlternativeSchema = {
+    type: "object", additionalProperties: false, required: ["itemId"],
+    properties: {
+      itemId: artifactIdSchema, reason: { type: "string", maxLength: 1000 }, compatible: { type: "string", enum: ["confirmed", "conditional", "unknown"], default: "conditional" },
+      quantityConversion: bomQuantityConversionSchema
+    }
+  };
+  const bomWriteProperties = {
+    name: { type: "string", minLength: 1, maxLength: 240 }, itemId: artifactIdSchema, role: bomRoleSchema,
+    requiredQuantity: { type: "number", exclusiveMinimum: 0 }, unit: { type: "string", enum: ["each", "gram", "millimetre", "millilitre", "metre", "set"] },
+    optional: { type: "boolean" }, constraints: bomConstraintsSchema, alternatives: { type: "array", maxItems: 20, items: bomAlternativeSchema }, notes: { type: "string", maxLength: 2000 }
+  };
+  const bomLineSchema = {
+    type: "object", additionalProperties: false,
+    required: ["id", "revisionId", "name", "requiredQuantity", "unit", "optional", "constraints", "alternatives", "createdAt", "updatedAt", "version"],
+    properties: {
+      id: artifactIdSchema, revisionId: artifactIdSchema, ...bomWriteProperties,
+      retiredAt: { type: "string", format: "date-time" }, createdAt: { type: "string", format: "date-time" }, updatedAt: { type: "string", format: "date-time" }, version: { type: "integer", minimum: 1 }
+    }
+  };
+  const createBomLineOpenApiSchema = {
+    type: "object", additionalProperties: false,
+    required: ["name", "requiredQuantity", "unit", "optional", "alternatives"],
+    properties: { id: artifactIdSchema, ...bomWriteProperties }
+  };
+  const updateBomLineOpenApiSchema = { type: "object", additionalProperties: false, properties: bomWriteProperties };
   const artifactRoleSchema = {
     type: "string",
     enum: ["source", "cad", "document", "brief", "design_record", "cad_source", "step", "stl", "three_mf", "slicer_project", "gcode", "firmware", "drawing", "validation", "photo", "text", "other"]
@@ -802,6 +917,13 @@ function jsonOpenApi(version: string): Record<string, unknown> {
         CreateInventoryProductProfileWithoutItem: createInventoryProductProfileWithoutItemSchema,
         CreateInventoryWithProductProfile: inventoryWithProductProfileSchema,
         CreateProjectWithInitialRevision: createProjectWithInitialRevisionSchema,
+        FabricationRoute: fabricationRouteSchema,
+        ProjectRevision: projectRevisionSchema,
+        CreateProjectRevision: createProjectRevisionSchema,
+        UpdateProjectRevision: updateProjectRevisionSchema,
+        BomLine: bomLineSchema,
+        CreateBomLine: createBomLineOpenApiSchema,
+        UpdateBomLine: updateBomLineOpenApiSchema,
         ProjectSetupProposal: { ...setupProposalSchema, description: "Strict bounded project setup proposal (maximum 6 work items, 24 BOM lines, 48 reservations, 256 KiB)." },
         ProjectSetupPreview: { ...setupPreviewSchema, description: "Strict actor-owned 30-minute project setup preview." },
         CommitProjectSetup: { type: "object", additionalProperties: false, required: ["expectedPreviewVersion", "contentSha256", "confirmReservations"], properties: { expectedPreviewVersion: { type: "integer", minimum: 1 }, contentSha256: { type: "string", pattern: "^[a-f0-9]{64}$" }, confirmReservations: { type: "boolean" } } },
@@ -934,14 +1056,24 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       },
       "/project-setup/previews": { post: { summary: "Preview a bounded project graph setup", requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectSetupProposal" } } } }, responses: { "201": { description: "Actor-owned project setup preview" }, "400": { description: "Invalid proposal or semantic field errors" }, "403": { description: "Project-scoped token denied" } } } },
       "/project-setup/previews/{id}/commit": { post: { summary: "Commit an exact project setup preview atomically", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", minLength: 1, maxLength: 160 } }, { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 8, maxLength: 200 } }], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CommitProjectSetup" } } } }, responses: { "200": { description: "Complete project graph, one aggregate audit, and context" }, "400": { description: "Invalid commit or missing reservation confirmation" }, "403": { description: "Project-scoped or insufficient scope" }, "409": { description: "Stale basis, identity, reservation, or idempotency conflict" } } } },
-      "/projects/{id}/revisions": { post: { responses: { "201": { description: "Project revision" } } } },
+      "/projects/{id}/revisions": { post: { requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CreateProjectRevision" } } } }, responses: { "201": { description: "Project revision" }, "400": { description: "Invalid route/printer planning fields" }, "404": { description: "Project not found" } } } },
+      "/project-revisions/{id}": {
+        get: { summary: "Read one project revision", responses: { "200": { description: "Project revision", content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectRevision" } } } }, "403": { description: "Revision scope denied" }, "404": { description: "Revision not found" } } },
+        patch: {
+          summary: "Update revision fabrication route planning",
+          description: "Narrow update of fabricationRoute and intendedPrinterItemId. intendedPrinterItemId is planning equipment only; a non-null value requires printed, and null clears the assignment. Lifecycle, evidence, BOM, and build configuration are unchanged.",
+          parameters: [{ name: "id", in: "path", required: true, schema: artifactIdSchema }, { name: "If-Match", in: "header", required: true, description: "Expected project revision version for optimistic concurrency.", schema: { type: "string", pattern: "^[1-9][0-9]*$" } }],
+          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateProjectRevision" } } } },
+          responses: { "200": { description: "Updated project revision", content: { "application/json": { schema: { type: "object" } } } }, "400": { description: "Invalid route/printer planning fields or missing If-Match" }, "403": { description: "Revision scope denied" }, "404": { description: "Revision not found" }, "409": { description: "Revision version conflict" } }
+        }
+      },
       "/projects/{id}/restore": { post: { description: "Restore an archived project to idea; retained history stays in place and released reservations are not recreated.", responses: { "200": { description: "Restored project" }, "400": { description: "Invalid version precondition" }, "409": { description: "Version or project lifecycle conflict" } } } },
       "/projects/{id}": { delete: { description: "Irreversibly remove an archived or active project from ordinary workspace views. Requires exact name confirmation, If-Match, and Idempotency-Key; retained history remains discoverable and no purge is available.", parameters: [{ in: "header", name: "If-Match", required: true, schema: { type: "string" } }, { in: "header", name: "Idempotency-Key", required: true, schema: { type: "string", minLength: 8, maxLength: 200 } }], requestBody: { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: false, required: ["name"], properties: { name: { type: "string", minLength: 1, maxLength: 240 } } } } } }, responses: { "200": { description: "Project tombstone and released reservation IDs" }, "400": { description: "Missing preconditions or invalid confirmation" }, "409": { description: "Version, confirmation, or idempotency conflict" }, "410": { description: "Project was already removed" } } } },
       "/projects/{id}/removed-history": { get: { description: "Read a bounded page of append-only audit history for a removed project.", parameters: [{ name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } }, { name: "cursor", in: "query", required: false, schema: { type: "string", maxLength: 200 }, description: "Opaque continuation cursor from the preceding page." }], responses: { "200": { description: "Removed project audit page" }, "409": { description: "Project has not been removed" } } } },
       "/catalog/products": { get: { responses: { "200": { description: "Bounded exact catalog product page" } } }, post: { responses: { "201": { description: "Catalog product mutation" } } } },
       "/catalog/products/{id}": { get: { responses: { "200": { description: "Exact catalog product" } } }, patch: { responses: { "200": { description: "Updated exact catalog product" } } } },
-      "/project-revisions/{id}/bom": { get: { parameters: [{ name: "includeRetired", in: "query", required: false, schema: { type: "boolean", default: false } }], responses: { "200": { description: "Active BOM lines by default; retired history when explicitly requested" } } }, post: { responses: { "201": { description: "BOM line" } } } },
-      "/bom-lines/{id}": { delete: { parameters: [{ name: "If-Match", in: "header", required: true, schema: { type: "integer", minimum: 1 } }], responses: { "200": { description: "Retired BOM line" }, "400": { description: "Missing or invalid version precondition" }, "409": { description: "Version or active-reservation conflict" } } } },
+      "/project-revisions/{id}/bom": { get: { parameters: [{ name: "includeRetired", in: "query", required: false, schema: { type: "boolean", default: false } }], responses: { "200": { description: "Active BOM lines by default; retired history when explicitly requested" } } }, post: { requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CreateBomLine" } } } }, responses: { "201": { description: "BOM line" } } } },
+      "/bom-lines/{id}": { patch: { summary: "Update a BOM requirement, including legacy role repair", parameters: [{ name: "id", in: "path", required: true, schema: artifactIdSchema }, { name: "If-Match", in: "header", required: false, description: "Optional expected BOM line version for optimistic concurrency.", schema: { type: "string", pattern: "^[1-9][0-9]*$" } }], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateBomLine" } } } }, responses: { "200": { description: "Updated BOM line" }, "400": { description: "Invalid BOM line or version precondition" }, "409": { description: "Version, active-reservation, or compatibility conflict" } } }, delete: { parameters: [{ name: "If-Match", in: "header", required: true, schema: { type: "integer", minimum: 1 } }], responses: { "200": { description: "Retired BOM line" }, "400": { description: "Missing or invalid version precondition" }, "409": { description: "Version or active-reservation conflict" } } } },
       "/bom-lines/{id}/restore": { post: { parameters: [{ name: "If-Match", in: "header", required: true, schema: { type: "integer", minimum: 1 } }], responses: { "200": { description: "Restored BOM line" }, "400": { description: "Missing or invalid version precondition" }, "409": { description: "Version conflict" } } } },
       "/project-revisions/{id}/build-configurations": { get: { responses: { "200": { description: "Immutable build configuration snapshot page" } } }, post: { responses: { "201": { description: "Immutable build configuration snapshot" } } } },
       "/build-configurations/{id}": { get: { responses: { "200": { description: "Immutable build configuration snapshot" } } } },
@@ -1042,6 +1174,7 @@ interface WorkspaceSnapshot {
   readonly offers: readonly ApiOffer[];
   readonly source: "api";
   readonly fetchedAt: string;
+  readonly capabilities: readonly string[];
   readonly pagination: {
     readonly inventory: { readonly limit: number; readonly total?: number; readonly nextCursor?: string };
     readonly projects: { readonly limit: number; readonly total?: number; readonly nextCursor?: string };
@@ -1122,6 +1255,7 @@ async function workspaceSnapshot(service: ApplicationService): Promise<Workspace
     offers: offers.data,
     source: "api",
     fetchedAt: new Date().toISOString(),
+    capabilities: service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : [],
     pagination: {
       inventory: { limit: inventory.limit, ...(inventory.total === undefined ? {} : { total: inventory.total }), ...(inventory.nextCursor === undefined ? {} : { nextCursor: inventory.nextCursor }) },
       projects: { limit: projects.limit, ...(projects.total === undefined ? {} : { total: projects.total }), ...(projects.nextCursor === undefined ? {} : { nextCursor: projects.nextCursor }) },
@@ -1371,7 +1505,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     name: "BenchLedger", version: service.getVersion(), protocol: "rest-v1", demo,
     authentication: { accessModes: ["lan_open", "password"], access: "/api/v1/auth/access", explicitLanSession: "/api/v1/auth/lan-session", bearerRequiredForMcp: true },
     vocabulary: { confirmed: "physically counted or commissioned stock", inspect_first: "recorded stock requiring a physical count", missing: "no confirmed or inspect-first candidate" },
-    actions: ["inventory.read", "inventory.write", "inventory.categories.read", "inventory.categories.write", "catalog.read", "catalog.write", "inventory.product_profile.read", "inventory.product_profile.write", "projects.read", "projects.write", "projects.remove", "projects.removed_history", "build_configurations.read", "build_configurations.create", "bom.evaluate", "artifacts.version", "offers.compare", "events.subscribe"],
+    actions: ["inventory.read", "inventory.write", "inventory.categories.read", "inventory.categories.write", "catalog.read", "catalog.write", "inventory.product_profile.read", "inventory.product_profile.write", "projects.read", "projects.write", "projects.remove", "projects.removed_history", "build_configurations.read", "build_configurations.create", "bom.evaluate", "artifacts.version", "offers.compare", "events.subscribe", ...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : [])],
     approvalBoundaries: ["purchasing", "external publication", "permanent deletion", "credential changes", "printer control"]
   }));
   app.get(route("/openapi.json"), async () => jsonOpenApi(service.getVersion()));
@@ -1624,6 +1758,14 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   app.post(route("/projects/:id/work-items"), async (request, reply) => { requireScope(request, "write", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); const mutation = await service.createWorkItem(params.id, parseBody(createWorkItemSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });
   app.post(route("/projects/:id/revisions"), async (request, reply) => { requireScope(request, "write", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); const mutation = await service.createProjectRevision(params.id, parseBody(createProjectRevisionSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });
   app.get(route("/project-revisions/:id"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; return projectRevisionForRequest(request, service, params.id); });
+  app.patch(route("/project-revisions/:id"), async (request) => {
+    requireScope(request, "write", auth);
+    const params = request.params as { id: string };
+    await requireRevisionScope(request, service, params.id);
+    const expectedVersion = parseRequiredExpectedVersion(request);
+    const body = parseBody(updateProjectRevisionSchema, request.body);
+    return service.updateProjectRevision(params.id, body, expectedVersion, requestContext(request, { body, expectedVersion }));
+  });
   app.get(route("/project-revisions/:id/build-configurations"), async (request) => {
     requireScope(request, "read", auth);
     const params = request.params as { id: string };

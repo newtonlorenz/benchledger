@@ -101,24 +101,37 @@ describe("BenchLedger HTTP API", () => {
       expect(staleCommit.statusCode).toBe(409);
       expect(staleCommit.json()).toMatchObject({ error: { code: "conflict", details: { reason: "stale_basis" } } });
 
+      const refreshedList = await app.inject({ method: "GET", url: `${base}?limit=1`, headers: { cookie } });
+      const refreshedActionId = refreshedList.json<{ data: Array<{ id: string }> }>().data[0]?.id;
+      if (refreshedActionId === undefined) throw new Error("expected a refreshed synthetic inspection action");
+
       const previewResponse = await app.inject({
         method: "POST",
-        url: `${base}/${actionId}/completion-preview`,
+        url: `${base}/${refreshedActionId}/completion-preview`,
         headers,
         payload: { result: "inconclusive", source: "physical inspection", observedAt: "2026-09-02T02:00:00.000Z", note: "Count was inconclusive." },
       });
       expect(previewResponse.statusCode).toBe(201);
       const preview = previewResponse.json<{ id: string; version: number; contentSha256: string }>();
 
-      const missingKey = await app.inject({ method: "POST", url: `${base}/${actionId}/completion-commit`, headers, payload: { previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmed: true } });
+      const missingKey = await app.inject({ method: "POST", url: `${base}/${refreshedActionId}/completion-commit`, headers, payload: { previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmed: true } });
       expect(missingKey.statusCode).toBe(400);
-      const unconfirmed = await app.inject({ method: "POST", url: `${base}/${actionId}/completion-commit`, headers: { ...headers, "idempotency-key": "inspection-unconfirmed" }, payload: { previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmed: false } });
+      const unconfirmed = await app.inject({ method: "POST", url: `${base}/${refreshedActionId}/completion-commit`, headers: { ...headers, "idempotency-key": "inspection-unconfirmed" }, payload: { previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmed: false } });
       expect(unconfirmed.statusCode).toBe(400);
 
-      const committed = await app.inject({ method: "POST", url: `${base}/${actionId}/completion-commit`, headers: { ...headers, "idempotency-key": "inspection-inconclusive" }, payload: { previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmed: true } });
-      expect(committed.statusCode).toBe(200);
-      expect(committed.json()).toMatchObject({ replayed: false, data: { status: "committed", evidence: { result: "inconclusive", actionId } } });
-      const retry = await app.inject({ method: "POST", url: `${base}/${actionId}/completion-commit`, headers: { ...headers, "idempotency-key": "inspection-inconclusive" }, payload: { previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmed: true } });
+      const finalPreviewResponse = await app.inject({
+        method: "POST",
+        url: `${base}/${refreshedActionId}/completion-preview`,
+        headers,
+        payload: { result: "inconclusive", source: "physical inspection", observedAt: "2026-09-02T02:00:00.000Z", note: "Count was inconclusive." },
+      });
+      expect(finalPreviewResponse.statusCode).toBe(201);
+      const finalPreview = finalPreviewResponse.json<{ id: string; version: number; contentSha256: string }>();
+
+      const committed = await app.inject({ method: "POST", url: `${base}/${refreshedActionId}/completion-commit`, headers: { ...headers, "idempotency-key": "inspection-inconclusive" }, payload: { previewId: finalPreview.id, expectedPreviewVersion: finalPreview.version, contentSha256: finalPreview.contentSha256, confirmed: true } });
+      expect(committed.statusCode, JSON.stringify(committed.json())).toBe(200);
+      expect(committed.json()).toMatchObject({ replayed: false, data: { status: "committed", evidence: { result: "inconclusive", actionId: refreshedActionId } } });
+      const retry = await app.inject({ method: "POST", url: `${base}/${refreshedActionId}/completion-commit`, headers: { ...headers, "idempotency-key": "inspection-inconclusive" }, payload: { previewId: finalPreview.id, expectedPreviewVersion: finalPreview.version, contentSha256: finalPreview.contentSha256, confirmed: true } });
       expect(retry.statusCode).toBe(200);
       expect(retry.json()).toMatchObject({ replayed: true, data: { status: "committed", evidence: { result: "inconclusive", actionId } } });
     } finally {
@@ -136,7 +149,6 @@ describe("BenchLedger HTTP API", () => {
       "synthetic-bom-board",
       "synthetic-bom-fasteners",
       "synthetic-bom-filament",
-      "synthetic-bom-printer",
       "synthetic-bom-wire"
     ]);
     expect(lines.find((line) => line.id === "synthetic-bom-fasteners")).toMatchObject({ optional: false, requiredQuantity: 4, unit: "each" });
@@ -452,7 +464,7 @@ describe("BenchLedger HTTP API", () => {
     const projectId = project.json<{ data: { id: string } }>().data.id;
     const revision = await app.inject({ method: "POST", url: `/api/v1/projects/${projectId}/revisions`, headers: { cookie, "x-csrf-token": csrf }, payload: { name: "Initial", status: "concept" } });
     const revisionId = revision.json<{ data: { id: string } }>().data.id;
-    const line = await app.inject({ method: "POST", url: `/api/v1/project-revisions/${revisionId}/bom`, headers: { cookie, "x-csrf-token": csrf }, payload: { name: "ESP32", itemId: "board-esp32", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} } });
+    const line = await app.inject({ method: "POST", url: `/api/v1/project-revisions/${revisionId}/bom`, headers: { cookie, "x-csrf-token": csrf }, payload: { name: "ESP32", role: "consumed", itemId: "board-esp32", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} } });
     expect(line.statusCode).toBe(201);
     const lineData = line.json<{ data: { id: string; version: number } }>().data;
     const undecidedPower = await app.inject({
@@ -461,6 +473,7 @@ describe("BenchLedger HTTP API", () => {
       headers: { cookie, "x-csrf-token": csrf },
       payload: {
         name: "12 V power supply",
+        role: "consumed",
         requiredQuantity: 1,
         unit: "each",
         optional: false,
@@ -502,10 +515,14 @@ describe("BenchLedger HTTP API", () => {
     const projectId = project.json<{ data: { id: string } }>().data.id;
     const revision = await app.inject({ method: "POST", url: `/api/v1/projects/${projectId}/revisions`, headers: { cookie, "x-csrf-token": csrf }, payload: { name: "Closeout", status: "concept" } });
     const revisionId = revision.json<{ data: { id: string } }>().data.id;
+    const line = await app.inject({ method: "POST", url: `/api/v1/project-revisions/${revisionId}/bom`, headers: { cookie, "x-csrf-token": csrf }, payload: { name: "Installed ESP32", role: "consumed", itemId: "board-esp32", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} } });
+    const lineId = line.json<{ data: { id: string } }>().data.id;
+    const reservation = await app.inject({ method: "POST", url: `/api/v1/project-revisions/${revisionId}/reservations`, headers: { cookie, "x-csrf-token": csrf }, payload: { lineId, itemId: "board-esp32", quantity: 1 } });
+    const reservationId = reservation.json<{ data: { id: string } }>().data.id;
     const withoutCsrf = await app.inject({ method: "POST", url: `/api/v1/project-revisions/${revisionId}/usage`, headers: { cookie }, payload: { itemId: "board-esp32", quantity: 1, unit: "each" } });
     expect(withoutCsrf.statusCode).toBe(403);
 
-    const usage = await app.inject({ method: "POST", url: `/api/v1/project-revisions/${revisionId}/usage`, headers: { cookie, "x-csrf-token": csrf, "idempotency-key": "usage-review-1" }, payload: { itemId: "board-esp32", quantity: 1, unit: "each", note: "Installed during final assembly" } });
+    const usage = await app.inject({ method: "POST", url: `/api/v1/project-revisions/${revisionId}/usage`, headers: { cookie, "x-csrf-token": csrf, "idempotency-key": "usage-review-1" }, payload: { reservationId, itemId: "board-esp32", quantity: 1, unit: "each", note: "Installed during final assembly" } });
     expect(usage.statusCode).toBe(201);
     expect(usage.json()).toMatchObject({
       data: {
@@ -515,7 +532,7 @@ describe("BenchLedger HTTP API", () => {
       audit: { action: "project.usage.record" },
       replayed: false
     });
-    const replay = await app.inject({ method: "POST", url: `/api/v1/project-revisions/${revisionId}/usage`, headers: { cookie, "x-csrf-token": csrf, "idempotency-key": "usage-review-1" }, payload: { itemId: "board-esp32", quantity: 1, unit: "each", note: "Installed during final assembly" } });
+    const replay = await app.inject({ method: "POST", url: `/api/v1/project-revisions/${revisionId}/usage`, headers: { cookie, "x-csrf-token": csrf, "idempotency-key": "usage-review-1" }, payload: { reservationId, itemId: "board-esp32", quantity: 1, unit: "each", note: "Installed during final assembly" } });
     expect(replay.statusCode).toBe(201);
     expect(replay.json()).toMatchObject({ replayed: true, data: { item: { id: "board-esp32" } } });
     await app.close();
@@ -529,7 +546,7 @@ describe("BenchLedger HTTP API", () => {
     const item = await service.createInventoryItem({ id: "reconciliation-http-item", name: "Reconciliation board", kind: "electronic", quantity: 4, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, seedContext);
     const project = await service.createProject({ id: "reconciliation-http-project", name: "Reconciliation HTTP", status: "planned" }, seedContext);
     const revision = await service.createProjectRevision(project.data.id, { id: "reconciliation-http-revision", name: "Initial", status: "concept" }, seedContext);
-    const line = await service.createBomLine(revision.data.id, { id: "reconciliation-http-line", name: "Reconciliation board", itemId: item.data.id, requiredQuantity: 2, unit: "each", optional: false, alternatives: [], constraints: {} }, seedContext);
+    const line = await service.createBomLine(revision.data.id, { id: "reconciliation-http-line", name: "Reconciliation board", role: "consumed", itemId: item.data.id, requiredQuantity: 2, unit: "each", optional: false, alternatives: [], constraints: {} }, seedContext);
     const reservation = await service.createReservation(revision.data.id, { id: "reconciliation-http-reservation", lineId: line.data.id, itemId: item.data.id, quantity: 2 }, seedContext);
     const otherProject = await service.createProject({ id: "reconciliation-http-other", name: "Other project", status: "planned" }, seedContext);
     const otherRevision = await service.createProjectRevision(otherProject.data.id, { id: "reconciliation-http-other-revision", name: "Initial", status: "concept" }, seedContext);
@@ -842,11 +859,11 @@ describe("BenchLedger HTTP API", () => {
     const projectId = project.json<{ data: { id: string } }>().data.id;
     const revision = await app.inject({ method: "POST", url: `/api/v1/projects/${projectId}/revisions`, headers: { cookie, "x-csrf-token": csrf }, payload: { name: "r01", status: "concept" } });
     const revisionId = revision.json<{ data: { id: string } }>().data.id;
-    const line = await app.inject({ method: "POST", url: `/api/v1/project-revisions/${revisionId}/bom`, headers: { cookie, "x-csrf-token": csrf }, payload: { name: "ESP32", itemId: "board-esp32", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} } });
+    const line = await app.inject({ method: "POST", url: `/api/v1/project-revisions/${revisionId}/bom`, headers: { cookie, "x-csrf-token": csrf }, payload: { name: "ESP32", role: null, itemId: "board-esp32", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} } });
     expect(line.statusCode).toBe(201);
     const enriched = await app.inject({ method: "GET", url: "/api/v1/workspace", headers: { cookie } });
     const aggregateProject = enriched.json<{ projects: Array<{ id: string; currentRevision?: { bom: Array<{ id: string }>; artifacts: unknown[]; gapEvaluation: { lines: Array<{ lineId: string; decision: string }>; totals: { readyLines: number } } }; bom: unknown[]; artifacts: unknown[] }> }>().projects.find((entry) => entry.id === projectId);
-    expect(aggregateProject).toMatchObject({ currentRevision: { bom: [{ id: expect.any(String) }], artifacts: expect.any(Array), gapEvaluation: { lines: [{ decision: "ready" }], totals: { readyLines: 1 } } }, bom: expect.any(Array), artifacts: expect.any(Array) });
+    expect(aggregateProject).toMatchObject({ currentRevision: { bom: [{ id: expect.any(String), role: null }], artifacts: expect.any(Array), gapEvaluation: { lines: [{ status: "supplied", decision: "check" }], totals: { readyLines: 0, checkLines: 1 } } }, bom: expect.any(Array), artifacts: expect.any(Array) });
     const count = await app.inject({ method: "POST", url: "/api/v1/inventory/wire-dupont/count", headers: { cookie, "x-csrf-token": csrf, "idempotency-key": "count-wire-dupont" }, payload: { quantity: 1, note: "Counted in parts drawer" } });
     expect(count.statusCode).toBe(201);
     expect(count.json()).toMatchObject({ data: { item: { id: "wire-dupont", quantity: 1, availableQuantity: 1, evidence: { state: "physically_counted" } } } });

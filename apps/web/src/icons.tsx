@@ -11,6 +11,7 @@ export type IconName =
   | "chevron-down"
   | "chevron-right"
   | "circle"
+  | "circuit"
   | "clipboard"
   | "clock"
   | "close"
@@ -35,8 +36,10 @@ export type IconName =
   | "settings"
   | "sliders"
   | "spark"
+  | "spool"
   | "tag"
   | "tool"
+  | "trash"
   | "upload"
   | "warning"
   | "wrench";
@@ -52,6 +55,7 @@ const paths: Record<IconName, ReactNode> = {
   "chevron-down": <path d="m6 9 6 6 6-6" />,
   "chevron-right": <path d="m9 6 6 6-6 6" />,
   circle: <circle cx="12" cy="12" r="8" />,
+  circuit: <><rect x="7" y="7" width="10" height="10" rx="1" /><path d="M9 2v5M15 2v5M9 17v5M15 17v5M2 9h5M17 9h5M2 15h5M17 15h5M10 10h4v4h-4z" /></>,
   clipboard: <><rect x="5" y="4" width="14" height="17" rx="1" /><path d="M9 4.5V3h6v1.5M8 9h8M8 13h6M8 17h4" /></>,
   clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
   close: <><path d="m6 6 12 12M18 6 6 18" /></>,
@@ -76,8 +80,10 @@ const paths: Record<IconName, ReactNode> = {
   settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1-1.7 1.7-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5v.2h-2.4v-.2a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1-1.7-1.7.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H7v-2.4h.2a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1L10 7l.1.1a1.6 1.6 0 0 0 1.8.3 1.6 1.6 0 0 0 1-1.5v-.2h2.4v.2a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3L18.2 7l1.7 1.7-.1.1a1.6 1.6 0 0 0-.3 1.8 1.6 1.6 0 0 0 1.5 1h.2V14H21a1.6 1.6 0 0 0-1.6 1Z" /></>,
   sliders: <><path d="M4 6h7M16 6h4M13 4v4M4 12h3M12 12h8M9 10v4M4 18h11M18 16v4" /></>,
   spark: <><path d="m12 3 1.3 5.7L19 10l-5.7 1.3L12 17l-1.3-5.7L5 10l5.7-1.3L12 3ZM19 16l.5 2.5L22 19l-2.5.5L19 22l-.5-2.5L16 19l2.5-.5L19 16Z" /></>,
+  spool: <><circle cx="7" cy="12" r="4" /><circle cx="17" cy="12" r="4" /><path d="M7 8h10M7 16h10M7 12h10" /></>,
   tag: <path d="M20 13 13 20 4 11V4h7l9 9ZM8 8h.01" />,
   tool: <><path d="m14.5 6.5 3-3a5 5 0 0 0-6.1 6.1L4 17a2.1 2.1 0 1 0 3 3l7.4-7.4a5 5 0 0 0 6.1-6.1l-3 3-3-3Z" /></>,
+  trash: <><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 11v6M14 11v6" /></>,
   upload: <><path d="M12 16V4m-5 5 5-5 5 5M5 20h14" /></>,
   warning: <><path d="m12 3 9 17H3L12 3Z" /><path d="M12 9v4M12 16h.01" /></>,
   wrench: <><path d="M14.5 6.5 18 3l3 3-3.5 3.5" /><path d="m15 9-5 5-2-2-5 5 3 3 5-5-2-2 5-5" /></>

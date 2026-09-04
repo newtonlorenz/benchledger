@@ -63,6 +63,7 @@ import type {
   ProjectWithInitialRevisionCreateInput,
   ProjectListInput,
   ProjectRevisionCreateInput,
+  ProjectRevisionUpdateInput,
   ProjectUpdateInput,
   Quantity,
   RecordOfferSnapshotInput,
@@ -153,6 +154,19 @@ function enumValue<T extends string>(value: unknown, label: string, values: read
 function optionalEnum<T extends string>(value: unknown, label: string, values: readonly T[]): T | undefined {
   if (value === undefined) return undefined;
   return enumValue(value, label, values);
+}
+
+/** Preserve an explicitly cleared nullable field while distinguishing it from
+ * an omitted field in PATCH-style inputs. */
+function optionalNullableEnum<T extends string>(value: unknown, label: string, values: readonly T[]): T | null | undefined {
+  if (value === undefined || value === null) return value;
+  return enumValue(value, label, values);
+}
+
+/** Preserve PATCH/create intent: omitted inherits, null deliberately clears. */
+function optionalNullableId(value: unknown, label: string): string | null | undefined {
+  if (value === undefined || value === null) return value;
+  return id(value, label);
 }
 
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -747,11 +761,16 @@ export function projectCreate(value: unknown): ProjectCreateInput {
 
 export function projectWithInitialRevisionCreate(value: unknown): ProjectWithInitialRevisionCreateInput {
   const input = record(value, "arguments");
-  keys(input, ["name", "description", "projectId", "revisionId", "revisionSummary"], "arguments");
+  keys(input, ["name", "description", "projectId", "revisionId", "revisionSummary", "fabricationRoute", "intendedPrinterItemId"], "arguments");
+  const fabricationRoute = optionalEnum(input.fabricationRoute, "arguments.fabricationRoute", ["printed", "ready_made", "none", "undecided"] as const);
+  const intendedPrinterItemId = optionalNullableId(input.intendedPrinterItemId, "arguments.intendedPrinterItemId");
+  if (intendedPrinterItemId !== undefined && intendedPrinterItemId !== null && fabricationRoute !== "printed") fail("arguments.intendedPrinterItemId requires arguments.fabricationRoute to be 'printed'.");
   const result: ProjectWithInitialRevisionCreateInput = {
     name: stringValue(input.name, "arguments.name", { max: 240 }),
     description: optionalString(input.description, "arguments.description"),
     revisionSummary: optionalString(input.revisionSummary, "arguments.revisionSummary", 2000),
+    ...(fabricationRoute === undefined ? {} : { fabricationRoute }),
+    ...(intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId }),
   };
   result.projectId = optionalId(input.projectId, "arguments.projectId");
   result.revisionId = optionalId(input.revisionId, "arguments.revisionId");
@@ -782,10 +801,31 @@ export function workItemCreate(value: unknown): WorkItemCreateInput {
 
 export function projectRevisionCreate(value: unknown): ProjectRevisionCreateInput {
   const input = record(value, "arguments");
-  keys(input, ["projectId", "summary"], "arguments");
+  keys(input, ["projectId", "summary", "fabricationRoute", "intendedPrinterItemId"], "arguments");
+  const fabricationRoute = optionalEnum(input.fabricationRoute, "arguments.fabricationRoute", ["printed", "ready_made", "none", "undecided"] as const);
+  const intendedPrinterItemId = optionalNullableId(input.intendedPrinterItemId, "arguments.intendedPrinterItemId");
+  if (intendedPrinterItemId !== undefined && intendedPrinterItemId !== null && fabricationRoute !== undefined && fabricationRoute !== "printed") fail("arguments.intendedPrinterItemId requires arguments.fabricationRoute to be 'printed'.");
   return {
     projectId: id(input.projectId, "arguments.projectId"),
     summary: optionalString(input.summary, "arguments.summary"),
+    ...(fabricationRoute === undefined ? {} : { fabricationRoute }),
+    ...(intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId }),
+  };
+}
+
+export function projectRevisionUpdate(value: unknown): ProjectRevisionUpdateInput {
+  const input = record(value, "arguments");
+  keys(input, ["revisionId", "expectedVersion", "fabricationRoute", "intendedPrinterItemId"], "arguments");
+  const fabricationRoute = optionalEnum(input.fabricationRoute, "arguments.fabricationRoute", ["printed", "ready_made", "none", "undecided"] as const);
+  const rawPrinter = input.intendedPrinterItemId;
+  const intendedPrinterItemId = rawPrinter === undefined || rawPrinter === null ? rawPrinter as undefined | null : id(rawPrinter, "arguments.intendedPrinterItemId");
+  if (intendedPrinterItemId !== undefined && intendedPrinterItemId !== null && fabricationRoute !== undefined && fabricationRoute !== "printed") fail("arguments.intendedPrinterItemId requires arguments.fabricationRoute to be 'printed'.");
+  if (fabricationRoute === undefined && intendedPrinterItemId === undefined) fail("arguments must include fabricationRoute or intendedPrinterItemId.");
+  return {
+    revisionId: id(input.revisionId, "arguments.revisionId"),
+    expectedVersion: integer(input.expectedVersion, "arguments.expectedVersion", 1),
+    ...(fabricationRoute === undefined ? {} : { fabricationRoute }),
+    ...(intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId }),
   };
 }
 
@@ -881,13 +921,14 @@ function parseBomAlternatives(input: UnknownRecord): { alternatives?: readonly B
 
 export function bomLineCreate(value: unknown): BomLineCreateInput {
   const input = record(value, "arguments");
-  keys(input, ["projectRevisionId", "description", "quantity", "unit", "requirement", "itemId", "alternatives", "compatibleItemIds", "constraints", "notes"], "arguments");
+  keys(input, ["projectRevisionId", "description", "quantity", "unit", "requirement", "role", "itemId", "alternatives", "compatibleItemIds", "constraints", "notes"], "arguments");
   const result: BomLineCreateInput = {
     projectRevisionId: id(input.projectRevisionId, "arguments.projectRevisionId"),
     description: stringValue(input.description, "arguments.description", { max: 512 }),
     quantity: finiteNumber(input.quantity, "arguments.quantity", 0.000001),
     unit: enumValue(input.unit, "arguments.unit", ["piece", "gram", "millimetre", "millilitre", "metre", "roll", "set"] as const),
     requirement: optionalEnum(input.requirement, "arguments.requirement", ["required", "optional"] as const),
+    role: optionalNullableEnum(input.role, "arguments.role", ["consumed", "reusable"] as const),
   };
   result.itemId = optionalId(input.itemId, "arguments.itemId");
   Object.assign(result, parseBomAlternatives(input));
@@ -898,13 +939,14 @@ export function bomLineCreate(value: unknown): BomLineCreateInput {
 
 export function bomLineUpdate(value: unknown): BomLineUpdateInput {
   const input = record(value, "arguments");
-  keys(input, ["bomLineId", "expectedVersion", "description", "quantity", "unit", "requirement", "itemId", "alternatives", "compatibleItemIds", "constraints", "notes"], "arguments");
+  keys(input, ["bomLineId", "expectedVersion", "description", "quantity", "unit", "requirement", "role", "itemId", "alternatives", "compatibleItemIds", "constraints", "notes"], "arguments");
   const result: BomLineUpdateInput = { bomLineId: id(input.bomLineId, "arguments.bomLineId") };
   result.expectedVersion = optionalInteger(input.expectedVersion, "arguments.expectedVersion");
   result.description = optionalString(input.description, "arguments.description", 512);
   result.quantity = input.quantity === undefined ? undefined : finiteNumber(input.quantity, "arguments.quantity", 0.000001);
   result.unit = optionalEnum(input.unit, "arguments.unit", ["piece", "gram", "millimetre", "millilitre", "metre", "roll", "set"] as const);
   result.requirement = optionalEnum(input.requirement, "arguments.requirement", ["required", "optional"] as const);
+  result.role = optionalNullableEnum(input.role, "arguments.role", ["consumed", "reusable"] as const);
   result.itemId = optionalId(input.itemId, "arguments.itemId");
   Object.assign(result, parseBomAlternatives(input));
   result.constraints = optionalBomConstraints(input.constraints, "arguments.constraints");
@@ -956,7 +998,7 @@ export function usage(value: unknown): UsageInput {
   keys(input, ["projectRevisionId", "reservationId", "itemId", "quantity", "note"], "arguments");
   return {
     projectRevisionId: id(input.projectRevisionId, "arguments.projectRevisionId"),
-    reservationId: optionalId(input.reservationId, "arguments.reservationId"),
+    reservationId: id(input.reservationId, "arguments.reservationId"),
     itemId: id(input.itemId, "arguments.itemId"),
     quantity: quantity(input.quantity, "arguments.quantity"),
     note: optionalString(input.note, "arguments.note", 2000),

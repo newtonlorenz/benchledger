@@ -443,7 +443,18 @@ function revisionStatus(status: RevisionStatus): ApiProjectRevision["status"] {
 }
 
 export function apiProjectRevisionFromNative(revision: ProjectRevision, version: number): ApiProjectRevision {
-  return { id: revision.id, projectId: revision.projectId, number: revision.number, name: revision.label, ...(revision.notes === undefined ? {} : { notes: revision.notes }), status: revisionStatus(revision.status), createdAt: revision.createdAt, version };
+  return {
+    id: revision.id,
+    projectId: revision.projectId,
+    number: revision.number,
+    name: revision.label,
+    ...(revision.notes === undefined ? {} : { notes: revision.notes }),
+    status: revisionStatus(revision.status),
+    fabricationRoute: revision.fabricationRoute ?? "undecided",
+    ...(revision.intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId: revision.intendedPrinterItemId }),
+    createdAt: revision.createdAt,
+    version
+  };
 }
 
 export function apiWorkItemRevisionFromNative(revision: WorkItemRevision, projectId: string, version: number): ApiWorkItemRevision {
@@ -457,6 +468,7 @@ export function apiBomLineFromNative(line: BomLine, metadata: BomApiMetadata, ve
     revisionId: line.revisionId,
     name: line.name,
     ...(line.itemId === undefined ? {} : { itemId: line.itemId }),
+    role: line.role ?? null,
     requiredQuantity: line.quantity,
     unit: mapNativeUnitToApi(line.unit),
     optional: line.optional === true || line.required === false,

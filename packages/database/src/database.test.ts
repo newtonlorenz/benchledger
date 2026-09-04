@@ -86,18 +86,22 @@ describe("SQLite repositories", () => {
 
   it("reopens a v2 project schema by adding removal tombstone columns without changing projects", () => {
     const database = new BenchDatabase(":memory:");
+    database.exec("ALTER TABLE bom_lines DROP COLUMN role");
     database.exec("ALTER TABLE projects DROP COLUMN removed_at");
     database.exec("ALTER TABLE projects DROP COLUMN removed_by_json");
     database.exec("ALTER TABLE projects DROP COLUMN last_lifecycle_status");
     database.exec("ALTER TABLE projects DROP COLUMN removed_reservation_ids_json");
     database.run("INSERT INTO projects (id, name, slug, status, visibility, created_at, updated_at) VALUES (?, ?, ?, 'planned', 'private', ?, ?)", ["v2-project", "V2 project", "v2-project", "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"]);
+    database.run("INSERT INTO project_revisions (id, project_id, revision_number, label, status, created_at) VALUES (?, ?, 1, 'Initial', 'concept', ?)", ["v2-revision", "v2-project", "2026-01-01T00:00:00.000Z"]);
+    database.run("INSERT INTO bom_lines (id, revision_id, name, quantity, unit, required, optional) VALUES (?, ?, 'Legacy requirement', 1, 'piece', 1, 0)", ["v2-bom", "v2-revision"]);
     database.run("INSERT INTO forge_meta (key, value) VALUES ('project_schema_version', '2') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
 
     migrateProjectSchema(database);
 
     expect(database.all<{ readonly name: string }>("PRAGMA table_info(projects)").map((column) => column.name)).toEqual(expect.arrayContaining(["removed_at", "removed_by_json", "last_lifecycle_status", "removed_reservation_ids_json"]));
     expect(database.get<{ readonly status: string; readonly removed_at: string | null }>("SELECT status, removed_at FROM projects WHERE id = 'v2-project'")).toEqual({ status: "planned", removed_at: null });
-    expect(database.get<{ readonly value: string }>("SELECT value FROM forge_meta WHERE key = 'project_schema_version'")).toEqual({ value: "3" });
+    expect(database.get<{ readonly role: string | null }>("SELECT role FROM bom_lines WHERE id = 'v2-bom'")).toEqual({ role: null });
+    expect(database.get<{ readonly value: string }>("SELECT value FROM forge_meta WHERE key = 'project_schema_version'")).toEqual({ value: "5" });
     database.close();
   });
 
@@ -171,7 +175,7 @@ describe("SQLite repositories", () => {
     inventory.create(item);
     projects.create(createProject({ id: "project-1", name: "Reservation Project" }));
     projects.createRevision(createProjectRevision({ id: "project-rev-1", projectId: "project-1", number: 1 }));
-    boms.createLine(createBomLine({ id: "bom-1", revisionId: "project-rev-1", name: item.name, quantity: 1, unit: item.unit, itemId: item.id }));
+    boms.createLine(createBomLine({ id: "bom-1", revisionId: "project-rev-1", name: item.name, role: "consumed", quantity: 1, unit: item.unit, itemId: item.id }));
     inventory.appendStockEvent(createStockEvent({ id: "event-reserve-receive", itemId: item.id, kind: "receipt", quantity: 3, unit: "board", reason: "received" }));
     const reservation = reservations.create({ id: "reservation-1", projectRevisionId: "project-rev-1", bomLineId: "bom-1", itemId: item.id, quantity: 2 });
     expect(reservation.status).toBe("active");

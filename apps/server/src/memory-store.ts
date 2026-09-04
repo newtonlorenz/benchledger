@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type {
   Artifact, BomLine, CreateBomLine, CreateInventoryItem, CreateOffer, CreateProject,
   CreateProjectRevision, CreateReservation, CreateWorkItem, CreateWorkItemRevision,
@@ -7,11 +8,12 @@ import type {
   StockEventInput, UploadSession, WorkItem, WorkItemRevision, CatalogProduct, CreateCatalogProduct,
   UpdateCatalogProduct, InventoryProductProfile, CreateInventoryProductProfile,
   UpdateInventoryProductProfile, BuildConfigurationSnapshot, CreateBuildConfigurationSnapshot, ProjectTombstone,
+  UpdateProjectRevision,
   ArtifactBuildConfigurationBinding, CommissionInventoryItem, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory,
   CommitProjectSetup, ProjectSetupCommitResult, ProjectSetupPreview, BomAlternative, InspectionCompletionPreview, InspectionEvidence, InspectionObservation
 } from "@benchledger/api-contract";
 import { bomAlternativeSchema, buildConfigurationSnapshotSchema, buildConfigurationSnapshotStorageInputSchema } from "@benchledger/api-contract";
-import { ApplicationError, applyInventoryBulkChanges, bomSpecification, conflict, matchesBomConstraints, normalizeInventoryBulkChanges, parseInventoryCursor, stableCreateConflict } from "@benchledger/application";
+import { ApplicationError, applyInventoryBulkChanges, assertOwnedPrinter, bomSpecification, conflict, matchesBomConstraints, normalizeInventoryBulkChanges, parseInventoryCursor, stableCreateConflict } from "@benchledger/application";
 import type {
   ApplicationPorts, ArtifactDownload, ArtifactPort, AuditEvent, AuditInput, AuditPort,
   BeginUploadInput, EventBusEvent, EventBusPort, HealthPort, IdempotencyPort,
@@ -642,6 +644,10 @@ class MemoryProjects implements ProjectPort {
     this.projectSlugs.set(project.id, slugify(project.name));
   }
   async createProjectWithInitialRevision(input: CreateProjectWithInitialRevision, ctx?: RequestContext): Promise<ProjectWithInitialRevision> {
+    const effectiveRoute = input.revision.fabricationRoute ?? "undecided";
+    if (input.revision.intendedPrinterItemId !== undefined && input.revision.intendedPrinterItemId !== null && effectiveRoute !== "printed") {
+      throw new ApplicationError("validation", "The intended printer requires the printed fabrication route");
+    }
     const projects = new Map([...this.projects].map(([key, value]) => [key, clone(value)] as const));
     const projectSlugs = new Map(this.projectSlugs);
     const revisions = new Map([...this.projectRevisions].map(([key, value]) => [key, clone(value)] as const));
@@ -841,13 +847,53 @@ class MemoryProjects implements ProjectPort {
   listWorkItems(projectId: string): Promise<readonly WorkItem[]> { return Promise.resolve(clone([...this.workItems.values()].filter((item) => item.projectId === projectId))); }
   createProjectRevision(projectId: string, input: CreateProjectRevision): Promise<ProjectRevision> {
     this.assertProjectActive(projectId);
-    const number = [...this.projectRevisions.values()].filter((revision) => revision.projectId === projectId).length + 1;
-    const revision: ProjectRevision = { id: input.id ?? id("revision", ++this.sequence), projectId, number, name: input.name, ...(input.notes === undefined ? {} : { notes: input.notes }), status: input.status, createdAt: iso(), version: 1 };
+    const previous = [...this.projectRevisions.values()].filter((revision) => revision.projectId === projectId);
+    const predecessor = previous.slice().sort((left, right) => right.number - left.number || right.id.localeCompare(left.id))[0];
+    const fabricationRoute = input.fabricationRoute ?? predecessor?.fabricationRoute ?? "undecided";
+    const hasPrinterField = Object.prototype.hasOwnProperty.call(input, "intendedPrinterItemId");
+    if (input.intendedPrinterItemId !== undefined && input.intendedPrinterItemId !== null && fabricationRoute !== "printed") {
+      throw new ApplicationError("validation", "The intended printer requires the printed fabrication route");
+    }
+    const intendedPrinterItemId = fabricationRoute === "printed"
+      ? (hasPrinterField ? input.intendedPrinterItemId : predecessor?.intendedPrinterItemId ?? null)
+      : null;
+    if (intendedPrinterItemId !== undefined && intendedPrinterItemId !== null && fabricationRoute !== "printed") {
+      throw new ApplicationError("validation", "The intended printer requires the printed fabrication route");
+    }
+    const number = Math.max(0, ...previous.map((revision) => revision.number)) + 1;
+    const revision: ProjectRevision = {
+      id: input.id ?? id("revision", ++this.sequence), projectId, number, name: input.name,
+      ...(input.notes === undefined ? {} : { notes: input.notes }), status: input.status,
+      fabricationRoute,
+      intendedPrinterItemId,
+      createdAt: iso(), version: 1
+    };
     if (this.projectRevisions.has(revision.id)) throw new ApplicationError("conflict", `Project revision '${revision.id}' already exists`);
     this.projectRevisions.set(revision.id, revision);
     const project = this.projects.get(projectId);
     if (project !== undefined) this.projects.set(projectId, { ...project, currentRevisionId: revision.id, updatedAt: revision.createdAt });
     return Promise.resolve(clone(revision));
+  }
+  updateProjectRevision(revisionId: string, input: UpdateProjectRevision, expectedVersion: number | undefined): Promise<ProjectRevision> {
+    const current = this.projectRevisions.get(revisionId);
+    if (current === undefined) throw new ApplicationError("not_found", `Project revision '${revisionId}' was not found`);
+    this.assertProjectActive(current.projectId);
+    ensureVersion(current.version, expectedVersion, "Project revision");
+    const fabricationRoute = input.fabricationRoute ?? current.fabricationRoute ?? "undecided";
+    const hasPrinterField = Object.prototype.hasOwnProperty.call(input, "intendedPrinterItemId");
+    if (hasPrinterField && input.intendedPrinterItemId !== undefined && input.intendedPrinterItemId !== null && fabricationRoute !== "printed") {
+      throw new ApplicationError("validation", "The intended printer requires the printed fabrication route");
+    }
+    const intendedPrinterItemId = fabricationRoute === "printed"
+      ? (hasPrinterField ? input.intendedPrinterItemId : current.intendedPrinterItemId ?? null)
+      : null;
+    if (intendedPrinterItemId !== undefined && intendedPrinterItemId !== null && fabricationRoute !== "printed") {
+      throw new ApplicationError("validation", "The intended printer requires the printed fabrication route");
+    }
+    const { intendedPrinterItemId: _priorPrinter, ...withoutPriorPrinter } = current;
+    const updated: ProjectRevision = { ...withoutPriorPrinter, fabricationRoute, intendedPrinterItemId, version: current.version + 1 };
+    this.projectRevisions.set(revisionId, clone(updated));
+    return Promise.resolve(clone(updated));
   }
   getProjectRevision(idValue: string): Promise<ProjectRevision | null> { const value = this.projectRevisions.get(idValue); return Promise.resolve(value ? clone(value) : null); }
   createWorkItemRevision(workItemId: string, input: CreateWorkItemRevision): Promise<WorkItemRevision> {
@@ -870,6 +916,7 @@ class MemoryProjects implements ProjectPort {
       revisionId,
       name: input.name,
       ...(input.itemId === undefined ? {} : { itemId: input.itemId }),
+      role: input.role ?? null,
       requiredQuantity: input.requiredQuantity,
       unit: input.unit,
       optional: input.optional,
@@ -884,6 +931,10 @@ class MemoryProjects implements ProjectPort {
   }
   updateBomLine(lineId: string, input: Partial<CreateBomLine>, expectedVersion: number | undefined): Promise<BomLine> {
     const current = this.bomLines.get(lineId); if (!current) throw new ApplicationError("not_found", `BOM line '${lineId}' was not found`); ensureVersion(current.version, expectedVersion, "BOM line");
+    if (Object.prototype.hasOwnProperty.call(input, "role") && (input.role === "reusable" || (current.role === "consumed" && input.role !== "consumed"))
+      && [...this.reservations.values()].some((reservation) => reservation.lineId === lineId && reservation.status === "active")) {
+      throw new ApplicationError("conflict", "Release or reconcile active reservations before changing this requirement from a part or material", { lineId });
+    }
     const next = {
       ...current,
       ...input,
@@ -909,6 +960,8 @@ class MemoryProjects implements ProjectPort {
     const revision = this.projectRevisions.get(revisionId); if (!revision) throw new ApplicationError("not_found", `Project revision '${revisionId}' was not found`);
     this.assertProjectActive(revision.projectId);
     const line = this.bomLines.get(input.lineId); if (!line || line.revisionId !== revisionId) throw new ApplicationError("not_found", `BOM line '${input.lineId}' was not found in this revision`);
+    if (line.role === null || line.role === undefined) throw new ApplicationError("validation", "Review the BOM line requirement role before reservation");
+    if (line.role !== "consumed") throw new ApplicationError("validation", "Reusable requirements do not reserve consumable stock");
     const item = this.inventory.items.get(input.itemId); if (!item) throw new ApplicationError("not_found", `Inventory item '${input.itemId}' was not found`);
     const conversion = bomQuantityConversion(line, item);
     if (item.unit !== line.unit && conversion === undefined) throw new ApplicationError("validation", `Unit mismatch: BOM uses ${line.unit}, item uses ${item.unit}; no valid quantity conversion is recorded`);
@@ -957,9 +1010,30 @@ class MemoryProjects implements ProjectPort {
     if (revision === undefined) return Promise.resolve(null);
     return Promise.resolve(clone({ reservation, projectId: revision.projectId, projectRevisionId: bomLine.revisionId, bomLine }));
   }
-  recordUsage(input: UsageInput, ctx: RequestContext): Promise<StockMutation> {
+  async recordUsage(input: UsageInput, ctx: RequestContext): Promise<StockMutation> {
     this.assertProjectActive(input.projectId);
-    return this.inventory.recordStockEvent({ itemId: input.itemId, type: "consume", quantity: input.quantity, unit: input.unit, ...(input.note ? { note: input.note } : {}), projectId: input.projectId }, ctx);
+    if (input.reservationId === undefined) throw new ApplicationError("validation", "Usage requires a reservation for a consumed BOM requirement");
+    const reservation = this.reservations.get(input.reservationId);
+    if (reservation === undefined) throw new ApplicationError("not_found", `Reservation '${input.reservationId}' was not found`);
+    if (reservation.status !== "active") throw new ApplicationError("conflict", "Reservation is no longer active");
+    if (reservation.itemId !== input.itemId || reservation.quantity !== input.quantity) throw new ApplicationError("validation", "Usage must consume the reserved item and quantity in full");
+    const line = this.bomLines.get(reservation.lineId);
+    const revision = line === undefined ? undefined : this.projectRevisions.get(line.revisionId);
+    if (line === undefined || revision?.projectId !== input.projectId) throw new ApplicationError("conflict", "Reservation belongs to a different project revision");
+    if (line.role === null || line.role === undefined) throw new ApplicationError("validation", "Review the BOM line requirement role before usage");
+    if (line.role !== "consumed") throw new ApplicationError("validation", "Reusable requirements remain owned and cannot be consumed");
+    const current = this.inventory.items.get(input.itemId);
+    if (current === undefined) throw new ApplicationError("not_found", `Inventory item '${input.itemId}' was not found`);
+    this.inventory.items.set(current.id, { ...current, availableQuantity: current.availableQuantity + reservation.quantity });
+    try {
+      const mutation = await this.inventory.recordStockEvent({ itemId: input.itemId, type: "consume", quantity: input.quantity, unit: input.unit, ...(input.note ? { note: input.note } : {}), projectId: input.projectId }, ctx);
+      const now = iso();
+      this.reservations.set(reservation.id, { ...reservation, status: "consumed", updatedAt: now, version: reservation.version + 1 });
+      return mutation;
+    } catch (error: unknown) {
+      this.inventory.items.set(current.id, current);
+      throw error;
+    }
   }
   private assertProjectActive(projectId: string): void {
     const project = this.projects.get(projectId);
@@ -986,6 +1060,7 @@ class MemoryProjectSetup implements ProjectSetupPort {
   constructor(
     private readonly projects: MemoryProjects,
     private readonly inventory: MemoryInventory,
+    private readonly catalog: MemoryCatalog,
     private readonly audit: MemoryAudit,
     private readonly idempotency: MemoryIdempotency
   ) {}
@@ -1031,6 +1106,11 @@ class MemoryProjectSetup implements ProjectSetupPort {
     // must never remain available as a compensation receipt for this command.
     this.lastSnapshot = undefined;
     if (preview.fieldErrors.length > 0) throw new ApplicationError("validation", "Project setup preview contains semantic field errors");
+    const intendedPrinterItemId = preview.proposal.revision.intendedPrinterItemId;
+    if (intendedPrinterItemId !== undefined && intendedPrinterItemId !== null) {
+      if (preview.proposal.revision.fabricationRoute !== "printed") throw new ApplicationError("validation", "The intended printer requires the printed fabrication route");
+      await assertOwnedPrinter({ inventory: this.inventory, catalog: this.catalog }, intendedPrinterItemId);
+    }
 
     const staleItems: string[] = [];
     for (const basis of preview.affectedInventory) {
@@ -1090,7 +1170,7 @@ class MemoryProjectSetup implements ProjectSetupPort {
       }
       const bomLines: ProjectSetupCommitResult["bomLines"] = [];
       for (const line of proposal.bomLines) {
-        bomLines.push(await this.projects.createBomLine(created.revision.id, { id: line.id, name: line.name, ...(line.itemId === undefined ? {} : { itemId: line.itemId }), requiredQuantity: line.requiredQuantity, unit: line.unit, optional: line.optional, constraints: line.constraints, alternatives: line.alternatives, ...(line.notes === undefined ? {} : { notes: line.notes }) }));
+        bomLines.push(await this.projects.createBomLine(created.revision.id, { id: line.id, name: line.name, role: line.role ?? null, ...(line.itemId === undefined ? {} : { itemId: line.itemId }), requiredQuantity: line.requiredQuantity, unit: line.unit, optional: line.optional, constraints: line.constraints, alternatives: line.alternatives, ...(line.notes === undefined ? {} : { notes: line.notes }) }));
       }
       const reservations: ProjectSetupCommitResult["reservations"] = [];
       for (const reservation of proposal.reservations) {
@@ -1159,7 +1239,7 @@ class MemoryInspections implements InspectionPort {
       const afterLines = input.preview.after.lines;
       for (const before of beforeLines) {
         const currentLine = this.projects.bomLines.get(before.id);
-        if (currentLine === undefined || JSON.stringify(currentLine) !== JSON.stringify(before)) {
+        if (currentLine === undefined || !isDeepStrictEqual(currentLine, before)) {
           throw conflict("Inspection BOM basis changed", { reason: "stale_basis", recoveryAction: "list_inspections" });
         }
       }
@@ -1458,7 +1538,7 @@ export function createMemoryRuntime(seed: readonly InventoryItem[] = []): Memory
   const unitOfWork = new MemoryUnitOfWork();
   const audit = new MemoryAudit();
   const idempotency = new MemoryIdempotency();
-  const projectSetups = new MemoryProjectSetup(projects, inventory, audit, idempotency);
+  const projectSetups = new MemoryProjectSetup(projects, inventory, catalog, audit, idempotency);
   const inspections = new MemoryInspections(inventory, projects);
   const ports: ApplicationPorts = { inventory, inventoryCategories, projects, projectSetups, inspections, offers: new MemoryOffers(), artifacts: new MemoryArtifacts(), catalog, buildConfigurations, audit, events: new MemoryEvents(), idempotency, unitOfWork, health: new MemoryHealth() };
   return { ports, inventory, inventoryCategories, projects, catalog, buildConfigurations, inspections, unitOfWork };
@@ -1478,6 +1558,7 @@ function seedSyntheticProject(runtime: MemoryRuntime): void {
     name: "Initial concept",
     notes: "Synthetic reference project for the guided planning flow.",
     status: "concept",
+    fabricationRoute: "undecided",
     createdAt: timestamp,
     version: 1
   };
@@ -1492,11 +1573,10 @@ function seedSyntheticProject(runtime: MemoryRuntime): void {
     version: 1
   };
   const lines: readonly BomLine[] = [
-    { id: "synthetic-bom-printer", revisionId: revision.id, name: "Bambu Lab H2D", itemId: "printer-h2d", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: timestamp, updatedAt: timestamp, version: 1 },
-    { id: "synthetic-bom-filament", revisionId: revision.id, name: "Bambu PETG HF", itemId: "filament-petg-hf", requiredQuantity: 250, unit: "gram", optional: false, constraints: {}, alternatives: [], notes: "Representative material allowance for the first prototype.", createdAt: timestamp, updatedAt: timestamp, version: 1 },
-    { id: "synthetic-bom-board", revisionId: revision.id, name: "ESP32 development board", itemId: "board-esp32", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: timestamp, updatedAt: timestamp, version: 1 },
-    { id: "synthetic-bom-wire", revisionId: revision.id, name: "Dupont jumper wire assortment", itemId: "wire-dupont", requiredQuantity: 1, unit: "set", optional: false, constraints: {}, alternatives: [], notes: "Delivery is recorded; physical count is still required.", createdAt: timestamp, updatedAt: timestamp, version: 1 },
-    { id: "synthetic-bom-fasteners", revisionId: revision.id, name: "M3 mounting screws", requiredQuantity: 4, unit: "each", optional: false, constraints: { kind: "fastener" }, alternatives: [], notes: "Synthetic missing line to exercise shopping guidance.", createdAt: timestamp, updatedAt: timestamp, version: 1 }
+    { id: "synthetic-bom-filament", revisionId: revision.id, name: "Bambu PETG HF", role: "consumed", itemId: "filament-petg-hf", requiredQuantity: 250, unit: "gram", optional: false, constraints: {}, alternatives: [], notes: "Representative material allowance for the first prototype.", createdAt: timestamp, updatedAt: timestamp, version: 1 },
+    { id: "synthetic-bom-board", revisionId: revision.id, name: "ESP32 development board", role: "consumed", itemId: "board-esp32", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: timestamp, updatedAt: timestamp, version: 1 },
+    { id: "synthetic-bom-wire", revisionId: revision.id, name: "Dupont jumper wire assortment", role: "consumed", itemId: "wire-dupont", requiredQuantity: 1, unit: "set", optional: false, constraints: {}, alternatives: [], notes: "Delivery is recorded; physical count is still required.", createdAt: timestamp, updatedAt: timestamp, version: 1 },
+    { id: "synthetic-bom-fasteners", revisionId: revision.id, name: "M3 mounting screws", role: "consumed", requiredQuantity: 4, unit: "each", optional: false, constraints: { kind: "fastener" }, alternatives: [], notes: "Synthetic missing line to exercise shopping guidance.", createdAt: timestamp, updatedAt: timestamp, version: 1 }
   ];
   runtime.projects.seedProject(project);
   runtime.projects.projectRevisions.set(revision.id, clone(revision));

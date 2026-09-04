@@ -33,6 +33,25 @@ export interface BomSpecification {
 export type BomCompatibility = "confirmed" | "conditional" | "unknown";
 export type BomDecision = "ready" | "check" | "decide" | "source";
 
+/** The user's intended build approach is planning context, not stock or a
+ * reservation. Keep it explicit so an electronics-only project is valid. */
+export type FabricationRoute = "printed" | "ready_made" | "none" | "undecided";
+
+export const fabricationRouteOptions: readonly {
+  value: FabricationRoute;
+  label: string;
+  description: string;
+}[] = [
+  { value: "printed", label: "3D-print parts", description: "Use an owned printer when you are ready." },
+  { value: "ready_made", label: "Use ready-made parts or an enclosure", description: "Use something bought or already on hand." },
+  { value: "none", label: "Electronics / assembly only", description: "Keep this project to electronics or assembly." },
+  { value: "undecided", label: "Decide later", description: "Record the project now and choose an approach later." }
+];
+
+export function fabricationRouteLabel(route: FabricationRoute | undefined): string {
+  return fabricationRouteOptions.find((option) => option.value === route)?.label ?? "Decide later";
+}
+
 /** Browser display units retain the server's set identity. The short aliases
  * are kept for the existing beginner-facing grams/metres copy. */
 export type QuantityDisplayUnit = "each" | "g" | "m" | "set" | "millimetre" | "millilitre";
@@ -151,6 +170,7 @@ export interface InventoryProductProfile {
   id?: string;
   inventoryItemId?: string;
   catalogProductId?: string;
+  profileType?: "filament_spool" | "printer_asset";
   linkState: LinkState;
   filament?: FilamentPhysicalProfile;
   printer?: PrinterPhysicalProfile;
@@ -313,6 +333,9 @@ export interface BomLine {
   itemId?: string;
   required: number;
   unit: QuantityDisplayUnit;
+  /** How the requirement is used in the finished build. Legacy lines may not
+   * have this value yet and must remain explicitly reviewable. */
+  role?: "consumed" | "reusable" | null;
   optional?: boolean;
   note?: string;
   constraints?: {
@@ -419,6 +442,8 @@ export interface Project {
   accent: "orange" | "teal" | "blue";
   /** API revision identifier retained for revision, BOM, and artifact writes. */
   serverRevisionId?: string;
+  /** Current revision version used for optimistic planning updates. */
+  serverRevisionVersion?: number;
   /** Bounded revision references used by the artifact scope picker. */
   projectRevisions?: ProjectRevisionReference[];
   /** Every real work item is offered independently; no item is inferred. */
@@ -432,6 +457,12 @@ export interface Project {
   readinessUnavailable?: boolean;
   /** Revision-scoped physical checks returned by the inspection queue. */
   inspectionActions?: readonly InspectionAction[];
+  /** Intended build approach for the current revision. This never implies a
+   * purchased part, reservation, or completed fabrication step. */
+  fabricationRoute?: FabricationRoute;
+  /** Optional owned printer selected for a printed build plan. */
+  /** Null is an explicit clear; an omitted field is inherited by the service. */
+  intendedPrinterItemId?: string | null;
   buildConfigSnapshot?: BuildConfigSnapshot;
 }
 

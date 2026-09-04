@@ -34,7 +34,7 @@ describe("BenchLedger beginner-friendly domain language", () => {
 
   it("keeps uncertain stock out of the ready-to-build count", () => {
     const summary = calculateProjectSummary(projects[0]!, inventory);
-    expect(summary.readyLines).toBe(2);
+    expect(summary.readyLines).toBe(1);
     expect(summary.inspectLines).toBe(1);
     expect(summary.missingLines).toBe(2);
     expect(summary.decideLines).toBe(1);

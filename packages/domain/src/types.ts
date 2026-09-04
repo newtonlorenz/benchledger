@@ -55,6 +55,10 @@ export interface BomSpecification {
 
 export type BomDecision = "ready" | "check" | "decide" | "source";
 export type BomCompatibility = "confirmed" | "conditional" | "unknown";
+/** Explicit stock treatment for a project requirement. Legacy BOM rows may
+ * carry `null` until a human records whether the item is consumed or reused. */
+export type BomLineRole = "consumed" | "reusable";
+export type BomRequirementRole = BomLineRole;
 
 export type QuantityUnit =
   | "piece"
@@ -204,6 +208,8 @@ export type RevisionStatus =
   | "fit/function verified"
   | "production approved";
 
+export type { FabricationRoute } from "./fabrication-route.js";
+
 /** Canonical project lifecycle. Legacy values are accepted only by migration
  * adapters and are never represented by a domain Project. */
 export type ProjectStatus = "idea" | "planned" | "ready" | "building" | "validating" | "complete" | "archived";
@@ -244,6 +250,10 @@ export interface ProjectRevision {
   number: number;
   label: string;
   status: RevisionStatus;
+  /** Legacy adapters may omit this field; persisted/new records default to undecided. */
+  fabricationRoute?: import("./fabrication-route.js").FabricationRoute;
+  /** Null is a deliberate clear; omission means inherit on a new revision. */
+  intendedPrinterItemId?: string | null;
   machineId?: string;
   material?: string;
   notes?: string;
@@ -280,6 +290,7 @@ export interface BomLine {
   name: string;
   quantity: number;
   unit: QuantityUnit;
+  role?: BomLineRole | null;
   required: boolean;
   optional?: boolean;
   itemId?: string;

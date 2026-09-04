@@ -6,7 +6,7 @@ async function signIn(page: Page): Promise<void> {
   await page.goto("/");
   await page.getByLabel("Workspace password").fill(demoPassword);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("heading", { name: "Review build status." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What are you making?" })).toBeVisible();
 }
 
 async function openInventory(page: Page): Promise<void> {
@@ -16,7 +16,7 @@ async function openInventory(page: Page): Promise<void> {
   } else {
     await page.getByRole("button", { name: "Inventory", exact: true }).click();
   }
-  await expect(page.getByRole("heading", { name: "Review inventory." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What do you have?" })).toBeVisible();
 }
 
 function inventoryRecord(id: string, name: string) {

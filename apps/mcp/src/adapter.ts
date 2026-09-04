@@ -52,6 +52,7 @@ import {
   removedProjectList,
   removedProjectHistory,
   projectRevisionCreate,
+  projectRevisionUpdate,
   projectUpdate,
   reservationList,
   reservationRead,
@@ -381,7 +382,7 @@ async function authorizeProjectScope(adapter: McpAdapter, name: string, input: u
   }
 
   const revisionId = inputString(input, "revisionId");
-  if (revisionId !== undefined && (name === "read_project_revision" || name === "list_bom_lines" || name === "calculate_bom_gaps")) {
+  if (revisionId !== undefined && (name === "read_project_revision" || name === "update_project_revision" || name === "list_bom_lines" || name === "calculate_bom_gaps")) {
     await assertResolvedProjectAccess(context, adapter.backend.projectScope?.projectForProjectRevision === undefined ? undefined : () => adapter.backend.projectScope!.projectForProjectRevision!(revisionId), "project revision");
   } else if (revisionId !== undefined && name === "read_work_item_revision") {
     await assertResolvedProjectAccess(context, adapter.backend.projectScope?.projectForWorkItemRevision === undefined ? undefined : () => adapter.backend.projectScope!.projectForWorkItemRevision!(revisionId), "work-item revision");
@@ -519,6 +520,10 @@ export class McpAdapter {
       ["create_work_item", (input, context) => this.backend.projects.createWorkItem(workItemCreate(input), context)],
       ["read_work_item", (input, context) => this.backend.projects.getWorkItem({ workItemId: singleId(input, "workItemId") }, context)],
       ["create_project_revision", (input, context) => this.backend.projects.createProjectRevision(projectRevisionCreate(input), context)],
+      ["update_project_revision", (input, context) => {
+        if (this.backend.projects.updateProjectRevision === undefined) throw new McpAdapterError("BACKEND_ERROR", "This project backend does not support revision planning updates.");
+        return this.backend.projects.updateProjectRevision(projectRevisionUpdate(input), context);
+      }],
       ["read_project_revision", (input, context) => this.backend.projects.getProjectRevision(revisionRead(input), context)],
       ["create_work_item_revision", (input, context) => this.backend.projects.createWorkItemRevision(workItemRevisionCreate(input), context)],
       ["read_work_item_revision", (input, context) => this.backend.projects.getWorkItemRevision(revisionRead(input), context)],

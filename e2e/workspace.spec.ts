@@ -6,7 +6,7 @@ async function signIn(page: Page): Promise<void> {
   await page.goto("/");
   await page.getByLabel("Workspace password").fill(demoPassword);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("heading", { name: "Review build status." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What are you making?" })).toBeVisible();
 }
 
 function inventoryRecord(id: string, name: string, kind = "tool") {
@@ -53,7 +53,7 @@ test("filters, edits, and physically counts evidence-aware inventory", async ({ 
   });
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
 
-  await expect(page.getByRole("heading", { name: "Review inventory." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What do you have?" })).toBeVisible();
   await expect(page.locator(".inventory-summary")).toHaveCount(0);
   const headers = page.getByRole("table").getByRole("columnheader");
   await expect(headers).toHaveCount(7);
@@ -66,8 +66,7 @@ test("filters, edits, and physically counts evidence-aware inventory", async ({ 
   await expect(page.getByRole("columnheader", { name: "Evidence source", exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Filter inventory by category")).toBeVisible();
   await page.getByLabel("Filter inventory by category").selectOption("__unassigned__");
-  await page.getByLabel("Filter inventory by kind").selectOption("electronic");
-  await page.getByLabel("Filter inventory by evidence").selectOption("physically_counted");
+  await page.getByText("More filters", { exact: true }).click(); await page .getByLabel("Filter inventory by item type").selectOption("electronic"); const stockRecord = page.getByLabel("Filter inventory by stock record"); expect(await stockRecord.locator("option").allTextContents()).toEqual([ "All stock records", "Physically counted", "Commissioned", "Delivered, not counted", "Ordered, not verified", "Reserved for a project", "Used", "Not checked yet" ]); await stockRecord.selectOption("physically_counted");
   await page.getByLabel("Filter inventory by availability").selectOption("available");
   await page.getByLabel("Search inventory").fill("ESP32");
   await expect(page.locator(".inventory-page-status")).toContainText("Showing 1 of 1 items");
@@ -75,12 +74,12 @@ test("filters, edits, and physically counts evidence-aware inventory", async ({ 
   await expect(espRow).toBeVisible();
   expect(inventoryRequests.some((value) => {
     const url = new URL(value);
-    return url.searchParams.get("q") === "ESP32"
+    return ( url.searchParams.get("q") === "ESP32"
       && url.searchParams.get("kind") === "electronic"
       && url.searchParams.get("evidence") === "physically_counted"
       && url.searchParams.get("available") === "true"
       && url.searchParams.get("unassigned") === "true"
-      && url.searchParams.get("limit") === "25";
+      && url.searchParams.get("limit") === "25" );
   })).toBe(true);
   await expect(espRow).toContainText("Ready");
   await expect(espRow).not.toContainText("synthetic-demo");
@@ -103,7 +102,7 @@ test("filters, edits, and physically counts evidence-aware inventory", async ({ 
   await drawer.getByRole("combobox", { name: /Category/u }).selectOption("category-electronics");
   const legacyUpdateResponse = page.waitForResponse((response) => {
     const url = new URL(response.url());
-    return response.request().method() === "PATCH" && response.status() === 200 && /\/api\/v1\/inventory\/board-esp32$/u.test(url.pathname);
+    return ( response.request().method() === "PATCH" && response.status() === 200 && /\/api\/v1\/inventory\/board-esp32$/u.test(url.pathname) );
   });
   await drawer.getByRole("button", { name: "Save changes" }).click();
   const legacyUpdate = await legacyUpdateResponse;
@@ -175,10 +174,10 @@ test("loads server-backed continuation pages, resets filters, and ignores stale 
   await expect(status).toHaveText("Showing 30 of 30 items");
   await expect(page.getByRole("button", { name: "Open Tool 29" })).toBeVisible();
 
-  await page.getByLabel("Filter inventory by kind").selectOption("electronic");
+  await page.getByText("More filters", { exact: true }).click(); await page .getByLabel("Filter inventory by item type").selectOption("electronic");
   await expect(status).toHaveText("Showing 1 of 1 items");
   await expect(page.getByRole("button", { name: "Open Fast ESP32" })).toBeVisible();
-  await page.getByLabel("Filter inventory by kind").selectOption("All");
+  await page.getByLabel("Filter inventory by item type").selectOption("All");
   await expect(status).toHaveText("Showing 25 of 30 items");
 
   const search = page.locator(".field-search input");
@@ -190,38 +189,53 @@ test("loads server-backed continuation pages, resets filters, and ignores stale 
   await expect(page.getByRole("button", { name: "Open Slow result" })).toHaveCount(0);
 });
 
+test("copies on LAN with a legacy fallback and exposes text when all copy paths fail", async ({ page }) => {
+  await signIn(page); await page .context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(page.url()).origin });
+  await page.getByRole("button", { name: "Settings", exact: true }).click(); await page .getByRole("button", { name: "Show technical details", exact: true }).click(); await page.getByRole("button", { name: "For agents", exact: true }).click();
+    const request = page.getByRole("button", { name: "Can I build this with what I have?", exact: true }); await request.click(); await expect(request).toBeFocused(); await expect(page.locator(".toast")).toHaveText(/Request copied\./u); await expect(page.locator(".toast")).toHaveAttribute("role", "status");
+    await page.evaluate(() => { Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined }); document.execCommand = () => true;
+  }); const legacyRequest = page.getByRole("button", { name: "Prepare a sourced shopping list. Do not place an order.", exact: true }); await legacyRequest.click();
+  await expect(legacyRequest).toBeFocused(); await expect(page.locator(".toast")).toHaveText("Request copied.");
+  await expect(page.getByLabel("Request to copy manually")).toHaveCount(0);
+  await page.evaluate(() => { document.execCommand = () => false; }); const failedRequest = page.getByRole("button", { name: "Which stock needs a physical count before I reserve it?", exact: true }); await failedRequest.click();
+  await expect(failedRequest).toBeFocused();
+  await expect(page.locator(".toast.toast-error")).toHaveText( "Copy did not work. Select the request below and copy it manually." );
+  await expect(page.locator(".toast.toast-error")).toHaveAttribute( "role", "alert" ); const manualRequest = page.getByLabel("Request to copy manually");
+  await expect(manualRequest).toHaveValue( "Which stock needs a physical count before I reserve it?" ); await manualRequest.focus(); expect( await manualRequest.evaluate((element: HTMLTextAreaElement) => [ element.selectionStart, element.selectionEnd ])).toEqual([0, 55]);
+  await page.getByRole("button", { name: "Projects", exact: false }).click();
+  await page.getByRole("tab", { name: /^Shopping list/ }).click(); await page.getByRole("button", { name: "Copy draft list" }).click(); await expect(page.getByLabel("Shopping list to copy manually")).toBeVisible(); await expect(page.locator(".toast.toast-error")).toContainText( "Select the shopping list below" ); }); test("reports reusable expert-value copy success and failure in place", async ({ page }) => { await signIn(page);
+    await page.context() .grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(page.url()).origin });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page .getByRole("button", { name: "Show technical details", exact: true }) .click();
+
+  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await page.getByLabel("Search inventory").fill("ESP32 development board");
+  await page.getByRole("button", { name: "ESP32 development board", exact: true }).click(); const drawer = page.getByRole("dialog", { name: "ESP32 development board" });
+  const copy = drawer.getByRole("button", { name: "Copy value" });
+  await copy.click(); const copied = drawer.getByRole("button", { name: "Copied" }); await expect(copied).toBeFocused();
+  await expect(drawer.getByRole("status")).toHaveText("Copied.");
+  await page.evaluate(() => { Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined }); document.execCommand = () => false; }); await copied.click(); await expect(copy).toBeFocused(); await expect(drawer.getByRole("alert")).toHaveText( "Copy did not work. Select the value and copy it manually." );
+});
+
 test("selects loaded inventory across pages, caps the selection surface, and clears it when filters change", async ({ page }) => {
   await signIn(page);
-  const rows = Array.from({ length: 30 }, (_, index) => inventoryRecord(`tool-${String(index).padStart(2, "0")}`, `Tool ${String(index).padStart(2, "0")}`));
-  await page.route("**/api/v1/inventory**", async (route) => {
+  const rows = Array.from({ length: 30 }, (_, index) => inventoryRecord(`tool-${String(index).padStart(2, "0")}`, `Tool ${String(index).padStart(2, "0")}`)); await page.route("**/api/v1/inventory**", async (route) => {
     const requestUrl = new URL(route.request().url());
-    if (route.request().method() !== "GET" || requestUrl.pathname !== "/api/v1/inventory") return route.continue();
-    const query = requestUrl.searchParams.get("q") ?? "";
-    const filtered = query ? rows.filter((item) => item.name.toLocaleLowerCase().includes(query.toLocaleLowerCase())) : rows;
+    if (route.request().method() !== "GET" || requestUrl.pathname !== "/api/v1/inventory") return route.continue(); const query = requestUrl.searchParams.get("q") ?? ""; const filtered = query ? rows.filter((item) => item.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()) ) : rows;
     const offset = requestUrl.searchParams.get("cursor") === "25" ? 25 : 0;
     const data = filtered.slice(offset, offset + 25);
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data, limit: 25, total: filtered.length, ...(offset + data.length < filtered.length ? { nextCursor: String(offset + data.length) } : {}) }) });
   });
+  await page.getByRole("button", { name: "Inventory", exact: true }).click(); await expect(page.locator(".inventory-page-status")).toHaveText("Showing 25 of 30 items" ); await page.getByLabel("Select all loaded inventory items").check(); await expect(page.locator(".inventory-selection-bar")).toContainText( "25 selected of 25 loaded" );
 
-  await page.getByRole("button", { name: "Inventory", exact: true }).click();
-  await expect(page.locator(".inventory-page-status")).toHaveText("Showing 25 of 30 items");
-  await page.getByLabel("Select all loaded inventory items").check();
-  await expect(page.locator(".inventory-selection-bar")).toContainText("25 selected of 25 loaded");
   await page.getByRole("button", { name: "Load more" }).click();
-  await expect(page.locator(".inventory-selection-bar")).toContainText("25 selected of 30 loaded");
+  await expect(page.locator(".inventory-selection-bar")).toContainText( "25 selected of 30 loaded" );
   await page.getByLabel("Select Tool 29").check();
-  await expect(page.locator(".inventory-selection-bar")).toContainText("26 selected of 30 loaded");
-
-  await page.locator(".field-search input").fill("Tool 00");
-  await expect(page.locator(".inventory-page-status")).toHaveText("Showing 1 of 1 items");
+  await expect(page.locator(".inventory-selection-bar")).toContainText( "26 selected of 30 loaded" );
+  await page.locator(".field-search input").fill("Tool 00"); await expect(page.locator(".inventory-page-status")).toHaveText( "Showing 1 of 1 items" );
   await expect(page.locator(".inventory-selection-bar")).toHaveCount(0);
-  await expect(page.locator(".inventory-selection-notice")).toContainText("Selection cleared");
-  await expect(page.getByLabel("Select Tool 00")).toBeVisible();
-});
-
-test("blocks bulk selection for rows without an observed version", async ({ page }) => {
-  await signIn(page);
-  const unversioned = { ...inventoryRecord("legacy-item", "Legacy item"), version: undefined };
+  await expect(page.locator(".inventory-selection-notice")).toContainText( "Selection cleared" );
+  await expect(page.getByLabel("Select Tool 00")).toBeVisible(); }); test("blocks bulk selection for rows without an observed version", async ({ page }) => { await signIn(page); const unversioned = { ...inventoryRecord("legacy-item", "Legacy item"), version: undefined };
   const versioned = inventoryRecord("current-item", "Current item");
   let bulkRequests = 0;
   await page.route("**/api/v1/inventory**", async (route) => {
@@ -229,696 +243,266 @@ test("blocks bulk selection for rows without an observed version", async ({ page
     if (route.request().method() !== "GET" || requestUrl.pathname !== "/api/v1/inventory") return route.continue();
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [unversioned, versioned], limit: 25, total: 2 }) });
   });
-  await page.route("**/api/v1/inventory/bulk", async (route) => {
-    bulkRequests += 1;
-    await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: { code: "unexpected", message: "Bulk request should not be sent." } }) });
+  await page.route("**/api/v1/inventory/bulk", async (route) => { bulkRequests += 1; await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: { code: "unexpected", message: "Bulk request should not be sent." } }) });
   });
 
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
   await expect(page.getByLabel("Select Legacy item")).toBeDisabled();
-  await expect(page.getByLabel("Select all loaded inventory items")).toBeDisabled();
-  await expect(page.locator(".inventory-selection-notice")).toContainText("observed version is unavailable");
-  await page.getByLabel("Select Current item").check();
-  const dialog = page.getByRole("dialog", { name: "Bulk edit inventory" });
+  await expect( page.getByLabel("Select all loaded inventory items") ).toBeDisabled();
+  await expect(page.locator(".inventory-selection-notice")).toContainText( "observed version is unavailable" );
+
+  await page.getByLabel("Select Current item").check(); const dialog = page.getByRole("dialog", { name: "Bulk edit inventory" });
   await page.getByRole("button", { name: "Bulk edit" }).click();
   await expect(dialog).toContainText("1 selected item");
-  await dialog.getByRole("button", { name: "Cancel" }).click();
-  expect(bulkRequests).toBe(0);
+  await dialog.getByRole("button", { name: "Cancel" }).click(); expect(bulkRequests).toBe(0);
 });
 
 test("confirms bulk inventory changes and refreshes returned rows", async ({ page }) => {
   await signIn(page);
-  const serverRows = Array.from({ length: 30 }, (_, index) => inventoryRecord(`tool-${String(index).padStart(2, "0")}`, `Tool ${String(index).padStart(2, "0")}`));
-  let refreshes = 0;
-  let requestBody: { targets: Array<{ itemId: string; expectedVersion: number }>; changes: Record<string, unknown> } | undefined;
-  await page.route("**/api/v1/inventory**", async (route) => {
+  const serverRows = Array.from({ length: 30 }, (_, index) => inventoryRecord( `tool-${String(index).padStart(2, "0")}`, `Tool ${String(index).padStart(2, "0")}` ) );
+  let refreshes = 0; let requestBody: | { targets: Array<{ itemId: string; expectedVersion: number }>; changes: Record<string, unknown>; } | undefined; await page.route("**/api/v1/inventory**", async (route) => {
     const requestUrl = new URL(route.request().url());
-    if (route.request().method() !== "GET" || requestUrl.pathname !== "/api/v1/inventory") return route.continue();
-    refreshes += 1;
-    const offset = requestUrl.searchParams.get("cursor") === "25" ? 25 : 0;
-    const data = serverRows.slice(offset, offset + 25);
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data, limit: 25, total: serverRows.length, ...(offset + data.length < serverRows.length ? { nextCursor: String(offset + data.length) } : {}) }) });
+    if (route.request().method() !== "GET" || requestUrl.pathname !== "/api/v1/inventory") return route.continue(); refreshes += 1; const offset = requestUrl.searchParams.get("cursor") === "25" ? 25 : 0; const data = serverRows.slice(offset, offset + 25); await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data, limit: 25, total: serverRows.length, ...(offset + data.length < serverRows.length ? { nextCursor: String(offset + data.length) } : {}) }) });
   });
   await page.route("**/api/v1/inventory/bulk", async (route) => {
-    if (route.request().method() !== "PATCH") return route.continue();
-    requestBody = route.request().postDataJSON() as typeof requestBody;
-    const updated = requestBody.targets.map((target) => {
-      const index = serverRows.findIndex((item) => item.id === target.itemId);
-      const next = { ...serverRows[index]!, location: "Bulk shelf", condition: "good", tags: ["bulk"], version: target.expectedVersion + 1 };
-      serverRows[index] = next;
-      return next;
-    });
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: { updated, unchanged: [] }, audits: updated.map((item) => ({ id: `audit-${item.id}` })), correlationId: "e2e-bulk", replayed: false }) });
+    if (route.request().method() !== "PATCH") return route.continue(); requestBody = route.request().postDataJSON() as typeof requestBody; const updated = requestBody.targets.map((target) => { const index = serverRows.findIndex((item) => item.id === target.itemId); const next = { ...serverRows[index]!, location: "Bulk shelf", condition: "good", tags: ["bulk"], version: target.expectedVersion + 1 }; serverRows[index] = next; return next; }); await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: { updated, unchanged: [] }, audits: updated.map((item) => ({ id: `audit-${item.id}` })), correlationId: "e2e-bulk", replayed: false }) });
   });
 
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
-  await expect(page.locator(".inventory-page-status")).toHaveText("Showing 25 of 30 items");
-  await page.getByLabel("Select Tool 00").check();
-  await page.getByLabel("Select Tool 01").check();
+  await expect(page.locator(".inventory-page-status")).toHaveText( "Showing 25 of 30 items" ); await page.getByLabel("Select Tool 00").check(); await page.getByLabel("Select Tool 01").check();
   await page.getByRole("button", { name: "Bulk edit" }).click();
   const dialog = page.getByRole("dialog", { name: "Bulk edit inventory" });
-  await expect(dialog).toContainText("2 selected");
-  await dialog.getByLabel("Location").fill("Bulk shelf");
-  await dialog.getByLabel("Condition").selectOption("good");
-  await dialog.getByLabel("Tags to add").fill("bulk");
+  await expect(dialog).toContainText("2 selected"); await dialog.getByLabel("Location").fill("Bulk shelf"); await dialog.getByLabel("Condition").selectOption("good"); await dialog.getByLabel("Tags to add").fill("bulk");
   await dialog.getByRole("button", { name: "Review changes" }).click();
-  await expect(dialog).toContainText("Nothing changes until you confirm.");
-  await dialog.getByRole("button", { name: "Confirm bulk edit" }).click();
-  await expect(dialog.getByRole("status")).toContainText("Saved changes to 2 items");
-  expect(requestBody).toEqual({
-    targets: [{ itemId: "tool-00", expectedVersion: 1 }, { itemId: "tool-01", expectedVersion: 1 }],
-    changes: { location: "Bulk shelf", condition: "good", tags: { add: ["bulk"] } }
-  });
+  await expect(dialog).toContainText("Nothing changes until you confirm."); await dialog.getByRole("button", { name: "Confirm bulk edit" }).click(); await expect(dialog.getByRole("status")).toContainText( "Saved changes to 2 items" ); expect(requestBody).toEqual({ targets: [ { itemId: "tool-00", expectedVersion: 1 }, { itemId: "tool-01", expectedVersion: 1 } ], changes: { location: "Bulk shelf", condition: "good", tags: { add: ["bulk"] } } });
   await dialog.getByRole("button", { name: "Done" }).click();
-  await expect(page.getByRole("button", { name: "Open Tool 00" })).toBeVisible();
-  await expect(page.locator(".inventory-table tbody tr").filter({ hasText: "Tool 00" })).toContainText("Bulk shelf");
+
+  await expect( page.getByRole("button", { name: "Open Tool 00" }) ).toBeVisible();
+  await expect( page.locator(".inventory-table tbody tr").filter({ hasText: "Tool 00" }) ).toContainText("Bulk shelf");
   expect(refreshes).toBeGreaterThan(1);
 });
 
 test("reports bulk no-op and conflict states without discarding the edit", async ({ page }) => {
-  await signIn(page);
-  const item = inventoryRecord("bulk-item", "Bulk item");
-  let mode: "noop" | "conflict" = "noop";
-  await page.route("**/api/v1/inventory**", async (route) => {
-    const requestUrl = new URL(route.request().url());
-    if (route.request().method() !== "GET" || requestUrl.pathname !== "/api/v1/inventory") return route.continue();
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [item], limit: 25, total: 1 }) });
-  });
-  await page.route("**/api/v1/inventory/bulk", async (route) => {
-    if (route.request().method() !== "PATCH") return route.continue();
-    if (mode === "conflict") {
-      await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: { code: "version_conflict", message: "Inventory changed since it was selected; nothing was changed." } }) });
-      return;
-    }
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: { updated: [], unchanged: [item] }, audits: [], correlationId: "e2e-noop", replayed: false }) });
-  });
-
-  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await signIn(page); const item = inventoryRecord("bulk-item", "Bulk item"); let mode: "noop" | "conflict" = "noop"; await page.route("**/api/v1/inventory**", async (route) => { const requestUrl = new URL(route.request().url()); if ( route.request().method() !== "GET" || requestUrl.pathname !== "/api/v1/inventory" ) return route.continue();
+  await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [item], limit: 25, total: 1 }) }); }); await page.route("**/api/v1/inventory/bulk", async (route) => { if (route.request().method() !== "PATCH") return route.continue(); if (mode === "conflict") { await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: { code: "version_conflict", message: "Inventory changed since it was selected; nothing was changed." } }) }); return; } await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: { updated: [], unchanged: [item] }, audits: [], correlationId: "e2e-noop", replayed: false }) }); }); await page.getByRole("button", { name: "Inventory", exact: true }).click();
   await page.getByLabel("Select Bulk item").check();
-  await page.getByRole("button", { name: "Bulk edit" }).click();
-  let dialog = page.getByRole("dialog", { name: "Bulk edit inventory" });
-  await dialog.getByLabel("Location").fill("Same place");
-  await dialog.getByRole("button", { name: "Review changes" }).click();
-  await dialog.getByRole("button", { name: "Confirm bulk edit" }).click();
-  await expect(dialog.getByRole("status")).toContainText("No changes needed");
-  await dialog.getByRole("button", { name: "Done" }).click();
-
-  await page.getByLabel("Select Bulk item").check();
-  await page.getByRole("button", { name: "Bulk edit" }).click();
-  dialog = page.getByRole("dialog", { name: "Bulk edit inventory" });
-  await dialog.getByLabel("Location").fill("Changed place");
-  await dialog.getByRole("button", { name: "Review changes" }).click();
-  mode = "conflict";
-  await dialog.getByRole("button", { name: "Confirm bulk edit" }).click();
-  await expect(dialog.getByRole("alert")).toContainText("Nothing changed");
-  await dialog.getByRole("button", { name: "Back to changes" }).click();
-  await expect(dialog.getByLabel("Location")).toHaveValue("Changed place");
+  await page.getByRole("button", { name: "Bulk edit" }).click(); let dialog = page.getByRole("dialog", { name: "Bulk edit inventory" }); await dialog.getByLabel("Location").fill("Same place");
+  await dialog.getByRole("button", { name: "Review changes" }).click(); await dialog.getByRole("button", { name: "Confirm bulk edit" }).click();
+  await expect(dialog.getByRole("status")).toContainText("No changes needed"); await dialog.getByRole("button", { name: "Done" }).click(); await page.getByLabel("Select Bulk item").check(); await page.getByRole("button", { name: "Bulk edit" }).click(); dialog = page.getByRole("dialog", { name: "Bulk edit inventory" }); await dialog.getByLabel("Location").fill("Changed place");
+  await dialog.getByRole("button", { name: "Review changes" }).click(); mode = "conflict"; await dialog.getByRole("button", { name: "Confirm bulk edit" }).click(); await expect(dialog.getByRole("alert")).toContainText("Nothing changed"); await dialog.getByRole("button", { name: "Back to changes" }).click(); await expect(dialog.getByLabel("Location")).toHaveValue("Changed place");
 });
 
 test("keeps an ambiguous bulk edit unresolved and retries the same command safely", async ({ page }) => {
-  await signIn(page);
-  const item = inventoryRecord("bulk-ambiguous-item", "Ambiguous bulk item");
-  const requestKeys: string[] = [];
-  let attempt = 0;
-  await page.route("**/api/v1/inventory**", async (route) => {
-    const requestUrl = new URL(route.request().url());
-    if (route.request().method() !== "GET" || requestUrl.pathname !== "/api/v1/inventory") return route.continue();
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [item], limit: 25, total: 1 }) });
-  });
-  await page.route("**/api/v1/inventory/bulk", async (route) => {
-    if (route.request().method() !== "PATCH") return route.continue();
-    requestKeys.push(route.request().headers()["idempotency-key"] ?? "");
-    if (attempt++ === 0) {
-      // The service may have committed before this response was lost.
-      await route.abort("failed");
-      return;
-    }
-    const updated = { ...item, location: "Recovered shelf", condition: "good", tags: ["recovered"], version: 2 };
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: { updated: [updated], unchanged: [] }, audits: [{ id: "audit-ambiguous" }], correlationId: "e2e-ambiguous", replayed: true }) });
-  });
-
-  await page.getByRole("button", { name: "Inventory", exact: true }).click();
-  await page.getByLabel("Select Ambiguous bulk item").check();
-  await page.getByRole("button", { name: "Bulk edit" }).click();
-  const dialog = page.getByRole("dialog", { name: "Bulk edit inventory" });
-  await dialog.getByLabel("Location").fill("Recovered shelf");
-  await dialog.getByRole("button", { name: "Review changes" }).click();
-  await dialog.getByRole("button", { name: "Confirm bulk edit" }).click();
-  const unresolved = dialog.getByRole("alert");
-  await expect(unresolved).toContainText("could not confirm whether this bulk edit was applied");
-  await expect(unresolved).not.toContainText("Nothing was saved");
-  await expect(dialog.getByRole("button", { name: "Retry safely" })).toBeVisible();
-
+  await signIn(page); const item = inventoryRecord("bulk-ambiguous-item", "Ambiguous bulk item");
+  const requestKeys: string[] = []; let attempt = 0; await page.route("**/api/v1/inventory**", async (route) => { const requestUrl = new URL(route.request().url()); if ( route.request().method() !== "GET" || requestUrl.pathname !== "/api/v1/inventory" ) return route.continue();
+  await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [item], limit: 25, total: 1 }) });
+  }); await page.route("**/api/v1/inventory/bulk", async (route) => { if (route.request().method() !== "PATCH") return route.continue(); requestKeys.push(route.request().headers()["idempotency-key"] ?? ""); if (attempt++ === 0) { // The service may have committed before this response was lost.
+await route.abort("failed"); return; } const updated = { ...item, location: "Recovered shelf", condition: "good", tags: ["recovered"], version: 2 }; await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: { updated: [updated], unchanged: [] }, audits: [{ id: "audit-ambiguous" }], correlationId: "e2e-ambiguous", replayed: true }) }); }); await page.getByRole("button", { name: "Inventory", exact: true }).click(); await page.getByLabel("Select Ambiguous bulk item").check(); await page.getByRole("button", { name: "Bulk edit" }).click(); const dialog = page.getByRole("dialog", { name: "Bulk edit inventory" }); await dialog.getByLabel("Location").fill("Recovered shelf"); await dialog.getByRole("button", { name: "Review changes" }).click(); await dialog.getByRole("button", { name: "Confirm bulk edit" }).click();
+        const unresolved = dialog.getByRole("alert"); await expect(unresolved).toContainText( "could not confirm whether this bulk edit was applied" ); await expect(unresolved).not.toContainText("Nothing was saved");
+  await expect( dialog.getByRole("button", { name: "Retry safely" }) ).toBeVisible();
   await dialog.getByRole("button", { name: "Retry safely" }).click();
-  await expect(dialog.getByRole("status")).toContainText("Saved changes to 1 item");
-  expect(requestKeys).toHaveLength(2);
-  expect(requestKeys[0]).toBe(requestKeys[1]);
+  await expect(dialog.getByRole("status")).toContainText( "Saved changes to 1 item" ); expect(requestKeys).toHaveLength(2); expect(requestKeys[0]).toBe(requestKeys[1]);
 });
 
-test("keeps inventory quantity and status columns usable on mobile", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
+test("keeps inventory quantity and status columns usable on mobile", async ({ page }) => { await page.setViewportSize({ width: 390, height: 844 });
   await signIn(page);
   await page.getByRole("button", { name: "Open navigation" }).click();
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
 
   const table = page.getByRole("table");
-  await expect(table.getByLabel("Select all loaded inventory items")).toBeVisible();
-  await expect(table.getByRole("columnheader", { name: "Quantity", exact: true })).toBeVisible();
-  await expect(table.getByRole("columnheader", { name: "Status", exact: true })).toBeVisible();
-  expect(await table.evaluate((element) => {
-    const rect = element.getBoundingClientRect();
-    return rect.left >= 0 && rect.right <= window.innerWidth && element.scrollWidth <= element.clientWidth;
-  })).toBe(true);
-  const horizontalScroll = await page.evaluate(() => {
-    window.scrollTo(500, 0);
-    return window.scrollX;
-  });
-  expect(horizontalScroll).toBe(0);
-});
-
-test("keeps project navigation and build progress discoverable on mobile", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
+  await expect( table.getByLabel("Select all loaded inventory items") ).toBeVisible();
+  await expect( table.getByRole("columnheader", { name: "Quantity", exact: true })).toBeVisible();
+  await expect( table.getByRole("columnheader", { name: "Status", exact: true })).toBeVisible(); expect( await table.evaluate((element) => { const rect = element.getBoundingClientRect(); return ( rect.left >= 0 && rect.right <= window.innerWidth && element.scrollWidth <= element.clientWidth ); }) ).toBe(true);
+  const horizontalScroll = await page.evaluate(() => { window.scrollTo(500, 0);
+    return window.scrollX; }); expect(horizontalScroll).toBe(0);
+  }); test("keeps inventory, settings, drawer, and shopping controls usable at narrow phone widths", async ({ page }) => { const assertPageFits = async () => { expect( await page.evaluate( () => document.documentElement.scrollWidth <= document.documentElement.clientWidth )).toBe(true); }; const assertTouchTarget = async (selector: ReturnType<Page["locator"]>) => { const box = await selector.boundingBox(); expect(box).not.toBeNull(); expect(box!.width).toBeGreaterThanOrEqual(44); expect(box!.height).toBeGreaterThanOrEqual(44);
+}; await page.setViewportSize({ width: 390, height: 844 });
   await signIn(page);
-  await expect(page.getByRole("button", { name: "Beginner view" })).toBeVisible();
+  await expect( page.getByRole("heading", { name: "What are you making?" }) ).toBeVisible();
   await page.getByRole("button", { name: "Open navigation" }).click();
-  await page.getByRole("button", { name: /^Projects/ }).click();
+  await page.getByRole("button", { name: "Inventory", exact: true }).click(); await expect(page.getByLabel("Filter inventory by category")).toBeVisible();
+  await expect( page.getByLabel("Filter inventory by stock record") ).toBeVisible();
+  await expect( page.getByLabel("Filter inventory by availability") ).toBeVisible();
+  const moreFilters = page.locator(".inventory-more-filters > summary");
+  await expect(moreFilters).toContainText("More filters"); await assertTouchTarget(moreFilters); await assertPageFits(); await page.getByLabel("Search inventory").fill("ESP32 development board"); await page.getByRole("button", { name: "ESP32 development board", exact: true }).click(); const drawer = page.getByRole("dialog", { name: "ESP32 development board" }); const title = drawer.getByRole("heading", { level: 2 }); await title.evaluate((element) => { element.textContent = "ESP32 development board with a deliberately long maker inventory identity that needs two readable lines"; }); const titleMetrics = await title.evaluate((element) => { const style = getComputedStyle(element); return { height: element.getBoundingClientRect().height, lineHeight: Number.parseFloat(style.lineHeight), lineClamp: style.getPropertyValue("-webkit-line-clamp"), overflow: style.overflow }; });
+  expect(titleMetrics.lineClamp).toBe("2"); expect(titleMetrics.overflow).toBe("hidden"); expect(titleMetrics.height).toBeLessThanOrEqual( titleMetrics.lineHeight * 2 + 2 ); expect( await drawer.evaluate( (element) => element.scrollWidth <= element.clientWidth ) ).toBe(true);
+  await assertTouchTarget(drawer.getByRole("button", { name: "Edit item" })); await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
 
-  const buildPath = page.getByRole("region", { name: "Build progress" });
-  await expect(buildPath).toBeVisible();
-  expect(await buildPath.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-
-  const tabs = page.getByRole("tablist", { name: "Project workspace" });
+  const connectionDetails = page.locator(".settings-system-details > summary");
+  await expect(connectionDetails).toContainText("System Connection and agent access");
+  await assertTouchTarget(connectionDetails); for (const action of await page.locator(".category-row-actions button").all()) await assertTouchTarget(action);
+  await assertPageFits(); await page.setViewportSize({ width: 320, height: 568 }); await expect(page.getByRole("button", { name: "Show technical details", exact: true })).toBeVisible(); await assertTouchTarget( page.getByRole("button", { name: "Open navigation" }) ); await assertTouchTarget( page.getByRole("button", { name: "Search inventory" }) ); await assertTouchTarget(page.getByRole("button", { name: "Open account settings" })); await assertPageFits(); await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await expect(page.locator(".inventory-more-filters > summary")).toContainText( "More filters" ); await assertPageFits(); await page.getByLabel("Search inventory").fill("ESP32 development board");
+  await page.getByRole("button", { name: "ESP32 development board", exact: true }).click(); await expect( page.getByRole("dialog", { name: "ESP32 development board" }) ).toBeVisible(); await assertPageFits(); await page.keyboard.press("Escape"); await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: /^Projects/ }).click(); await page.getByRole("tab", { name: /^Shopping list/ }).click();
+  await expect(page.locator(".shopping-section")).toBeVisible(); await assertPageFits(); }); test("keeps project navigation and build approach discoverable on mobile", async ({ page }) => { await page.setViewportSize({ width: 390, height: 844 }); await signIn(page);
+  await expect(page.getByRole("heading", { name: "What are you making?" })).toBeVisible();
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: /^Projects/ }).click(); const buildApproach = page.getByRole("region", { name: "Build approach" });
+  await expect(buildApproach).toBeVisible(); expect( await buildApproach.evaluate( (element) => element.scrollWidth <= element.clientWidth ) ).toBe(true); const tabs = page.getByRole("tablist", { name: "Project workspace" });
   await expect(tabs.getByRole("tab", { name: /^Plan/ })).toBeVisible();
   await expect(tabs.getByRole("tab", { name: /^Files/ })).toBeVisible();
-  await expect(tabs.getByRole("tab", { name: /^Shopping list/ })).toBeVisible();
-  expect(await tabs.evaluate((element) => {
-    const rect = element.getBoundingClientRect();
-    return rect.left >= 0 && rect.right <= window.innerWidth && element.scrollWidth <= element.clientWidth;
-  })).toBe(true);
-});
-
-test("keeps realistic BOM rows readable without collisions on desktop and mobile", async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 1000 });
-  await signIn(page);
-  await page.getByRole("button", { name: /^Projects/ }).click();
-  const rows = page.locator(".bom-row");
+  await expect(tabs.getByRole("tab", { name: /^Shopping list/ })).toBeVisible(); expect( await tabs.evaluate((element) => { const rect = element.getBoundingClientRect(); return ( rect.left >= 0 && rect.right <= window.innerWidth && element.scrollWidth <= element.clientWidth ); }) ).toBe(true); }); test("keeps realistic BOM rows readable without collisions on desktop and mobile", async ({ page }) => { await page.setViewportSize({ width: 1440, height: 1000 }); await signIn(page);
+  await page.getByRole("button", { name: /^Projects/ }).click(); const rows = page.locator(".bom-row");
   await expect(rows.first()).toBeVisible();
-  await rows.first().locator(".bom-main strong").evaluate((element) => {
-    element.textContent = "Addressable LED illumination assembly with extra-long strain-relief routing and service access clearance";
-  });
-  await rows.first().locator(".bom-main > div > span").evaluate((element) => {
-    element.textContent = "Confirm voltage, connector orientation, cable bend radius, diffuser clearance, and mounting access before final assembly.";
-  });
+  await rows .first().locator(".bom-main strong").evaluate((element) => { element.textContent = "Addressable LED illumination assembly with extra-long strain-relief routing and service access clearance"; });
+  await rows .first() .locator(".bom-main > div > span").evaluate((element) => { element.textContent = "Confirm voltage, connector orientation, cable bend radius, diffuser clearance, and mounting access before final assembly."; }); const assertNoCollisions = async () => { expect( await page.evaluate( () => document.documentElement.scrollWidth <= document.documentElement.clientWidth ) ).toBe(true); for (const row of await rows.all()) { const rowSize = await row.evaluate((element) => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth, text: element.textContent, children: [...element.children].map((child) => ({ className: child.className, clientWidth: (child as HTMLElement).clientWidth, scrollWidth: (child as HTMLElement).scrollWidth, left: child.getBoundingClientRect().left, right: child.getBoundingClientRect().right })) })); expect(rowSize.scrollWidth, JSON.stringify(rowSize)).toBeLessThanOrEqual( rowSize.clientWidth );
+  const boxes = await Promise.all( [".bom-main", ".bom-quantity", ".bom-match", ".bom-expert"].map( async (selector) => { const target = row.locator(selector); return (await target.count()) > 0 ? target.boundingBox() : null; } ) ); const visible = boxes.filter( (box): box is NonNullable<typeof box> => box !== null ); for (let left = 0; left < visible.length; left += 1) for (let right = left + 1; right < visible.length; right += 1) { const a = visible[left]!;
 
-  const assertNoCollisions = async () => {
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
-    for (const row of await rows.all()) {
-      const rowSize = await row.evaluate((element) => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth, text: element.textContent, children: [...element.children].map((child) => ({ className: child.className, clientWidth: (child as HTMLElement).clientWidth, scrollWidth: (child as HTMLElement).scrollWidth, left: child.getBoundingClientRect().left, right: child.getBoundingClientRect().right })) }));
-      expect(rowSize.scrollWidth, JSON.stringify(rowSize)).toBeLessThanOrEqual(rowSize.clientWidth);
-      const boxes = await Promise.all([".bom-main", ".bom-quantity", ".bom-match", ".bom-expert"].map(async (selector) => {
-        const target = row.locator(selector);
-        return await target.count() > 0 ? target.boundingBox() : null;
-      }));
-      const visible = boxes.filter((box): box is NonNullable<typeof box> => box !== null);
-      for (let left = 0; left < visible.length; left += 1) for (let right = left + 1; right < visible.length; right += 1) {
-        const a = visible[left]!;
-        const b = visible[right]!;
-        const overlap = a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
-        expect(overlap).toBe(false);
-      }
-    }
-  };
+  const b = visible[right]!; const overlap = a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y; expect(overlap).toBe(false); } } }; await assertNoCollisions(); await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Show technical details", exact: true }).click();
 
-  await assertNoCollisions();
-  await page.getByRole("button", { name: "Beginner view" }).click();
-  await assertNoCollisions();
-  await page.setViewportSize({ width: 768, height: 900 });
-  await assertNoCollisions();
-  await page.setViewportSize({ width: 390, height: 844 });
-  await assertNoCollisions();
-});
-
-test("requires and persists the managed category and semantic kind for quick inventory add", async ({ page }) => {
-  const categoryStatuses: number[] = [];
-  page.on("response", (response) => {
-    const url = new URL(response.url());
-    if (response.request().method() === "GET" && url.pathname === "/api/v1/inventory/categories") categoryStatuses.push(response.status());
-  });
-  await signIn(page);
-  await page.getByRole("button", { name: "Inventory", exact: true }).click();
-  await page.getByRole("button", { name: "Add item", exact: true }).click();
-
-  const selectionDialog = page.getByRole("dialog", { name: "Add to inventory" });
-  await selectionDialog.getByRole("combobox", { name: /Item type/u }).selectOption("tool");
-  await expect(selectionDialog.getByRole("combobox", { name: /Category/u })).toHaveValue("category-tools");
-  expect(categoryStatuses.length).toBeGreaterThan(0);
-  expect(categoryStatuses).not.toContain(404);
-  await expect(selectionDialog.getByRole("button", { name: "Continue", exact: true })).toBeEnabled();
-  await selectionDialog.getByRole("button", { name: "Continue", exact: true }).click();
-
-  const quickDialog = page.getByRole("dialog", { name: "Add an inventory item" });
-  await quickDialog.getByLabel("Name").fill("E2E quick category item");
-  const createResponse = page.waitForResponse((response) => {
-    const url = new URL(response.url());
-    return response.request().method() === "POST" && response.status() === 201 && url.pathname === "/api/v1/inventory";
-  });
-  await quickDialog.getByRole("button", { name: "Add item", exact: true }).click();
-  const response = await createResponse;
-  expect(response.request().postDataJSON()).toMatchObject({
-    name: "E2E quick category item",
-    kind: "tool",
-    categoryNodeId: "category-tools",
-  });
-  await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.locator(".table-item").filter({ hasText: "E2E quick category item" })).toBeVisible();
-});
-
-test("shows a truthful non-overlapping used-stock capability boundary on mobile", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await signIn(page);
-  await page.getByRole("button", { name: "Open navigation" }).click();
   await page.getByRole("button", { name: /^Projects/ }).click();
-  await page.getByRole("tab", { name: /^Update used stock/ }).click();
+  await assertNoCollisions(); await page.setViewportSize({ width: 768, height: 900 }); await assertNoCollisions();
+  await page.setViewportSize({ width: 390, height: 844 }); await assertNoCollisions(); }); test("keeps beginner requirement capture simple and preserves expert matching context", async ({ page }) => { await signIn(page); await page.getByRole("button", { name: /^Projects/ }).click();
+  await page.getByRole("button", { name: "Add a requirement", exact: true }) .click(); const beginnerDialog = page.getByRole("dialog", { name: "Add a part, material, or tool" }); await expect(beginnerDialog).toBeVisible();
+  await expect( beginnerDialog.getByRole("textbox", { name: "What do you need?" })).toBeVisible(); const rolePicker = beginnerDialog.getByRole("combobox", { name: "How will you use it?" }); await expect(rolePicker).toHaveValue("consumed");
+  await expect(rolePicker).toContainText( "Part or material (used up or built in)" ); await expect(rolePicker).toContainText("Reusable tool or equipment"); await rolePicker.selectOption("reusable"); await expect(rolePicker).toHaveValue("reusable");
+  await rolePicker.selectOption("consumed"); await expect( beginnerDialog.getByRole("textbox", { name: "Search matching inventory" }) ).toHaveCount(0);
 
-  const unavailable = page.locator(".reconciliation-load-error");
-  await expect(unavailable).toHaveAttribute("role", "alert");
-  await expect(unavailable).toContainText("Used-stock updates are not available on this service version. Update the service, then try again.");
-  await expect(unavailable).not.toContainText(/reconcil|close.?out/iu);
-  const back = unavailable.getByRole("button", { name: "Back to plan" });
-  await expect(back).toBeVisible();
-  expect(await unavailable.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  const [messageBox, buttonBox] = await Promise.all([
-    unavailable.locator("strong").boundingBox(),
-    back.boundingBox(),
-  ]);
-  expect(messageBox).not.toBeNull();
-  expect(buttonBox).not.toBeNull();
-  expect(buttonBox!.y).toBeGreaterThanOrEqual(messageBox!.y + messageBox!.height);
+  await expect( beginnerDialog.getByText("Revision ID", { exact: true })).toHaveCount(0);
+  await beginnerDialog.getByRole("button", { name: "Close dialog" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Show technical details", exact: true }) .click(); await page.getByRole("button", { name: /^Projects/ }).click(); await page.getByRole("button", { name: "Add a requirement", exact: true }).click(); const expertDialog = page.getByRole("dialog", { name: /Add a requirement to /u }); await expect(expertDialog).toBeVisible();
+  await expect( expertDialog.getByRole("textbox", { name: "Search matching inventory" })).toBeVisible();
+  await expect( expertDialog.getByText("Project revision", { exact: true })).toBeVisible();
+  await expect( expertDialog.getByText("Requirement role", { exact: true })).toBeVisible();
 });
 
-test("guides beginners through one blank physical-count action", async ({ page }) => {
-  await signIn(page);
-  await page.getByRole("button", { name: "Inventory", exact: true }).click();
-  await page.getByLabel("Search inventory").fill("Dupont jumper wire assortment");
-  await page.getByRole("button", { name: "Dupont jumper wire assortment", exact: true }).click();
-
-  const drawer = page.getByRole("dialog", { name: "Dupont jumper wire assortment" });
-  await expect(drawer.getByLabel("Counted quantity")).toHaveValue("");
-  await expect(drawer.getByRole("button", { name: "Review physical count" })).toHaveCount(1);
-  await expect(drawer.getByLabel("Observed quantity")).toHaveCount(0);
-  await expect(drawer.getByText("Provenance", { exact: true })).toHaveCount(0);
-});
-
-test("reviews a physical count without writing and restores focus on Escape", async ({ page }) => {
-  await signIn(page);
-  let countRequests = 0;
-  page.on("request", (request) => {
-    const url = new URL(request.url());
-    if (request.method() === "POST" && /\/api\/v1\/inventory\/[^/]+\/count$/u.test(url.pathname)) countRequests += 1;
-  });
-  await page.getByRole("button", { name: "Inventory", exact: true }).click();
-  await page.getByLabel("Search inventory").fill("ESP32 development board");
-  await page.getByRole("row", { name: /ESP32 development board/u }).locator(".table-item").click();
-
-  const drawer = page.getByRole("dialog", { name: "ESP32 development board" });
-  const quantity = drawer.getByLabel("Counted quantity");
-  const trigger = drawer.getByRole("button", { name: "Review physical count", exact: true });
-  await quantity.fill("4");
-  await quantity.press("Enter");
-  expect(countRequests).toBe(0);
-  const review = page.getByRole("alertdialog", { name: "Review physical count" });
-  await expect(page.locator(".detail-drawer")).toHaveAttribute("inert", "");
-  expect(await page.locator("#count-quantity").evaluate((input) => {
-    const bounds = input.getBoundingClientRect();
-    return document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2) === input;
-  })).toBe(false);
-  await expect(page.getByRole("dialog", { name: "ESP32 development board" })).toHaveCount(0);
-  await expect(review).toContainText("ESP32 development board");
-  await expect(review.locator("span").filter({ hasText: "Old value" })).toContainText("pieces");
-  await expect(review).toContainText("4 pieces");
-  await expect(review).toContainText("updates the quantity available for reuse");
-  await page.keyboard.press("Escape");
-  await expect(review).toHaveCount(0);
-  await expect(quantity).toBeFocused();
-  expect(countRequests).toBe(0);
-
-  await trigger.click();
-  expect(countRequests).toBe(0);
-  await page.keyboard.press("Escape");
-  await expect(trigger).toBeFocused();
-  expect(countRequests).toBe(0);
-});
-
-test("keeps the physical-count field aligned after commissioning delivered stock", async ({ page }) => {
-  await signIn(page);
-  await page.getByRole("button", { name: "Beginner view" }).click();
-  await page.getByRole("button", { name: "Inventory", exact: true }).click();
-  await page.getByLabel("Search inventory").fill("Dupont jumper wire assortment");
-  await page.getByRole("button", { name: "Dupont jumper wire assortment", exact: true }).click();
-
-  const drawer = page.getByRole("dialog", { name: "Dupont jumper wire assortment" });
-  await drawer.getByLabel("Observed quantity").fill("7");
-  await drawer.getByLabel("Source", { exact: true }).fill("E2E bench count");
-  await drawer.getByLabel("Observed", { exact: true }).fill("2026-09-01T12:00");
-  let commissionRequests = 0;
-  page.on("request", (request) => {
-    const url = new URL(request.url());
-    if (request.method() === "POST" && /\/api\/v1\/inventory\/[^/]+\/commission$/u.test(url.pathname)) commissionRequests += 1;
-  });
-  await drawer.getByRole("button", { name: "Review commissioning" }).click();
-  expect(commissionRequests).toBe(0);
-  const review = page.getByRole("alertdialog", { name: "Review stock commissioning" });
-  await expect(review).toContainText("Dupont jumper wire assortment");
-  await expect(review).toContainText("Old value");
-  await expect(review).toContainText("New value");
-  await expect(review).toContainText("Effect");
-  await expect(review).toContainText("E2E bench count");
-  await page.keyboard.press("Escape");
-  await expect(review).toHaveCount(0);
-  await expect(drawer.getByRole("button", { name: "Review commissioning", exact: true })).toBeFocused();
-  expect(commissionRequests).toBe(0);
-  await drawer.getByRole("button", { name: "Review commissioning", exact: true }).click();
-  expect(commissionRequests).toBe(0);
-  await page.getByRole("alertdialog", { name: "Review stock commissioning" }).getByRole("button", { name: "Commission stock", exact: true }).click();
-  expect(commissionRequests).toBe(1);
-
-  await expect(drawer.getByLabel("Counted quantity")).toHaveValue("7");
-});
-
-test("creates a project atomically and finalizes a revisioned artifact", async ({ page }) => {
-  await signIn(page);
-  const uploadBodies: Record<string, unknown>[] = [];
-  page.on("request", (request) => {
-    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/artifacts/uploads") {
-      uploadBodies.push(request.postDataJSON() as Record<string, unknown>);
-    }
-  });
-  await page.getByRole("button", { name: "New project" }).click();
-
-  const appBackground = page.locator(".app-background");
-  await expect(appBackground).toHaveAttribute("inert", "");
-  await expect(page.getByRole("button", { name: "Close dialog" })).toHaveCount(1);
-  await page.getByLabel("Project name").fill("E2E enclosure");
-  await page.getByLabel("Project goal").fill("Synthetic end-to-end project used only by the test suite.");
-  await page.getByRole("button", { name: "Create project" }).click();
-
-  await expect(page.getByRole("heading", { name: "E2E enclosure" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Plan 0" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "No requirements are recorded yet.", exact: true })).toBeVisible();
-  await expect(page.getByText("Add the materials, parts, and files that this build needs.", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Add first requirement", exact: true })).toBeVisible();
-  await expect(page.getByText("Every recorded requirement is covered by confirmed stock.", { exact: true })).toHaveCount(0);
-  await page.getByRole("tab", { name: "Files 0" }).click();
-  await page.getByLabel("Choose files to upload").setInputFiles({
-    name: "e2e-enclosure.step",
-    mimeType: "model/step",
-    buffer: Buffer.from("ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\nENDSEC;\nEND-ISO-10303-21;\n")
-  });
-  await page.getByRole("button", { name: "Add files" }).click();
-
-  await expect(page.getByRole("tab", { name: "Files 1" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: /e2e-enclosure\.step/u })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "STEP", exact: true })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "r01", exact: true })).toBeVisible();
-  expect(uploadBodies).toHaveLength(1);
-  expect(uploadBodies[0]).toHaveProperty("projectRevisionId");
-  expect(uploadBodies[0]).not.toHaveProperty("revisionId");
-  expect(uploadBodies[0]).not.toHaveProperty("workItemId");
-  expect(uploadBodies[0]).not.toHaveProperty("workItemRevisionId");
-  await page.getByRole("button", { name: "Workbench", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Add requirements for E2E enclosure.", exact: true })).toBeVisible();
-  await expect(page.getByText("No requirements are recorded yet. Add the materials, parts, and files that this build needs.", { exact: true })).toBeVisible();
-  await expect(page.getByText("Every recorded requirement is covered by confirmed stock.", { exact: true })).toHaveCount(0);
-});
-
-test("offers exact work-item scopes, keeps legacy files in All, and freezes upload targets", async ({ page }) => {
-  let projectId = "";
-  let projectRevisionId = "";
-  const workItemId = "e2e-work-body";
-  const workItemRevisionId = "e2e-work-revision-1";
-  await page.route("**/api/v1/workspace", async (route) => {
-    const response = await route.fetch();
-    const body = await response.json() as { projects?: Array<Record<string, any>> };
-    const project = body.projects?.[0];
-    if (!project || !project.currentRevision) {
-      await route.fulfill({ response, body: JSON.stringify(body) });
-      return;
-    }
-    projectId = String(project.id);
-    projectRevisionId = String(project.currentRevision.id);
-    project.workItems = [
-      { id: workItemId, projectId, name: "Body", kind: "part", currentRevisionId: workItemRevisionId, createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 },
-      { id: "e2e-work-unbound", projectId, name: "Unbound notes", kind: "document", createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 }
-    ];
-    project.workItemRevisions = [{ id: workItemRevisionId, projectId, workItemId, number: 1, name: "Body baseline", status: "concept", createdAt: "2026-08-30T10:00:00.000Z", version: 1 }];
-    project.artifacts = [
-      ...(project.artifacts ?? []),
-      { id: "e2e-legacy-artifact", projectId, role: "text", filename: "legacy-scope-note.md", mediaType: "text/markdown", byteSize: 12, sha256: "l".repeat(64), currentCandidate: false, retired: false, createdAt: "2026-08-30T10:00:00.000Z", version: 1 },
-      { id: "e2e-work-artifact", projectId, workItemId, workItemRevisionId, role: "step", filename: "body-existing.step", mediaType: "model/step", byteSize: 12, sha256: "w".repeat(64), currentCandidate: true, retired: false, createdAt: "2026-08-30T10:00:00.000Z", version: 1 }
-    ];
-    await route.fulfill({ response, body: JSON.stringify(body) });
-  });
-  await signIn(page);
-  await page.getByRole("button", { name: /^Projects/ }).click();
-  await page.getByRole("combobox", { name: "Choose project" }).selectOption(projectId);
-  await page.getByRole("tab", { name: /Files/ }).click();
-
-  const scope = page.getByLabel("Choose file scope");
-  await expect(scope).toHaveValue(`project:${projectRevisionId}`);
-  await expect(scope.locator("option")).toContainText(["Project", "Body", "Unbound notes", "All files (read-only)"]);
-  await expect(scope.locator("option").filter({ hasText: "Unbound notes" })).toHaveAttribute("disabled", "");
-  await expect(page.locator(".file-scope-identity")).toContainText("Project revision");
-  await expect(page.locator(".file-scope-identity")).not.toContainText(projectRevisionId);
-
-  await scope.selectOption("all");
-  await expect(page.locator(".file-scope-identity")).toContainText("All files · read-only");
-  await expect(page.getByRole("cell", { name: /legacy-scope-note\.md/u })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Choose a revision to upload" })).toBeDisabled();
-
-  await scope.selectOption(`work-item:${workItemId}:${workItemRevisionId}`);
-  await expect(page.locator(".file-scope-identity")).toContainText("Work item revision");
-  await expect(page.locator(".file-scope-identity")).not.toContainText(workItemId);
-  await expect(page.getByRole("cell", { name: /body-existing\.step/u })).toBeVisible();
-  await expect(page.getByRole("cell", { name: /legacy-scope-note\.md/u })).toHaveCount(0);
-
-  await page.getByRole("button", { name: "Beginner view" }).click();
-  await expect(page.locator(".file-scope-identity")).toContainText(`Work item · ${workItemId} · ${workItemRevisionId}`);
-  await expect(scope.locator("option").filter({ hasText: "Body" })).toContainText(workItemId);
-
-  const beginBodies: Record<string, unknown>[] = [];
-  let releaseFirstBegin: (() => void) | undefined;
-  await page.route("**/api/v1/artifacts/uploads", async (route) => {
-    if (route.request().method() !== "POST") return route.continue();
-    const body = route.request().postDataJSON() as Record<string, unknown>;
-    beginBodies.push(body);
-    if (beginBodies.length === 1) await new Promise<void>((resolve) => { releaseFirstBegin = resolve; });
-    const sessionId = `e2e-work-upload-${beginBodies.length}`;
-    await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ data: { id: sessionId, artifactId: `${sessionId}-artifact`, expiresAt: "2026-09-02T11:00:00.000Z", maxBytes: 1000, uploadUrl: `/api/v1/artifacts/uploads/${sessionId}`, status: "pending" } }) });
-  });
-  await page.route("**/api/v1/artifacts/uploads/**", async (route) => {
-    if (route.request().method() === "PUT") {
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ receivedBytes: 3 }) });
-      return;
-    }
-    if (route.request().method() === "POST") {
-      const sessionId = route.request().url().split("/").at(-2) ?? "e2e-work-upload";
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: { id: `${sessionId}-artifact`, projectId, workItemId, workItemRevisionId, role: "step", filename: "upload.step", mediaType: "model/step", byteSize: 5, sha256: "b".repeat(64), currentCandidate: true, retired: false, createdAt: "2026-09-02T10:00:00.000Z", version: 1 } }) });
-      return;
-    }
-    await route.continue();
-  });
-
-  await page.getByLabel("Choose files to upload").setInputFiles([
-    { name: "upload-one.step", mimeType: "model/step", buffer: Buffer.from("one") },
-    { name: "upload-two.step", mimeType: "model/step", buffer: Buffer.from("two") }
-  ]);
-  await expect(scope).toBeDisabled();
-  expect(releaseFirstBegin).toBeDefined();
-  releaseFirstBegin?.();
-  await expect(page.getByText("2 of 2 files uploaded", { exact: true })).toBeVisible();
-  expect(beginBodies).toHaveLength(2);
-  for (const body of beginBodies) {
-    expect(body).toMatchObject({ projectId, workItemId, workItemRevisionId });
-    expect(body).not.toHaveProperty("projectRevisionId");
-    expect(body).not.toHaveProperty("revisionId");
-  }
-});
-
-test("archives a project into the explicit Archived view and restores it", async ({ page }) => {
-  await signIn(page);
-  await page.getByRole("button", { name: /^Projects/ }).click();
-  await page.getByRole("button", { name: "New project" }).click();
-  const createDialog = page.getByRole("dialog", { name: "Create project" });
-  await createDialog.getByLabel("Project name").fill("E2E retirement project");
-  await createDialog.getByLabel("Project goal").fill("Retained history acceptance flow.");
-  await createDialog.getByRole("button", { name: "Create project" }).click();
-  await expect(page.getByRole("heading", { name: "E2E retirement project", exact: true })).toBeVisible();
-
-  await page.getByText("Project settings", { exact: true }).click();
-  const archiveTrigger = page.getByRole("button", { name: "Archive project", exact: true });
-  await archiveTrigger.click();
-  const confirmation = page.getByRole("alertdialog", { name: "Archive E2E retirement project?" });
-  await expect(confirmation).toContainText("hides the project from active lists");
-  await expect(confirmation).toContainText("project history are kept");
-  await expect(confirmation).not.toContainText(/reservation|tombstone|audit/iu);
-  await confirmation.getByRole("button", { name: "Cancel" }).click();
-  await expect(archiveTrigger).toBeVisible();
-
-  await archiveTrigger.click();
-  await confirmation.getByRole("button", { name: "Archive project", exact: true }).click();
-  await expect(page.getByText("Project archived.", { exact: false })).toBeVisible();
-
+test("asks one Beginner question and persists the derived category for quick inventory add", async ({ page }) => { const categoryStatuses: number[] = []; page.on("response", (response) => {
+    const url = new URL(response.url()); if ( response.request().method() === "GET" && url.pathname === "/api/v1/inventory/categories" ) categoryStatuses.push(response.status()); }); await signIn(page); await page.getByRole("button", { name: "Inventory", exact: true }).click(); await page.getByRole("button", { name: "Add item", exact: true }).click(); const selectionDialog = page.getByRole("dialog", { name: "Add to inventory" }); await expect(selectionDialog.getByRole("combobox")).toHaveCount(1); await selectionDialog .getByRole("combobox", { name: "What are you adding?", exact: true }) .selectOption("tool"); await expect( selectionDialog.getByRole("combobox", { name: /Category/u }) ).toHaveCount(0); expect(categoryStatuses.length).toBeGreaterThan(0); expect(categoryStatuses).not.toContain(404); await expect( selectionDialog.getByRole("button", { name: "Continue", exact: true }) ).toBeEnabled(); await selectionDialog .getByRole("button", { name: "Continue", exact: true }) .click(); const quickDialog = page.getByRole("dialog", { name: "Add an inventory item" }); await quickDialog.getByLabel("Name").fill("E2E quick category item"); const createResponse = page.waitForResponse((response) => { const url = new URL(response.url()); return ( response.request().method() === "POST" && response.status() === 201 && url.pathname === "/api/v1/inventory" ); }); await quickDialog .getByRole("button", { name: "Add item", exact: true }) .click(); const response = await createResponse; expect(response.request().postDataJSON()).toMatchObject({ name: "E2E quick category item", kind: "tool", categoryNodeId: "category-tools" }); await expect(page.getByRole("dialog")).toHaveCount(0); await expect( page.locator(".table-item").filter({ hasText: "E2E quick category item" }) ).toBeVisible(); }); test("records an unlisted printer as Check without fabricating an exact product", async ({ page }) => { await signIn(page); await page.getByRole("button", { name: "Inventory", exact: true }).click(); await page.getByRole("button", { name: "Add item", exact: true }).click(); const selectionDialog = page.getByRole("dialog", { name: "Add to inventory" }); await selectionDialog .getByRole("combobox", { name: "What are you adding?", exact: true }) .selectOption("printer"); await selectionDialog .getByRole("button", { name: "Continue", exact: true }) .click(); const catalogDialog = page.getByRole("dialog", { name: "Add a printer" }); await expect( catalogDialog.getByRole("button", { name: "Change selection", exact: true }) ).toHaveCount(1); await expect( catalogDialog.getByText("Choose another category", { exact: true }) ).toHaveCount(0); await catalogDialog .getByRole("combobox", { name: "Exact printer model" }) .fill("E2E unlisted printer model"); await expect( catalogDialog.getByRole("button", { name: "Add details myself", exact: true }) ).toBeVisible(); await catalogDialog .getByRole("button", { name: "Add details myself", exact: true }) .click(); const manualDialog = page.getByRole("dialog", { name: "Add an inventory item" }); await expect(manualDialog).toContainText("exact product is not confirmed"); await manualDialog.getByLabel("Name").fill("E2E unlisted printer"); await manualDialog.getByLabel("Brand or manufacturer").fill("Example Maker"); await manualDialog.getByLabel("Model").fill("Prototype 300"); const createResponse = page.waitForResponse( (response) => new URL(response.url()).pathname === "/api/v1/inventory" && response.request().method() === "POST" && response.status() === 201 ); await manualDialog .getByRole("button", { name: "Add item", exact: true }) .click(); const requestBody = (await createResponse).request().postDataJSON(); expect(requestBody).toMatchObject({ name: "E2E unlisted printer", kind: "printer", categoryNodeId: "category-printers", manufacturer: "Example Maker", model: "Prototype 300", evidence: { state: "unknown", source: "ui" } }); expect(requestBody).not.toHaveProperty("catalogProductId"); expect(requestBody).not.toHaveProperty("productProfile"); await expect( page.getByRole("row").filter({ hasText: "E2E unlisted printer" }) ).toContainText("Check"); }); test("shows a truthful non-overlapping used-stock capability boundary on mobile", async ({ page }) => { await page.route("**/api/v1/workspace", async (route) => { const response = await route.fetch(); const body = (await response.json()) as Record<string, unknown>; delete body.capabilities; await route.fulfill({ response, json: body }); }); await page.setViewportSize({ width: 390, height: 844 }); await signIn(page); await page.getByRole("button", { name: "Open navigation" }).click(); await page.getByRole("button", { name: /^Projects/ }).click(); await expect( page.getByRole("tab", { name: /^Update used stock/ }) ).toHaveCount(0); const tabs = page.getByRole("tablist", { name: "Project workspace" }); expect( await tabs.evaluate( (element) => element.scrollWidth <= element.clientWidth ) ).toBe(true); }); test("guides beginners through one blank physical-count action", async ({ page }) => { await signIn(page); await page.getByRole("button", { name: "Inventory", exact: true }).click(); await page .getByLabel("Search inventory") .fill("Dupont jumper wire assortment"); await page .getByRole("button", { name: "Dupont jumper wire assortment", exact: true }) .click(); const drawer = page.getByRole("dialog", { name: "Dupont jumper wire assortment" }); await expect(drawer.getByLabel("Counted quantity")).toHaveValue(""); await expect( drawer.getByRole("button", { name: "Review physical count" }) ).toHaveCount(1); await expect(drawer.getByLabel("Observed quantity")).toHaveCount(0); await expect(drawer.getByText("Provenance", { exact: true })).toHaveCount(0); }); test("reviews a physical count without writing and restores focus on Escape", async ({ page }) => { await signIn(page); let countRequests = 0; page.on("request", (request) => { const url = new URL(request.url()); if ( request.method() === "POST" && /\/api\/v1\/inventory\/[^/]+\/count$/u.test(url.pathname) ) countRequests += 1; }); await page.getByRole("button", { name: "Inventory", exact: true }).click(); await page.getByLabel("Search inventory").fill("ESP32 development board"); await page .getByRole("row", { name: /ESP32 development board/u }) .locator(".table-item") .click(); const drawer = page.getByRole("dialog", { name: "ESP32 development board" }); const quantity = drawer.getByLabel("Counted quantity"); const trigger = drawer.getByRole("button", { name: "Review physical count", exact: true }); await quantity.fill("4"); await quantity.press("Enter"); expect(countRequests).toBe(0); const review = page.getByRole("alertdialog", { name: "Review physical count" }); await expect(page.locator(".detail-drawer")).toHaveAttribute("inert", ""); expect( await page.locator("#count-quantity").evaluate((input) => { const bounds = input.getBoundingClientRect(); return ( document.elementFromPoint( bounds.left + bounds.width / 2, bounds.top + bounds.height / 2 ) === input ); }) ).toBe(false); await expect( page.getByRole("dialog", { name: "ESP32 development board" }) ).toHaveCount(0); await expect(review).toContainText("ESP32 development board"); await expect( review.locator("span").filter({ hasText: "Old value" }) ).toContainText("pieces"); await expect(review).toContainText("4 pieces"); await expect(review).toContainText( "updates the quantity available for reuse" ); await page.keyboard.press("Escape"); await expect(review).toHaveCount(0); await expect(quantity).toBeFocused(); expect(countRequests).toBe(0); await trigger.click(); expect(countRequests).toBe(0); await page.keyboard.press("Escape"); await expect(trigger).toBeFocused(); expect(countRequests).toBe(0); }); test("keeps the physical-count field aligned after commissioning delivered stock", async ({ page }) => { await signIn(page); await page.getByRole("button", { name: "Settings", exact: true }).click(); await page .getByRole("button", { name: "Show technical details", exact: true }) .click(); await page.getByRole("button", { name: "Inventory", exact: true }).click(); await page .getByLabel("Search inventory") .fill("Dupont jumper wire assortment"); await page .getByRole("button", { name: "Dupont jumper wire assortment", exact: true }) .click(); const drawer = page.getByRole("dialog", { name: "Dupont jumper wire assortment" }); await drawer.getByLabel("Observed quantity").fill("7"); await drawer.getByLabel("Source", { exact: true }).fill("E2E bench count"); await drawer.getByLabel("Observed", { exact: true }).fill("2026-09-01T12:00"); let commissionRequests = 0; page.on("request", (request) => { const url = new URL(request.url()); if ( request.method() === "POST" && /\/api\/v1\/inventory\/[^/]+\/commission$/u.test(url.pathname) ) commissionRequests += 1; }); await drawer.getByRole("button", { name: "Review commissioning" }).click(); expect(commissionRequests).toBe(0); const review = page.getByRole("alertdialog", { name: "Review stock commissioning" }); await expect(review).toContainText("Dupont jumper wire assortment"); await expect(review).toContainText("Old value"); await expect(review).toContainText("New value"); await expect(review).toContainText("Effect"); await expect(review).toContainText("E2E bench count"); await page.keyboard.press("Escape"); await expect(review).toHaveCount(0); await expect( drawer.getByRole("button", { name: "Review commissioning", exact: true }) ).toBeFocused(); expect(commissionRequests).toBe(0); await drawer .getByRole("button", { name: "Review commissioning", exact: true }) .click(); expect(commissionRequests).toBe(0); await page .getByRole("alertdialog", { name: "Review stock commissioning" }) .getByRole("button", { name: "Commission stock", exact: true }) .click(); expect(commissionRequests).toBe(1); await expect(drawer.getByLabel("Counted quantity")).toHaveValue("7"); }); test("creates a project atomically and finalizes a revisioned artifact", async ({ page }) => { await signIn(page); const uploadBodies: Record<string, unknown>[] = []; page.on("request", (request) => { if ( request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/artifacts/uploads" ) { uploadBodies.push(request.postDataJSON() as Record<string, unknown>); } }); await page.getByRole("button", { name: /^Projects/ }).click(); await page.getByRole("button", { name: "New project", exact: true }).click(); const appBackground = page.locator(".app-background"); await expect(appBackground).toHaveAttribute("inert", ""); await expect(page.getByRole("button", { name: "Close dialog" })).toHaveCount( 1 ); const createDialog = page.getByRole("dialog", { name: "Create project" }); await createDialog.getByRole("radio", { name: /^3D-print parts/u }).check(); await expect( createDialog.getByText("Printer for this project", { exact: true }) ).toBeVisible(); await expect( createDialog.getByText("Leave blank if you have not decided yet.", { exact: true }) ).toBeVisible(); await createDialog.getByRole("radio", { name: /^Decide later/u }).check(); await page.getByLabel("Project name").fill("E2E enclosure"); await page .getByLabel("Project goal") .fill("Synthetic end-to-end project used only by the test suite."); await page.getByRole("button", { name: "Create project" }).click(); await expect( page.getByRole("heading", { name: "E2E enclosure" }) ).toBeVisible(); await expect(page.getByRole("tab", { name: "Plan 0" })).toBeVisible(); await expect( page.getByRole("heading", { name: "No requirements are recorded yet.", exact: true }) ).toBeVisible(); await expect( page.getByText( "Add the materials, parts, and files that this build needs.", { exact: true } ) ).toBeVisible(); await expect( page.getByRole("button", { name: "Add first requirement", exact: true }) ).toBeVisible(); await expect( page.getByText( "Every recorded requirement is covered by confirmed stock.", { exact: true } ) ).toHaveCount(0); await page.getByRole("tab", { name: "Files 0" }).click(); await page.getByLabel("Choose files to upload").setInputFiles({ name: "e2e-enclosure.step", mimeType: "model/step", buffer: Buffer.from( "ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\nENDSEC;\nEND-ISO-10303-21;\n" ) }); await page.getByRole("button", { name: "Add 1 file", exact: true }).click(); await expect(page.getByRole("tab", { name: "Files 1" })).toBeVisible(); await expect( page.getByRole("cell", { name: /e2e-enclosure\.step/u }) ).toBeVisible(); await expect( page.getByRole("cell", { name: "STEP", exact: true }) ).toBeVisible(); await expect( page.getByRole("cell", { name: "r01", exact: true }) ).toBeVisible(); expect(uploadBodies).toHaveLength(1); expect(uploadBodies[0]).toHaveProperty("projectRevisionId"); expect(uploadBodies[0]).not.toHaveProperty("revisionId"); expect(uploadBodies[0]).not.toHaveProperty("workItemId"); expect(uploadBodies[0]).not.toHaveProperty("workItemRevisionId"); await page.getByRole("button", { name: "Workbench", exact: true }).click(); await expect( page.getByRole("heading", { name: "What are you making?", exact: true }) ).toBeVisible(); await expect( page.getByRole("button", { name: "Continue E2E enclosure", exact: true }) ).toBeVisible(); await expect( page.getByText( "Choose whether this is 3D printed, ready-made, electronics-only, or still undecided.", { exact: true } ) ).toBeVisible(); await expect( page.getByText( "Every recorded requirement is covered by confirmed stock.", { exact: true } ) ).toHaveCount(0); }); test("offers exact work-item scopes, keeps legacy files in All, and freezes upload targets", async ({ page }) => { let projectId = ""; let projectRevisionId = ""; const workItemId = "e2e-work-body"; const workItemRevisionId = "e2e-work-revision-1"; await page.route("**/api/v1/workspace", async (route) => { const response = await route.fetch(); const body = (await response.json()) as { projects?: Array<Record<string, any>>; }; const project = body.projects?.[0]; if (!project || !project.currentRevision) { await route.fulfill({ response, body: JSON.stringify(body) }); return; } projectId = String(project.id); projectRevisionId = String(project.currentRevision.id); project.workItems = [ { id: workItemId, projectId, name: "Body", kind: "part", currentRevisionId: workItemRevisionId, createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 }, { id: "e2e-work-unbound", projectId, name: "Unbound notes", kind: "document", createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 } ]; project.workItemRevisions = [ { id: workItemRevisionId, projectId, workItemId, number: 1, name: "Body baseline", status: "concept", createdAt: "2026-08-30T10:00:00.000Z", version: 1 } ]; project.artifacts = [ ...(project.artifacts ?? []), { id: "e2e-legacy-artifact", projectId, role: "text", filename: "legacy-scope-note.md", mediaType: "text/markdown", byteSize: 12, sha256: "l".repeat(64), currentCandidate: false, retired: false, createdAt: "2026-08-30T10:00:00.000Z", version: 1 }, { id: "e2e-work-artifact", projectId, workItemId, workItemRevisionId, role: "step", filename: "body-existing.step", mediaType: "model/step", byteSize: 12, sha256: "w".repeat(64), currentCandidate: true, retired: false, createdAt: "2026-08-30T10:00:00.000Z", version: 1 } ]; await route.fulfill({ response, body: JSON.stringify(body) }); }); await signIn(page); await page.getByRole("button", { name: /^Projects/ }).click(); await page .getByRole("combobox", { name: "Choose project" }) .selectOption(projectId); await page.getByRole("tab", { name: /Files/ }).click(); const scope = page.getByLabel("Choose file scope"); await expect(scope).toHaveValue(`project:${projectRevisionId}`); await expect(scope.locator("option")).toContainText([ "Project", "Body", "Unbound notes", "All files (read-only)" ]); await expect( scope.locator("option").filter({ hasText: "Unbound notes" }) ).toHaveAttribute("disabled", ""); await expect(page.locator(".file-scope-identity")).toContainText( "Project revision" ); await expect(page.locator(".file-scope-identity")).not.toContainText( projectRevisionId ); await scope.selectOption("all"); await expect(page.locator(".file-scope-identity")).toContainText( "All files · read-only" ); await expect( page.getByRole("cell", { name: /legacy-scope-note\.md/u }) ).toBeVisible(); await expect( page.getByRole("button", { name: "Choose a revision first" }) ).toBeDisabled(); await scope.selectOption(`work-item:${workItemId}:${workItemRevisionId}`); await expect(page.locator(".file-scope-identity")).toContainText( "Work item revision" ); await expect(page.locator(".file-scope-identity")).not.toContainText( workItemId ); await expect( page.getByRole("cell", { name: /body-existing\.step/u }) ).toBeVisible(); await expect( page.getByRole("cell", { name: /legacy-scope-note\.md/u }) ).toHaveCount(0); await page.getByRole("button", { name: "Settings", exact: true }).click(); await page .getByRole("button", { name: "Show technical details", exact: true }) .click(); await page.getByRole("button", { name: /^Projects/ }).click(); await page .getByRole("combobox", { name: "Choose project" }) .selectOption(projectId); await page.getByRole("tab", { name: /Files/ }).click(); await scope.selectOption(`work-item:${workItemId}:${workItemRevisionId}`); await expect(page.locator(".file-scope-identity")).toContainText( `Work item · ${workItemId} · ${workItemRevisionId}` ); await expect( scope.locator("option").filter({ hasText: "Body" }) ).toContainText(workItemId); const beginBodies: Record<string, unknown>[] = []; let releaseFirstBegin: (() => void) | undefined; await page.route("**/api/v1/artifacts/uploads", async (route) => { if (route.request().method() !== "POST") return route.continue(); const body = route.request().postDataJSON() as Record<string, unknown>; beginBodies.push(body); if (beginBodies.length === 1) await new Promise<void>((resolve) => { releaseFirstBegin = resolve; }); const sessionId = `e2e-work-upload-${beginBodies.length}`; await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ data: { id: sessionId, artifactId: `${sessionId}-artifact`, expiresAt: "2026-09-02T11:00:00.000Z", maxBytes: 1000, uploadUrl: `/api/v1/artifacts/uploads/${sessionId}`, status: "pending" } }) }); }); await page.route("**/api/v1/artifacts/uploads/**", async (route) => { if (route.request().method() === "PUT") { await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ receivedBytes: 3 }) }); return; } if (route.request().method() === "POST") { const sessionId = route.request().url().split("/").at(-2) ?? "e2e-work-upload"; await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: { id: `${sessionId}-artifact`, projectId, workItemId, workItemRevisionId, role: "step", filename: "upload.step", mediaType: "model/step", byteSize: 5, sha256: "b".repeat(64), currentCandidate: true, retired: false, createdAt: "2026-09-02T10:00:00.000Z", version: 1 } }) }); return; } await route.continue(); }); await page.getByLabel("Choose files to upload").setInputFiles([ { name: "upload-one.step", mimeType: "model/step", buffer: Buffer.from("one") }, { name: "upload-two.step", mimeType: "model/step", buffer: Buffer.from("two") } ]); await page.getByRole("button", { name: "Add 2 files", exact: true }).click(); await expect(scope).toBeDisabled(); await expect.poll(() => typeof releaseFirstBegin).toBe("function"); releaseFirstBegin?.(); await expect( page.getByText("2 of 2 files uploaded", { exact: true }) ).toBeVisible(); expect(beginBodies).toHaveLength(2); for (const body of beginBodies) { expect(body).toMatchObject({ projectId, workItemId, workItemRevisionId }); expect(body).not.toHaveProperty("projectRevisionId"); expect(body).not.toHaveProperty("revisionId"); } }); test("archives a project into the explicit Archived view and restores it", async ({ page }) => { await signIn(page); await page.getByRole("button", { name: /^Projects/ }).click(); await page.getByRole("button", { name: "New project" }).click(); const createDialog = page.getByRole("dialog", { name: "Create project" }); await createDialog.getByLabel("Project name").fill("E2E retirement project"); await createDialog .getByLabel("Project goal") .fill("Retained history acceptance flow."); await createDialog.getByRole("button", { name: "Create project" }).click(); await expect( page.getByRole("heading", { name: "E2E retirement project", exact: true }) ).toBeVisible(); await page.getByText("Project settings",
+      { exact: true }).click(); const archiveTrigger = page.getByRole("button", { name: "Archive project", exact: true }); await archiveTrigger.click(); const confirmation = page.getByRole("alertdialog",
+      { name: "Archive E2E retirement project?" }); await expect(confirmation).toContainText( "hides the project from active lists" ); await expect(confirmation).toContainText("project history are kept"); await expect(confirmation).not.toContainText(/reservation|tombstone|audit/iu); await confirmation.getByRole("button", { name: "Cancel" }).click();
+    await expect(archiveTrigger).toBeVisible(); await archiveTrigger.click(); await confirmation .getByRole("button", { name: "Archive project", exact: true }).click(); await expect( page.getByText("Project archived.", { exact: false }) ).toBeVisible();
   await page.getByRole("button", { name: "Active projects", exact: true }).click();
-  await expect(page.getByRole("combobox", { name: "Choose project" }).getByRole("option", { name: "E2E retirement project", exact: true })).toHaveCount(0);
+  await expect( page.getByRole("combobox", { name: "Choose project" }).getByRole("option", { name: "E2E retirement project", exact: true }) ).toHaveCount(0);
   await page.getByRole("button", { name: /^Archived \(/ }).click();
   await expect(page.getByRole("heading", { name: "E2E retirement project" })).toBeVisible();
-  await expect(page.locator(".archive-notice")).toContainText("revisions, files, requirements, stock records, and project history were kept");
-  await expect(page.locator(".archive-notice")).not.toContainText(/reservation|tombstone|audit/iu);
-
+  await expect(page.locator(".archive-notice")).toContainText( "revisions, files, requirements, stock records, and project history were kept" );
+  await expect(page.locator(".archive-notice")).not.toContainText( /reservation|tombstone|audit/iu );
   await page.getByRole("button", { name: "Restore project", exact: true }).click();
-  await page.getByRole("alertdialog", { name: "Restore E2E retirement project?" }).getByRole("button", { name: "Restore project", exact: true }).click();
+  await page.getByRole("alertdialog", { name: "Restore E2E retirement project?" }) .getByRole("button", { name: "Restore project", exact: true }).click();
   await expect(page.getByRole("heading", { name: "E2E retirement project", exact: true })).toBeVisible();
-  await expect(page.getByText("E2E retirement project was restored to Idea. Previously released stock was not set aside again.", { exact: true })).toBeVisible();
+  await expect(page.getByText( "E2E retirement project was restored to Idea. Previously released stock was not set aside again.", { exact: true } )).toBeVisible();
   await expect(page.getByRole("button", { name: "Active projects", exact: true })).toHaveClass(/is-active/u);
-  await expect(page.getByRole("combobox", { name: "Choose project" }).getByRole("option", { name: "E2E retirement project", exact: true })).toHaveCount(1);
-});
-
-test("keeps project creation discoverable from a populated Projects view", async ({ page }) => {
-  await signIn(page);
-  await page.getByRole("button", { name: /^Projects/ }).click();
-
-  const trigger = page.getByRole("button", { name: "New project" });
+  await expect(page.getByRole("combobox", { name: "Choose project" }) .getByRole("option", { name: "E2E retirement project", exact: true })).toHaveCount(1); }); test("keeps project creation discoverable from a populated Projects view", async ({ page }) => { await signIn(page);
+  await page.getByRole("button", { name: /^Projects/ }).click(); const trigger = page.getByRole("button", { name: "New project" });
   await expect(trigger).toBeVisible();
-  await trigger.click();
-  const dialog = page.getByRole("dialog", { name: "Create project" });
-  await expect(dialog).toBeVisible();
-  await expect(page.getByLabel("Project name")).toBeFocused();
-  await page.keyboard.press("Escape");
-  await expect(dialog).toHaveCount(0);
-  await expect(trigger).toBeFocused();
-});
-
-test("keeps an ambiguous project create truthful and safely retryable", async ({ page }) => {
-  await signIn(page);
-  await page.getByRole("button", { name: /^Projects/ }).click();
-
-  const requestKeys: string[] = [];
-  let attempt = 0;
-  await page.route("**/api/v1/projects/with-initial-revision", async (route) => {
-    requestKeys.push(route.request().headers()["idempotency-key"] ?? "");
-    if (attempt++ === 0) {
+  await trigger.click(); const dialog = page.getByRole("dialog", { name: "Create project" });
+  await expect(dialog).toBeVisible(); await expect(page.getByLabel("Project name")).toBeFocused(); await page.keyboard.press("Escape"); await expect(dialog).toHaveCount(0); await expect(trigger).toBeFocused(); }); test("keeps an ambiguous project create truthful and safely retryable", async ({ page }) => { await signIn(page); await page.getByRole("button", { name: /^Projects/ }).click(); const requestKeys: string[] = []; let attempt = 0;
+  await page.route( "**/api/v1/projects/with-initial-revision", async (route) => { requestKeys.push(route.request().headers()["idempotency-key"] ?? ""); if (attempt++ === 0) {
       await route.abort("failed");
       return;
-    }
-    await route.continue();
-  });
+    } await route.continue(); } ); await page.getByRole("button", { name: "New project" }).click(); const dialog = page.getByRole("dialog", { name: "Create project" }); await dialog.getByLabel("Project name").fill("Ambiguous project"); await dialog .getByLabel("Project goal").fill("A project whose response was intentionally lost.");
+      await dialog.getByRole("button", { name: "Create project" }).click(); await expect(dialog.getByRole("alert")).toContainText( "BenchLedger could not confirm whether this project was created." ); await expect(dialog.getByRole("alert")).not.toContainText( /Nothing was saved|was not created/iu ); await expect(dialog.getByLabel("Project name")).toHaveValue( "Ambiguous project" );
 
-  await page.getByRole("button", { name: "New project" }).click();
-  const dialog = page.getByRole("dialog", { name: "Create project" });
-  await dialog.getByLabel("Project name").fill("Ambiguous project");
-  await dialog.getByLabel("Project goal").fill("A project whose response was intentionally lost.");
-  await dialog.getByRole("button", { name: "Create project" }).click();
-
-  await expect(dialog.getByRole("alert")).toContainText("BenchLedger could not confirm whether this project was created.");
-  await expect(dialog.getByRole("alert")).not.toContainText(/Nothing was saved|was not created/iu);
-  await expect(dialog.getByLabel("Project name")).toHaveValue("Ambiguous project");
-  await expect(dialog.getByLabel("Project goal")).toHaveValue("A project whose response was intentionally lost.");
-
-  await dialog.getByRole("button", { name: "Create project" }).click();
+  await expect(dialog.getByLabel("Project goal")).toHaveValue( "A project whose response was intentionally lost." ); await dialog.getByRole("button",
+    { name: "Create project" }).click();
   await expect(dialog).toHaveCount(0);
-  expect(requestKeys).toHaveLength(2);
-  expect(requestKeys[0]).toBe(requestKeys[1]);
-  await page.unroute("**/api/v1/projects/with-initial-revision");
-});
+  expect(requestKeys).toHaveLength(2); expect(requestKeys[0]).toBe(requestKeys[1]);
+  await page.unroute("**/api/v1/projects/with-initial-revision"); }); test("keeps modal focus surfaces isolated and restores the workspace on Escape", async ({ page }) => { await signIn(page); await page.getByRole("button", { name: /^Projects/ }).click(); await page.getByRole("button", { name: "New project", exact: true }).click(); await expect(page.locator(".app-background")).toHaveAttribute("inert", ""); await expect( page.getByRole("button", { name: "Open account settings" }) ).toHaveCount(0); await page.keyboard.press("Escape"); await expect(page.locator(".app-background")).not.toHaveAttribute( "inert", "" ); await expect( page.getByRole("button", { name: "Open account settings" }) ).toBeVisible(); });
 
-test("keeps modal focus surfaces isolated and restores the workspace on Escape", async ({ page }) => {
+test("suspends a new revision while adding a printer and restores its draft", async ({ page }) => {
   await signIn(page);
-  await page.getByRole("button", { name: "New project" }).click();
+  await page.getByRole("button", { name: /^Projects/ }).click();
+  await page.getByRole("button", { name: "New revision", exact: true }).click();
+  const revision = page.getByRole("dialog", { name: /New revision for/u });
+  await revision.getByLabel("Revision name").fill("Draft with new printer");
+  await revision.getByRole("radio", { name: /3D-print parts/u }).check();
+  await revision .getByLabel(/Notes/u).fill("Keep this draft while adding inventory.");
+  await revision .getByRole("button", { name: "Add printer", exact: true }) .click();
 
-  await expect(page.locator(".app-background")).toHaveAttribute("inert", "");
-  await expect(page.getByRole("button", { name: "Open account settings" })).toHaveCount(0);
-  await page.keyboard.press("Escape");
-  await expect(page.locator(".app-background")).not.toHaveAttribute("inert", "");
-  await expect(page.getByRole("button", { name: "Open account settings" })).toBeVisible();
-});
-
-test("shows exactly one accessible navigation surface at 390px", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await signIn(page);
-
-  const openNavigation = page.getByRole("button", { name: "Open navigation" });
-  await expect(openNavigation).toBeVisible();
+  await expect(page.locator('[aria-modal="true"]')).toHaveCount(1);
+  const inventory = page.getByRole("dialog", { name: "Add to inventory" });
+  await expect(inventory).toBeVisible(); await inventory.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.locator('[aria-modal="true"]')).toHaveCount(1);
+  await expect(revision.getByLabel("Revision name")).toHaveValue( "Draft with new printer" );
+  await expect( revision.getByRole("radio", { name: /3D-print parts/u }) ).toBeChecked();
+  await expect(revision.getByLabel(/Notes/u)).toHaveValue( "Keep this draft while adding inventory." ); }); test("shows exactly one accessible navigation surface at 390px", async ({ page }) => { await page.setViewportSize({ width: 390, height: 844 }); await signIn(page); const openNavigation = page.getByRole("button", { name: "Open navigation" }); await expect(openNavigation).toBeVisible();
   await expect(page.getByRole("button", { name: "Close navigation" })).toHaveCount(0);
-  await openNavigation.click();
-  const mobileNavigation = page.getByRole("dialog", { name: "Primary navigation" });
-  const closeNavigation = page.getByRole("button", { name: "Close navigation" });
+  await openNavigation.click(); const mobileNavigation = page.getByRole("dialog", { name: "Primary navigation" }); const closeNavigation = page.getByRole("button", { name: "Close navigation" });
   await expect(mobileNavigation).toBeVisible();
-  await expect(closeNavigation).toBeFocused();
-  await page.keyboard.press("Shift+Tab");
-  await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(closeNavigation).toBeFocused();
-  expect(await page.evaluate(() => document.activeElement?.tagName)).not.toBe("BODY");
-  await expect(page.getByRole("button", { name: "Workbench", exact: true })).toBeVisible();
+  await expect(closeNavigation).toBeFocused(); await page.keyboard.press("Shift+Tab");
+
+  await expect( page.getByRole("button", { name: "Settings", exact: true }) ).toBeFocused();
+  await page.keyboard.press("Tab"); await expect(closeNavigation).toBeFocused(); expect(await page.evaluate(() => document.activeElement?.tagName)).not.toBe( "BODY" );
+  await expect(page.getByText("Current workspace", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Open navigation" })).toHaveCount(0);
-  await expect(page.locator(".app-main")).toHaveAttribute("inert", "");
-  await expect(page.locator(".workspace-switcher svg")).toHaveCount(0);
-  expect(await page.locator(".workspace-switcher").evaluate((element) => ({ tag: element.tagName, role: element.getAttribute("role") }))).toEqual({ tag: "DIV", role: null });
-
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("button", { name: "Close navigation" })).toHaveCount(0);
+  await expect(page.locator(".app-main")).toHaveAttribute("inert", ""); const workspaceIdentity = page.locator(".workspace-identity"); await expect(workspaceIdentity).toBeVisible(); expect( await workspaceIdentity.evaluate((element) => { const style = getComputedStyle(element); return { tag: element.tagName, role: element.getAttribute("role"), border: style.borderStyle, background: style.backgroundColor }; }) ).toEqual({ tag: "DIV", role: null, border: "none", background: "rgba(0, 0, 0, 0)" }); await page.keyboard.press("Escape");
+  await expect( page.getByRole("button", { name: "Close navigation" }) ).toHaveCount(0); await expect(openNavigation).toBeFocused(); await openNavigation.click(); await page.locator(".nav-scrim").click({ position: { x: 350, y: 400 } });
   await expect(openNavigation).toBeFocused();
-
-  await openNavigation.click();
-  await page.locator(".nav-scrim").click({ position: { x: 350, y: 400 } });
-  await expect(openNavigation).toBeFocused();
-
-  await openNavigation.click();
-  await page.setViewportSize({ width: 1440, height: 1000 });
-  await expect(page.getByRole("complementary", { name: "Primary navigation" })).toBeVisible();
+  await openNavigation.click(); await page.setViewportSize({ width: 1440, height: 1000 });
+  await expect( page.getByRole("complementary", { name: "Primary navigation" }) ).toBeVisible();
   await expect(page.locator(".app-main")).not.toHaveAttribute("inert", "");
   await page.setViewportSize({ width: 390, height: 844 });
-
-  await page.getByLabel("Search inventory").focus();
-  const searchFocus = await page.locator(".global-search").evaluate((element) => {
-    const style = getComputedStyle(element);
-    return { style: style.outlineStyle, width: Number.parseFloat(style.outlineWidth) };
-  });
-  expect(searchFocus.style).toBe("solid");
-  expect(searchFocus.width).toBeGreaterThanOrEqual(3);
-
-  await openNavigation.click();
-  await page.getByRole("button", { name: /^Projects/ }).click();
+  await page.getByLabel("Search inventory").focus(); const searchFocus = await page.locator(".global-search") .evaluate((element) => { const style = getComputedStyle(element); return { style: style.outlineStyle, width: Number.parseFloat(style.outlineWidth) }; }); expect(searchFocus.style).toBe("solid"); expect(searchFocus.width).toBeGreaterThanOrEqual(3); await openNavigation.click(); await page.getByRole("button", { name: /^Projects/ }).click();
   const projectTrigger = page.getByRole("button", { name: "New project" });
-  await expect(projectTrigger).toBeVisible();
-  expect(await page.evaluate(() => window.scrollX)).toBe(0);
 
-  const projectViews = page.getByRole("group", { name: "Project view" });
-  await expect(projectViews.getByRole("button", { name: "Active projects", pressed: true })).toBeVisible();
-  await expect(projectViews.getByRole("button", { name: /^Archived/, pressed: false })).toBeVisible();
-  expect(await projectViews.evaluate((element) => {
-    const buttons = [...element.querySelectorAll("button")];
-    return element.scrollWidth <= element.clientWidth && buttons.every((button) => button.getBoundingClientRect().height >= 44);
-  })).toBe(true);
+  await expect(projectTrigger).toBeVisible(); expect(await page.evaluate(() => window.scrollX)).toBe(0); const projectViews = page.getByRole("group", { name: "Project view" });
+  await expect( projectViews.getByRole("button", { name: "Active projects", pressed: true })).toBeVisible();
 
+  await expect( projectViews.getByRole("button", { name: /^Archived/, pressed: false }) ).toBeVisible(); expect( await projectViews.evaluate((element) => { const buttons = [...element.querySelectorAll("button")]; return ( element.scrollWidth <= element.clientWidth && buttons.every((button) => button.getBoundingClientRect().height >= 44) ); }) ).toBe(true);
   await page.getByRole("button", { name: "Search inventory" }).click();
+
   await page.getByRole("textbox", { name: "Search inventory" }).fill("ESP32");
-  await expect(page.getByRole("heading", { name: "Review inventory." })).toBeVisible();
-  const horizontalScroll = await page.evaluate(() => {
-    window.scrollTo(500, 0);
-    return window.scrollX;
-  });
-  expect(horizontalScroll).toBe(0);
+  await expect(page.getByRole("heading", { name: "What do you have?" })).toBeVisible(); const horizontalScroll = await page.evaluate(() => { window.scrollTo(500, 0); return window.scrollX; }); expect(horizontalScroll).toBe(0);
   await expect(page.getByRole("button", { name: "Open account settings" })).toBeVisible();
 });
 
-test("keeps desktop navigation visible and non-modal", async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 1000 });
+test("keeps agent access contextual in Beginner and restores the nav in Expert", async ({ page }) => {
   await signIn(page);
+  await expect(page .locator(".nav-list") .getByRole("button", { name: "For agents", exact: true }) ).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "For agents", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Settings", exact: true }).click(); await page.getByRole("button", { name: "Show technical details", exact: true }) .click();
+  await expect( page.locator(".nav-list") .getByRole("button", { name: "For agents", exact: true })).toBeVisible(); }); test("hides used-stock updates when the workspace does not advertise reconciliation", async ({ page }) => { await page.route("**/api/v1/workspace", async (route) => { const response = await route.fetch(); const body = (await response.json()) as Record<string, unknown>; delete body.capabilities; await route.fulfill({ response, json: body }); });
+  await signIn(page); await page.getByRole("button", { name: /^Projects/u }).click();
+  await expect(page.getByRole("tab", { name: /Update used stock/u })).toHaveCount(0); }); test("keeps desktop navigation visible and non-modal", async ({ page }) => { await page.setViewportSize({ width: 1440, height: 1000 }); await signIn(page);
+  await expect(page.getByRole("complementary", { name: "Primary navigation" })).toBeVisible(); await expect(page.getByRole("button", { name: "Open navigation" }) ).toHaveCount(0); await expect( page.getByRole("button", { name: "Close navigation" }) ).toHaveCount(0); }); test("resets scroll and focuses main content when navigating or opening a project", async ({ page }) => { await page.setViewportSize({ width: 1440, height: 1000 });
 
-  await expect(page.getByRole("complementary", { name: "Primary navigation" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Open navigation" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Close navigation" })).toHaveCount(0);
+  await signIn(page); const main = page.getByRole("main"); const continueProject = page.getByRole("button", { name: /^Continue /u }) .first();
+  await expect(continueProject).toBeVisible(); const projectName = (await continueProject.innerText()) .replace(/^Continue\s+/u, "").trim();
+  await page.evaluate(() => window.scrollTo(0, 900));
+  await continueProject.click();
+  await expect(page.getByRole("heading", { name: projectName, exact: true })).toBeVisible();
+  await expect(main).toBeFocused(); expect(await page.evaluate(() => document.activeElement?.id)).toBe("main-content"); expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  await page.getByRole("button", { name: "Workbench", exact: true }).click(); await expect( page.getByRole("heading", { name: "What are you making?", exact: true }) ).toBeVisible(); await expect(main).toBeFocused(); expect(await page.evaluate(() => document.activeElement?.id)).toBe("main-content"); await page.evaluate(() => window.scrollTo(0, 900));
+  await page.getByRole("button", { name: "Inventory", exact: true }).click(); await expect( page.getByRole("heading", { name: "What do you have?", exact: true }) ).toBeVisible();
+  await expect(main).toBeFocused(); expect(await page.evaluate(() => document.activeElement?.id)).toBe("main-content");
+  await page.getByRole("button", { name: /^Projects/u }).click(); await expect(page.getByRole("heading", { name: projectName, exact: true })).toBeVisible(); await expect(main).toBeFocused(); expect(await page.evaluate(() => document.activeElement?.id)).toBe("main-content");
+  expect(await page.evaluate(() => window.scrollY)).toBe(0); }); test("keeps project tabs, browser history, and deep links in sync", async ({ page }) => { await signIn(page);
+  await page.getByRole("button", { name: "Inventory", exact: true }).click(); await expect.poll(() => new URL(page.url()).hash).toBe("#/inventory");
+
+  await page.getByRole("button", { name: /^Projects/u }).click(); const plan = page.getByRole("tab", { name: /^Plan\b/u }); await expect(plan).toHaveAttribute("aria-selected", "true");
+  await expect .poll(() => new URL(page.url()).hash) .toMatch(/^#\/projects\/[^/]+\/plan$/u); await plan.press("ArrowRight"); const files = page.getByRole("tab", { name: /^Files\b/u }); await expect(files).toBeFocused(); await expect(files).toHaveAttribute("aria-selected", "true"); await expect.poll(() => new URL(page.url()).hash).toMatch(/\/files$/u);
+  await files.press("ArrowRight"); const shopping = page.getByRole("tab", { name: /^Shopping list\b/u }); await expect(shopping).toBeFocused(); await expect(shopping).toHaveAttribute("aria-selected", "true"); await expect.poll(() => new URL(page.url()).hash).toMatch(/\/offers$/u);
+  await page.goBack();
+
+  await expect(files).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("main")).toBeFocused();
+  await page.reload(); await expect(files).toHaveAttribute("aria-selected", "true"); await shopping.press("Home"); await expect(plan).toBeFocused(); await expect(plan).toHaveAttribute("aria-selected", "true"); await plan.press("End"); await expect(shopping).toBeFocused(); await expect(shopping).toHaveAttribute("aria-selected", "true");
+});
+
+test("keeps keyboard focus on project tabs at 320px", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 844 });
+  await signIn(page);
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: /^Projects/u }).click();
+
+  const plan = page.getByRole("tab", { name: /^Plan\b/u });
+  const files = page.getByRole("tab", { name: /^Files\b/u });
+  await expect(plan).toBeVisible();
+  await plan.focus();
+  await plan.press("ArrowRight");
+  expect(await page.evaluate(() => document.activeElement?.id)).toBe("project-tab-files");
+  await expect(files).toBeFocused();
+
+  await files.press("ArrowLeft");
+  expect(await page.evaluate(() => document.activeElement?.id)).toBe("project-tab-plan");
+  await expect(plan).toBeFocused();
+  await expect(page.getByRole("main")).not.toBeFocused();
 });
 
 test("gives project checks contextual names and a reversible mobile expansion", async ({ page }) => {
@@ -953,10 +537,8 @@ test("creates, edits, and archives a managed category hierarchy", async ({ page 
   await page.setViewportSize({ width: 390, height: 844 });
   await signIn(page);
   await page.getByRole("button", { name: "Open account settings" }).click();
-  await expect(page.getByRole("heading", { name: "Review workspace settings" })).toBeVisible();
-
-  const manager = page.locator(".category-manager");
-  await expect(manager.getByRole("heading", { name: "Manage inventory categories" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Settings", exact: true }) ).toBeVisible(); await expect( page.getByRole("button", { name: "Show technical details", exact: true }) ).toBeVisible(); await expect( page.getByRole("heading", { name: "Inventory evidence rules", exact: true }) ).toHaveCount(0); await page .getByRole("button", { name: "Show technical details", exact: true }) .click(); await expect( page.getByRole("heading", { name: "Inventory evidence rules", exact: true })).toBeVisible(); await page .getByRole("button", { name: "Hide technical details", exact: true }) .click(); await expect( page.getByRole("heading", { name: "Inventory evidence rules", exact: true }) ).toHaveCount(0); const manager = page.locator(".category-manager");
+  await expect(manager.getByRole("heading", { name: "Manage inventory categories" })).not.toBeVisible(); await page.getByText("Categories · 14", { exact: true }).click(); await expect( manager.getByRole("heading", { name: "Manage inventory categories" }) ).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await manager.getByRole("button", { name: "New category" }).click();
   const createForm = manager.locator('form[aria-label="Create top-level category"]');
@@ -990,7 +572,7 @@ test("creates, edits, and archives a managed category hierarchy", async ({ page 
   await expect(page.locator(".category-archive-scrim")).toBeVisible();
   expect(await page.locator(".category-archive-scrim").evaluate((element) => {
     const rect = element.getBoundingClientRect();
-    return rect.left === 0 && rect.top === 0 && rect.width >= window.innerWidth && rect.height >= window.innerHeight;
+    return ( rect.left === 0 && rect.top === 0 && rect.width >= window.innerWidth && rect.height >= window.innerHeight );
   })).toBe(true);
   await expect(parentConfirmation).toHaveAttribute("aria-modal", "true");
   await expect(parentConfirmation.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
@@ -1027,4 +609,105 @@ test("creates, edits, and archives a managed category hierarchy", async ({ page 
   releaseArchive?.();
   await expect(manager.getByText("E2E renamed category", { exact: true })).toHaveCount(0);
   await page.unroute("**/api/v1/inventory/categories/*/archive");
+});
+
+test("resumes project and build-approach drafts after adding a printer", async ({ page }) => {
+  await page.route("**/api/v1/workspace", async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as { inventory?: Array<{ kind?: string }> };
+    body.inventory = body.inventory?.filter((item) => item.kind !== "printer");
+    await route.fulfill({ response, json: body });
+  });
+  await signIn(page);
+  await page.getByRole("button", { name: /^Projects/u }).click();
+
+  await page.getByRole("button", { name: "New project", exact: true }).click();
+  let projectDialog = page.getByRole("dialog", { name: "Create project" });
+  await projectDialog.getByLabel("Project name").fill("Retained project draft");
+  await projectDialog.getByLabel("Project goal").fill("Keep this text while recording a printer.");
+  await projectDialog.getByRole("radio", { name: /^3D-print parts/u }).check();
+  await projectDialog.getByRole("button", { name: "Add printer", exact: true }).click();
+  const inventoryDialog = page.getByRole("dialog", { name: "Add to inventory" });
+  await expect(inventoryDialog).toBeVisible();
+  await inventoryDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  projectDialog = page.getByRole("dialog", { name: "Create project" });
+  await expect(projectDialog.getByLabel("Project name")).toHaveValue("Retained project draft");
+  await expect(projectDialog.getByLabel("Project goal")).toHaveValue("Keep this text while recording a printer.");
+  await expect(projectDialog.getByRole("radio", { name: /^3D-print parts/u })).toBeChecked();
+  await projectDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+
+  await page.getByRole("button", { name: "Change build approach", exact: true }).click();
+  let approachDialog = page.getByRole("dialog", { name: "Edit build approach" });
+  await approachDialog.getByRole("radio", { name: /^3D-print parts/u }).check();
+  await approachDialog.getByRole("button", { name: "Add printer", exact: true }).click();
+  await page.getByRole("dialog", { name: "Add to inventory" }).getByRole("button", { name: "Cancel", exact: true }).click();
+  approachDialog = page.getByRole("dialog", { name: "Edit build approach" });
+  await expect(approachDialog.getByRole("radio", { name: /^3D-print parts/u })).toBeChecked();
+});
+
+test("keeps project files and view controls inside the card at mobile widths", async ({ page }) => {
+  await signIn(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: /^Projects/u }).click();
+  await page.getByRole("tab", { name: /^Files/u }).click();
+
+  const filesSection = page.locator(".files-section");
+  const scopeControl = filesSection.locator(".artifact-scope-control");
+  const scopeSelect = page.getByLabel("Choose file scope");
+  const identity = filesSection.locator(".file-scope-identity");
+  await expect(filesSection).toBeVisible();
+
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    const metrics = await filesSection.evaluate((section) => {
+      const scope = section.querySelector<HTMLElement>(".artifact-scope-control");
+      const select = section.querySelector<HTMLElement>("#artifact-scope");
+      const identity = section.querySelector<HTMLElement>(".file-scope-identity");
+      const viewSwitch = document.querySelector<HTMLElement>(".project-view-switch");
+      const rect = (element: HTMLElement | null) => {
+        if (!element) return undefined;
+        const bounds = element.getBoundingClientRect();
+        return { left: bounds.left, right: bounds.right, width: bounds.width };
+      };
+      const sectionRect = section.getBoundingClientRect();
+      const viewSwitchRect = viewSwitch?.getBoundingClientRect();
+      return {
+        viewportWidth: document.documentElement.clientWidth,
+        pageScrollWidth: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth),
+        sectionWidth: section.clientWidth,
+        sectionScrollWidth: section.scrollWidth,
+        sectionRight: sectionRect.right,
+        scope: rect(scope),
+        select: rect(select),
+        identity: rect(identity),
+        viewSwitch: viewSwitchRect ? {
+          left: viewSwitchRect.left,
+          right: viewSwitchRect.right,
+          width: viewSwitchRect.width,
+          buttons: [...viewSwitch.querySelectorAll<HTMLElement>("button")].map(rect)
+        } : undefined
+      };
+    });
+
+    expect(metrics.viewportWidth).toBe(width);
+    expect(metrics.pageScrollWidth).toBeLessThanOrEqual(width);
+    expect(metrics.sectionScrollWidth).toBeLessThanOrEqual(metrics.sectionWidth);
+    for (const control of [metrics.scope, metrics.select, metrics.identity]) {
+      expect(control).toBeDefined();
+      expect(control!.width).toBeLessThanOrEqual(metrics.sectionWidth);
+      expect(control!.left).toBeGreaterThanOrEqual(-0.5);
+      expect(control!.right).toBeLessThanOrEqual(metrics.sectionRight + 0.5);
+    }
+    expect(metrics.viewSwitch).toBeDefined();
+    expect(metrics.viewSwitch!.right).toBeLessThanOrEqual(width + 0.5);
+    for (const button of metrics.viewSwitch!.buttons) {
+      expect(button).toBeDefined();
+      expect(button!.width).toBeGreaterThanOrEqual(44);
+      expect(button!.right).toBeLessThanOrEqual(metrics.viewSwitch!.right + 0.5);
+    }
+  }
+  await expect(scopeControl).toBeVisible();
+  await expect(scopeSelect).toBeVisible();
+  await expect(identity).toBeVisible();
 });

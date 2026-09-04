@@ -81,6 +81,12 @@ function serviceFixture(): ApplicationService & Record<string, any> {
     createWorkItem: vi.fn(async (projectId: string, input: unknown) => mutation({ id: "work-1", projectId, ...(input as object), version: 1 }, "work-1", 1)),
     getWorkItem: vi.fn(async () => ({ id: "work-1", projectId: "project-1", name: "Base", kind: "part", description: "base", currentRevisionId: "work-revision-1", createdAt: date, updatedAt: date, version: 1 })),
     createProjectRevision: vi.fn(async (projectId: string, input: unknown) => mutation(apiRevision({ id: "revision-2", projectId, ...(input as object), status: "concept" }), "revision-2", 1)),
+    updateProjectRevision: vi.fn(async (id: string, input: any) => mutation(apiRevision({
+      id,
+      fabricationRoute: input.fabricationRoute ?? "undecided",
+      ...(typeof input.intendedPrinterItemId === "string" ? { intendedPrinterItemId: input.intendedPrinterItemId } : {}),
+      version: 2
+    }), id, 2)),
     getProjectRevision: vi.fn(async () => apiRevision()),
     createWorkItemRevision: vi.fn(async (workItemId: string, input: unknown) => mutation({ ...apiRevision({ id: "work-revision-1", workItemId }), ...(input as object) }, "work-revision-1", 1)),
     getWorkItemRevision: vi.fn(async () => ({ ...apiRevision({ id: "work-revision-1", workItemId: "work-1" }) })),
@@ -453,11 +459,22 @@ describe("createApplicationBackend translation coverage", () => {
     expect(await backend.projects.create({ name: "Lamp", description: "x" }, context)).toMatchObject({ id: "created-project", project: { visibility: "private" } });
     expect(await backend.projects.createWithInitialRevision({ name: "Lamp", projectId: "fixed", revisionId: "fixed-r", revisionSummary: "Plan" }, context)).toMatchObject({ id: "fixed", revision: { status: "concept" } });
     expect(service.createProjectWithInitialRevision).toHaveBeenCalledWith(expect.objectContaining({ project: expect.objectContaining({ id: "fixed", status: "idea" }), revision: expect.objectContaining({ id: "fixed-r", name: "Plan", notes: "Plan" }) }), expect.anything());
+    await backend.projects.createWithInitialRevision({ name: "Printed lamp", fabricationRoute: "printed", intendedPrinterItemId: "printer-1" }, context);
+    expect(service.createProjectWithInitialRevision).toHaveBeenLastCalledWith(expect.objectContaining({
+      revision: expect.objectContaining({ fabricationRoute: "printed", intendedPrinterItemId: "printer-1" })
+    }), expect.anything());
     await backend.projects.update({ projectId: "project-1", expectedVersion: 2, status: "ready", name: "Ready lamp" }, context);
     await backend.projects.retire({ projectId: "project-1", expectedVersion: 3 }, context);
     await backend.projects.createWorkItem({ projectId: "project-1", name: "Base", kind: "part", description: "base" }, context);
     await backend.projects.getWorkItem({ workItemId: "work-1" }, context);
     await backend.projects.createProjectRevision({ projectId: "project-1", summary: "r2" }, context);
+    await backend.projects.createProjectRevision({ projectId: "project-1", fabricationRoute: "printed", intendedPrinterItemId: "printer-1" }, context);
+    await expect(backend.projects.updateProjectRevision({ revisionId: "revision-2", expectedVersion: 1, fabricationRoute: "none" }, context))
+      .resolves.toMatchObject({ revision: { fabricationRoute: "none" } });
+    await expect(backend.projects.updateProjectRevision({ revisionId: "revision-2", expectedVersion: 1, intendedPrinterItemId: null }, context))
+      .resolves.toMatchObject({ revision: { fabricationRoute: "undecided" } });
+    await expect(backend.projects.updateProjectRevision({ revisionId: "revision-2", expectedVersion: 1, fabricationRoute: "printed", intendedPrinterItemId: "printer-1" }, context))
+      .resolves.toMatchObject({ revision: { fabricationRoute: "printed", intendedPrinterItemId: "printer-1" } });
     await backend.projects.createWorkItemRevision({ workItemId: "work-1", summary: "fit" }, context);
     for (const status of ["concept", "CAD complete", "DFAM reviewed", "mesh validated", "slicer validated", "test printed", "fit/function verified", "production approved", "unknown"] as const) {
       service.getProjectRevision.mockResolvedValueOnce(apiRevision({ id: `rev-${status}`, status }));
@@ -497,12 +514,14 @@ describe("createApplicationBackend translation coverage", () => {
     const noRevisionContext = await backend.projects.context({ projectId: "project-1" }, context);
     expect(noRevisionContext.text).toContain("Current revision: not selected");
     expect(noRevisionContext).toMatchObject({ status: "building", blocked: { blocked: false, reasons: [] } });
-    const line = await backend.bom.createLine({ projectRevisionId: "revision-1", description: "M3", quantity: 4, unit: "piece", requirement: "optional", compatibleItemIds: ["alt"], constraints: { model: "M3" }, notes: "note" }, context);
-    expect(line.line).toMatchObject({ requirement: "optional", description: "M3", compatibleItemIds: ["alt"] });
+    const line = await backend.bom.createLine({ projectRevisionId: "revision-1", description: "M3", quantity: 4, unit: "piece", requirement: "optional", role: "consumed", compatibleItemIds: ["alt"], constraints: { model: "M3" }, notes: "note" }, context);
+    expect(line.line).toMatchObject({ requirement: "optional", role: "consumed", description: "M3", compatibleItemIds: ["alt"] });
+    expect(service.createBomLine).toHaveBeenCalledWith("revision-1", expect.objectContaining({ role: "consumed" }), expect.anything());
     const structuredLine = await backend.bom.createLine({ projectRevisionId: "revision-1", description: "Controller", quantity: 1, unit: "piece", alternatives: [{ itemId: "board-alt", compatible: "confirmed", reason: "same pinout" }] }, context);
     expect(structuredLine.line).toMatchObject({ alternatives: [{ itemId: "board-alt", compatible: "confirmed", reason: "same pinout" }], compatibleItemIds: ["board-alt"] });
     expect(service.createBomLine).toHaveBeenCalledWith("revision-1", expect.objectContaining({ alternatives: [{ itemId: "board-alt", compatible: "confirmed", reason: "same pinout" }] }), expect.anything());
-    await backend.bom.updateLine({ bomLineId: "bom-1", expectedVersion: 1, description: "M4", unit: "set", requirement: "optional", compatibleItemIds: ["alt"] }, context);
+    await backend.bom.updateLine({ bomLineId: "bom-1", expectedVersion: 1, description: "M4", unit: "set", requirement: "optional", role: null, compatibleItemIds: ["alt"] }, context);
+    expect(service.updateBomLine).toHaveBeenCalledWith("bom-1", expect.objectContaining({ role: null }), 1, expect.anything());
     await backend.bom.retireLine({ bomLineId: "bom-1", expectedVersion: 2 }, context);
     await backend.bom.restoreLine({ bomLineId: "bom-1", expectedVersion: 3 }, context);
     const evaluation = await backend.bom.evaluate({ projectRevisionId: "revision-1" }, context);
@@ -514,6 +533,13 @@ describe("createApplicationBackend translation coverage", () => {
     const used = await backend.bom.recordUsage({ projectRevisionId: "revision-1", reservationId: "reservation-1", itemId: "screw-m3", quantity: { value: 1, unit: "piece" }, note: "installed" }, context);
     expect(used).toMatchObject({ usageEventId: "usage-1", resultingQuantity: { value: 898, unit: "gram" } });
     expect(service.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ projectId: "project-1", reservationId: "reservation-1", note: "installed", unit: "each" }), expect.anything());
+  });
+
+  it("preserves nullable legacy BOM roles in list reads", async () => {
+    const service = serviceFixture();
+    service.listBomLines.mockResolvedValue([apiLine({ role: null })]);
+    const listed = await createApplicationBackend(service).bom.listLines({ projectRevisionId: "revision-1", limit: 10 }, context);
+    expect(listed.items[0]).toMatchObject({ role: null });
   });
 
   it("maps structured package conversions across BOM writes and candidate diagnostics", async () => {

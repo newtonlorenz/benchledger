@@ -167,6 +167,15 @@ checks. Updates pass the returned version; a conflict means “read again,” no
 “overwrite.” Reservations reduce available confirmed stock but are not
 consumption. Corrections and usage are append-only events.
 
+Project revisions also record a separate planning-only `fabricationRoute`:
+`printed`, `ready_made`, `none`, or `undecided`. An optional
+`intendedPrinterItemId` is valid only for `printed`; it identifies planning
+equipment and never creates a BOM line or build-configuration snapshot.
+Later revisions carry the current route and printer when omitted, while
+`update_project_revision` uses `expectedVersion` and accepts `null` to clear
+the printer. Revision reads always expose a non-null canonical route;
+legacy rows read as `undecided`.
+
 The bounded project context includes the selected current revision and its
 persisted summary without enumerating revision history.
 
@@ -174,6 +183,13 @@ Gap and inspection candidates require an exact item ID or an explicit
 alternative. Broad kind/category constraints do not automatically nominate
 inventory; add the intended candidate explicitly when a physical check is
 needed.
+
+BOM requirements may carry a nullable `role`: `consumed` stock is depleted by
+use and may be reserved, consumed, and reconciled; `reusable` stock remains
+owned and cannot be used for those depletion operations. A `null` or omitted
+role is legacy intent that requires review and does not authorize reservation,
+usage, or reconciliation. Printers remain exact build-configuration selections,
+not BOM stock.
 
 `create_project_with_initial_revision` accepts optional caller-provided
 `projectId` and `revisionId` values as stable record identities. They are not

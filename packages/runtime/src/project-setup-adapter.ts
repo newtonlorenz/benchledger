@@ -1,6 +1,7 @@
 import type { CommitProjectSetup, ProjectSetupCommitResult, ProjectSetupPreview } from "@benchledger/api-contract";
 import type { ProjectSetupPort, RequestContext } from "@benchledger/application";
-import { ApplicationError, bomSpecification, conflict } from "@benchledger/application";
+import { ApplicationError, assertOwnedPrinter, bomSpecification, conflict } from "@benchledger/application";
+import type { CatalogPort } from "@benchledger/application";
 import { ProjectSetupRepository } from "@benchledger/database";
 import { ProductionInventoryAdapter } from "./inventory-adapter.js";
 import { ProductionProjectAdapter } from "./project-adapter.js";
@@ -12,7 +13,8 @@ export class ProductionProjectSetupAdapter implements ProjectSetupPort {
   constructor(
     private readonly previews: ProjectSetupRepository,
     private readonly projects: ProductionProjectAdapter,
-    private readonly inventory: ProductionInventoryAdapter
+    private readonly inventory: ProductionInventoryAdapter,
+    private readonly catalog: CatalogPort
   ) {}
 
   async savePreview(preview: ProjectSetupPreview, actor: string): Promise<ProjectSetupPreview> {
@@ -32,6 +34,11 @@ export class ProductionProjectSetupAdapter implements ProjectSetupPort {
   }): Promise<ProjectSetupCommitResult> {
     const { preview } = input;
     if (preview.fieldErrors.length > 0) throw new ApplicationError("validation", "Project setup preview contains semantic field errors");
+    const intendedPrinterItemId = preview.proposal.revision.intendedPrinterItemId;
+    if (intendedPrinterItemId !== undefined && intendedPrinterItemId !== null) {
+      if (preview.proposal.revision.fabricationRoute !== "printed") throw new ApplicationError("validation", "The intended printer requires the printed fabrication route");
+      await assertOwnedPrinter({ inventory: this.inventory, catalog: this.catalog }, intendedPrinterItemId);
+    }
     for (const reservation of preview.proposal.reservations) {
       const line = preview.proposal.bomLines.find((candidate) => candidate.localRef === reservation.bomLineLocalRef);
       if (line === undefined || !bomSpecification(line).sufficient) {
@@ -68,7 +75,7 @@ export class ProductionProjectSetupAdapter implements ProjectSetupPort {
     // `revisionLocalRef` can document which work-item revision informed a
     // requirement, but the durable BOM foreign key remains project_revision.
     for (const line of preview.proposal.bomLines) {
-      bomLines.push(await this.projects.createBomLine(created.revision.id, { id: line.id, name: line.name, ...(line.itemId === undefined ? {} : { itemId: line.itemId }), requiredQuantity: line.requiredQuantity, unit: line.unit, optional: line.optional, constraints: line.constraints, alternatives: line.alternatives, ...(line.notes === undefined ? {} : { notes: line.notes }) }, ctx));
+      bomLines.push(await this.projects.createBomLine(created.revision.id, { id: line.id, name: line.name, ...(line.itemId === undefined ? {} : { itemId: line.itemId }), role: line.role, requiredQuantity: line.requiredQuantity, unit: line.unit, optional: line.optional, constraints: line.constraints, alternatives: line.alternatives, ...(line.notes === undefined ? {} : { notes: line.notes }) }, ctx));
     }
     const reservations = [] as ProjectSetupCommitResult["reservations"];
     for (const reservation of preview.proposal.reservations) {

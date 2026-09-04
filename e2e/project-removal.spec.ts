@@ -144,4 +144,64 @@ test("removes an archived project only after exact-name confirmation and hides i
   await expect(page.getByRole("heading", { name: "No projects yet", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Archived (0)", exact: true }).click();
   await expect(page.getByRole("heading", { name: "No archived projects", exact: true })).toBeVisible();
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: "No projects yet", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Active projects", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await page.goForward();
+  await expect(page.getByRole("heading", { name: "No archived projects", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Archived (0)", exact: true })).toHaveAttribute("aria-pressed", "true");
+});
+
+test("restores the active or archived project named by browser history", async ({ page }) => {
+  const activeProject = {
+    ...project,
+    id: "project-active-e2e",
+    name: "Active Project E2E",
+    status: "idea",
+    currentRevisionId: "revision-active-e2e",
+    workItems: [],
+    currentRevision: {
+      ...project.currentRevision,
+      id: "revision-active-e2e",
+      projectId: "project-active-e2e",
+      bom: [],
+      artifacts: [],
+    },
+  };
+  await page.route("**/api/v1/auth/access", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ mode: "lan_open", passwordConfigured: false, version: 1 }) });
+  });
+  await page.route("**/api/v1/auth/lan-session", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: true, actor: "e2e", csrfToken: "csrf-history-e2e", expiresAt: "2026-09-01T18:00:00.000Z" }) });
+  });
+  await page.route("**/api/v1/auth/session", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: true, actor: "e2e", source: "ui", scopes: ["read", "write"] }) });
+  });
+  await page.route("**/api/v1/health", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok", service: "benchledger", version: "e2e", demo: false, now: "2026-09-01T10:00:00.000Z" }) });
+  });
+  await page.route("**/api/v1/workspace", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ source: "api", fetchedAt: "2026-09-01T10:00:00.000Z", inventory: [], projects: [activeProject], offers: [] }) });
+  });
+  await page.route("**/api/v1/projects**", async (route) => {
+    const archived = new URL(route.request().url()).searchParams.get("status") === "archived";
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: archived ? [project] : [activeProject], limit: 200, total: 1 }) });
+  });
+  await page.route("**/api/v1/inventory/categories*", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [], limit: 200, total: 0 }) });
+  });
+
+  await page.goto(`/#/projects/${project.id}/files`);
+  await expect(page.getByRole("heading", { name: project.name, exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Active projects", exact: true }).click();
+  await expect(page.getByRole("heading", { name: activeProject.name, exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Archived (1)", exact: true }).click();
+  await expect(page.getByRole("heading", { name: project.name, exact: true })).toBeVisible();
+
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: activeProject.name, exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Active projects", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: project.name, exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Archived (1)", exact: true })).toHaveAttribute("aria-pressed", "true");
 });

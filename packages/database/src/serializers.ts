@@ -1,4 +1,4 @@
-import { canonicalProjectStatus } from "@benchledger/domain";
+import { canonicalProjectStatus, isFabricationRoute } from "@benchledger/domain";
 import type { Dimensions, InventoryItem, InventoryProvenance, StockEvent, Project, WorkItem, ProjectRevision, WorkItemRevision, BomLine, BomAlternative, Reservation, Supplier, OfferSnapshot, AuditRecord, AuditActor } from "@benchledger/domain";
 import type { SqliteRow } from "./sqlite.js";
 
@@ -30,6 +30,13 @@ function number(row: SqliteRow, key: string): number {
 function optionalText(row: SqliteRow, key: string): string | undefined {
   const value = row[key];
   return typeof value === "string" ? value : undefined;
+}
+
+/** Distinguish an absent legacy column from a present SQL NULL clear. */
+function nullableText(row: SqliteRow, key: string): string | null | undefined {
+  if (!Object.prototype.hasOwnProperty.call(row, key)) return undefined;
+  const value = row[key];
+  return value === null ? null : typeof value === "string" ? value : undefined;
 }
 
 function optionalNumber(row: SqliteRow, key: string): number | undefined {
@@ -110,8 +117,12 @@ export function workItemFromRow(row: SqliteRow): WorkItem {
 }
 
 export function projectRevisionFromRow(row: SqliteRow): ProjectRevision {
+  const storedRoute = optionalText(row, "fabrication_route") ?? "undecided";
+  if (!isFabricationRoute(storedRoute)) throw new Error(`database row fabrication route is unsupported: ${storedRoute}`);
+  const intendedPrinterItemId = nullableText(row, "intended_printer_item_id");
   return {
-    id: text(row, "id"), projectId: text(row, "project_id"), number: number(row, "revision_number"), label: text(row, "label"), status: text(row, "status") as ProjectRevision["status"],
+    id: text(row, "id"), projectId: text(row, "project_id"), number: number(row, "revision_number"), label: text(row, "label"), status: text(row, "status") as ProjectRevision["status"], fabricationRoute: storedRoute,
+    ...(intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId }),
     ...(optionalText(row, "machine_id") === undefined ? {} : { machineId: optionalText(row, "machine_id") as string }),
     ...(optionalText(row, "material") === undefined ? {} : { material: optionalText(row, "material") as string }),
     ...(optionalText(row, "notes") === undefined ? {} : { notes: optionalText(row, "notes") as string }),
@@ -132,8 +143,13 @@ export function workItemRevisionFromRow(row: SqliteRow): WorkItemRevision {
 export function bomLineFromRow(row: SqliteRow): BomLine {
   const alternatives = parseJson<string[]>(row["alternative_item_ids_json"]);
   const constraints = parseJson<BomLine["constraints"]>(row["constraints_json"]);
+  const storedRole = row["role"];
+  if (storedRole !== null && storedRole !== undefined && storedRole !== "consumed" && storedRole !== "reusable") {
+    throw new Error(`database row role is unsupported: ${String(storedRole)}`);
+  }
   return {
     id: text(row, "id"), revisionId: text(row, "revision_id"), name: text(row, "name"), quantity: number(row, "quantity"), unit: text(row, "unit"),
+    role: storedRole === "consumed" || storedRole === "reusable" ? storedRole : null,
     required: number(row, "required") === 1, optional: number(row, "optional") === 1,
     ...(optionalText(row, "item_id") === undefined ? {} : { itemId: optionalText(row, "item_id") as string }),
     ...(alternatives === undefined ? {} : { alternativeItemIds: alternatives }),

@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  bomAlternativeSchema, bomGapSchema, bomLineSchema, bomSpecificationDecisionSchema, bomSpecificationSchema, createInventoryCategorySchema, createInventoryItemSchema, createOfferSchema,
+  bomAlternativeSchema, bomGapSchema, bomLineSchema, bomLineRoleSchema, bomSpecificationDecisionSchema, bomSpecificationSchema, createInventoryCategorySchema, createInventoryItemSchema, createOfferSchema,
   createProjectRevisionSchema, createProjectSchema, createReservationSchema,
   createProjectWithInitialRevisionSchema, createWorkItemRevisionSchema, createWorkItemSchema, idSchema, inventoryListQuerySchema,
   commissionInventoryItemSchema, quantityUnitSchema, stockEventInputSchema, updateInventoryCategorySchema, updateInventoryItemSchema,
   inventoryBulkUpdateSchema,
-  updateProjectSchema, catalogProductSchema, createCatalogProductSchema,
+  updateProjectSchema, updateProjectRevisionSchema, catalogProductSchema, createCatalogProductSchema,
   updateCatalogProductSchema, inventoryProductProfileSchema,
   createInventoryProductProfileSchema, updateInventoryProductProfileSchema,
   buildConfigurationSnapshotSchema, createBuildConfigurationSnapshotSchema,
@@ -25,6 +25,7 @@ import type {
   CreateProjectWithInitialRevision, InventoryItem, InventoryListQuery, Offer, Project, ProjectRevision, ProjectWithInitialRevision, Reservation,
   InventoryBulkUpdate, StockEventInput, CommissionInventoryItem, UploadSession, WorkItem, WorkItemRevision, CatalogProduct, CreateCatalogProduct,
   UpdateCatalogProduct, InventoryProductProfile, CreateInventoryProductProfile,
+  UpdateProjectRevision,
   UpdateInventoryProductProfile, BuildConfigurationSnapshot, CreateBuildConfigurationSnapshot,
   ReconciliationDraft, ReconciliationCommit, CommitReconciliation, InventoryCategory, CreateInventoryCategory, UpdateInventoryCategory, WorkspaceSecurityMutation, ProjectTombstone,
   ProjectSetupProposal, ProjectSetupPreview, CommitProjectSetup, ProjectSetupCommitResult, ProjectSetupFieldError, BeginUpload as ApiBeginUpload, ArtifactListQuery, InspectionAction, InspectionCompletionPreview, InspectionObservation, InspectionCompletionCommit
@@ -86,6 +87,7 @@ const legacyCreateBomLineSchema = z.object({
   id: idSchema.optional(),
   name: z.string().min(1).max(240),
   itemId: idSchema.optional(),
+  role: bomLineRoleSchema.nullable().optional(),
   requiredQuantity: z.number().finite().positive(),
   unit: quantityUnitSchema,
   optional: z.boolean(),
@@ -96,6 +98,7 @@ const legacyCreateBomLineSchema = z.object({
 const legacyUpdateBomLineSchema = z.object({
   name: z.string().min(1).max(240).optional(),
   itemId: idSchema.optional(),
+  role: bomLineRoleSchema.nullable().optional(),
   requiredQuantity: z.number().finite().positive().optional(),
   unit: quantityUnitSchema.optional(),
   optional: z.boolean().optional(),
@@ -289,6 +292,19 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 
 function isSpecificationSufficientClaim(value: unknown): value is Readonly<Record<string, unknown>> & { readonly status: "sufficient" } {
   return isRecord(value) && value.status === "sufficient";
+}
+
+function bomRequirementRequestsPrinter(input: Pick<CreateBomLine, "constraints">): boolean {
+  return input.constraints?.kind === "printer";
+}
+
+function assertConsumedBomRequirement(line: Pick<BomLine, "role">): void {
+  if (line.role === undefined || line.role === null) {
+    throw new ApplicationError("validation", "Review whether this BOM line is consumed or reusable before changing stock");
+  }
+  if (line.role !== "consumed") {
+    throw new ApplicationError("validation", "Only consumed BOM requirements may reserve or consume stock");
+  }
 }
 
 function canonicalizeSetupProposal(proposal: ProjectSetupProposal): ProjectSetupProposal {
@@ -735,7 +751,8 @@ function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], active: 
     else if (suppliedQuantity > 0 && missingQuantity > 0) status = "partially_supplied";
     else if (inspectQuantity > 0) status = "inspect_first";
     else status = "missing";
-    const decision = bomDecision(line, status, specification.sufficient, inspectQuantity);
+    const roleNeedsReview = line.role === undefined || line.role === null;
+    const decision = roleNeedsReview ? "check" : bomDecision(line, status, specification.sufficient, inspectQuantity);
     const candidateResults = candidates.map((candidate) => {
       const fact = candidateFacts.get(`${line.id}\u0000${candidate.item.id}`);
       if (fact === undefined) throw new ApplicationError("integrity_error", "BOM candidate facts were not recorded");
@@ -757,6 +774,7 @@ function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], active: 
       ...(uncertain.some((candidate) => isUnitCompatibleWithItemKind(candidate.item.kind, candidate.item.unit) && !bomCandidateHasResolvableQuantity(line, candidate)) ? ["A cross-unit alternative has no valid evidence-backed conversion; inspect before use."] : []),
       ...(uncertain.some((candidate) => !isUnitCompatibleWithItemKind(candidate.item.kind, candidate.item.unit)) ? ["Matching stock has a unit that needs correction before use."] : []),
       ...(decision === "decide" ? [`Specify ${specification.missingDecisions.join(" and ")} before sourcing this requirement.`] : []),
+      ...(roleNeedsReview ? ["Requirement role is not recorded; review whether this item is consumed or reusable before reserving or closing out."] : []),
       ...(decision !== "decide" && missingQuantity > 0 ? ["No confirmed stock covers the remaining quantity."] : []),
       ...(decision !== "decide" && candidates.length === 0 ? ["No matching inventory item was found for this line."] : []),
     ];
@@ -803,6 +821,7 @@ function setupBomLines(proposal: ProjectSetupProposal, now: string): readonly Bo
       name: line.name,
       requiredQuantity: line.requiredQuantity,
       unit: line.unit,
+      role: line.role,
       optional: line.optional,
       ...(line.itemId === undefined ? {} : { itemId: line.itemId }),
       constraints: line.constraints,
@@ -919,9 +938,34 @@ function requireId(value: string, label: string): string {
   return parsed.data;
 }
 
-function catalogPort(ports: ApplicationPorts): NonNullable<ApplicationPorts["catalog"]> {
+function catalogPort(ports: Pick<ApplicationPorts, "catalog">): NonNullable<ApplicationPorts["catalog"]> {
   if (ports.catalog === undefined) throw new ApplicationError("integrity_error", "This runtime does not support the product catalog");
   return ports.catalog;
+}
+
+/**
+ * Resolve an intended printer through the owned inventory item and its exact
+ * product profile. A bare item kind is not enough ancestry to make a printer
+ * assignment trustworthy.
+ */
+export async function assertOwnedPrinter(ports: Pick<ApplicationPorts, "inventory" | "catalog">, itemId: string): Promise<void> {
+  const item = await ports.inventory.getItem(itemId);
+  if (item === null) throw notFound("Inventory item", itemId);
+  if (item.kind !== "printer") throw new ApplicationError("validation", "The intended printer must be an owned printer inventory item");
+  if (item.retiredAt !== undefined) throw new ApplicationError("validation", "The intended printer inventory item is retired");
+  if (item.unit !== "each" || item.unitStatus === "needs_correction") {
+    throw new ApplicationError("validation", "The intended printer must use a compatible each unit");
+  }
+  if ((item.evidence.state !== "physically_counted" && item.evidence.state !== "commissioned") || item.quantity <= 0 || item.availableQuantity <= 0) {
+    throw new ApplicationError("validation", "The intended printer must have positive available stock with physically counted or commissioned evidence");
+  }
+  const profile = await catalogPort(ports).getInventoryProductProfile(itemId);
+  if (profile === null || profile.itemId !== itemId || profile.profileType !== "printer_asset" || profile.linkState !== "confirmed") {
+    throw new ApplicationError("validation", "The intended printer must have an exact printer product profile");
+  }
+  const product = await catalogPort(ports).getProduct(profile.catalogProductId);
+  if (product === null) throw notFound("Catalog product", profile.catalogProductId);
+  if (product.kind !== "printer") throw new ApplicationError("validation", "The intended printer profile must point to a printer catalog product");
 }
 
 function inventoryCategoryPort(ports: ApplicationPorts): InventoryCategoryPort {
@@ -1102,6 +1146,11 @@ export class ApplicationService {
 
   getVersion(): string {
     return this.version;
+  }
+
+  /** Report whether this runtime can provide revision-scoped reconciliation. */
+  supportsReconciliation(): boolean {
+    return this.ports.reconciliations !== undefined;
   }
 
   /** Return only the safe workspace-access projection. */
@@ -1544,7 +1593,7 @@ export class ApplicationService {
         const current = await this.ports.inventory.getItem(itemId);
         if (!current) throw notFound("Inventory item", itemId);
         if (parsed.kind !== current.kind) {
-          assertCompatibleInventoryUnit({ id: current.id, kind: parsed.kind, unit: current.unit }, "Cannot change inventory kind");
+          throw new ApplicationError("validation", "Cannot change inventory kind in place. Create a corrected replacement so reservations, evidence, and history stay attached to the original item");
         }
       }
       const item = await this.ports.inventory.updateItem(itemId, parsed, expectedVersion, ctx);
@@ -1819,7 +1868,51 @@ export class ApplicationService {
     const parentId = requireId(projectId, "project id");
     return this.mutate(ctx, "project.revision.create", "project_revision", parsed.id ?? "pending", async () => {
       await this.assertProjectActive(parentId);
-      const revision = await this.ports.projects.createProjectRevision(parentId, parsed, ctx);
+      const project = await this.ports.projects.getProject(parentId);
+      const predecessor = project?.currentRevisionId === undefined ? null : await this.ports.projects.getProjectRevision(project.currentRevisionId);
+      const route = parsed.fabricationRoute ?? predecessor?.fabricationRoute;
+      const hasPrinterField = Object.prototype.hasOwnProperty.call(parsed, "intendedPrinterItemId");
+      if (hasPrinterField && parsed.intendedPrinterItemId !== undefined && parsed.intendedPrinterItemId !== null && route !== "printed") {
+        throw new ApplicationError("validation", "The intended printer requires the printed fabrication route");
+      }
+      const intendedPrinterItemId = route === "printed"
+        ? (hasPrinterField ? parsed.intendedPrinterItemId : predecessor?.intendedPrinterItemId ?? null)
+        : null;
+      if (intendedPrinterItemId !== undefined && intendedPrinterItemId !== null) await assertOwnedPrinter(this.ports, intendedPrinterItemId);
+      const createInput: CreateProjectRevision = {
+        ...parsed,
+        ...(route === undefined ? {} : { fabricationRoute: route }),
+        intendedPrinterItemId
+      };
+      const revision = await this.ports.projects.createProjectRevision(parentId, createInput, ctx);
+      return { value: revision, entityId: revision.id, version: revision.version };
+    });
+  }
+
+  async updateProjectRevision(id: string, input: UpdateProjectRevision, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<ProjectRevision>> {
+    const parsed = updateProjectRevisionSchema.parse(input);
+    const revisionId = requireId(id, "revision id");
+    return this.mutate(ctx, "project.revision.update", "project_revision", revisionId, async () => {
+      const current = await this.ports.projects.getProjectRevision(revisionId);
+      if (current === null) throw notFound("Project revision", revisionId);
+      await this.assertProjectActive(current.projectId);
+      const route = parsed.fabricationRoute ?? current.fabricationRoute ?? "undecided";
+      const hasPrinterField = Object.prototype.hasOwnProperty.call(parsed, "intendedPrinterItemId");
+      if (hasPrinterField && parsed.intendedPrinterItemId !== undefined && parsed.intendedPrinterItemId !== null && route !== "printed") {
+        throw new ApplicationError("validation", "The intended printer requires the printed fabrication route");
+      }
+      const intendedPrinterItemId = route === "printed"
+        ? (hasPrinterField ? parsed.intendedPrinterItemId : current.intendedPrinterItemId ?? null)
+        : null;
+      if (intendedPrinterItemId !== undefined && intendedPrinterItemId !== null) await assertOwnedPrinter(this.ports, intendedPrinterItemId);
+      const update = {
+        ...parsed,
+        fabricationRoute: route,
+        intendedPrinterItemId
+      } as UpdateProjectRevision;
+      const updateRevision = this.ports.projects.updateProjectRevision;
+      if (updateRevision === undefined) throw new ApplicationError("integrity_error", "This project adapter does not support revision planning updates");
+      const revision = await updateRevision.call(this.ports.projects, revisionId, update, expectedVersion, ctx);
       return { value: revision, entityId: revision.id, version: revision.version };
     });
   }
@@ -1829,6 +1922,11 @@ export class ApplicationService {
     const createAtomic = this.ports.projects.createProjectWithInitialRevision;
     if (createAtomic === undefined) throw new ApplicationError("integrity_error", "This project adapter does not support atomic project creation");
     const action = "project.create_with_initial_revision";
+    const effectiveRoute = parsed.revision.fabricationRoute ?? "undecided";
+    if (parsed.revision.intendedPrinterItemId !== undefined && parsed.revision.intendedPrinterItemId !== null && effectiveRoute !== "printed") {
+      throw new ApplicationError("validation", "The intended printer requires the printed fabrication route");
+    }
+    if (parsed.revision.intendedPrinterItemId !== undefined && parsed.revision.intendedPrinterItemId !== null) await assertOwnedPrinter(this.ports, parsed.revision.intendedPrinterItemId);
     // The atomic command is also used by MCP hosts without an HTTP request
     // fingerprint. Always derive the digest from the parsed, canonical
     // payload so transport envelope differences cannot change replay
@@ -1851,6 +1949,11 @@ export class ApplicationService {
     if (setup === undefined) throw new ApplicationError("integrity_error", "This runtime does not support project setup previews");
     const previewId = setupDerivedId(randomUUID(), "preview", "setup-preview");
     const proposal = canonicalizeSetupProposal(setupNormalize(previewId, parsed));
+    const intendedPrinterItemId = proposal.revision.intendedPrinterItemId;
+    if (intendedPrinterItemId !== undefined && intendedPrinterItemId !== null) {
+      if (proposal.revision.fabricationRoute !== "printed") throw new ApplicationError("validation", "The intended printer requires the printed fabrication route");
+      await assertOwnedPrinter(this.ports, intendedPrinterItemId);
+    }
     const inventory = await this.ports.unitOfWork.exclusive(() => listAllInventory(this.ports.inventory));
     const now = nowIso();
     const setupLines = setupBomLines(proposal, now);
@@ -1861,6 +1964,17 @@ export class ApplicationService {
     const fieldErrors: ProjectSetupFieldError[] = [];
     const lineByRef = new Map(proposal.bomLines.map((line) => [line.localRef, line]));
     const setupLineByRef = new Map(proposal.bomLines.map((line, index) => [line.localRef, setupLines[index]! ]));
+    for (const [index, line] of proposal.bomLines.entries()) {
+      if (bomRequirementRequestsPrinter(line)) {
+        fieldErrors.push({ path: `bomLines.${index}.constraints.kind`, code: "printer_requirement_not_allowed", message: "Printers are selected through build configuration, not BOM requirements" });
+      }
+      for (const itemId of [line.itemId, ...line.alternatives.map((alternative) => alternative.itemId)].filter((value): value is string => value !== undefined)) {
+        const item = inventory.find((candidate) => candidate.id === itemId);
+        if (item?.kind === "printer") {
+          fieldErrors.push({ path: `bomLines.${index}.itemId`, code: "printer_requirement_not_allowed", message: "Printers are selected through build configuration, not BOM requirements" });
+        }
+      }
+    }
     for (let index = 0; index < proposal.reservations.length; index += 1) {
       const reservation = proposal.reservations[index];
       if (reservation === undefined) continue;
@@ -1870,6 +1984,10 @@ export class ApplicationService {
       if (line === undefined) fieldErrors.push({ path: `reservations.${index}.bomLineLocalRef`, code: "unknown_bom_line", message: "Reservation references an unknown BOM line" });
       if (item === undefined) fieldErrors.push({ path: `reservations.${index}.itemId`, code: "inventory_not_found", message: "Reservation references an unknown inventory item" });
       if (line !== undefined && setupLine !== undefined && item !== undefined) {
+        if (setupLine.role !== "consumed") {
+          fieldErrors.push({ path: `reservations.${index}.bomLineLocalRef`, code: setupLine.role === "reusable" ? "reusable_requirement_not_reservable" : "bom_line_role_required", message: setupLine.role === "reusable" ? "Reusable tools and equipment remain owned and are not reserved as consumable stock" : "Review whether this BOM line is consumed or reusable before reserving stock" });
+          continue;
+        }
         if (!isUnitCompatibleWithItemKind(item.kind, item.unit)) {
           const reason = unitCorrectionReason(item.kind, item.unit) ?? `unit '${item.unit}' is not recognized for kind '${item.kind}'`;
           fieldErrors.push({ path: `reservations.${index}.itemId`, code: "incompatible_inventory_unit", message: `Inventory item needs unit correction before it can be used in project setup: ${reason}` });
@@ -1981,6 +2099,11 @@ export class ApplicationService {
       // failures. Preserve that precedence before reading the live inventory;
       // stale-basis checks apply only to otherwise valid previews.
       if (preview.fieldErrors.length > 0) throw new ApplicationError("validation", "Project setup preview contains semantic field errors");
+      const intendedPrinterItemId = preview.proposal.revision.intendedPrinterItemId;
+      if (intendedPrinterItemId !== undefined && intendedPrinterItemId !== null) {
+        if (preview.proposal.revision.fabricationRoute !== "printed") throw new ApplicationError("validation", "The intended printer requires the printed fabrication route");
+        await assertOwnedPrinter(this.ports, intendedPrinterItemId);
+      }
       // Candidate identity is part of the preview basis as well as the
       // quantity/evidence rows below. A new inventory row that now matches a
       // constraint has no prior version to compare, so recompute candidate
@@ -2100,6 +2223,15 @@ export class ApplicationService {
     const parentId = requireId(revisionId, "revision id");
     return this.mutate(ctx, "project.bom_line.create", "bom_line", parsed.id ?? "pending", async () => {
       await this.assertProjectActiveFromRevision(parentId);
+      if (bomRequirementRequestsPrinter(parsed)) {
+        throw new ApplicationError("validation", "Printers are selected through build configuration, not BOM requirements");
+      }
+      for (const itemId of [parsed.itemId, ...parsed.alternatives.map((alternative) => alternative.itemId)].filter((value): value is string => value !== undefined)) {
+        const item = await this.ports.inventory.getItem(itemId);
+        if (item?.kind === "printer") {
+          throw new ApplicationError("validation", "Printers are selected through build configuration, not BOM requirements");
+        }
+      }
       const line = await this.ports.projects.createBomLine(parentId, parsed, ctx);
       return { value: line, entityId: line.id, version: line.version };
     });
@@ -2112,11 +2244,25 @@ export class ApplicationService {
       const existing = await this.ports.projects.getBomLine(lineId);
       if (existing === null) throw notFound("BOM line", lineId);
       await this.assertProjectActiveFromRevision(existing.revisionId);
+      if (Object.prototype.hasOwnProperty.call(parsed, "role") && (parsed.role === "reusable" || (existing.role === "consumed" && parsed.role !== "consumed"))) {
+        const hasActiveReservation = (await this.ports.projects.listReservations(existing.revisionId))
+          .some((reservation) => reservation.lineId === lineId && reservation.status === "active");
+        if (hasActiveReservation) throw conflict("Release or reconcile active reservations before changing this requirement from a part or material", { lineId });
+      }
       const merged = canonicalizeBomLineWrite({
         ...existing,
         ...parsed,
         ...(parsed.constraints === undefined ? { constraints: existing.constraints } : {}),
       });
+      if (bomRequirementRequestsPrinter(merged)) {
+        throw new ApplicationError("validation", "Printers are selected through build configuration, not BOM requirements");
+      }
+      for (const itemId of [merged.itemId, ...merged.alternatives.map((alternative) => alternative.itemId)].filter((value): value is string => value !== undefined)) {
+        const item = await this.ports.inventory.getItem(itemId);
+        if (item?.kind === "printer") {
+          throw new ApplicationError("validation", "Printers are selected through build configuration, not BOM requirements");
+        }
+      }
       const canonicalConstraints = isRecord(merged.constraints) ? { constraints: merged.constraints } : {};
       const line = await this.ports.projects.updateBomLine(lineId, { ...parsed, ...canonicalConstraints }, expectedVersion, ctx);
       return { value: line, entityId: line.id, version: line.version };
@@ -2331,6 +2477,7 @@ export class ApplicationService {
       const lines = await this.ports.projects.listBomLines(parentId);
       const line = lines.find((candidate) => candidate.id === parsed.lineId);
       if (line === undefined) throw notFound("BOM line", parsed.lineId);
+      assertConsumedBomRequirement(line);
       if (!bomSpecification(line).sufficient) {
         throw new ApplicationError("validation", "Resolve the BOM specification decisions before reserving stock");
       }
@@ -2516,7 +2663,7 @@ export class ApplicationService {
   async recordUsage(input: UsageInput, ctx: RequestContext): Promise<Mutation<StockMutation>> {
     const itemId = requireId(input.itemId, "item id");
     requireId(input.projectId, "project id");
-    if (input.reservationId !== undefined) requireId(input.reservationId, "reservation id");
+    const reservationId = requireId(input.reservationId ?? "", "reservation id");
     if (!Number.isFinite(input.quantity) || input.quantity <= 0) {
       throw new ApplicationError("validation", "Usage quantity must be greater than zero");
     }
@@ -2528,7 +2675,11 @@ export class ApplicationService {
       if (item.unit !== input.unit) {
         throw new ApplicationError("validation", `Unit mismatch: item uses ${item.unit}, usage uses ${input.unit}`);
       }
-      const usage = await this.ports.projects.recordUsage({ ...input, itemId }, ctx);
+      const details = await this.ports.projects.getReservationDetails(reservationId);
+      if (details === null) throw notFound("Reservation", reservationId);
+      if (details.projectId !== input.projectId) throw new ApplicationError("validation", "Reservation belongs to a different project");
+      assertConsumedBomRequirement(details.bomLine);
+      const usage = await this.ports.projects.recordUsage({ ...input, itemId, reservationId }, ctx);
       return { value: { ...usage, item: inventoryWithUnitStatus(usage.item) }, entityId: usage.item.id, version: usage.item.version };
     });
   }
