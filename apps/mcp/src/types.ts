@@ -508,6 +508,11 @@ export interface ProjectWithInitialRevisionCreateInput extends ProjectCreateInpu
   projectId?: string;
   revisionId?: string;
   revisionSummary?: string;
+  /** Intended manufacturing route for the initial planning revision. */
+  fabricationRoute?: FabricationRoute;
+  /** Exact owned printer item used for planning when the route is printed. */
+  /** Null deliberately clears; omitted carries the current assignment forward. */
+  intendedPrinterItemId?: string | null;
 }
 
 export interface ProjectUpdateInput {
@@ -544,6 +549,8 @@ export interface WorkItemCreateInput {
   description?: string;
 }
 
+export type FabricationRoute = "printed" | "ready_made" | "none" | "undecided";
+
 export interface Revision {
   id: string;
   number: number;
@@ -551,12 +558,27 @@ export interface Revision {
   projectId?: string;
   workItemId?: string;
   summary?: string;
+  /** Canonical manufacturing route; legacy records are projected as undecided. */
+  fabricationRoute: FabricationRoute;
+  /** Planning-only printer selection; it is not a BOM or build snapshot. */
+  /** Null deliberately clears; omitted carries the current assignment forward. */
+  intendedPrinterItemId?: string | null;
   version?: number;
 }
 
 export interface ProjectRevisionCreateInput {
   projectId: string;
   summary?: string;
+  fabricationRoute?: FabricationRoute;
+  intendedPrinterItemId?: string | null;
+}
+
+export interface ProjectRevisionUpdateInput {
+  revisionId: string;
+  expectedVersion: number;
+  fabricationRoute?: FabricationRoute;
+  /** Null explicitly clears the planning printer assignment. */
+  intendedPrinterItemId?: string | null;
 }
 
 export interface WorkItemRevisionCreateInput {
@@ -602,6 +624,12 @@ export interface BomLine {
   quantity: number;
   unit: Quantity["unit"];
   requirement: "required" | "optional";
+  /**
+   * Whether using this requirement consumes stock or leaves it reusable.
+   * Null is a legacy value whose intent must be reviewed before reserving,
+   * consuming, or reconciling the line.
+   */
+  role?: "consumed" | "reusable" | null;
   itemId?: string;
   /** Structured alternatives preserve compatibility evidence and reasons. */
   alternatives?: readonly BomAlternative[];
@@ -665,6 +693,7 @@ export interface BomLineCreateInput {
   quantity: number;
   unit: Quantity["unit"];
   requirement?: BomLine["requirement"];
+  role?: BomLine["role"];
   itemId?: string;
   alternatives?: readonly BomAlternative[];
   /** @deprecated Use alternatives when compatibility state or reason matters. */
@@ -680,6 +709,7 @@ export interface BomLineUpdateInput {
   quantity?: number;
   unit?: Quantity["unit"];
   requirement?: BomLine["requirement"];
+  role?: BomLine["role"];
   itemId?: string;
   alternatives?: readonly BomAlternative[];
   /** @deprecated Use alternatives when compatibility state or reason matters. */
@@ -770,7 +800,7 @@ export interface ReleaseReservationInput {
 
 export interface UsageInput {
   projectRevisionId: string;
-  reservationId?: string;
+  reservationId: string;
   itemId: string;
   quantity: Quantity;
   note?: string;
@@ -1014,6 +1044,7 @@ export interface ProjectsBackend {
   createWorkItem(input: WorkItemCreateInput, context: McpRequestContext): Promise<WriteResult<WorkItem>>;
   getWorkItem(input: { workItemId: string }, context: McpRequestContext): Promise<WorkItem>;
   createProjectRevision(input: ProjectRevisionCreateInput, context: McpRequestContext): Promise<WriteResult<Revision>>;
+  updateProjectRevision?(input: ProjectRevisionUpdateInput, context: McpRequestContext): Promise<WriteResult<Revision>>;
   getProjectRevision(input: RevisionReadInput, context: McpRequestContext): Promise<Revision>;
   createWorkItemRevision(input: WorkItemRevisionCreateInput, context: McpRequestContext): Promise<WriteResult<Revision>>;
   getWorkItemRevision(input: RevisionReadInput, context: McpRequestContext): Promise<Revision>;

@@ -89,7 +89,7 @@ describe("production runtime mappings", () => {
     const project = await service.createProject({ id: "inspection-basis-project", name: "Inspection basis", status: "planned" }, context());
     const revision = await service.createProjectRevision(project.data.id, { id: "inspection-basis-revision", name: "Initial", status: "concept" }, context());
     const physicalLine = await service.createBomLine(revision.data.id, {
-      id: "inspection-basis-physical-line", name: "Uncounted cable", itemId: uncertain.data.id, requiredQuantity: 2, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: confirmed.data.id, compatible: "confirmed" }],
+      id: "inspection-basis-physical-line", name: "Uncounted cable", role: "consumed", itemId: uncertain.data.id, requiredQuantity: 2, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: confirmed.data.id, compatible: "confirmed" }],
     }, context());
     const competingLine = await service.createBomLine(revision.data.id, {
       id: "inspection-basis-competing-line", name: "Confirmed controller", itemId: confirmed.data.id, requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [],
@@ -242,7 +242,7 @@ describe("production runtime mappings", () => {
       project: { id: "setup-project", name: "Atomic setup", status: "planned" as const },
       revision: { id: "setup-revision", name: "Initial", status: "concept" as const },
       workItems: [{ localRef: "body", id: "setup-work", name: "Body", kind: "part" as const, revision: { id: "setup-work-revision", name: "Initial body", status: "concept" as const } }],
-      bomLines: [{ localRef: "screw", revisionLocalRef: "project", id: "setup-bom", name: "M3 screw", itemId: "setup-stock", requiredQuantity: 2, unit: "each" as const, optional: false, constraints: {}, alternatives: [] }],
+      bomLines: [{ localRef: "screw", revisionLocalRef: "project", id: "setup-bom", name: "M3 screw", role: "consumed" as const, itemId: "setup-stock", requiredQuantity: 2, unit: "each" as const, optional: false, constraints: {}, alternatives: [] }],
       reservations: [{ localRef: "reserve-screw", bomLineLocalRef: "screw", id: "setup-reservation", itemId: "setup-stock", quantity: 2, unit: "each" as const }]
     };
     const beforeProjects = runtime.database.get("SELECT COUNT(*) AS count FROM projects")?.count;
@@ -277,7 +277,7 @@ describe("production runtime mappings", () => {
         project: { id: `${suffix}-project`, name: `Rollback ${stage} project`, status: "planned" },
         revision: { id: `${suffix}-revision`, name: "Initial", status: "concept" },
         workItems: [],
-        bomLines: [{ localRef: "screw", id: `${suffix}-line`, name: "Rollback screw", itemId: `${suffix}-stock`, requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }],
+        bomLines: [{ localRef: "screw", id: `${suffix}-line`, name: "Rollback screw", role: "consumed", itemId: `${suffix}-stock`, requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }],
         reservations: [{ localRef: "reservation", bomLineLocalRef: "screw", id: `${suffix}-reservation`, itemId: `${suffix}-stock`, quantity: 1, unit: "each" }]
       }, context({ actor: suffix }));
 
@@ -327,7 +327,7 @@ describe("production runtime mappings", () => {
         project: { id: `${stage}-identity-project`, name: `${stage} identity project`, status: "planned" },
         revision: { id: `${stage}-identity-revision`, name: "Initial", status: "concept" },
         workItems: [{ localRef: "part", id: `${stage}-identity-work`, name: "Part", kind: "part", revision: { id: `${stage}-identity-work-revision`, name: "Initial part", status: "concept" } }],
-        bomLines: [{ localRef: "line", id: `${stage}-identity-line`, name: "Identity stock", itemId: `${stage}-identity-stock`, requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }],
+        bomLines: [{ localRef: "line", id: `${stage}-identity-line`, name: "Identity stock", role: "consumed", itemId: `${stage}-identity-stock`, requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }],
         reservations: [{ localRef: "reservation", bomLineLocalRef: "line", id: `${stage}-identity-reservation`, itemId: `${stage}-identity-stock`, quantity: 1, unit: "each" }]
       }, context({ actor: `${stage}-identity-agent` }));
       const spy = vi.spyOn(runtime.ports.projects, method as "getProject").mockResolvedValueOnce({ id: `existing-${stage}` } as never);
@@ -536,10 +536,10 @@ describe("production runtime mappings", () => {
     await runtime.ports.inventory.createItem({ id: "removal-item", name: "Removal item", kind: "electronic", quantity: 4, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
     const project = await runtime.ports.projects.createProject({ id: "removal-project", name: "Removal project", status: "planned" }, context());
     const firstRevision = await runtime.ports.projects.createProjectRevision(project.id, { id: "removal-revision-1", name: "First", status: "concept" }, context());
-    const firstLine = await runtime.ports.projects.createBomLine(firstRevision.id, { id: "removal-line-1", name: "Removal item", itemId: "removal-item", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
+    const firstLine = await runtime.ports.projects.createBomLine(firstRevision.id, { id: "removal-line-1", name: "Removal item", role: "consumed", itemId: "removal-item", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
     const firstReservation = await runtime.ports.projects.createReservation(firstRevision.id, { id: "removal-reservation-1", lineId: firstLine.id, itemId: "removal-item", quantity: 1 }, context());
     const secondRevision = await runtime.ports.projects.createProjectRevision(project.id, { id: "removal-revision-2", name: "Second", status: "concept" }, context());
-    const secondLine = await runtime.ports.projects.createBomLine(secondRevision.id, { id: "removal-line-2", name: "Removal item", itemId: "removal-item", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
+    const secondLine = await runtime.ports.projects.createBomLine(secondRevision.id, { id: "removal-line-2", name: "Removal item", role: "consumed", itemId: "removal-item", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
     const secondReservation = await runtime.ports.projects.createReservation(secondRevision.id, { id: "removal-reservation-2", lineId: secondLine.id, itemId: "removal-item", quantity: 1 }, context());
     const removeContext = context({ actor: "remover", idempotencyKey: "remove-project-1", correlationId: "remove-correlation" });
 
@@ -677,7 +677,7 @@ describe("production runtime mappings", () => {
     }, context());
     const project = await runtime.ports.projects.createProject({ id: "historical-project", name: "Historical project", status: "planned" }, context());
     const historicalRevision = await runtime.ports.projects.createProjectRevision(project.id, { id: "historical-revision", name: "Historical", status: "concept" }, context());
-    const line = await runtime.ports.projects.createBomLine(historicalRevision.id, { id: "historical-bom", name: "Historical board", itemId: "historical-board", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
+    const line = await runtime.ports.projects.createBomLine(historicalRevision.id, { id: "historical-bom", name: "Historical board", role: "consumed", itemId: "historical-board", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
     const reservation = await runtime.ports.projects.createReservation(historicalRevision.id, { id: "historical-reservation", lineId: line.id, itemId: "historical-board", quantity: 1 }, context());
     const currentRevision = await runtime.ports.projects.createProjectRevision(project.id, { id: "current-revision", name: "Current", status: "concept" }, context());
 
@@ -712,6 +712,7 @@ describe("production runtime mappings", () => {
     const line = await first.ports.projects.createBomLine(revision.id, {
       id: "retirement-line",
       name: "M3 fastener",
+      role: "consumed",
       itemId: "retirement-fastener",
       requiredQuantity: 2,
       unit: "each",
@@ -765,6 +766,7 @@ describe("production runtime mappings", () => {
     const line = await first.ports.projects.createBomLine(revision.id, {
       id: "specification-line",
       name: "12 V power supply",
+      role: "consumed",
       requiredQuantity: 1,
       unit: "each",
       optional: false,
@@ -969,7 +971,7 @@ describe("production runtime mappings", () => {
     }, context());
     const project = await runtime.ports.projects.createProject({ id: "project-1", name: "Lamp", status: "planned" }, context());
     const revision = await runtime.ports.projects.createProjectRevision(project.id, { id: "revision-1", name: "Initial", status: "concept" }, context());
-    const line = await runtime.ports.projects.createBomLine(revision.id, { id: "bom-1", name: "M3 bolt", itemId: "bolt-1", requiredQuantity: 2, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
+    const line = await runtime.ports.projects.createBomLine(revision.id, { id: "bom-1", name: "M3 bolt", role: "consumed", itemId: "bolt-1", requiredQuantity: 2, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
 
     const reservation = await runtime.ports.projects.createReservation(revision.id, { id: "reservation-1", lineId: line.id, itemId: "bolt-1", quantity: 1 }, context());
     expect(reservation.status).toBe("active");
@@ -988,12 +990,12 @@ describe("production runtime mappings", () => {
     }
     const project = await runtime.ports.projects.createProject({ id: "project-reference", name: "Reference checks", status: "planned" }, context());
     const revision = await runtime.ports.projects.createProjectRevision(project.id, { id: "revision-reference", name: "Initial", status: "concept" }, context());
-    const line = await runtime.ports.projects.createBomLine(revision.id, { id: "bom-reference", name: "M3 bolt", itemId: "bolt-1", requiredQuantity: 1, unit: "each", optional: false, alternatives: [{ itemId: "board-1", compatible: "conditional" }], constraints: {} }, context());
+    const line = await runtime.ports.projects.createBomLine(revision.id, { id: "bom-reference", name: "M3 bolt", role: "consumed", itemId: "bolt-1", requiredQuantity: 1, unit: "each", optional: false, alternatives: [{ itemId: "board-1", compatible: "conditional" }], constraints: {} }, context());
 
     await expect(runtime.ports.projects.createReservation(revision.id, { id: "reservation-wrong-item", lineId: line.id, itemId: "board-1", quantity: 1 }, context())).rejects.toMatchObject({ code: "validation" });
 
     // Simulate a legacy persisted row that predates the strict public constraint schema.
-    const unsupportedLine = await runtime.ports.projects.createBomLine(revision.id, { id: "bom-unsupported", name: "M3 bolt", itemId: "bolt-1", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: { mysteryProperty: "anything" } as never }, context());
+    const unsupportedLine = await runtime.ports.projects.createBomLine(revision.id, { id: "bom-unsupported", name: "M3 bolt", role: "consumed", itemId: "bolt-1", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: { mysteryProperty: "anything" } as never }, context());
     await expect(runtime.ports.projects.createReservation(revision.id, { id: "reservation-unsupported", lineId: unsupportedLine.id, itemId: "bolt-1", quantity: 1 }, context())).rejects.toMatchObject({ code: "validation" });
   });
 
@@ -1002,7 +1004,7 @@ describe("production runtime mappings", () => {
     await runtime.ports.inventory.createItem({ id: "board-reserved", name: "ESP32 board", kind: "electronic", quantity: 1, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
     const project = await runtime.ports.projects.createProject({ id: "project-reserved", name: "Reserved project", status: "planned" }, context());
     const revision = await runtime.ports.projects.createProjectRevision(project.id, { id: "revision-reserved", name: "Initial", status: "concept" }, context());
-    const line = await runtime.ports.projects.createBomLine(revision.id, { id: "bom-reserved", name: "ESP32 board", itemId: "board-reserved", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
+    const line = await runtime.ports.projects.createBomLine(revision.id, { id: "bom-reserved", name: "ESP32 board", role: "consumed", itemId: "board-reserved", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
     const reservation = await runtime.ports.projects.createReservation(revision.id, { id: "reservation-reserved", lineId: line.id, itemId: "board-reserved", quantity: 1 }, context());
     const service = new ApplicationService(runtime.ports);
 
@@ -1025,7 +1027,7 @@ describe("production runtime mappings", () => {
     await runtime.ports.inventory.createItem({ id: "board-partial", name: "ESP32 board", kind: "electronic", quantity: 2, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
     const project = await runtime.ports.projects.createProject({ id: "project-partial", name: "Partial usage", status: "planned" }, context());
     const revision = await runtime.ports.projects.createProjectRevision(project.id, { id: "revision-partial", name: "Initial", status: "concept" }, context());
-    const line = await runtime.ports.projects.createBomLine(revision.id, { id: "bom-partial", name: "ESP32 board", itemId: "board-partial", requiredQuantity: 2, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
+    const line = await runtime.ports.projects.createBomLine(revision.id, { id: "bom-partial", name: "ESP32 board", role: "consumed", itemId: "board-partial", requiredQuantity: 2, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
     const reservation = await runtime.ports.projects.createReservation(revision.id, { id: "reservation-partial", lineId: line.id, itemId: "board-partial", quantity: 2 }, context());
 
     await expect(runtime.ports.projects.recordUsage({ reservationId: reservation.id, projectId: project.id, itemId: "board-partial", quantity: 1, unit: "each" }, context())).rejects.toMatchObject({ code: "validation" });

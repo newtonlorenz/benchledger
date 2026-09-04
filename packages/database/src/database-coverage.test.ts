@@ -166,7 +166,7 @@ describe("SQLite repository edge behavior", () => {
     projects.createRevision(revision);
     const workRevision = createWorkItemRevision({ id: "work-revision-full", workItemId: work.id, number: 1, label: "r01", status: "CAD complete", sourcePath: "cad/enclosure.step", createdAt: "2026-01-02T00:00:00.000Z" });
     projects.createWorkItemRevision(workRevision);
-    const line = createBomLine({ id: "bom-full", revisionId: revision.id, name: "ESP32 board", quantity: 1, unit: "board", required: true, optional: false, itemId: fullItem.id, alternativeItemIds: ["item-alt"], constraints: { manufacturer: "Maker", tags: ["electronics"] }, notes: "main board" });
+    const line = createBomLine({ id: "bom-full", revisionId: revision.id, name: "ESP32 board", role: "consumed", quantity: 1, unit: "board", required: true, optional: false, itemId: fullItem.id, alternativeItemIds: ["item-alt"], constraints: { manufacturer: "Maker", tags: ["electronics"] }, notes: "main board" });
     boms.createLine(line);
     const alternative = { id: "alternative-full", bomLineId: line.id, itemId: "item-alt", label: "Compatible board", constraints: { model: "Rev B" as const } };
     boms.createAlternative(alternative);
@@ -207,7 +207,7 @@ describe("SQLite repository edge behavior", () => {
     inventory.appendStockEvent(createStockEvent({ id: "reservation-receipt", itemId: fullItem.id, kind: "receipt", quantity: 3, unit: fullItem.unit, reason: "received", occurredAt: "2026-01-02T00:00:00.000Z", createdAt: "2026-01-02T00:00:00.000Z" }));
     projects.create(createProject({ id: "reservation-project", name: "Reservation project" }));
     projects.createRevision(createProjectRevision({ id: "reservation-revision", projectId: "reservation-project", number: 1 }));
-    boms.createLine(createBomLine({ id: "reservation-bom", revisionId: "reservation-revision", name: fullItem.name, quantity: 2, unit: fullItem.unit, itemId: fullItem.id }));
+    boms.createLine(createBomLine({ id: "reservation-bom", revisionId: "reservation-revision", name: fullItem.name, role: "consumed", quantity: 2, unit: fullItem.unit, itemId: fullItem.id }));
 
     const reservation = reservations.create({ id: "reservation-consume", projectRevisionId: "reservation-revision", bomLineId: "reservation-bom", itemId: fullItem.id, quantity: 2, createdAt: "2026-01-03T00:00:00.000Z" });
     expect(reservation.status).toBe("active");

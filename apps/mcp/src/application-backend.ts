@@ -89,6 +89,7 @@ import type {
   ProjectWithInitialRevisionCreateInput,
   ProjectListInput,
   ProjectRevisionCreateInput,
+  ProjectRevisionUpdateInput,
   ProjectUpdateInput,
   ProjectWithInitialRevisionResult,
   ProjectTombstone,
@@ -546,6 +547,11 @@ export function createApplicationBackend(service: ApplicationService, options: P
       createWorkItem: async (input, context) => mutationResult(await service.createWorkItem(input.projectId, toApiWorkItemCreate(input), appContext(context)), "workItem", toMcpWorkItem),
       getWorkItem: async (input) => toMcpWorkItem(await service.getWorkItem(input.workItemId)),
       createProjectRevision: async (input, context) => mutationResult(await service.createProjectRevision(input.projectId, toApiProjectRevisionCreate(input), appContext(context)), "revision", toMcpRevision),
+      updateProjectRevision: async (input, context) => {
+        if (service.updateProjectRevision === undefined) throw new ApplicationError("integrity_error", "This project backend does not support revision planning updates");
+        const { revisionId, expectedVersion, ...changes } = input;
+        return mutationResult(await service.updateProjectRevision(revisionId, toApiProjectRevisionUpdate(changes), expectedVersion, appContext(context)), "revision", toMcpRevision);
+      },
       getProjectRevision: async (input) => toMcpRevision(await service.getProjectRevision(input.revisionId)),
       createWorkItemRevision: async (input, context) => mutationResult(await service.createWorkItemRevision(input.workItemId, toApiWorkItemRevisionCreate(input), appContext(context)), "revision", toMcpRevision),
       getWorkItemRevision: async (input) => toMcpRevision(await service.getWorkItemRevision(input.revisionId)),
@@ -623,15 +629,13 @@ export function createApplicationBackend(service: ApplicationService, options: P
       },
       release: async (input, context) => mapReservation(await service.releaseReservation(input.reservationId, input.expectedVersion, appContext(context)), reservationDetails),
       recordUsage: async (input, context) => {
-        if (input.reservationId !== undefined) {
-          const details = await reservationDetails(input.reservationId);
-          if (details === null) throw new McpAdapterError("NOT_FOUND", "The usage reservation could not be resolved.");
-          if (details.projectRevisionId !== input.projectRevisionId) {
-            throw new McpAdapterError("INVALID_ARGUMENT", "reservationId must belong to the supplied projectRevisionId.");
-          }
+        const details = await reservationDetails(input.reservationId);
+        if (details === null) throw new McpAdapterError("NOT_FOUND", "The usage reservation could not be resolved.");
+        if (details.projectRevisionId !== input.projectRevisionId) {
+          throw new McpAdapterError("INVALID_ARGUMENT", "reservationId must belong to the supplied projectRevisionId.");
         }
         const revision = await service.getProjectRevision(input.projectRevisionId);
-        const mutation = await service.recordUsage({ projectId: revision.projectId, itemId: input.itemId, quantity: input.quantity.value, unit: toApiUnit(input.quantity.unit), ...(input.reservationId === undefined ? {} : { reservationId: input.reservationId }), ...(input.note === undefined ? {} : { note: input.note }) }, appContext(context));
+        const mutation = await service.recordUsage({ projectId: revision.projectId, itemId: input.itemId, quantity: input.quantity.value, unit: toApiUnit(input.quantity.unit), reservationId: input.reservationId, ...(input.note === undefined ? {} : { note: input.note }) }, appContext(context));
         return { usageEventId: mutation.data.event.id, itemId: mutation.data.item.id, quantity: input.quantity, resultingQuantity: toQuantity(mutation.data.item.availableQuantity, mutation.data.item.unit), version: mutation.data.item.version, auditId: mutation.audit.id } satisfies UsageResult;
       },
     },
@@ -1333,7 +1337,14 @@ function toApiProjectWithInitialRevisionCreate(input: ProjectWithInitialRevision
   const revisionName = summary.length <= 240 ? summary : "Initial planning revision";
   return {
     project: { ...toApiProjectCreate(input), ...(input.projectId === undefined ? {} : { id: input.projectId }) },
-    revision: { name: revisionName, status: "concept", notes: summary, ...(input.revisionId === undefined ? {} : { id: input.revisionId }) },
+    revision: {
+      name: revisionName,
+      status: "concept",
+      notes: summary,
+      ...(input.revisionId === undefined ? {} : { id: input.revisionId }),
+      ...(input.fabricationRoute === undefined ? {} : { fabricationRoute: input.fabricationRoute }),
+      ...(input.intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId: input.intendedPrinterItemId }),
+    },
   };
 }
 
@@ -1354,7 +1365,8 @@ function toMcpRevision(value: ApiProjectRevision | ApiWorkItemRevision): Revisio
   const projectId = "projectId" in value && typeof value.projectId === "string" ? value.projectId : undefined;
   const workItemId = "workItemId" in value && typeof value.workItemId === "string" ? value.workItemId : undefined;
   const summary = typeof value.notes === "string" ? value.notes : undefined;
-  return { id: value.id, number: value.number, status, ...(projectId === undefined ? {} : { projectId }), ...(workItemId === undefined ? {} : { workItemId }), ...(summary === undefined ? {} : { summary }), version: value.version };
+  const fabricationRoute = value.fabricationRoute ?? "undecided";
+  return { id: value.id, number: value.number, status, ...(projectId === undefined ? {} : { projectId }), ...(workItemId === undefined ? {} : { workItemId }), ...(summary === undefined ? {} : { summary }), fabricationRoute, ...(value.intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId: value.intendedPrinterItemId }), version: value.version };
 }
 
 function toMcpRevisionStatus(value: string): Revision["status"] {
@@ -1378,7 +1390,20 @@ function assertArtifactRevision(artifact: ApiArtifact, revisionId: string | unde
 }
 
 function toApiProjectRevisionCreate(input: ProjectRevisionCreateInput): CreateProjectRevision {
-  return { name: input.summary ?? "Planning revision", status: "concept", ...(input.summary === undefined ? {} : { notes: input.summary }) };
+  return {
+    name: input.summary ?? "Planning revision",
+    status: "concept",
+    ...(input.summary === undefined ? {} : { notes: input.summary }),
+    ...(input.fabricationRoute === undefined ? {} : { fabricationRoute: input.fabricationRoute }),
+    ...(input.intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId: input.intendedPrinterItemId }),
+  };
+}
+
+function toApiProjectRevisionUpdate(input: Omit<ProjectRevisionUpdateInput, "revisionId" | "expectedVersion">): { fabricationRoute?: ProjectRevisionUpdateInput["fabricationRoute"]; intendedPrinterItemId?: string | null } {
+  return {
+    ...(input.fabricationRoute === undefined ? {} : { fabricationRoute: input.fabricationRoute }),
+    ...(input.intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId: input.intendedPrinterItemId }),
+  };
 }
 
 function toApiWorkItemRevisionCreate(input: WorkItemRevisionCreateInput): CreateWorkItemRevision {
@@ -1414,6 +1439,7 @@ function toMcpProjectSetupProposal(value: ApiProjectSetupProposal): ProjectSetup
     ...value,
     bomLines: value.bomLines.map((line) => ({
       ...line,
+      role: line.role ?? null,
       alternatives: line.alternatives.map(toMcpBomAlternative),
     })),
   } as ProjectSetupProposal;
@@ -1438,6 +1464,7 @@ function toMcpProjectSetupCommitResult(value: ApiProjectSetupCommitResult): Proj
     ...value,
     bomLines: value.bomLines.map((line) => ({
       ...line,
+      role: line.role ?? null,
       alternatives: line.alternatives.map(toMcpBomAlternative),
     })),
     gaps: {
@@ -1539,6 +1566,7 @@ function toMcpBomLine(line: ApiBomLine): BomLine {
     quantity: line.requiredQuantity,
     unit: fromApiUnit(line.unit),
     requirement: line.optional ? "optional" : "required",
+    role: line.role ?? null,
     ...(line.itemId === undefined ? {} : { itemId: line.itemId }),
     ...(alternatives.length === 0 ? {} : { alternatives, compatibleItemIds: alternatives.map((alternative) => alternative.itemId) }),
     ...(Object.keys(line.constraints ?? {}).length === 0 ? {} : { constraints: toMcpBomConstraints(line.constraints) }),
@@ -1549,11 +1577,11 @@ function toMcpBomLine(line: ApiBomLine): BomLine {
 }
 
 function toApiBomCreate(input: BomLineCreateInput): CreateBomLine {
-  return { name: input.description, requiredQuantity: input.quantity, unit: toApiUnit(input.unit), optional: input.requirement === "optional", ...(input.itemId === undefined ? {} : { itemId: input.itemId }), alternatives: toApiBomAlternatives(input), constraints: toApiBomConstraints(input.constraints), ...(input.notes === undefined ? {} : { notes: input.notes }) };
+  return { name: input.description, requiredQuantity: input.quantity, unit: toApiUnit(input.unit), optional: input.requirement === "optional", ...(input.role === undefined ? {} : { role: input.role }), ...(input.itemId === undefined ? {} : { itemId: input.itemId }), alternatives: toApiBomAlternatives(input), constraints: toApiBomConstraints(input.constraints), ...(input.notes === undefined ? {} : { notes: input.notes }) };
 }
 
 function toApiBomUpdate(input: Omit<BomLineUpdateInput, "bomLineId" | "expectedVersion">): Record<string, unknown> {
-  return { ...(input.description === undefined ? {} : { name: input.description }), ...(input.quantity === undefined ? {} : { requiredQuantity: input.quantity }), ...(input.unit === undefined ? {} : { unit: toApiUnit(input.unit) }), ...(input.requirement === undefined ? {} : { optional: input.requirement === "optional" }), ...(input.itemId === undefined ? {} : { itemId: input.itemId }), ...((input.alternatives !== undefined || input.compatibleItemIds !== undefined) ? { alternatives: toApiBomAlternatives(input) } : {}), ...(input.constraints === undefined ? {} : { constraints: toApiBomConstraints(input.constraints) }), ...(input.notes === undefined ? {} : { notes: input.notes }) };
+  return { ...(input.description === undefined ? {} : { name: input.description }), ...(input.quantity === undefined ? {} : { requiredQuantity: input.quantity }), ...(input.unit === undefined ? {} : { unit: toApiUnit(input.unit) }), ...(input.requirement === undefined ? {} : { optional: input.requirement === "optional" }), ...(input.role === undefined ? {} : { role: input.role }), ...(input.itemId === undefined ? {} : { itemId: input.itemId }), ...((input.alternatives !== undefined || input.compatibleItemIds !== undefined) ? { alternatives: toApiBomAlternatives(input) } : {}), ...(input.constraints === undefined ? {} : { constraints: toApiBomConstraints(input.constraints) }), ...(input.notes === undefined ? {} : { notes: input.notes }) };
 }
 
 function toMcpBomEvaluation(value: { revisionId: string; lines: readonly BomGap[]; totals: { requiredLines: number; suppliedLines: number; inspectFirstLines: number; partialLines: number; missingLines: number; optionalLines: number; readyLines?: number; checkLines?: number; decideLines?: number; sourceLines?: number } }, _input: BomEvaluationInput): BomEvaluation {

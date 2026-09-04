@@ -5,6 +5,53 @@ import { ApplicationService } from "@benchledger/application";
 import { createMemoryRuntime, MemoryUnitOfWork } from "./memory-store.js";
 
 describe("MemoryInventory", () => {
+  it("does not change a directly reserved BOM line to reusable", async () => {
+    const runtime = createMemoryRuntime([{
+      id: "reserved-role-item", name: "Reserved board", kind: "electronic", quantity: 1, availableQuantity: 1, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" }, createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1
+    }]);
+    await runtime.projects.createProject({ id: "reserved-role-project", name: "Role project", status: "planned" });
+    const revision = await runtime.projects.createProjectRevision("reserved-role-project", { id: "reserved-role-revision", name: "Initial", status: "concept" });
+    const line = await runtime.projects.createBomLine(revision.id, { id: "reserved-role-line", name: "Reserved board", role: "consumed", itemId: "reserved-role-item", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} });
+    const reservation = await runtime.projects.createReservation(revision.id, { id: "reserved-role-reservation", lineId: line.id, itemId: "reserved-role-item", quantity: 1 });
+
+    await expect(Promise.resolve().then(() => runtime.projects.updateBomLine(line.id, { role: "reusable" }, line.version))).rejects.toMatchObject({ code: "conflict" });
+    await runtime.projects.releaseReservation(reservation.id, reservation.version);
+    await expect(runtime.projects.updateBomLine(line.id, { role: "reusable" }, line.version)).resolves.toMatchObject({ role: "reusable", version: 2 });
+  });
+
+  it("blocks a legacy null role from becoming reusable while preserving null to consumed", async () => {
+    const runtime = createMemoryRuntime([{
+      id: "legacy-reserved-role-item", name: "Legacy reserved board", kind: "electronic", quantity: 1, availableQuantity: 1, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" }, createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1
+    }]);
+    await runtime.projects.createProject({ id: "legacy-reserved-role-project", name: "Legacy role project", status: "planned" });
+    const revision = await runtime.projects.createProjectRevision("legacy-reserved-role-project", { id: "legacy-reserved-role-revision", name: "Initial", status: "concept" });
+    const line = await runtime.projects.createBomLine(revision.id, { id: "legacy-reserved-role-line", name: "Legacy reserved board", role: null, itemId: "legacy-reserved-role-item", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} });
+    runtime.projects.reservations.set("legacy-reserved-role-reservation", { id: "legacy-reserved-role-reservation", lineId: line.id, itemId: "legacy-reserved-role-item", quantity: 1, status: "active", createdAt: line.createdAt, updatedAt: line.updatedAt, version: 1 });
+
+    await expect(Promise.resolve().then(() => runtime.projects.updateBomLine(line.id, { role: "reusable" }, line.version))).rejects.toMatchObject({ code: "conflict" });
+    await expect(runtime.projects.updateBomLine(line.id, { role: "consumed" }, line.version)).resolves.toMatchObject({ role: "consumed", version: 2 });
+  });
+
+  it("round-trips consumed, reusable, and legacy requirement roles through direct and atomic writes", async () => {
+    const runtime = createMemoryRuntime();
+    const service = new ApplicationService(runtime.ports);
+    const context = { actor: "memory-role-test", source: "api" as const, correlationId: "memory-role-test", scopes: new Set(["projects:write", "bom:write"]) };
+    const project = await service.createProject({ id: "memory-role-project", name: "Role project", status: "planned" }, context);
+    const revision = await service.createProjectRevision(project.data.id, { id: "memory-role-revision", name: "Initial", status: "concept" }, context);
+    await service.createBomLine(revision.data.id, { id: "memory-role-consumed", name: "Fastener", role: "consumed", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }, context);
+    await service.createBomLine(revision.data.id, { id: "memory-role-reusable", name: "Tool", role: "reusable", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }, context);
+    await service.createBomLine(revision.data.id, { id: "memory-role-legacy", name: "Legacy", role: null, requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }, context);
+    await expect(service.listBomLines(revision.data.id)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "memory-role-consumed", role: "consumed" }),
+      expect.objectContaining({ id: "memory-role-reusable", role: "reusable" }),
+      expect.objectContaining({ id: "memory-role-legacy", role: null }),
+    ]));
+
+    const preview = await service.previewProjectSetup({ project: { id: "memory-role-setup", name: "Role setup", status: "planned" }, revision: { id: "memory-role-setup-revision", name: "Initial", status: "concept" }, workItems: [], bomLines: [{ localRef: "tool", id: "memory-role-setup-tool", name: "Reusable tool", role: "reusable", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }], reservations: [] }, context);
+    const committed = await service.commitProjectSetup({ previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmReservations: false }, { ...context, idempotencyKey: "memory-role-setup-commit" });
+    expect(committed.data.bomLines).toEqual([expect.objectContaining({ id: "memory-role-setup-tool", role: "reusable" })]);
+  });
+
   it("supports an atomic setup preview and commit with allocation evidence", async () => {
     const runtime = createMemoryRuntime([{
       id: "memory-setup-stock", name: "M3 screw", kind: "fastener", quantity: 3, availableQuantity: 3, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" }, createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1
@@ -15,7 +62,7 @@ describe("MemoryInventory", () => {
       project: { id: "memory-setup-project", name: "Memory setup", status: "planned" },
       revision: { id: "memory-setup-revision", name: "Initial", status: "concept" },
       workItems: [],
-      bomLines: [{ localRef: "screws", id: "memory-setup-line", name: "M3 screw", itemId: "memory-setup-stock", requiredQuantity: 2, unit: "each", optional: false, constraints: {}, alternatives: [] }],
+      bomLines: [{ localRef: "screws", id: "memory-setup-line", name: "M3 screw", role: "consumed", itemId: "memory-setup-stock", requiredQuantity: 2, unit: "each", optional: false, constraints: {}, alternatives: [] }],
       reservations: [{ localRef: "screw-reservation", bomLineLocalRef: "screws", id: "memory-setup-reservation", itemId: "memory-setup-stock", quantity: 2, unit: "each" }]
     }, context);
     expect(preview.status).toBe("active");
@@ -36,8 +83,8 @@ describe("MemoryInventory", () => {
       revision: { id: "memory-shared-revision", name: "Initial", status: "concept" as const },
       workItems: [],
       bomLines: [
-        { localRef: "line-a", id: "memory-shared-line-a", name: "First board", itemId: "memory-shared-setup-stock", requiredQuantity: 1, unit: "each" as const, optional: false, constraints: {}, alternatives: [] },
-        { localRef: "line-b", id: "memory-shared-line-b", name: "Reserved board", itemId: "memory-shared-setup-stock", requiredQuantity: 1, unit: "each" as const, optional: false, constraints: {}, alternatives: [] }
+        { localRef: "line-a", id: "memory-shared-line-a", name: "First board", role: "consumed" as const, itemId: "memory-shared-setup-stock", requiredQuantity: 1, unit: "each" as const, optional: false, constraints: {}, alternatives: [] },
+        { localRef: "line-b", id: "memory-shared-line-b", name: "Reserved board", role: "consumed" as const, itemId: "memory-shared-setup-stock", requiredQuantity: 1, unit: "each" as const, optional: false, constraints: {}, alternatives: [] }
       ],
       reservations: [{ localRef: "shared-reservation", bomLineLocalRef: "line-b", id: "memory-shared-reservation", itemId: "memory-shared-setup-stock", quantity: 1, unit: "each" as const }]
     };
@@ -83,7 +130,7 @@ describe("MemoryInventory", () => {
       project: { id: "memory-setup-guard-project", name: "Guard setup", status: "planned" },
       revision: { id: "memory-setup-guard-revision", name: "Initial", status: "concept" },
       workItems: [],
-      bomLines: [{ localRef: "screws", id: "memory-setup-guard-line", name: "Guard screw", itemId: "memory-setup-guard-stock", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }],
+      bomLines: [{ localRef: "screws", id: "memory-setup-guard-line", name: "Guard screw", role: "consumed", itemId: "memory-setup-guard-stock", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }],
       reservations: [{ localRef: "guard-reservation", bomLineLocalRef: "screws", id: "memory-setup-guard-reservation", itemId: "memory-setup-guard-stock", quantity: 1, unit: "each" }]
     }, context);
     await expect(service.commitProjectSetup({ previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmReservations: true }, { ...context, actor: "different-actor", idempotencyKey: "memory-setup-guard-owner" })).rejects.toMatchObject({ code: "conflict", details: { reason: "preview_ownership", commitState: "not_committed" } });
@@ -111,7 +158,7 @@ describe("MemoryInventory", () => {
     ]);
     const service = new ApplicationService(runtime.ports);
     const context = { actor: "memory-setup-errors", source: "api" as const, correlationId: "memory-setup-errors", scopes: new Set(["projects:write", "bom:write"]) };
-    const exactLine = (localRef: string, itemId: string, requiredQuantity: number) => ({ localRef, id: `line-${localRef}`, name: localRef, itemId, requiredQuantity, unit: "each" as const, optional: false, constraints: {}, alternatives: [] });
+    const exactLine = (localRef: string, itemId: string, requiredQuantity: number) => ({ localRef, id: `line-${localRef}`, name: localRef, role: "consumed" as const, itemId, requiredQuantity, unit: "each" as const, optional: false, constraints: {}, alternatives: [] });
     const preview = await service.previewProjectSetup({
       project: { id: "memory-setup-errors-project", name: "Unsafe reservation review", status: "planned" },
       revision: { id: "memory-setup-errors-revision", name: "Initial", status: "concept" },
@@ -174,7 +221,7 @@ describe("MemoryInventory", () => {
       project: { id: "memory-setup-rollback-project", name: "Memory rollback setup", status: "planned" },
       revision: { id: "memory-setup-rollback-revision", name: "Initial", status: "concept" },
       workItems: [],
-      bomLines: [{ localRef: "screws", id: "memory-setup-rollback-line", name: "Rollback screw", itemId: "memory-setup-rollback-stock", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }],
+      bomLines: [{ localRef: "screws", id: "memory-setup-rollback-line", name: "Rollback screw", role: "consumed", itemId: "memory-setup-rollback-stock", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }],
       reservations: [{ localRef: "screw-reservation", bomLineLocalRef: "screws", id: "memory-setup-rollback-reservation", itemId: "memory-setup-rollback-stock", quantity: 1, unit: "each" }]
     }, context);
     const failingAudit = vi.spyOn(runtime.ports.audit, "append").mockRejectedValueOnce(new Error("injected audit failure"));
@@ -309,7 +356,7 @@ describe("MemoryInventory", () => {
   it("rolls back an in-memory removal when reservation release fails", async () => {
     const runtime = createMemoryRuntime();
     const project = await runtime.projects.createProject({ id: "project-release-failure", name: "Release failure", status: "planned" });
-    runtime.projects.projectRevisions.set("revision-release-failure", { id: "revision-release-failure", projectId: project.id, number: 1, name: "Initial", status: "concept", createdAt: project.createdAt, version: 1 });
+    runtime.projects.projectRevisions.set("revision-release-failure", { id: "revision-release-failure", projectId: project.id, number: 1, name: "Initial", status: "concept", fabricationRoute: "undecided", createdAt: project.createdAt, version: 1 });
     runtime.projects.bomLines.set("line-release-failure", { id: "line-release-failure", revisionId: "revision-release-failure", name: "Missing item", itemId: "missing-item", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: project.createdAt, updatedAt: project.updatedAt, version: 1 });
     runtime.projects.reservations.set("reservation-release-failure", { id: "reservation-release-failure", lineId: "line-release-failure", itemId: "missing-item", quantity: 1, status: "active", createdAt: project.createdAt, updatedAt: project.updatedAt, version: 1 });
 
@@ -323,7 +370,7 @@ describe("MemoryInventory", () => {
   it("preflights every archive reservation dependency before mutation", async () => {
     const runtime = createMemoryRuntime();
     const project = await runtime.projects.createProject({ id: "project-archive-preflight", name: "Archive preflight", status: "planned" });
-    runtime.projects.projectRevisions.set("revision-archive-preflight", { id: "revision-archive-preflight", projectId: project.id, number: 1, name: "Initial", status: "concept", createdAt: project.createdAt, version: 1 });
+    runtime.projects.projectRevisions.set("revision-archive-preflight", { id: "revision-archive-preflight", projectId: project.id, number: 1, name: "Initial", status: "concept", fabricationRoute: "undecided", createdAt: project.createdAt, version: 1 });
     runtime.projects.bomLines.set("line-archive-preflight", { id: "line-archive-preflight", revisionId: "revision-archive-preflight", name: "Missing item", itemId: "missing-item", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: project.createdAt, updatedAt: project.updatedAt, version: 1 });
     runtime.projects.reservations.set("reservation-archive-preflight", { id: "reservation-archive-preflight", lineId: "line-archive-preflight", itemId: "missing-item", quantity: 1, status: "active", createdAt: project.createdAt, updatedAt: project.updatedAt, version: 1 });
 
@@ -337,7 +384,7 @@ describe("MemoryInventory", () => {
       id: "archive-item", name: "Archive item", kind: "electronic", quantity: 2, availableQuantity: 1, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" }, createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1
     }]);
     const project = await runtime.projects.createProject({ id: "project-archive-commit", name: "Archive commit", status: "planned" });
-    runtime.projects.projectRevisions.set("revision-archive-commit", { id: "revision-archive-commit", projectId: project.id, number: 1, name: "Initial", status: "concept", createdAt: project.createdAt, version: 1 });
+    runtime.projects.projectRevisions.set("revision-archive-commit", { id: "revision-archive-commit", projectId: project.id, number: 1, name: "Initial", status: "concept", fabricationRoute: "undecided", createdAt: project.createdAt, version: 1 });
     runtime.projects.bomLines.set("line-archive-commit", { id: "line-archive-commit", revisionId: "revision-archive-commit", name: "Archive item", itemId: "archive-item", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: project.createdAt, updatedAt: project.updatedAt, version: 1 });
     runtime.projects.reservations.set("reservation-archive-commit", { id: "reservation-archive-commit", lineId: "line-archive-commit", itemId: "archive-item", quantity: 1, status: "active", createdAt: project.createdAt, updatedAt: project.updatedAt, version: 1 });
 
@@ -453,6 +500,7 @@ describe("Memory BOM quantity conversion parity", () => {
     const line = await service.createBomLine(revision.data.id, {
       id: "memory-conversion-line",
       name: "LEDs",
+      role: "consumed",
       requiredQuantity: 15,
       unit: "each",
       optional: false,
@@ -468,6 +516,7 @@ describe("Memory BOM quantity conversion parity", () => {
     const noConversion = await service.createBomLine(revision.data.id, {
       id: "memory-no-conversion-line",
       name: "Unconverted LEDs",
+      role: "consumed",
       requiredQuantity: 1,
       unit: "each",
       optional: false,
@@ -498,7 +547,7 @@ describe("Memory BOM quantity conversion parity", () => {
       project: { id: "memory-conversion-setup-project", name: "Memory converted setup", status: "planned" as const },
       revision: { id: "memory-conversion-setup-revision", name: "Initial", status: "concept" as const },
       workItems: [],
-      bomLines: [{ localRef: "led-line", id: "memory-conversion-setup-line", name: "LEDs", requiredQuantity: 15, unit: "each" as const, optional: false, constraints: {}, alternatives: [{ itemId: "memory-setup-conversion-set", compatible: "confirmed" as const, quantityConversion: conversion }] }],
+      bomLines: [{ localRef: "led-line", id: "memory-conversion-setup-line", name: "LEDs", role: "consumed" as const, requiredQuantity: 15, unit: "each" as const, optional: false, constraints: {}, alternatives: [{ itemId: "memory-setup-conversion-set", compatible: "confirmed" as const, quantityConversion: conversion }] }],
       reservations: [{ localRef: "led-reservation", bomLineLocalRef: "led-line", id: "memory-conversion-setup-reservation", itemId: "memory-setup-conversion-set", quantity: 2, unit: "set" as const }],
     };
     const preview = await service.previewProjectSetup(proposal, context);

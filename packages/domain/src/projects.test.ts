@@ -198,7 +198,7 @@ describe("project BOM domain", () => {
   });
 
   it("allows reviewed_no_change only as the sole outcome on an unreserved line", () => {
-    const line = createBomLine({ id: "b-reconcile", revisionId: "r-reconcile", name: "Unused board", quantity: 1, unit: "board" });
+    const line = createBomLine({ id: "b-reconcile", revisionId: "r-reconcile", name: "Unused board", role: "consumed", quantity: 1, unit: "board" });
     const noChange = { bomLineId: line.id, outcomes: [{ kind: "reviewed_no_change" as const, quantity: 0, unit: "board" as const, evidence: { state: "physically_counted" } }] };
     const source = { revisionId: "r-reconcile", lines: [line], reservations: [], inventory: [] };
     expect(planReconciliation(source, [noChange], { requireComplete: true }).stockEvents).toEqual([]);
@@ -210,11 +210,35 @@ describe("project BOM domain", () => {
     expect(() => planReconciliation(reservedSource, [{ ...noChange, outcomes: [noChange.outcomes[0]!, { kind: "consumed" as const, reservationId: active.id, quantity: 1, unit: "board" as const, evidence: { state: "consumed" } }] }], { requireComplete: true })).toThrow(/sole outcome.*zero active reserved quantity/i);
   });
 
+  it.each([
+    ["returned", null],
+    ["usable_leftover", null],
+    ["returned", "reusable"],
+    ["usable_leftover", "reusable"]
+  ] as const)("rejects %s reconciliation for a %s-role BOM line", (kind, role) => {
+    const line = createBomLine({ id: `b-reconcile-${kind}-${role ?? "legacy"}`, revisionId: "r-reconcile-role", name: "Reviewed stock", role, quantity: 1, unit: "board" });
+    const reservedItem = snapshot(`reconcile-${kind}-${role ?? "legacy"}`, "Board", "confirmed", 1);
+    const active = createReservation({ id: `reservation-${kind}-${role ?? "legacy"}`, projectRevisionId: "r-reconcile-role", bomLineId: line.id, itemId: reservedItem.item.id, quantity: 1 }, { ...reservedItem.balance, allocated: 1, available: 0 });
+    const source = { revisionId: "r-reconcile-role", lines: [line], reservations: [active], inventory: [{ ...reservedItem, balance: { ...reservedItem.balance, allocated: 1, available: 0 } }] };
+    const outcome = { bomLineId: line.id, outcomes: [{ kind, reservationId: active.id, itemId: active.itemId, quantity: 1, unit: "board" as const, evidence: { state: "physically_counted" as const } }] };
+
+    expect(() => planReconciliation(source, [outcome], { requireComplete: true })).toThrow(/role|only consumed/i);
+  });
+
+  it.each([null, "reusable"] as const)("rejects reviewed_no_change for a %s-role BOM line", (role) => {
+    const line = createBomLine({ id: `b-reconcile-no-change-${role ?? "legacy"}`, revisionId: "r-reconcile-role", name: "Unreviewed stock", role, quantity: 1, unit: "board" });
+    const source = { revisionId: "r-reconcile-role", lines: [line], reservations: [], inventory: [] };
+    const outcome = { bomLineId: line.id, outcomes: [{ kind: "reviewed_no_change" as const, quantity: 0, unit: "board" as const, evidence: { state: "physically_counted" as const } }] };
+
+    expect(() => planReconciliation(source, [outcome], { requireComplete: true })).toThrow(/role|only consumed/i);
+  });
+
   it("completes close-out from active reservations without reviewing every zero-reservation BOM line", () => {
     const lines = Array.from({ length: 22 }, (_, index) => createBomLine({
       id: `b-closeout-${index + 1}`,
       revisionId: "r-closeout",
       name: `Fitzroy Cafe part ${index + 1}`,
+      role: "consumed",
       quantity: 1,
       unit: "board"
     }));

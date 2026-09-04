@@ -1,11 +1,11 @@
 import type { BenchDatabase, SqliteRow } from "./sqlite.js";
 import { CATALOG_SCHEMA_SQL, INSPECTION_SCHEMA_SQL, INVENTORY_CATEGORY_SCHEMA_SQL, PROJECT_SETUP_SCHEMA_SQL, WORKSPACE_SECURITY_SCHEMA_SQL } from "./schema.js";
-import { BUILTIN_INVENTORY_CATEGORIES, isProjectLifecycle, normalizeInventoryCategoryKey, normalizeProjectLifecycle } from "@benchledger/domain";
+import { BUILTIN_INVENTORY_CATEGORIES, isFabricationRoute, isProjectLifecycle, normalizeInventoryCategoryKey, normalizeProjectLifecycle } from "@benchledger/domain";
 
 export const WORKSPACE_SECURITY_SCHEMA_VERSION = 1;
 export const WORKSPACE_SECURITY_SCHEMA_MIGRATION_SQL = WORKSPACE_SECURITY_SCHEMA_SQL;
 
-export const PROJECT_SCHEMA_VERSION = 3;
+export const PROJECT_SCHEMA_VERSION = 5;
 
 export const PROJECT_SETUP_SCHEMA_VERSION = 1;
 export const PROJECT_SETUP_SCHEMA_MIGRATION_SQL = PROJECT_SETUP_SCHEMA_SQL;
@@ -46,6 +46,25 @@ export function migrateProjectSchema(database: BenchDatabase): void {
     const columns = database.all<SqliteRow>("PRAGMA table_info(bom_lines)");
     if (!columns.some((column) => column.name === "retired_at")) {
       database.exec("ALTER TABLE bom_lines ADD COLUMN retired_at TEXT");
+    }
+    // Requirement role is deliberately nullable. Existing BOM records have
+    // no reliable consumed/reusable intent, so the migration preserves them
+    // as NULL and lets a later reviewed write set the role explicitly.
+    if (!columns.some((column) => column.name === "role")) {
+      database.exec("ALTER TABLE bom_lines ADD COLUMN role TEXT CHECK (role IS NULL OR role IN ('consumed', 'reusable'))");
+    }
+    const invalidRoles = database.get<SqliteRow>("SELECT id FROM bom_lines WHERE role IS NOT NULL AND role NOT IN ('consumed', 'reusable') LIMIT 1");
+    if (invalidRoles !== undefined) throw new Error(`BOM line ${String(invalidRoles.id)} has an unsupported requirement role`);
+    const revisionColumns = database.all<SqliteRow>("PRAGMA table_info(project_revisions)");
+    if (!revisionColumns.some((column) => column.name === "fabrication_route")) {
+      database.exec("ALTER TABLE project_revisions ADD COLUMN fabrication_route TEXT NOT NULL DEFAULT 'undecided' CHECK (fabrication_route IN ('printed', 'ready_made', 'none', 'undecided'))");
+    }
+    if (!revisionColumns.some((column) => column.name === "intended_printer_item_id")) {
+      database.exec("ALTER TABLE project_revisions ADD COLUMN intended_printer_item_id TEXT REFERENCES inventory_items(id)");
+    }
+    const invalidRoutes = database.all<SqliteRow>("SELECT id, fabrication_route FROM project_revisions WHERE fabrication_route IS NULL OR fabrication_route NOT IN ('printed', 'ready_made', 'none', 'undecided') LIMIT 1");
+    if (invalidRoutes.length > 0 && !isFabricationRoute(invalidRoutes[0]?.fabrication_route)) {
+      throw new Error(`Project revision ${String(invalidRoutes[0]?.id)} has an unsupported fabrication route`);
     }
     const projectColumns = database.all<SqliteRow>("PRAGMA table_info(projects)");
     if (!projectColumns.some((column) => column.name === "removed_at")) database.exec("ALTER TABLE projects ADD COLUMN removed_at TEXT");

@@ -15,4 +15,11 @@ describe("ConnectionScreen", () => {
     expect(integrityFailure).toContain("The service returned inconsistent project readiness");
     expect(integrityFailure).not.toContain("Workspace password");
   });
+
+  it("labels sample records as practice data before sign-in", () => {
+    const sampleChoice = renderToStaticMarkup(<ConnectionScreen state="unauthenticated" error={undefined} demoAvailable {...actions} />);
+
+    expect(sampleChoice).toContain("Sample records are for practice");
+    expect(sampleChoice).not.toContain("synthetic");
+  });
 });

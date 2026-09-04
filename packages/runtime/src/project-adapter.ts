@@ -8,7 +8,7 @@ import type {
   CreateWorkItem, CreateWorkItemRevision, Project as ApiProject, ProjectRevision as ApiProjectRevision,
   ProjectWithInitialRevision as ApiProjectWithInitialRevision, CreateProjectWithInitialRevision,
   Reservation as ApiReservation, WorkItem as ApiWorkItem, WorkItemRevision as ApiWorkItemRevision, ProjectTombstone,
-  InventoryItem as ApiInventoryItem
+  InventoryItem as ApiInventoryItem, UpdateProjectRevision
 } from "@benchledger/api-contract";
 import { ApplicationError, matchesBomConstraints, stableCreateConflict, unsupportedBomConstraintKeys } from "@benchledger/application";
 import type { ProjectPort, ProjectListOptions, RequestContext, ReservationDetails, StockMutation, UsageInput } from "@benchledger/application";
@@ -125,6 +125,7 @@ function nativeBomFromApi(revisionId: string, input: CreateBomLine | LegacyCreat
     name: input.name,
     quantity: input.requiredQuantity,
     unit: mapApiUnitToDomain(input.unit),
+    ...(input.role === undefined ? {} : { role: input.role }),
     required: !input.optional,
     optional: input.optional,
     ...(input.itemId === undefined ? {} : { itemId: input.itemId }),
@@ -198,6 +199,7 @@ export class ProductionProjectAdapter implements ProjectPort {
       const projectId = input.project.id ?? createId("project");
       const revisionId = input.revision.id ?? createId("project-revision");
       const now = nowIso();
+      const fabricationRoute = input.revision.fabricationRoute ?? "undecided";
       const nativeProject = createProject({
         id: projectId,
         name: input.project.name,
@@ -212,6 +214,8 @@ export class ProductionProjectAdapter implements ProjectPort {
         number: 1,
         label: input.revision.name,
         status: input.revision.status,
+        fabricationRoute,
+        intendedPrinterItemId: input.revision.intendedPrinterItemId ?? null,
         ...(input.revision.notes === undefined ? {} : { notes: input.revision.notes }),
         createdAt: now
       });
@@ -391,7 +395,27 @@ export class ProductionProjectAdapter implements ProjectPort {
     return attempt(() => {
       this.assertProjectActive(projectId);
       const previous = this.projects.listRevisions(projectId);
-      const revision = createProjectRevision({ id: input.id ?? createId("project-revision"), projectId, number: Math.max(0, ...previous.map((candidate) => candidate.number)) + 1, label: input.name, status: input.status, ...(input.notes === undefined ? {} : { notes: input.notes }), createdAt: nowIso() });
+      const predecessor = previous.slice().sort((left, right) => right.number - left.number || right.id.localeCompare(left.id))[0];
+      const inheritedRoute = input.fabricationRoute ?? predecessor?.fabricationRoute;
+      const effectiveRoute = inheritedRoute ?? "undecided";
+      const hasPrinterField = Object.prototype.hasOwnProperty.call(input, "intendedPrinterItemId");
+      if (input.intendedPrinterItemId !== undefined && input.intendedPrinterItemId !== null && effectiveRoute !== "printed") {
+        throw new DomainError("invalid_printer_route", "an intended printer requires the printed fabrication route");
+      }
+      const intendedPrinterItemId = effectiveRoute === "printed"
+        ? (hasPrinterField ? input.intendedPrinterItemId ?? null : predecessor?.intendedPrinterItemId ?? null)
+        : null;
+      const revision = createProjectRevision({
+        id: input.id ?? createId("project-revision"),
+        projectId,
+        number: Math.max(0, ...previous.map((candidate) => candidate.number)) + 1,
+        label: input.name,
+        status: input.status,
+        fabricationRoute: effectiveRoute,
+        intendedPrinterItemId,
+        ...(input.notes === undefined ? {} : { notes: input.notes }),
+        createdAt: nowIso()
+      });
       const created = this.projects.createRevision(revision);
       this.state.setInitialVersion(PROJECT_REVISION, created.id);
       const metadata = this.state.getMetadata(PROJECT, projectId);
@@ -404,6 +428,35 @@ export class ProductionProjectAdapter implements ProjectPort {
     return attempt(() => {
       const found = this.findProjectRevision(id);
       return found === undefined ? null : apiProjectRevisionFromNative(found.revision, this.state.getVersion(PROJECT_REVISION, id));
+    });
+  }
+
+  async updateProjectRevision(id: string, input: UpdateProjectRevision, _expectedVersion: number | undefined, _ctx: RequestContext): Promise<ApiProjectRevision> {
+    return attempt(() => {
+      const found = this.findProjectRevision(id);
+      if (found === undefined) throw new DomainError("project_revision_not_found", `project revision ${id} does not exist`);
+      // Route changes are intentionally narrow. A non-printed route cannot
+      // retain a printer assignment, because that would look actionable on a
+      // later read even though the revision no longer plans to print.
+      const route = (input.fabricationRoute ?? found.revision.fabricationRoute ?? "undecided") as NonNullable<ProjectRevision["fabricationRoute"]>;
+      const hasPrinterField = Object.prototype.hasOwnProperty.call(input, "intendedPrinterItemId");
+      if (hasPrinterField && input.intendedPrinterItemId !== undefined && input.intendedPrinterItemId !== null && route !== "printed") {
+        throw new DomainError("invalid_printer_route", "an intended printer requires the printed fabrication route");
+      }
+      const intendedPrinterItemId = route === "printed"
+        ? (hasPrinterField ? input.intendedPrinterItemId ?? null : found.revision.intendedPrinterItemId ?? null)
+        : null;
+      if (intendedPrinterItemId !== undefined && intendedPrinterItemId !== null && route !== "printed") {
+        throw new DomainError("invalid_printer_route", "an intended printer requires the printed fabrication route");
+      }
+      const { intendedPrinterItemId: _priorPrinter, ...withoutPriorPrinter } = found.revision;
+      const updated: ProjectRevision = { ...withoutPriorPrinter, fabricationRoute: route, intendedPrinterItemId };
+      return this.database.transaction(() => {
+        this.state.ensureVersion(PROJECT_REVISION, id, _expectedVersion);
+        const created = this.projects.updateRevision(updated);
+        const version = this.state.bumpVersion(PROJECT_REVISION, id);
+        return apiProjectRevisionFromNative(created, version);
+      });
     });
   }
 
@@ -445,6 +498,15 @@ export class ProductionProjectAdapter implements ProjectPort {
       this.assertProjectActive(revision.revision.projectId);
       const alternatives = canonicalBomAlternatives(input.alternatives);
       const canonicalInput = { ...input, alternatives };
+      if (canonicalInput.constraints?.kind === "printer") {
+        throw new ApplicationError("validation", "Printers are selected through build configuration, not BOM requirements");
+      }
+      for (const itemId of [canonicalInput.itemId, ...alternatives.map((alternative) => alternative.itemId)].filter((value): value is string => value !== undefined)) {
+        const item = this.inventory.native(itemId);
+        if (item !== undefined && item.category === "printer") {
+          throw new ApplicationError("validation", "Printers are selected through build configuration, not BOM requirements");
+        }
+      }
       const native = nativeBomFromApi(revisionId, canonicalInput, input.id ?? createId("bom"));
       const created = this.boms.createLine(native);
       this.state.setInitialVersion(BOM, created.id);
@@ -460,23 +522,39 @@ export class ProductionProjectAdapter implements ProjectPort {
       return this.database.transaction(() => {
         this.state.ensureVersion(BOM, id, expectedVersion);
         const current = this.toApiBom(native);
+        if (Object.prototype.hasOwnProperty.call(input, "role") && (input.role === "reusable" || (current.role === "consumed" && input.role !== "consumed"))
+          && this.reservations.list().some((reservation) => reservation.bomLineId === id && reservation.status === "active")) {
+          throw new ApplicationError("conflict", "Release or reconcile active reservations before changing this requirement from a part or material", { lineId: id });
+        }
         const optional = input.optional ?? current.optional;
         const alternatives = canonicalBomAlternatives(input.alternatives ?? current.alternatives);
         const constraints = input.constraints ?? current.constraints;
+        if (constraints.kind === "printer") {
+          throw new ApplicationError("validation", "Printers are selected through build configuration, not BOM requirements");
+        }
+        for (const itemId of [input.itemId ?? current.itemId, ...alternatives.map((alternative) => alternative.itemId)].filter((value): value is string => value !== undefined)) {
+          const item = this.inventory.native(itemId);
+          if (item !== undefined && item.category === "printer") {
+            throw new ApplicationError("validation", "Printers are selected through build configuration, not BOM requirements");
+          }
+        }
         const updatedAt = nowIso();
-        const updated: BomLine = {
-          ...native,
-          name: input.name ?? native.name,
-          quantity: input.requiredQuantity ?? native.quantity,
-          unit: input.unit === undefined ? native.unit : mapApiUnitToDomain(input.unit),
-          required: !optional,
+      const updated: BomLine = {
+        ...native,
+        name: input.name ?? native.name,
+        quantity: input.requiredQuantity ?? native.quantity,
+        unit: input.unit === undefined ? native.unit : mapApiUnitToDomain(input.unit),
+        ...(input.role === undefined
+          ? (native.role === undefined ? {} : { role: native.role })
+          : { role: input.role }),
+        required: !optional,
           optional,
           ...(input.itemId === undefined && native.itemId === undefined ? {} : { itemId: input.itemId ?? native.itemId }),
           alternativeItemIds: alternatives.map((alternative) => alternative.itemId),
           constraints: nativeConstraintsFromApi(constraints),
           ...(input.notes === undefined && native.notes === undefined ? {} : { notes: input.notes ?? native.notes })
         };
-        this.database.run("UPDATE bom_lines SET name = ?, quantity = ?, unit = ?, required = ?, optional = ?, item_id = ?, alternative_item_ids_json = ?, constraints_json = ?, notes = ? WHERE id = ?", [updated.name, updated.quantity, updated.unit, updated.required ? 1 : 0, updated.optional === true ? 1 : 0, updated.itemId ?? null, JSON.stringify(updated.alternativeItemIds ?? []), JSON.stringify(updated.constraints ?? {}), updated.notes ?? null, id]);
+        this.database.run("UPDATE bom_lines SET name = ?, quantity = ?, unit = ?, role = ?, required = ?, optional = ?, item_id = ?, alternative_item_ids_json = ?, constraints_json = ?, notes = ? WHERE id = ?", [updated.name, updated.quantity, updated.unit, updated.role ?? null, updated.required ? 1 : 0, updated.optional === true ? 1 : 0, updated.itemId ?? null, JSON.stringify(updated.alternativeItemIds ?? []), JSON.stringify(updated.constraints ?? {}), updated.notes ?? null, id]);
         const version = this.state.bumpVersion(BOM, id);
         this.state.setMetadata(BOM, id, { ...this.state.getMetadata(BOM, id), constraints, alternatives, updatedAt });
         return this.toApiBom(updated, version);
@@ -485,7 +563,7 @@ export class ProductionProjectAdapter implements ProjectPort {
   }
 
   async retireBomLine(id: string, expectedVersion: number | undefined, _ctx: RequestContext): Promise<ApiBomLine> {
-    return attempt(() => {
+    return attempt(async () => {
       const native = this.boms.getLine(id);
       if (native === undefined) throw new DomainError("bom_line_not_found", `BOM line ${id} does not exist`);
       if (this.reservations.list().some((reservation) => reservation.bomLineId === id && reservation.status === "active")) {
@@ -535,6 +613,9 @@ export class ProductionProjectAdapter implements ProjectPort {
       const nativeItem = this.inventory.native(input.itemId);
       if (nativeItem === undefined) throw new DomainError("inventory_not_found", `inventory item ${input.itemId} does not exist`);
       const item = this.inventory.toApi(nativeItem);
+      if (apiLine.role !== "consumed") {
+        throw new DomainError(apiLine.role === "reusable" ? "reusable_requirement_not_reservable" : "bom_line_role_required", apiLine.role === "reusable" ? "Reusable requirements do not reserve consumable stock" : "Review the BOM line requirement role before reservation");
+      }
       const exact = apiLine.itemId === input.itemId;
       const approvedAlternative = apiLine.alternatives.some((alternative) => alternative.itemId === input.itemId && alternative.compatible === "confirmed");
       if (!exact && !approvedAlternative) throw new DomainError("invalid_reservation_reference", "reservation item must be the exact BOM item or an approved alternative");
@@ -608,10 +689,7 @@ export class ProductionProjectAdapter implements ProjectPort {
       if (nativeItem === undefined) throw new DomainError("inventory_not_found", `inventory item ${input.itemId} does not exist`);
       if (nativeItem.unit !== mapApiUnitToDomain(input.unit)) throw new DomainError("invalid_unit", `unit mismatch: item uses ${nativeItem.unit}, usage uses ${input.unit}`);
       if (!Number.isFinite(input.quantity) || input.quantity <= 0) throw new DomainError("invalid_usage_quantity", "usage quantity must be greater than zero");
-
-      if (input.reservationId === undefined) {
-        return this.inventory.recordStockEvent({ itemId: input.itemId, type: "consume", quantity: input.quantity, unit: input.unit, ...(input.note === undefined ? {} : { note: input.note }), projectId: input.projectId }, ctx);
-      }
+      if (input.reservationId === undefined) throw new DomainError("reservation_required", "Usage requires a reservation for a consumed BOM requirement");
 
       const reservation = this.reservations.get(input.reservationId);
       if (reservation === undefined) throw new DomainError("reservation_not_found", `reservation ${input.reservationId} does not exist`);
@@ -619,6 +697,11 @@ export class ProductionProjectAdapter implements ProjectPort {
       if (reservation.itemId !== input.itemId) throw new DomainError("invalid_usage_reference", "usage item does not match the reservation");
       const revision = this.findProjectRevision(reservation.projectRevisionId);
       if (revision === undefined || revision.projectId !== project.id) throw new DomainError("invalid_usage_reference", "reservation belongs to a different project revision");
+      const bomLine = this.boms.getLine(reservation.bomLineId);
+      if (bomLine === undefined) throw new DomainError("bom_line_not_found", `BOM line ${reservation.bomLineId} does not exist`);
+      if (bomLine.role !== "consumed") {
+        throw new DomainError(bomLine.role === "reusable" ? "reusable_requirement_not_consumable" : "bom_line_role_required", bomLine.role === "reusable" ? "Reusable requirements remain owned and cannot be consumed" : "Review the BOM line requirement role before usage");
+      }
       const usageEvent = createStockEvent({
         id: createId("usage"),
         itemId: input.itemId,

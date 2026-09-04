@@ -33,6 +33,25 @@ export interface BomSpecification {
 export type BomCompatibility = "confirmed" | "conditional" | "unknown";
 export type BomDecision = "ready" | "check" | "decide" | "source";
 
+/** The user's intended build approach is planning context, not stock or a
+ * reservation. Keep it explicit so an electronics-only project is valid. */
+export type FabricationRoute = "printed" | "ready_made" | "none" | "undecided";
+
+export const fabricationRouteOptions: readonly {
+  value: FabricationRoute;
+  label: string;
+  description: string;
+}[] = [
+  { value: "printed", label: "3D-print parts", description: "Use an owned printer when you are ready." },
+  { value: "ready_made", label: "Use ready-made parts or an enclosure", description: "Use something bought or already on hand." },
+  { value: "none", label: "Electronics / assembly only", description: "Keep this project to electronics or assembly." },
+  { value: "undecided", label: "Decide later", description: "Record the project now and choose an approach later." }
+];
+
+export function fabricationRouteLabel(route: FabricationRoute | undefined): string {
+  return fabricationRouteOptions.find((option) => option.value === route)?.label ?? "Decide later";
+}
+
 /** Browser display units retain the server's set identity. The short aliases
  * are kept for the existing beginner-facing grams/metres copy. */
 export type QuantityDisplayUnit = "each" | "g" | "m" | "set" | "millimetre" | "millilitre";
@@ -151,6 +170,7 @@ export interface InventoryProductProfile {
   id?: string;
   inventoryItemId?: string;
   catalogProductId?: string;
+  profileType?: "filament_spool" | "printer_asset";
   linkState: LinkState;
   filament?: FilamentPhysicalProfile;
   printer?: PrinterPhysicalProfile;
@@ -313,6 +333,9 @@ export interface BomLine {
   itemId?: string;
   required: number;
   unit: QuantityDisplayUnit;
+  /** How the requirement is used in the finished build. Legacy lines may not
+   * have this value yet and must remain explicitly reviewable. */
+  role?: "consumed" | "reusable" | null;
   optional?: boolean;
   note?: string;
   constraints?: {
@@ -419,6 +442,8 @@ export interface Project {
   accent: "orange" | "teal" | "blue";
   /** API revision identifier retained for revision, BOM, and artifact writes. */
   serverRevisionId?: string;
+  /** Current revision version used for optimistic planning updates. */
+  serverRevisionVersion?: number;
   /** Bounded revision references used by the artifact scope picker. */
   projectRevisions?: ProjectRevisionReference[];
   /** Every real work item is offered independently; no item is inferred. */
@@ -432,6 +457,12 @@ export interface Project {
   readinessUnavailable?: boolean;
   /** Revision-scoped physical checks returned by the inspection queue. */
   inspectionActions?: readonly InspectionAction[];
+  /** Intended build approach for the current revision. This never implies a
+   * purchased part, reservation, or completed fabrication step. */
+  fabricationRoute?: FabricationRoute;
+  /** Optional owned printer selected for a printed build plan. */
+  /** Null is an explicit clear; an omitted field is inherited by the service. */
+  intendedPrinterItemId?: string | null;
   buildConfigSnapshot?: BuildConfigSnapshot;
 }
 
@@ -457,15 +488,15 @@ export type StockLabelTone = "good" | "warn" | "muted" | "bad" | "info";
 export function getStockLabel(state: StockState): { label: string; tone: StockLabelTone } {
   switch (state) {
     case "available":
-      return { label: "Ready to use", tone: "good" };
+      return { label: "Ready", tone: "good" };
     case "inspect-first":
-      return { label: "Check quantity", tone: "warn" };
+      return { label: "Check", tone: "warn" };
     case "ordered-unverified":
-      return { label: "Ordered, not verified", tone: "muted" };
+      return { label: "Check", tone: "warn" };
     case "reserved":
-      return { label: "Reserved", tone: "warn" };
+      return { label: "Check", tone: "warn" };
     case "depleted":
-      return { label: "Need to buy", tone: "bad" };
+      return { label: "Source", tone: "bad" };
   }
 }
 
@@ -551,13 +582,29 @@ export function filterInventory(items: InventoryItem[], query: string, filters?:
   });
 }
 
-export function isExactProductConfirmed(item: Pick<InventoryItem, "category" | "catalogProduct" | "productProfile">): boolean {
-  return (item.category === "Filament" || item.category === "Printers")
-    && item.catalogProduct !== undefined
-    && item.productProfile?.linkState === "confirmed";
+type ExactProductItem = Pick<InventoryItem, "category" | "name" | "variant" | "catalogProduct" | "productProfile">;
+
+export function isExactProductIdentityComplete(item: ExactProductItem): boolean {
+  if (!item.catalogProduct) return false;
+  if (item.category !== "Printers") return true;
+
+  const recordedIdentity = `${item.name} ${item.variant}`.toLowerCase();
+  const catalogVariant = `${item.catalogProduct.exactVariant ?? ""} ${item.catalogProduct.variant ?? ""}`.toLowerCase();
+  const recordsBundle = /\b(combo|bundle)\b/u.test(recordedIdentity);
+  return !recordsBundle || /\b(combo|bundle)\b/u.test(catalogVariant);
 }
 
-export function exactProductLabel(item: Pick<InventoryItem, "category" | "catalogProduct" | "productProfile">): string {
+export function isExactProductConfirmed(item: ExactProductItem): boolean {
+  return (item.category === "Filament" || item.category === "Printers")
+    && item.catalogProduct !== undefined
+    && item.productProfile?.linkState === "confirmed"
+    && isExactProductIdentityComplete(item);
+}
+
+export function exactProductLabel(item: ExactProductItem): string {
+  if (item.productProfile?.linkState === "confirmed" && item.catalogProduct && !isExactProductIdentityComplete(item)) {
+    return "Product identity incomplete";
+  }
   return isExactProductConfirmed(item) ? "Exact product confirmed" : "Exact product not confirmed";
 }
 
@@ -727,7 +774,7 @@ export function shoppingEmptyState(summary: ProjectSummary): { title: string; de
   if (summary.readinessUnavailable) {
     return {
       title: "Readiness needs to reload",
-      description: "Inventory changed, but canonical project readiness is unavailable. Reload before preparing a shopping proposal.",
+      description: "Inventory changed, but the latest stock results are unavailable. Reload before preparing a shopping proposal.",
     };
   }
   if (summary.decideLines > 0 || summary.checkLines > 0 || summary.optionalLines > 0) {
@@ -875,15 +922,15 @@ export function calculateProjectSummary(project: Project, items: InventoryItem[]
 export function getLineLabel(state: BomLineStatus["state"]): { label: string; tone: StockLabelTone } {
   switch (state) {
     case "ready":
-      return { label: "Ready to use", tone: "good" };
+      return { label: "Ready", tone: "good" };
     case "inspect-first":
-      return { label: "Check quantity", tone: "warn" };
+      return { label: "Check", tone: "warn" };
     case "specify-first":
-      return { label: "Specify first", tone: "warn" };
+      return { label: "Decide", tone: "info" };
     case "partial":
-      return { label: "Partly covered", tone: "warn" };
+      return { label: "Source", tone: "bad" };
     case "missing":
-      return { label: "Need to buy", tone: "bad" };
+      return { label: "Source", tone: "bad" };
     case "optional":
       return { label: "Optional", tone: "muted" };
   }
@@ -896,4 +943,4 @@ export function countByState(items: InventoryItem[]): Record<StockState, number>
   );
 }
 
-export const railSteps = ["Idea", "Setup", "BOM", "Reuse / inspect / buy", "Files", "Validate"] as const;
+export const railSteps = ["Idea", "Setup", "Requirements", "Stock decisions", "Files", "Validate"] as const;

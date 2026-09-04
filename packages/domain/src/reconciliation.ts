@@ -113,6 +113,15 @@ function outcomeStockKind(kind: ReconciliationOutcomeKind): Extract<StockEventKi
   return undefined;
 }
 
+function assertConsumedRole(line: Pick<BomLine, "id" | "role">): void {
+  if (line.role === undefined || line.role === null) {
+    fail("reconciliation_role_required", `BOM line ${line.id} has no requirement role; review it as consumed or reusable before reconciliation`);
+  }
+  if (line.role === "reusable") {
+    fail("reconciliation_reusable_consumption", `Reusable BOM line ${line.id} cannot be reconciled; only consumed requirements may be reconciled`);
+  }
+}
+
 /**
  * Validate and plan a complete close-out without mutating any state. Complete
  * means every active reservation is accounted for; BOM lines with no active
@@ -147,6 +156,7 @@ export function planReconciliation(
     const line = lineById.get(lineInput.bomLineId);
     if (line === undefined) fail("reconciliation_unknown_line", `BOM line ${lineInput.bomLineId} does not belong to revision ${source.revisionId}`);
     if (lineInput.outcomes.length === 0) fail("reconciliation_no_outcome", `BOM line ${lineInput.bomLineId} has no explicit outcome`);
+    assertConsumedRole(line);
 
     const lineReservations = source.reservations.filter((reservation) => reservation.bomLineId === lineInput.bomLineId);
     const activeReservations = lineReservations.filter((reservation) => reservation.status === "active");

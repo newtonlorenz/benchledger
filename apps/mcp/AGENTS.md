@@ -142,6 +142,16 @@ optional lines and duplicate reasons are excluded from that line. Project
 lifecycle changes do not advance or reset the separate revision evidence ladder
 from `concept` through `production approved`.
 
+Project revisions also carry a separate planning-only `fabricationRoute`:
+`printed`, `ready_made`, `none`, or `undecided`. A non-null
+`intendedPrinterItemId` is allowed only with `printed`; it identifies owned
+planning equipment and never creates a BOM line or build-configuration
+snapshot. `create_project_with_initial_revision` and `create_project_revision`
+carry these fields, omitted fields inherit the current route/printer for a
+later revision, and `update_project_revision` accepts `expectedVersion` plus
+nullable printer clearing. Revision reads always return a canonical route;
+legacy rows are exposed as `undecided`.
+
 ## 3. Ask the simple question first (minute 2–4)
 
 For a beginner, use plain language and explain one next action:
@@ -175,6 +185,13 @@ reservable. Valid converted reservations are whole-number inventory `set`s and
 read back as `set`. Only an exact `itemId` or an explicit alternative becomes a
 gap or inspection candidate; kind/category constraints alone are descriptive,
 not automatic inventory discovery.
+
+Each BOM requirement may declare a nullable `role`: `consumed` depletes stock
+when used, and `reusable` remains owned after use. A `null` or omitted role is
+legacy intent that must be reviewed; it never authorizes reservation, usage, or
+reconciliation. Only `consumed` requirements can reserve, consume, or
+reconcile. Printers stay in the exact `create_build_configuration` snapshot
+and are not BOM stock.
 
 Optional lines remain separately identified and never authorize Source or
 create default inspection actions; they stay visible in the plan for explicit

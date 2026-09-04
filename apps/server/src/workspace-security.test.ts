@@ -110,7 +110,7 @@ describe("workspace password access", () => {
       expect(missing.statusCode).toBe(400);
       const bearer = await app.inject({ method: "PATCH", url: "/api/v1/auth/access", headers: { authorization: `Bearer ${bearerFixture}` }, payload: { mode: "password", newPassword: "a-new-workspace-password" } });
       expect(bearer.statusCode).toBe(403);
-      expect((await app.inject({ method: "GET", url: "/api/v1/capabilities" })).json()).toMatchObject({ authentication: { bearerRequiredForMcp: true, explicitLanSession: "/api/v1/auth/lan-session" } });
+      expect((await app.inject({ method: "GET", url: "/api/v1/capabilities" })).json()).toMatchObject({ authentication: { bearerRequiredForMcp: true, explicitLanSession: "/api/v1/auth/lan-session" }, actions: expect.arrayContaining(["reconciliation.read", "reconciliation.write"]) });
       expect(hashBearerToken(bearerFixture)).toMatch(/^[a-f0-9]{64}$/u);
     } finally {
       await app.close();

@@ -95,7 +95,7 @@ describe("runtime configuration and persistence", () => {
     const board = await service.createInventoryItem({ id: "retirement-board", name: "Retirement board", kind: "electronic", quantity: 4, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
     const project = await service.createProject({ id: "retirement-project", name: "Retirement project", status: "planned" }, context());
     const revision = await service.createProjectRevision(project.data.id, { id: "retirement-revision", name: "Initial", status: "concept" }, context());
-    const line = await service.createBomLine(revision.data.id, { id: "retirement-line", name: board.data.name, itemId: board.data.id, requiredQuantity: 2, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
+    const line = await service.createBomLine(revision.data.id, { id: "retirement-line", name: board.data.name, role: "consumed", itemId: board.data.id, requiredQuantity: 2, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
     const reservation = await service.createReservation(revision.data.id, { id: "retirement-reservation", lineId: line.data.id, itemId: board.data.id, quantity: 2 }, context());
 
     const archived = await service.archiveProject(project.data.id, project.data.version, context({ idempotencyKey: "retirement-archive-1" }));
@@ -118,7 +118,7 @@ describe("runtime configuration and persistence", () => {
     const item = await service.createInventoryItem({ id: "retirement-rollback-item", name: "Rollback item", kind: "electronic", quantity: 2, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
     const project = await service.createProject({ id: "retirement-rollback-project", name: "Rollback project", status: "planned" }, context());
     const revision = await service.createProjectRevision(project.data.id, { id: "retirement-rollback-revision", name: "Initial", status: "concept" }, context());
-    const line = await service.createBomLine(revision.data.id, { id: "retirement-rollback-line", name: item.data.name, itemId: item.data.id, requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
+    const line = await service.createBomLine(revision.data.id, { id: "retirement-rollback-line", name: item.data.name, role: "consumed", itemId: item.data.id, requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
     const reservation = await service.createReservation(revision.data.id, { id: "retirement-rollback-reservation", lineId: line.data.id, itemId: item.data.id, quantity: 1 }, context());
     const originalAppend = runtime.ports.audit.append;
     runtime.ports.audit.append = async () => { throw new Error("forced archive audit failure"); };
@@ -563,7 +563,7 @@ describe("production project adapter", () => {
     await expect(runtime.ports.projects.getWorkItemRevision("missing-work-revision")).resolves.toBeNull();
     await expect(runtime.ports.projects.createWorkItemRevision("missing-work", { name: "No work", status: "concept" }, context())).rejects.toMatchObject({ code: "not_found" });
 
-    const line = await runtime.ports.projects.createBomLine(firstRevision.id, { id: "bom-adapter", name: "ESP32 board", itemId: "board-adapter", requiredQuantity: 2, unit: "each", optional: false, alternatives: [{ itemId: "alternative-adapter", compatible: "confirmed", reason: "same pinout" }], constraints: { kind: "electronic", manufacturer: "Maker", tag: "board" }, notes: "main controller" }, context());
+    const line = await runtime.ports.projects.createBomLine(firstRevision.id, { id: "bom-adapter", name: "ESP32 board", role: "consumed", itemId: "board-adapter", requiredQuantity: 2, unit: "each", optional: false, alternatives: [{ itemId: "alternative-adapter", compatible: "confirmed", reason: "same pinout" }], constraints: { kind: "electronic", manufacturer: "Maker", tag: "board" }, notes: "main controller" }, context());
     expect(line).toMatchObject({ id: line.id, requiredQuantity: 2, optional: false, alternatives: [{ compatible: "confirmed" }], constraints: { kind: "electronic", manufacturer: "Maker", tag: "board" }, version: 1 });
     await expect(runtime.ports.projects.listBomLines(firstRevision.id)).resolves.toHaveLength(1);
     await expect(runtime.ports.projects.getBomLine(line.id)).resolves.toMatchObject({ id: line.id });
@@ -587,35 +587,48 @@ describe("production project adapter", () => {
     expect(JSON.parse(runtime.database.get<{ readonly payload_json: string }>("SELECT payload_json FROM forge_runtime_metadata WHERE entity_type = ? AND entity_id = ?", ["project", "atomic-project"])!.payload_json)).toEqual({ currentRevisionId: "atomic-revision" });
   });
 
-  it("validates reservations and records unreserved usage through the stock adapter", async () => {
+  it("validates reservations and rejects usage that cannot prove a consumed requirement", async () => {
     const runtime = await makeRuntime();
     const item = await runtime.ports.inventory.createItem({ id: "reservation-board", name: "ESP32 board", kind: "electronic", manufacturer: "Maker", model: "ESP32", quantity: 3, unit: "each", tags: ["board"], links: [], evidence: { state: "physically_counted" } }, context());
     const alternative = await runtime.ports.inventory.createItem({ id: "reservation-alt", name: "Compatible board", kind: "electronic", manufacturer: "Maker", model: "ESP32-alt", quantity: 2, unit: "each", tags: ["board"], links: [], evidence: { state: "physically_counted" } }, context());
     const project = await runtime.ports.projects.createProject({ id: "reservation-project-adapter", name: "Reservation project", status: "planned" }, context());
     const revision = await runtime.ports.projects.createProjectRevision(project.id, { id: "reservation-revision-adapter", name: "Initial", status: "concept" }, context());
-    const line = await runtime.ports.projects.createBomLine(revision.id, { id: "reservation-line-adapter", name: item.name, itemId: item.id, requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
+    const line = await runtime.ports.projects.createBomLine(revision.id, { id: "reservation-line-adapter", name: item.name, role: "consumed", itemId: item.id, requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
     const reservation = await runtime.ports.projects.createReservation(revision.id, { id: "reservation-adapter", lineId: line.id, itemId: item.id, quantity: 1 }, context());
     expect(reservation).toMatchObject({ status: "active", version: 1 });
+    await expect(runtime.ports.projects.updateBomLine(line.id, { role: "reusable" }, line.version, context())).rejects.toMatchObject({ code: "conflict" });
     await expect(runtime.ports.projects.getReservationDetails(reservation.id)).resolves.toMatchObject({ projectId: project.id, projectRevisionId: revision.id, bomLine: { id: line.id } });
     await expect(runtime.ports.projects.getReservationDetails("missing-reservation")).resolves.toBeNull();
     await expect(runtime.ports.projects.listReservations(revision.id)).resolves.toMatchObject([{ id: reservation.id }]);
     await expect(runtime.ports.projects.releaseReservation(reservation.id, 99, context())).rejects.toMatchObject({ code: "conflict" });
     const released = await runtime.ports.projects.releaseReservation(reservation.id, reservation.version, context());
     expect(released).toMatchObject({ status: "released", version: 2 });
+    await expect(runtime.ports.projects.updateBomLine(line.id, { role: "reusable" }, line.version, context())).resolves.toMatchObject({ role: "reusable", version: 2 });
 
-    const altLine = await runtime.ports.projects.createBomLine(revision.id, { id: "alternative-line-adapter", name: "Board alternative", itemId: item.id, requiredQuantity: 1, unit: "each", optional: false, alternatives: [{ itemId: alternative.id, compatible: "confirmed" }], constraints: {} }, context());
+    const altLine = await runtime.ports.projects.createBomLine(revision.id, { id: "alternative-line-adapter", name: "Board alternative", role: "consumed", itemId: item.id, requiredQuantity: 1, unit: "each", optional: false, alternatives: [{ itemId: alternative.id, compatible: "confirmed" }], constraints: {} }, context());
     const altReservation = await runtime.ports.projects.createReservation(revision.id, { id: "alternative-reservation-adapter", lineId: altLine.id, itemId: alternative.id, quantity: 1 }, context());
     expect(altReservation).toMatchObject({ itemId: alternative.id, status: "active" });
 
     const otherRevision = await runtime.ports.projects.createProjectRevision(project.id, { id: "other-revision-adapter", name: "Other", status: "concept" }, context());
     await expect(runtime.ports.projects.createReservation(otherRevision.id, { id: "wrong-revision-reservation", lineId: line.id, itemId: item.id, quantity: 1 }, context())).rejects.toMatchObject({ code: "not_found" });
-    const unitLine = await runtime.ports.projects.createBomLine(revision.id, { id: "wrong-unit-line", name: "Gram board", itemId: alternative.id, requiredQuantity: 1, unit: "gram", optional: false, alternatives: [], constraints: {} }, context());
+    const unitLine = await runtime.ports.projects.createBomLine(revision.id, { id: "wrong-unit-line", name: "Gram board", role: "consumed", itemId: alternative.id, requiredQuantity: 1, unit: "gram", optional: false, alternatives: [], constraints: {} }, context());
     await expect(runtime.ports.projects.createReservation(revision.id, { id: "wrong-unit-reservation", lineId: unitLine.id, itemId: alternative.id, quantity: 1 }, context())).rejects.toMatchObject({ code: "validation" });
-    await expect(runtime.ports.projects.recordUsage({ projectId: project.id, itemId: item.id, quantity: 1, unit: "each", note: "used without reservation" }, context({ source: "import" }))).resolves.toMatchObject({ event: { type: "consume", source: "import", note: "used without reservation" } });
-    await expect(runtime.ports.projects.recordUsage({ projectId: "missing-project", itemId: item.id, quantity: 1, unit: "each" }, context())).rejects.toMatchObject({ code: "not_found" });
-    await expect(runtime.ports.projects.recordUsage({ projectId: project.id, itemId: "missing-item", quantity: 1, unit: "each" }, context())).rejects.toMatchObject({ code: "not_found" });
-    await expect(runtime.ports.projects.recordUsage({ projectId: project.id, itemId: item.id, quantity: 1, unit: "gram" }, context())).rejects.toMatchObject({ code: "validation" });
-    await expect(runtime.ports.projects.recordUsage({ projectId: project.id, itemId: item.id, quantity: 0, unit: "each" }, context())).rejects.toMatchObject({ code: "validation" });
+    await expect(runtime.ports.projects.recordUsage({ projectId: project.id, itemId: item.id, quantity: 1, unit: "each", note: "used without reservation" }, context({ source: "import" }))).rejects.toMatchObject({ code: "validation" });
+
+    const reusableLine = await runtime.ports.projects.createBomLine(revision.id, { id: "reusable-line-adapter", name: "Bench tool", role: "reusable", itemId: item.id, requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
+    await expect(runtime.ports.projects.createReservation(revision.id, { id: "reusable-reservation-adapter", lineId: reusableLine.id, itemId: item.id, quantity: 1 }, context())).rejects.toMatchObject({ code: "validation" });
+  });
+
+  it("blocks a legacy null role from becoming reusable while preserving null to consumed", async () => {
+    const runtime = await makeRuntime();
+    const item = await runtime.ports.inventory.createItem({ id: "legacy-reserved-role-adapter-item", name: "Legacy reserved board", kind: "electronic", manufacturer: "Maker", model: "ESP32", quantity: 1, unit: "each", tags: ["board"], links: [], evidence: { state: "physically_counted" } }, context());
+    const project = await runtime.ports.projects.createProject({ id: "legacy-reserved-role-adapter-project", name: "Legacy role project", status: "planned" }, context());
+    const revision = await runtime.ports.projects.createProjectRevision(project.id, { id: "legacy-reserved-role-adapter-revision", name: "Initial", status: "concept" }, context());
+    const line = await runtime.ports.projects.createBomLine(revision.id, { id: "legacy-reserved-role-adapter-line", name: "Legacy reserved board", itemId: item.id, requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
+    runtime.database.run("INSERT INTO reservations (id, project_revision_id, bom_line_id, item_id, quantity, status, created_at, released_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", ["legacy-reserved-role-adapter-reservation", revision.id, line.id, item.id, 1, "active", line.createdAt, null]);
+
+    await expect(runtime.ports.projects.updateBomLine(line.id, { role: "reusable" }, line.version, context())).rejects.toMatchObject({ code: "conflict" });
+    await expect(runtime.ports.projects.updateBomLine(line.id, { role: "consumed" }, line.version, context())).resolves.toMatchObject({ role: "consumed", version: 2 });
   });
 });
 

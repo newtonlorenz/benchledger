@@ -454,6 +454,69 @@ describe("authenticated BenchLedger API adapter", () => {
     });
   });
 
+  it("loads a supplied migrated null-role BOM line when the service reports Check", async () => {
+    const bom = {
+      id: "bom-migrated",
+      revisionId: "revision-1",
+      name: "Legacy requirement",
+      itemId: "legacy-item",
+      role: null,
+      requiredQuantity: 1,
+      unit: "each",
+      optional: false,
+      constraints: {},
+      alternatives: [],
+      createdAt: "2026-08-30T10:00:00.000Z",
+      updatedAt: "2026-08-30T10:00:00.000Z",
+      version: 1,
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "0.1.0", demo: false, now: "2026-08-30T10:00:00.000Z" }))
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", source: "ui", scopes: ["read", "write"] }))
+      .mockResolvedValueOnce(jsonResponse({
+        source: "api",
+        fetchedAt: "2026-08-30T10:00:00.000Z",
+        inventory: [],
+        projects: [serverProject({ currentRevision: serverRevision({
+          bom: [bom],
+          gapEvaluation: {
+            lines: [{
+              lineId: "bom-migrated",
+              name: "Legacy requirement",
+              optional: false,
+              status: "supplied",
+              decision: "check",
+              missingDecisions: [],
+              requiredQuantity: 1,
+              suppliedQuantity: 1,
+              inspectQuantity: 0,
+              missingQuantity: 0,
+              unit: "each",
+              matchedItemIds: ["legacy-item"],
+              reasons: ["Stock is available, but the requirement role still needs review."],
+              alternatives: [],
+              candidates: [],
+            }],
+            totals: { requiredLines: 1, optionalLines: 0, readyLines: 0, checkLines: 1, decideLines: 0, sourceLines: 0, partialLines: 0, missingLines: 0 },
+          },
+        }) })],
+        offers: [],
+      }));
+
+    const snapshot = await createWorkspaceAdapter().loadWorkspace();
+
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "/api/v1/health",
+      "/api/v1/auth/session",
+      "/api/v1/workspace",
+    ]);
+    expect(snapshot.projects[0]?.bom[0]).toMatchObject({ id: "bom-migrated", role: null });
+    expect(snapshot.projects[0]?.gapEvaluation).toMatchObject({
+      lines: [{ lineId: "bom-migrated", decision: "check", status: "supplied", suppliedQuantity: 1, inspectQuantity: 0, missingQuantity: 0 }],
+      totals: { checkLines: 1 },
+    });
+  });
+
   it("rejects zero-quantity inspection states without a matched candidate", async () => {
     const bom = { id: "bom-wire", revisionId: "revision-1", name: "Hook-up wire", requiredQuantity: 1, unit: "metre", optional: false, constraints: {}, alternatives: [], createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 };
     vi.spyOn(globalThis, "fetch")
@@ -587,81 +650,31 @@ describe("authenticated BenchLedger API adapter", () => {
     expect(new Headers(fetchMock.mock.calls[4]?.[1]?.headers).get("x-csrf-token")).toBeNull();
   });
 
-  it("reuses a revision command key after an ambiguous response, then releases it for a later revision", async () => {
-    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-revision-retry" });
-    const committedRevision = serverRevision({ id: "revision-replayed", number: 2, name: "Fit pass", status: "CAD complete" });
-    const requestBodies: string[] = [];
-    const requestKeys: string[] = [];
-    let revisionWriteCount = 0;
-    const fetchMock = vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "0.1.0", demo: false, now: "2026-08-30T10:00:00.000Z" }))
-      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", source: "ui", scopes: ["read", "write"] }))
-      .mockResolvedValueOnce(jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00.000Z", inventory: [], projects: [{ ...serverProject(), currentRevision: serverRevision({ id: "revision-1", number: 1 }) }], offers: [] }))
-      .mockImplementationOnce(async (_input, init) => {
-        revisionWriteCount += 1;
-        requestBodies.push(String(init?.body));
-        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
-        // The server has committed before the response is lost. A retry must
-        // replay this same command instead of creating a second revision.
-        return Promise.reject(new TypeError("response lost after commit"));
-      })
-      .mockImplementationOnce(async (_input, init) => {
-        revisionWriteCount += 1;
-        requestBodies.push(String(init?.body));
-        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
-        return jsonResponse({ data: committedRevision });
-      });
+  it("clears printed revision state when a ready-made revision becomes current", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-revision-state" });
+    const printedRevision = serverRevision({ id: "revision-printed", number: 3, version: 4, fabricationRoute: "printed", intendedPrinterItemId: "printer-1", buildConfigSnapshot: { id: "build-old", projectRevisionId: "revision-printed", accessories: [], explicitUnknowns: [], createdAt: "2026-08-30T10:00:00.000Z", version: 1 } });
+    const readyMadeRevision = serverRevision({ id: "revision-ready", number: 4, name: "Ready-made enclosure", status: "production approved", version: 1, fabricationRoute: "ready_made" }); vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "test", demo: false, now: "2026-08-30T10:00:00.000Z" }))
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", scopes: ["read", "write"] }))
+      .mockResolvedValueOnce(jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00.000Z", inventory: [], projects: [ serverProject({ currentRevisionId: printedRevision.id, currentRevision: printedRevision }) ], offers: [] }))
+      .mockResolvedValueOnce(jsonResponse({ data: readyMadeRevision }));
 
     const adapter = createWorkspaceAdapter();
-    await adapter.loadWorkspace();
-    await expect(adapter.createRevision("project-1", { name: "Fit pass", status: "CAD complete" })).rejects.toMatchObject({ kind: "offline" });
-
-    const replayed = await adapter.createRevision("project-1", { name: "Fit pass", status: "CAD complete" });
-    expect(replayed).toMatchObject({ serverRevisionId: "revision-replayed", currentRevision: "r02" });
-    expect(revisionWriteCount).toBe(2);
-    expect(requestBodies[1]).toBe(requestBodies[0]);
-    expect(requestKeys[1]).toBe(requestKeys[0]);
-    expect(requestKeys[0]).toMatch(/^web-revision-/);
-
-    // Once the replay succeeds, an intentional later revision gets a fresh
-    // command identity even when its fields happen to be identical.
-    fetchMock.mockResolvedValueOnce(jsonResponse({ data: serverRevision({ id: "revision-new", number: 3, name: "Fit pass", status: "CAD complete" }) }));
-    await adapter.createRevision("project-1", { name: "Fit pass", status: "CAD complete" });
-    expect(requestKeys).toHaveLength(2);
-    const newRequest = fetchMock.mock.calls.at(-1)?.[1];
-    expect(new Headers(newRequest?.headers).get("idempotency-key")).not.toBe(requestKeys[0]);
+    await adapter.loadWorkspace(); const revised = await adapter.createRevision("project-1", { name: readyMadeRevision.name, status: readyMadeRevision.status }); expect(revised).toMatchObject({ currentRevision: "r04", serverRevisionId: "revision-ready", serverRevisionVersion: 1, fabricationRoute: "ready_made", bom: [], artifacts: [], notes: [] });
+    expect(revised).not.toHaveProperty("intendedPrinterItemId");
+    expect(revised).not.toHaveProperty("buildConfigSnapshot");
   });
 
-  it("reuses an exact-inventory command key after an ambiguous response, then releases it for a later identical create", async () => {
-    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-exact-inventory-retry" });
-    const product = {
-      id: "catalog-filament-petg",
-      kind: "filament" as const,
-      manufacturer: "Bambu Lab",
-      family: "PETG",
-      model: "PETG HF",
-      variant: "HF",
-      colour: "Black",
-      productCode: "PETG-HF-BLK",
-      diameterMm: 1.75,
-      netMassG: 1000
-    };
-    const input = {
-      category: "Filament" as const,
-      product,
-      quantity: 1000,
-      linkState: "reported" as const,
-      filament: { lotBatch: "LOT-1", state: "opened" as const, openedAt: "2026-08-30", tareMassG: 164, placement: "AMS slot 1" }
-    };
-    const requestBodies: string[] = [];
-    const requestKeys: string[] = [];
-    let writeCount = 0;
-    const committedItem = (id: string) => serverItem({ id, name: "Bambu Lab PETG HF Black", kind: "filament", quantity: 1000, availableQuantity: 0, unit: "gram", manufacturer: "Bambu Lab", sku: "PETG-HF-BLK", evidence: { state: "unknown" } });
-    const committedProfile = (itemId: string) => ({ id: `profile-${itemId}`, itemId, catalogProductId: product.id, profileType: "filament_spool", linkState: "reported", details: { lot: "LOT-1", openedState: "open", openedAt: "2026-08-30T00:00:00.000Z", tareMassG: 164, currentPlacement: "AMS slot 1" } });
-    const fetchMock = vi.spyOn(globalThis, "fetch")
-      .mockImplementationOnce(async (_input, init) => {
-        writeCount += 1;
-        requestBodies.push(String(init?.body));
+  it("updates an unresolved requirement role and refreshes readiness", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-bom-role" });
+    const bomLine = {
+      id: "line-1", revisionId: "revision-1", name: "Legacy item", role: null, requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 };
+    const fetchMock = vi .spyOn(globalThis, "fetch") .mockResolvedValueOnce( jsonResponse({ status: "ok", service: "benchledger", version: "test", demo: false, now: "2026-08-30T10:00:00.000Z" }) ) .mockResolvedValueOnce( jsonResponse({ authenticated: true, actor: "admin", scopes: ["read", "write"] }) ) .mockResolvedValueOnce( jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00.000Z", inventory: [], projects: [ serverProject({ currentRevision: serverRevision({ bom: [bomLine] }) }) ], offers: [] }) ) .mockResolvedValueOnce( jsonResponse({ data: { ...bomLine, role: "consumed", version: 2 } }) ) .mockResolvedValueOnce( jsonResponse({ revisionId: "revision-1", lines: [ { lineId: "line-1", status: "missing", decision: "source", suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 1, matchedItemIds: [], reasons: [] } ], totals: { requiredLines: 1, optionalLines: 0, sourceLines: 1, partialLines: 0, missingLines: 1 } }) );
+    const adapter = createWorkspaceAdapter(); await adapter.loadWorkspace(); await expect( adapter.updateBomLineRole("project-1", "line-1", "consumed", 1) ).resolves.toMatchObject({ bom: [{ id: "line-1", role: "consumed", version: 2 }], gapEvaluation: { totals: { sourceLines: 1 } } }); expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([ "/api/v1/health", "/api/v1/auth/session", "/api/v1/workspace", "/api/v1/bom-lines/line-1", "/api/v1/project-revisions/revision-1/gaps" ]); expect( new Headers(fetchMock.mock.calls[3]?.[1]?.headers).get("if-match") ).toBe("1"); }); it("keeps a committed role update when readiness cannot refresh", async () => { vi.stubGlobal("document", { cookie: "forge_csrf=csrf-bom-role" }); const bomLine = { id: "line-1", revisionId: "revision-1", name: "Legacy item", role: null, requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 }; vi.spyOn(globalThis, "fetch") .mockResolvedValueOnce( jsonResponse({ status: "ok", service: "benchledger", version: "test", demo: false, now: "2026-08-30T10:00:00.000Z" }) ) .mockResolvedValueOnce( jsonResponse({ authenticated: true, actor: "admin", scopes: ["read", "write"] }) ) .mockResolvedValueOnce( jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00.000Z", inventory: [], projects: [ serverProject({ currentRevision: serverRevision({ bom: [bomLine], gapEvaluation: { lines: [ { lineId: "line-1", status: "missing", decision: "check", suppliedQuantity: 0, inspectQuantity: 0, missingQuantity: 1, matchedItemIds: [], reasons: [] } ], totals: { requiredLines: 1, optionalLines: 0, readyLines: 0, checkLines: 1, decideLines: 0, sourceLines: 0, partialLines: 0, missingLines: 1 } } }) }) ], offers: [] }) ) .mockResolvedValueOnce( jsonResponse({ data: { ...bomLine, role: "consumed", version: 2 } }) ) .mockResolvedValueOnce( jsonResponse({ error: { message: "gap service unavailable" } }, 503) ); const adapter = createWorkspaceAdapter(); await adapter.loadWorkspace(); const updated = await adapter.updateBomLineRole( "project-1", "line-1", "consumed", 1 ); expect(updated).toMatchObject({ bom: [{ id: "line-1", role: "consumed", version: 2 }], readinessUnavailable: true }); expect(updated).not.toHaveProperty("gapEvaluation"); }); it("reuses the role update key after an ambiguous PATCH response", async () => { vi.stubGlobal("document", { cookie: "forge_csrf=csrf-bom-role" }); const bomLine = { id: "line-1", revisionId: "revision-1", name: "Legacy item", role: null, requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 }; const keys: string[] = []; vi.spyOn(globalThis, "fetch") .mockResolvedValueOnce( jsonResponse({ status: "ok", service: "benchledger", version: "test", demo: false, now: "2026-08-30T10:00:00.000Z" }) ) .mockResolvedValueOnce( jsonResponse({ authenticated: true, actor: "admin", scopes: ["read", "write"] }) ) .mockResolvedValueOnce( jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00.000Z", inventory: [], projects: [ serverProject({ currentRevision: serverRevision({ bom: [bomLine] }) }) ], offers: [] }) ) .mockImplementationOnce(async (_input, init) => { keys.push(new Headers(init?.headers).get("idempotency-key") ?? ""); throw new TypeError("response lost after commit"); }) .mockImplementationOnce(async (_input, init) => { keys.push(new Headers(init?.headers).get("idempotency-key") ?? ""); return jsonResponse({ data: { ...bomLine, role: "consumed", version: 2 } }); }) .mockResolvedValueOnce( jsonResponse({ revisionId: "revision-1", lines: [], totals: { requiredLines: 0, optionalLines: 0, partialLines: 0, missingLines: 0 } }) ); const adapter = createWorkspaceAdapter(); await adapter.loadWorkspace(); await expect( adapter.updateBomLineRole("project-1", "line-1", "consumed", 1) ).rejects.toMatchObject({ kind: "offline" }); await expect( adapter.updateBomLineRole("project-1", "line-1", "consumed", 1) ).resolves.toMatchObject({ bom: [{ role: "consumed", version: 2 }] }); expect(keys).toHaveLength(2); expect(keys[0]).toBe(keys[1]); }); it("reuses a revision command key after an ambiguous response, then releases it for a later revision", async () => { vi.stubGlobal("document", { cookie: "forge_csrf=csrf-revision-retry" }); const committedRevision = serverRevision({ id: "revision-replayed", number: 2, name: "Fit pass", status: "CAD complete" }); const requestBodies: string[] = []; const requestKeys: string[] = []; let revisionWriteCount = 0; const fetchMock = vi .spyOn(globalThis, "fetch") .mockResolvedValueOnce( jsonResponse({ status: "ok", service: "benchledger", version: "0.1.0", demo: false, now: "2026-08-30T10:00:00.000Z" }) ) .mockResolvedValueOnce( jsonResponse({ authenticated: true, actor: "admin", source: "ui", scopes: ["read", "write"] }) ) .mockResolvedValueOnce( jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00.000Z", inventory: [], projects: [ { ...serverProject(), currentRevision: serverRevision({ id: "revision-1", number: 1 }) } ], offers: [] }) ) .mockImplementationOnce(async (_input, init) => { revisionWriteCount += 1; requestBodies.push(String(init?.body)); requestKeys.push( new Headers(init?.headers).get("idempotency-key") ?? "" ); // The server has committed before the response is lost. A retry must
+// replay this same command instead of creating a second revision.
+return Promise.reject(new TypeError("response lost after commit")); }) .mockImplementationOnce(async (_input, init) => { revisionWriteCount += 1; requestBodies.push(String(init?.body)); requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "" ); return jsonResponse({ data: committedRevision }); }); const adapter = createWorkspaceAdapter(); await adapter.loadWorkspace(); await expect(adapter.createRevision("project-1", { name: "Fit pass", status: "CAD complete" }) ).rejects.toMatchObject({ kind: "offline" }); const replayed = await adapter.createRevision("project-1", { name: "Fit pass", status: "CAD complete" }); expect(replayed).toMatchObject({ serverRevisionId: "revision-replayed", currentRevision: "r02" }); expect(revisionWriteCount).toBe(2); expect(requestBodies[1]).toBe(requestBodies[0]); expect(requestKeys[1]).toBe(requestKeys[0]); expect(requestKeys[0]).toMatch(/^web-revision-/); // Once the replay succeeds, an intentional later revision gets a fresh
+// command identity even when its fields happen to be identical.
+fetchMock.mockResolvedValueOnce(jsonResponse({ data: serverRevision({ id: "revision-new", number: 3, name: "Fit pass", status: "CAD complete" }) }) ); await adapter.createRevision("project-1", { name: "Fit pass", status: "CAD complete" }); expect(requestKeys).toHaveLength(2); const newRequest = fetchMock.mock.calls.at(-1)?.[1]; expect(new Headers(newRequest?.headers).get("idempotency-key")).not.toBe(requestKeys[0] ); }); it("reuses an exact-inventory command key after an ambiguous response, then releases it for a later identical create", async () => { vi.stubGlobal("document", { cookie: "forge_csrf=csrf-exact-inventory-retry" }); const product = { id: "catalog-filament-petg", kind: "filament" as const, manufacturer: "Bambu Lab", family: "PETG", model: "PETG HF", variant: "HF", colour: "Black", productCode: "PETG-HF-BLK", diameterMm: 1.75, netMassG: 1000 }; const input = { category: "Filament" as const, product, quantity: 1000, linkState: "reported" as const, filament: { lotBatch: "LOT-1", state: "opened" as const, openedAt: "2026-08-30", tareMassG: 164, placement: "AMS slot 1" } }; const requestBodies: string[] = []; const requestKeys: string[] = []; let writeCount = 0; const committedItem = (id: string) => serverItem({ id, name: "Bambu Lab PETG HF Black", kind: "filament", quantity: 1000, availableQuantity: 0, unit: "gram", manufacturer: "Bambu Lab", sku: "PETG-HF-BLK", evidence: { state: "unknown" } }); const committedProfile = (itemId: string) => ({ id: `profile-${itemId}`, itemId, catalogProductId: product.id, profileType: "filament_spool", linkState: "reported", details: { lot: "LOT-1", openedState: "open", openedAt: "2026-08-30T00:00:00.000Z", tareMassG: 164, currentPlacement: "AMS slot 1" } }); const fetchMock = vi.spyOn(globalThis, "fetch") .mockImplementationOnce(async (_input, init) => { writeCount += 1; requestBodies.push(String(init?.body));
         requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
         // The server has committed before the response is lost. A retry must
         // replay this same compound command instead of creating a duplicate item/profile pair.
@@ -729,7 +742,7 @@ describe("authenticated BenchLedger API adapter", () => {
         }
       } }))
       .mockResolvedValueOnce(jsonResponse({ data: {
-        id: "catalog-printer-h2d", kind: "printer", manufacturer: "Bambu Lab", exactModel: "H2D", exactVariant: "AMS Combo", technology: "fff", buildVolumeMm: { x: 325, y: 320, z: 325 },
+        id: "profile-spool-1", itemId: "spool-1", catalogProductId: canonicalProduct.id, profileType: "filament_spool", linkState: "confirmed", details: { lot: "LOT-1", openedState: "open", openedAt: "2026-08-30T00:00:00.000Z", tareMassG: 164, currentPlacement: "AMS slot 1" }, createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T11:00:00.000Z", version: 2 } }) ) .mockResolvedValueOnce(jsonResponse({ data: { id: "catalog-printer-h2d", kind: "printer", manufacturer: "Bambu Lab", exactModel: "H2D", exactVariant: "AMS Combo", technology: "fff", buildVolumeMm: { x: 325, y: 320, z: 325 },
         createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1
       } }));
 
@@ -752,11 +765,11 @@ describe("authenticated BenchLedger API adapter", () => {
     expect(inventoryBody).toMatchObject({ kind: "filament", unit: "gram", manufacturer: "Bambu Lab", sku: "PETG-HF-BLK" });
     const profileBody = compoundBody.profile;
     expect(profileBody).toEqual({ catalogProductId: canonicalProduct.id, profileType: "filament_spool", linkState: "reported", details: { lot: "LOT-1", openedState: "open", openedAt: "2026-08-30T00:00:00.000Z", tareMassG: 164, currentPlacement: "AMS slot 1" } });
-    expect(profileBody).not.toHaveProperty("itemId");
-    expect(new Headers(fetchMock.mock.calls[2]?.[1]?.headers).get("idempotency-key")).toMatch(/^web-exact-inventory-/);
+    expect(profileBody).not.toHaveProperty("itemId"); expect( new Headers(fetchMock.mock.calls[2]?.[1]?.headers).get("idempotency-key") ).toMatch(/^web-exact-inventory-/); const linked = await adapter.linkExactInventoryItem( "spool-1", { category: "Filament", product: createdProduct, quantity: 1000, linkState: "confirmed", filament: { lotBatch: "LOT-1", state: "opened", openedAt: "2026-08-30", tareMassG: 164, placement: "AMS slot 1" } }, 1 ); expect(linked).toMatchObject({ id: "spool-1", serverEvidence: "unknown", productProfile: { linkState: "confirmed", version: 2 } }); expect(linked.evidence).toBe(exact.evidence); expect(String(fetchMock.mock.calls[3]?.[0])).toBe( "/api/v1/inventory/spool-1/product-profile" ); expect(fetchMock.mock.calls[3]?.[1]?.method).toBe("PUT");
+    expect(new Headers(fetchMock.mock.calls[3]?.[1]?.headers).get("if-match")).toBe("1"); expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toEqual({ ...profileBody, linkState: "confirmed" });
     const createdPrinter = await adapter.createCatalogProduct({ kind: "printer", manufacturer: "Bambu Lab", model: "H2D", variant: "AMS Combo", buildVolumeMm: { x: 325, y: 320, z: 325 } });
     expect(createdPrinter).toMatchObject({ id: "catalog-printer-h2d", exactModel: "H2D", buildVolumeMm: { x: 325, y: 320, z: 325 } });
-    const printerBody = JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body));
+    const printerBody = JSON.parse(String(fetchMock.mock.calls[4]?.[1]?.body));
     expect(printerBody).toEqual({ kind: "printer", manufacturer: "Bambu Lab", exactModel: "H2D", exactVariant: "AMS Combo", technology: "fff", buildVolumeMm: { x: 325, y: 320, z: 325 } });
   });
 
@@ -779,6 +792,81 @@ describe("authenticated BenchLedger API adapter", () => {
     expect(body).toEqual({ projectRevisionId: "revision-build", printerItemSnapshot: { itemId: "printer-1", catalogProductId: "printer-product-1", profileId: "printer-profile-1" }, filamentSelections: [{ itemId: "filament-1", catalogProductId: "filament-product-1", profileId: "filament-profile-1" }], activeHotend: "left", nozzle: { diameterMm: 0.4, material: "hardened_steel" }, plate: "Textured PEI", accessories: ["AMS 2 Pro"], firmware: "01.08", slicer: { name: "Bambu Studio", version: "1.10" }, profile: "0.20 mm Standard", calibration: "checked", explicitUnknowns: ["first-layer coupon"] });
     expect(body).not.toHaveProperty("projectId");
     expect(body).not.toHaveProperty("revisionId");
+  });
+
+  it("reuses a build-setup command key when the response is lost after commit", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-build-retry" });
+    const snapshot = {
+      id: "build-config-replayed", projectRevisionId: "revision-build-retry",
+      printerItemSnapshot: { itemId: "printer-1", catalogProductId: "printer-product-1" },
+      filamentSelections: [], activeHotend: "Not recorded", nozzle: "Not recorded", plate: "Not recorded",
+      accessories: [], firmware: "Not recorded", slicer: "Not recorded", profile: "Not recorded",
+      calibration: "Not recorded", explicitUnknowns: [], contentSha256: "b".repeat(64),
+      createdAt: "2026-08-30T10:00:00.000Z"
+    };
+    const requestBodies: string[] = [];
+    const requestKeys: string[] = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ data: {
+        project: { id: "project-build-retry", name: "Build", description: "A build", status: "idea", currentRevisionId: "revision-build-retry", createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 },
+        revision: { id: "revision-build-retry", projectId: "project-build-retry", number: 1, name: "Initial", status: "concept", createdAt: "2026-08-30T10:00:00.000Z", version: 1 }
+      } }))
+      .mockImplementationOnce(async (_input, init) => {
+        requestBodies.push(String(init?.body));
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        return Promise.reject(new TypeError("response lost after commit"));
+      })
+      .mockImplementationOnce(async (_input, init) => {
+        requestBodies.push(String(init?.body));
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        return jsonResponse({ data: snapshot, replayed: true });
+      })
+      .mockImplementationOnce(async (_input, init) => {
+        requestBodies.push(String(init?.body));
+        requestKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+        return jsonResponse({ data: { ...snapshot, id: "build-config-intentional" } });
+      });
+    const adapter = createWorkspaceAdapter();
+    const project = await adapter.createProject({ name: "Build", description: "A build" });
+    const input = { printerItemId: "printer-1", printerProductId: "printer-product-1", accessories: [], unknowns: [] };
+
+    await expect(adapter.createBuildConfigSnapshot(project.id, "revision-build-retry", input)).rejects.toMatchObject({ kind: "offline" });
+    await expect(adapter.createBuildConfigSnapshot(project.id, "revision-build-retry", input)).resolves.toMatchObject({ id: "build-config-replayed" });
+
+    await expect(adapter.createBuildConfigSnapshot(project.id, "revision-build-retry", input)).resolves.toMatchObject({ id: "build-config-intentional" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(requestBodies[1]).toBe(requestBodies[0]);
+    expect(requestKeys[1]).toBe(requestKeys[0]);
+    expect(requestKeys[0]).toMatch(/^web-build-config-/);
+    expect(requestKeys[2]).not.toBe(requestKeys[0]);
+  });
+
+  it("releases a build-setup command key after a known rejection", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-build-known" });
+    const projectResponse = { data: {
+      project: { id: "project-build-known", name: "Build", description: "A build", status: "idea", currentRevisionId: "revision-build-known", createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z", version: 1 },
+      revision: { id: "revision-build-known", projectId: "project-build-known", number: 1, name: "Initial", status: "concept", createdAt: "2026-08-30T10:00:00.000Z", version: 1 }
+    } };
+    const snapshot = {
+      id: "build-config-after-known", projectRevisionId: "revision-build-known",
+      printerItemSnapshot: { itemId: "printer-1", catalogProductId: "printer-product-1" },
+      filamentSelections: [], activeHotend: "Not recorded", nozzle: "Not recorded", plate: "Not recorded",
+      accessories: [], firmware: "Not recorded", slicer: "Not recorded", profile: "Not recorded",
+      calibration: "Not recorded", explicitUnknowns: [], contentSha256: "c".repeat(64), createdAt: "2026-08-30T10:00:00.000Z"
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(projectResponse))
+      .mockResolvedValueOnce(jsonResponse({ error: { message: "setup rejected" } }, 400))
+      .mockResolvedValueOnce(jsonResponse({ data: snapshot }));
+    const adapter = createWorkspaceAdapter();
+    const project = await adapter.createProject({ name: "Build", description: "A build" });
+    const input = { printerItemId: "printer-1", printerProductId: "printer-product-1", accessories: [], unknowns: [] };
+
+    await expect(adapter.createBuildConfigSnapshot(project.id, "revision-build-known", input)).rejects.toMatchObject({ kind: "validation", status: 400 });
+    const rejectedKey = new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("idempotency-key");
+    await expect(adapter.createBuildConfigSnapshot(project.id, "revision-build-known", input)).resolves.toMatchObject({ id: "build-config-after-known" });
+    expect(new Headers(fetchMock.mock.calls[2]?.[1]?.headers).get("idempotency-key")).not.toBe(rejectedKey);
   });
 
   it("posts an eligible physical filament as an explicit unknown identity", async () => {
@@ -1051,7 +1139,7 @@ describe("sample bulk inventory adapter", () => {
 
 describe("web data mappers", () => {
   it("maps every inventory kind, unit, evidence state, and measured dimension", () => {
-    const cases: Array<{ kind: string; category: InventoryItem["category"]; accent: InventoryItem["accent"] }> = [
+    const cases: Array<{ kind: string; category: InventoryItem["category"]; accent: InventoryItem["accent"]; }> = [
       { kind: "printer", category: "Printers", accent: "teal" },
       { kind: "filament", category: "Filament", accent: "slate" },
       { kind: "tool", category: "Tools", accent: "blue" },
@@ -1085,14 +1173,14 @@ describe("web data mappers", () => {
         id: `item-${index}`,
         category: expected.category,
         accent: expected.accent,
-        variant: index === 0 ? "Model variant" : index === 1 ? "SKU variant" : expected.kind,
+        variant: index === 0 ? "Model variant" : index === 1 ? "SKU variant" : "",
         unit: index % 3 === 0 ? "g" : index % 3 === 1 ? "m" : "each",
         description: index === 2 ? "No description recorded." : `Description ${index}`,
         location: index === 3 ? "Unassigned" : `Location ${index}`,
         tags: [`tag-${index}`],
         compatibility: []
       });
-      expect(mapped.tags).not.toBe((serverItem({ tags: [`tag-${index}`] })).tags);
+      expect(mapped.tags).not.toBe(serverItem({ tags: [`tag-${index}`] }).tags);
       if (index === 0) expect(mapped.state).toBe("available");
       if (index === 1) expect(mapped.state).toBe("ordered-unverified");
       if (index === 2) expect(mapped.state).toBe("available");
@@ -1105,6 +1193,7 @@ describe("web data mappers", () => {
     expect(mapInventoryItem(serverItem({ quantity: 2, availableQuantity: 5, evidence: { state: "physically_counted" } }))).toMatchObject({ reserved: 0, state: "available" });
     expect(mapInventoryItem(serverItem({ quantity: 2, availableQuantity: 0, evidence: { state: "commissioned" } }))).toMatchObject({ reserved: 2, state: "reserved", evidence: "commissioned" });
     expect(mapInventoryItem(serverItem({ quantity: 0, availableQuantity: 0, evidence: { state: "physically_counted" } }))).toMatchObject({ reserved: 0, state: "depleted" });
+    expect(mapInventoryItem(serverItem({ name: "ESP32", kind: "electronic" }))).toMatchObject({ name: "ESP32", variant: "" });
     expect(mapInventoryItem(serverItem({
       kind: "electronic",
       availableQuantity: 2,
@@ -1615,44 +1704,10 @@ describe("API boundaries and mutation guards", () => {
   it("rejects incomplete mutation payloads and guards uncached projects", async () => {
     vi.stubGlobal("document", { cookie: "forge_csrf=mutation-token" });
     const adapter = createWorkspaceAdapter();
-    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({ data: { event: {} } }));
-    await expect(adapter.recordCount("missing-item", 1)).rejects.toMatchObject({ kind: "server", status: 502, message: "The service returned an incomplete count" });
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({ data: { event: {} } }) ); await expect(adapter.recordCount("missing-item", 1)).rejects.toMatchObject({ kind: "server", status: 502, message: "The service returned an incomplete count" }); vi.restoreAllMocks(); vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({})); await expect(adapter.createInventoryItem({ name: "New", category: "Accessories", quantity: 1, unit: "each" }) ).rejects.toMatchObject({ kind: "server", status: 502, message: "The service returned an incomplete mutation" }); vi.restoreAllMocks(); vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({})); await expect( adapter.createProject({ name: "New project", description: "Description" }) ).rejects.toMatchObject({ kind: "server", status: 502 }); vi.restoreAllMocks(); const uncachedRevisionFetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({ data: { id: "unknown-revision", projectId: "unknown", number: 2, name: "No cache", status: "concept", createdAt: "2026-08-30T10:00:00.000Z", version: 1 } }));
+    await expect(adapter.createRevision("not-loaded", { name: "No cache" })).rejects.toMatchObject({ kind: "validation", status: 409 }); expect(uncachedRevisionFetch).not.toHaveBeenCalled();
+    await expect(adapter.createBomLine("not-loaded", { name: "No revision", requiredQuantity: 1, unit: "each" })).rejects.toMatchObject({ kind: "validation", status: 409, message: "Create a project revision before adding a requirement" }); await expect(adapter.uploadArtifact( "not-loaded", new File(["data"], "data.stl"), "STL" ) ).rejects.toMatchObject({ kind: "validation", status: 409, message: "Create a project revision before uploading a file" }); }); it("removes a cached project with exact-name, version, and idempotency headers", async () => { const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", csrfToken: "csrf-remove", expiresAt: "2026-08-31T10:00:00.000Z" })).mockResolvedValueOnce( jsonResponse({ status: "ok", service: "benchledger", version: "test", demo: false, now: "2026-08-30T10:00:00.000Z" })).mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", source: "ui", scopes: ["read", "write"] }) ).mockResolvedValueOnce( jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00.000Z", inventory: [], projects: [{ ...serverProject(), currentRevision: serverRevision() }], offers: [] }) ).mockResolvedValueOnce(jsonResponse({ data: { id: "project-1", name: "Maker project", removedAt: "2026-08-30T11:00:00.000Z", removedBy: "admin", lastLifecycleStatus: "planned", releasedReservationIds: [], version: 2, auditId: "audit-remove" } })); const adapter = createWorkspaceAdapter(); await adapter.login("correct-password"); await adapter.loadWorkspace(); await expect(adapter.removeProject("project-1", 1)).resolves.toMatchObject({ id: "project-1", removedAt: "2026-08-30T11:00:00.000Z", lastLifecycleStatus: "planned", version: 2 }); const [url, init] = fetchMock.mock.calls[4]!; expect(url).toBe("/api/v1/projects/project-1"); expect(init).toMatchObject({ method: "DELETE", body: JSON.stringify({ name: "Maker project" }) }); expect(new Headers(init?.headers).get("if-match")).toBe("1"); expect(new Headers(init?.headers).get("idempotency-key")).toMatch( /^web-project-remove-/u );
 
-    vi.restoreAllMocks();
-    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({}));
-    await expect(adapter.createInventoryItem({ name: "New", category: "Accessories", quantity: 1, unit: "each" })).rejects.toMatchObject({ kind: "server", status: 502, message: "The service returned an incomplete mutation" });
-
-    vi.restoreAllMocks();
-    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({}));
-    await expect(adapter.createProject({ name: "New project", description: "Description" })).rejects.toMatchObject({ kind: "server", status: 502 });
-
-    vi.restoreAllMocks();
-    const uncachedRevisionFetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({ data: { id: "unknown-revision", projectId: "unknown", number: 2, name: "No cache", status: "concept", createdAt: "2026-08-30T10:00:00.000Z", version: 1 } }));
-    await expect(adapter.createRevision("not-loaded", { name: "No cache" })).rejects.toMatchObject({ kind: "validation", status: 409 });
-    expect(uncachedRevisionFetch).not.toHaveBeenCalled();
-
-    await expect(adapter.createBomLine("not-loaded", { name: "No revision", requiredQuantity: 1, unit: "each" })).rejects.toMatchObject({ kind: "validation", status: 409, message: "Create a project revision before adding a requirement" });
-    await expect(adapter.uploadArtifact("not-loaded", new File(["data"], "data.stl"), "STL")).rejects.toMatchObject({ kind: "validation", status: 409, message: "Create a project revision before uploading a file" });
-
-  });
-
-  it("removes a cached project with exact-name, version, and idempotency headers", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", csrfToken: "csrf-remove", expiresAt: "2026-08-31T10:00:00.000Z" }))
-      .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "test", demo: false, now: "2026-08-30T10:00:00.000Z" }))
-      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", source: "ui", scopes: ["read", "write"] }))
-      .mockResolvedValueOnce(jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00.000Z", inventory: [], projects: [{ ...serverProject(), currentRevision: serverRevision() }], offers: [] }))
-      .mockResolvedValueOnce(jsonResponse({ data: { id: "project-1", name: "Maker project", removedAt: "2026-08-30T11:00:00.000Z", removedBy: "admin", lastLifecycleStatus: "planned", releasedReservationIds: [], version: 2, auditId: "audit-remove" } }));
-    const adapter = createWorkspaceAdapter();
-    await adapter.login("correct-password");
-    await adapter.loadWorkspace();
-
-    await expect(adapter.removeProject("project-1", 1)).resolves.toMatchObject({ id: "project-1", removedAt: "2026-08-30T11:00:00.000Z", lastLifecycleStatus: "planned", version: 2 });
-    const [url, init] = fetchMock.mock.calls[4]!;
-    expect(url).toBe("/api/v1/projects/project-1");
-    expect(init).toMatchObject({ method: "DELETE", body: JSON.stringify({ name: "Maker project" }) });
-    expect(new Headers(init?.headers).get("if-match")).toBe("1");
-    expect(new Headers(init?.headers).get("idempotency-key")).toMatch(/^web-project-remove-/u);
   });
 
   it("reuses the removal idempotency key after an ambiguous response", async () => {
@@ -1661,23 +1716,21 @@ describe("API boundaries and mutation guards", () => {
       .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "test", demo: false, now: "2026-08-30T10:00:00.000Z" }))
       .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", source: "ui", scopes: ["read", "write"] }))
       .mockResolvedValueOnce(jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00.000Z", inventory: [], projects: [{ ...serverProject(), currentRevision: serverRevision() }], offers: [] }))
-      .mockResolvedValueOnce(jsonResponse({ error: { message: "The response was lost after the server committed" } }, 500))
-      .mockResolvedValueOnce(jsonResponse({ data: { id: "project-1", name: "Maker project", removedAt: "2026-08-30T11:00:00.000Z", removedBy: "admin", lastLifecycleStatus: "planned", releasedReservationIds: [], version: 2, auditId: "audit-remove-retry" } }));
+      .mockResolvedValueOnce(jsonResponse({ error: { message: "The response was lost after the server committed" } }, 500 ) ) .mockResolvedValueOnce(jsonResponse({ data: { id: "project-1", name: "Maker project", removedAt: "2026-08-30T11:00:00.000Z", removedBy: "admin", lastLifecycleStatus: "planned", releasedReservationIds: [], version: 2, auditId: "audit-remove-retry" } }));
     const adapter = createWorkspaceAdapter();
     await adapter.login("correct-password");
     await adapter.loadWorkspace();
 
-    await expect(adapter.removeProject("project-1", 1)).rejects.toMatchObject({ kind: "server", status: 500 });
-    await expect(adapter.removeProject("project-1", 1)).resolves.toMatchObject({ id: "project-1", removedAt: "2026-08-30T11:00:00.000Z" });
-    const firstKey = new Headers(fetchMock.mock.calls[4]?.[1]?.headers).get("idempotency-key");
-    const secondKey = new Headers(fetchMock.mock.calls[5]?.[1]?.headers).get("idempotency-key");
-    expect(firstKey).toMatch(/^web-project-remove-/u);
-    expect(secondKey).toBe(firstKey);
-  });
-});
-
-describe("sample workspace adapter", () => {
-  it("keeps demo pagination server-shaped and rejects malformed cursors", async () => {
+    await expect(adapter.removeProject("project-1", 1)).rejects.toMatchObject({ kind: "server", status: 500 }); await expect(adapter.removeProject("project-1", 1)).resolves.toMatchObject({ id: "project-1", removedAt: "2026-08-30T11:00:00.000Z" });
+    const firstKey = new Headers(fetchMock.mock.calls[4]?.[1]?.headers).get( "idempotency-key" ); const secondKey = new Headers(fetchMock.mock.calls[5]?.[1]?.headers).get("idempotency-key" ); expect(firstKey).toMatch(/^web-project-remove-/u);
+    expect(secondKey).toBe(firstKey); });
+  }); describe("sample workspace adapter", () => { it("keeps sample category labels and category filtering coherent", async () => {
+    const adapter = createSampleWorkspaceAdapter(); const categories = await adapter.listInventoryCategories({ limit: 50 }); const categoryIds = new Set(categories.data.map((category) => category.id)); const all = await adapter.listInventory({ limit: 50 }); expect(all.items)
+      .toHaveLength(14); expect( all.items.every( (item) => item.categoryNodeId !== undefined && categoryIds.has(item.categoryNodeId) ))
+      .toBe(true); const electronics = await adapter.listInventory({ categoryNodeId: "category-electronics", limit: 50 }); expect(electronics.items.map((item) => item.name)).toEqual([ "2.54 mm pin headers", "ESP32 DevKitC" ]); expect( electronics.items.every( (item) => item.categoryNodeId === "category-electronics" ) ) .toBe(true); }); it("keeps named sample projects revision-backed for build approach saves", async () => { const adapter = createSampleWorkspaceAdapter(); const snapshot = await adapter.loadWorkspace(); for (const expected of [ { name: "Horizon wallwash", revisionId: "sample-project-circadian-r09" }, { name: "Memory Loop v2", revisionId: "sample-project-battery-r02" } ]) { const project = snapshot.projects.find( (candidate) => candidate.name === expected.name ); expect(project).toMatchObject({ serverRevisionId: expected.revisionId, serverRevisionVersion: 1 }); expect(project?.bom.every((line) => line.role === "consumed")).toBe(true);
+    const saved = await adapter.updateProjectRevision( expected.revisionId, { fabricationRoute: "printed", intendedPrinterItemId: "eq-h2d" }, project?.serverRevisionVersion );
+    expect(saved).toMatchObject({ serverRevisionId: expected.revisionId, serverRevisionVersion: 2, fabricationRoute: "printed", intendedPrinterItemId: "eq-h2d" }); await expect( adapter.updateProjectRevision( expected.revisionId, { fabricationRoute: "none" }, 1 ) ).rejects.toMatchObject({ status: 409, code: "version_conflict" });
+} }); it("keeps demo pagination server-shaped and rejects malformed cursors", async () => {
     const adapter = createSampleWorkspaceAdapter();
     const first = await adapter.listInventory({ limit: 1 });
     expect(first.items).toHaveLength(1);
@@ -1707,13 +1760,12 @@ describe("sample workspace adapter", () => {
 
     const createdItem = await adapter.createInventoryItem({ name: "JST connector", category: "Electronics", quantity: 10, unit: "each" });
     expect(createdItem).toMatchObject({ name: "JST connector", state: "inspect-first", evidence: "delivered", accent: "teal", location: "Unassigned" });
-    const createdProject = await adapter.createProject({ name: "Sample project", description: "A demo project" });
-    expect(createdProject).toMatchObject({ name: "Sample project", status: "idea", currentRevision: "r01", railStep: 0 });
-    const revised = await adapter.createRevision(createdProject.id, { name: "r02 concept", notes: "Measure first", status: "CAD complete" });
-    expect(revised).toMatchObject({ currentRevision: "r02 concept", railStep: 1, notes: ["Measure first"], bom: [], artifacts: [] });
-    const withBom = await adapter.createBomLine(createdProject.id, { name: "JST connector", requiredQuantity: 2, unit: "each", itemId: createdItem.id, note: "One per panel" });
+    const createdProject = await adapter.createProject({ name: "Sample project", description: "A demo project", fabricationRoute: "printed", intendedPrinterItemId: "printer-1" });
+    expect(createdProject).toMatchObject({ name: "Sample project", status: "idea", currentRevision: "r01", railStep: 0, fabricationRoute: "printed", intendedPrinterItemId: "printer-1" }); const oldBuildConfig = await adapter.createBuildConfigSnapshot( createdProject.id, createdProject.serverRevisionId!, { printerItemId: "printer-1", accessories: [], unknowns: [] } ); Object.assign(createdProject, { buildConfigSnapshot: oldBuildConfig });
+    const revised = await adapter.createRevision(createdProject.id, { name: "r02 concept", notes: "Measure first", status: "CAD complete", fabricationRoute: "ready_made" });
+    expect(revised).toMatchObject({ currentRevision: "r02 concept", railStep: 1, notes: ["Measure first"], bom: [], artifacts: [], fabricationRoute: "ready_made", intendedPrinterItemId: null }); expect(revised).not.toHaveProperty("buildConfigSnapshot"); await expect(adapter.updateProjectRevision(revised.serverRevisionId!, { fabricationRoute: "ready_made", intendedPrinterItemId: "printer-1" }, revised.serverRevisionVersion)).rejects.toMatchObject({ status: 400 }); const withBom = await adapter.createBomLine(createdProject.id, { name: "JST connector", requiredQuantity: 2, unit: "each", itemId: createdItem.id, note: "One per panel" });
     expect(withBom.bom[0]).toMatchObject({ label: "JST connector", required: 2, optional: false, note: "One per panel" });
-    const file = new File(["solid"], "sample.step", { type: "model/step" });
+    const roleResolved = await adapter.updateBomLineRole( createdProject.id, withBom.bom[0]!.id, "consumed", 1 ); expect(roleResolved.bom[0]).toMatchObject({ role: "consumed", version: 2 }); await expect( adapter.updateBomLineRole( createdProject.id, withBom.bom[0]!.id, "reusable", 1 ) ).rejects.toMatchObject({ code: "version_conflict", status: 409 }); const file = new File(["solid"], "sample.step", { type: "model/step" });
     for (const [role, expected] of [["STEP", "STEP"], ["STL", "STL"], ["Build plate", "Build plate"], ["Editable CAD", "Editable CAD"], ["Notes", "Notes"], ["Validation", "Validation"]] as const) {
       const updated = await adapter.uploadArtifact(createdProject.id, file, role);
       expect(updated.artifacts[0]).toMatchObject({ name: "sample.step", role: expected, status: "candidate", hash: "sample-hash" });
@@ -1726,6 +1778,15 @@ describe("sample workspace adapter", () => {
     expect(after.inventory).toHaveLength(initialInventoryCount + 1);
     expect(after.projects).toHaveLength(initialProjectCount + 1);
     expect(after.projects.find((project) => project.id === createdProject.id)?.artifacts).toHaveLength(6);
+    await expect(adapter.createRevision(createdProject.id, { name: "Invalid printer route", intendedPrinterItemId: "printer-1" })).rejects.toMatchObject({ kind: "validation", status: 400 });
+    const printed = await adapter.createRevision(createdProject.id, { name: "r03 printed", fabricationRoute: "printed", intendedPrinterItemId: "printer-1" });
+    expect(printed).toMatchObject({ fabricationRoute: "printed", intendedPrinterItemId: "printer-1" });
+    const inherited = await adapter.createRevision(createdProject.id, { name: "r04 inherited" });
+    expect(inherited).toMatchObject({ fabricationRoute: "printed", intendedPrinterItemId: "printer-1" });
+    const cleared = await adapter.createRevision(createdProject.id, { name: "r05 clear", intendedPrinterItemId: null });
+    expect(cleared).toMatchObject({ fabricationRoute: "printed", intendedPrinterItemId: null });
+    const carriedClear = await adapter.createRevision(createdProject.id, { name: "r06 clear carried" });
+    expect(carriedClear).toMatchObject({ fabricationRoute: "printed", intendedPrinterItemId: null });
     await expect(adapter.removeProject(createdProject.id, after.projects.find((project) => project.id === createdProject.id)?.version)).resolves.toMatchObject({ id: createdProject.id, removedAt: expect.any(String), lastLifecycleStatus: "idea" });
     await expect(adapter.loadWorkspace()).resolves.toMatchObject({ projects: expect.not.arrayContaining([expect.objectContaining({ id: createdProject.id })]) });
   });

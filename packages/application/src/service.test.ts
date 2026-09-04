@@ -39,9 +39,9 @@ function fakePorts(seed = item(), inspections?: InspectionPort): ApplicationPort
       listProjects: async () => ({ data: [project], limit: 50 }), getProject: async (id) => id === project.id ? project : null,
       createProject: async (input) => ({ id: input.id ?? "project-2", name: input.name, status: input.status, ...(input.description === undefined ? {} : { description: input.description }), createdAt: project.createdAt, updatedAt: project.updatedAt, version: 1 }), updateProject: async (_id, input) => { project = { ...project, ...input, ...(input.description === undefined ? {} : { description: input.description }), version: project.version + 1 } as Project; return project; },
       createWorkItem: async (_id, input) => ({ id: input.id ?? "work-1", projectId: project.id, name: input.name, kind: input.kind, createdAt: project.createdAt, updatedAt: project.updatedAt, version: 1 }), getWorkItem: async (id) => id === "work-1" ? { id: "work-1", projectId: project.id, name: "Enclosure", kind: "part", createdAt: project.createdAt, updatedAt: project.updatedAt, version: 1 } : null, listWorkItems: async () => [],
-      createProjectRevision: async (_id, input) => ({ id: input.id ?? "rev-1", projectId: project.id, number: 1, name: input.name, status: input.status, ...(input.notes ? { notes: input.notes } : {}), createdAt: project.createdAt, version: 1 }), getProjectRevision: async () => ({ id: "rev-1", projectId: project.id, number: 1, name: "r1", status: "concept", createdAt: project.createdAt, version: 1 }),
+      createProjectRevision: async (_id, input) => ({ id: input.id ?? "rev-1", projectId: project.id, number: 1, name: input.name, status: input.status, fabricationRoute: input.fabricationRoute ?? "undecided", ...(input.intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId: input.intendedPrinterItemId }), ...(input.notes ? { notes: input.notes } : {}), createdAt: project.createdAt, version: 1 }), getProjectRevision: async () => ({ id: "rev-1", projectId: project.id, number: 1, name: "r1", status: "concept", fabricationRoute: "undecided", createdAt: project.createdAt, version: 1 }),
       createWorkItemRevision: async (_id, input) => ({ id: input.id ?? "wir-1", workItemId: "work-1", projectId: project.id, number: 1, name: input.name, status: input.status, ...(input.notes ? { notes: input.notes } : {}), createdAt: project.createdAt, version: 1 }), getWorkItemRevision: async () => null,
-      listBomLines: async (_id, options) => options?.includeRetired === true ? bom : bom.filter((line) => line.retiredAt === undefined), getBomLine: async (id) => bom.find((line) => line.id === id) ?? null, createBomLine: async (_id, input) => { const line = { ...input, id: input.id ?? "bom-1", revisionId: "rev-1", alternatives: input.alternatives ?? [], constraints: input.constraints ?? {}, createdAt: project.createdAt, updatedAt: project.updatedAt, version: 1 }; bom.push(line); return line; }, updateBomLine: async () => bom[0]!, retireBomLine: async (id) => { const index = bom.findIndex((line) => line.id === id); const retired = { ...bom[index]!, retiredAt: "2026-08-30T01:00:00.000Z", updatedAt: "2026-08-30T01:00:00.000Z", version: bom[index]!.version + 1 }; bom[index] = retired; return retired; }, restoreBomLine: async (id) => { const index = bom.findIndex((line) => line.id === id); const { retiredAt: _retiredAt, ...active } = bom[index]!; const restored = { ...active, updatedAt: "2026-08-30T02:00:00.000Z", version: active.version + 1 }; bom[index] = restored; return restored; },
+      listBomLines: async (_id, options) => options?.includeRetired === true ? bom : bom.filter((line) => line.retiredAt === undefined), getBomLine: async (id) => bom.find((line) => line.id === id) ?? null, createBomLine: async (_id, input) => { const line = { role: "consumed" as const, ...input, id: input.id ?? "bom-1", revisionId: "rev-1", alternatives: input.alternatives ?? [], constraints: input.constraints ?? {}, createdAt: project.createdAt, updatedAt: project.updatedAt, version: 1 }; bom.push(line); return line; }, updateBomLine: async () => bom[0]!, retireBomLine: async (id) => { const index = bom.findIndex((line) => line.id === id); const retired = { ...bom[index]!, retiredAt: "2026-08-30T01:00:00.000Z", updatedAt: "2026-08-30T01:00:00.000Z", version: bom[index]!.version + 1 }; bom[index] = retired; return retired; }, restoreBomLine: async (id) => { const index = bom.findIndex((line) => line.id === id); const { retiredAt: _retiredAt, ...active } = bom[index]!; const restored = { ...active, updatedAt: "2026-08-30T02:00:00.000Z", version: active.version + 1 }; bom[index] = restored; return restored; },
       createReservation: async (_id, input) => { const reservation = { ...input, id: input.id ?? "reservation-1", status: "active" as const, createdAt: project.createdAt, updatedAt: project.updatedAt, version: 1 }; reservations.push(reservation); return reservation; }, releaseReservation: async () => reservations[0]!, listReservations: async () => reservations, getReservationDetails: async (id) => { const reservation = reservations.find((candidate) => candidate.id === id); const line = reservation === undefined ? undefined : bom.find((candidate) => candidate.id === reservation.lineId); return reservation === undefined || line === undefined ? null : { reservation, projectId: project.id, projectRevisionId: line.revisionId, bomLine: line }; },
       recordUsage: async () => { throw new Error("not implemented"); }
     },
@@ -50,9 +50,9 @@ function fakePorts(seed = item(), inspections?: InspectionPort): ApplicationPort
       getPreview: async () => setupPreview ?? null,
       commitPreview: async ({ preview }) => ({
         project: { id: preview.proposal.project.id as string, name: preview.proposal.project.name, status: preview.proposal.project.status, createdAt: preview.createdAt, updatedAt: preview.createdAt, version: 1 },
-        revision: { id: preview.proposal.revision.id as string, projectId: preview.proposal.project.id as string, number: 1, name: preview.proposal.revision.name, status: preview.proposal.revision.status, createdAt: preview.createdAt, version: 1 },
+        revision: { id: preview.proposal.revision.id as string, projectId: preview.proposal.project.id as string, number: 1, name: preview.proposal.revision.name, status: preview.proposal.revision.status, fabricationRoute: preview.proposal.revision.fabricationRoute ?? "undecided", ...(preview.proposal.revision.intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId: preview.proposal.revision.intendedPrinterItemId }), createdAt: preview.createdAt, version: 1 },
         workItems: [], workItemRevisions: [],
-        bomLines: preview.proposal.bomLines.map((line) => ({ id: line.id as string, revisionId: preview.proposal.revision.id as string, name: line.name, requiredQuantity: line.requiredQuantity, unit: line.unit, optional: line.optional, ...(line.itemId === undefined ? {} : { itemId: line.itemId }), constraints: line.constraints, alternatives: line.alternatives, createdAt: preview.createdAt, updatedAt: preview.createdAt, version: 1 })),
+        bomLines: preview.proposal.bomLines.map((line) => ({ id: line.id as string, revisionId: preview.proposal.revision.id as string, name: line.name, role: line.role ?? null, requiredQuantity: line.requiredQuantity, unit: line.unit, optional: line.optional, ...(line.itemId === undefined ? {} : { itemId: line.itemId }), constraints: line.constraints, alternatives: line.alternatives, createdAt: preview.createdAt, updatedAt: preview.createdAt, version: 1 })),
         reservations: [], auditIds: [], context: { previewId: preview.id, contentSha256: preview.contentSha256 }, gaps: preview.gaps, nextAction: "Review setup"
       } as ProjectSetupCommitResult)
     },
@@ -77,7 +77,7 @@ const setupProposal = (overrides: Partial<ProjectSetupProposal> = {}): ProjectSe
   project: { id: "setup-project", name: "Setup project", status: "planned" },
   revision: { id: "setup-revision", name: "Initial", status: "concept" },
   workItems: [],
-  bomLines: [{ localRef: "line", id: "setup-line", name: "PETG", itemId: "item-1", requiredQuantity: 1, unit: "gram", optional: false, constraints: {}, alternatives: [] }],
+  bomLines: [{ localRef: "line", id: "setup-line", name: "PETG", role: "consumed", itemId: "item-1", requiredQuantity: 1, unit: "gram", optional: false, constraints: {}, alternatives: [] }],
   reservations: [],
   ...overrides
 });
@@ -90,6 +90,31 @@ const setupCommitInput = (preview: ProjectSetupPreview): { previewId: string; ex
 });
 
 describe("ApplicationService", () => {
+  it("keeps a reserved requirement consumable until its reservation is released", async () => {
+    const ports = fakePorts();
+    const service = new ApplicationService(ports);
+    const line = await service.createBomLine("rev-1", { id: "reserved-role", name: "Reserved board", role: "consumed", itemId: "item-1", requiredQuantity: 1, unit: "gram", optional: false, alternatives: [], constraints: {} }, context);
+    await service.createReservation("rev-1", { id: "role-reservation", lineId: line.data.id, itemId: "item-1", quantity: 1 }, context);
+
+    await expect(service.updateBomLine(line.data.id, { role: "reusable" }, line.data.version, context)).rejects.toMatchObject({ code: "conflict" });
+    ports.projects.listReservations = async () => [];
+    await expect(service.updateBomLine(line.data.id, { role: "reusable" }, line.data.version, context)).resolves.toMatchObject({ audit: { action: "project.bom_line.update" } });
+  });
+
+  it("blocks a legacy null role from becoming reusable while preserving null to consumed", async () => {
+    const ports = fakePorts(item({ kind: "electronic", unit: "each", quantity: 1, availableQuantity: 1 }));
+    const service = new ApplicationService(ports);
+    const line = await service.createBomLine("rev-1", { id: "legacy-reserved-role", name: "Reserved board", role: "consumed", itemId: "item-1", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context);
+    await service.createReservation("rev-1", { id: "legacy-role-reservation", lineId: line.data.id, itemId: "item-1", quantity: 1 }, context);
+
+    const legacyLine: BomLine = { ...line.data, role: null };
+    ports.projects.getBomLine = async () => legacyLine;
+    ports.projects.updateBomLine = async (_id, input) => ({ ...legacyLine, ...input, version: legacyLine.version + 1 } as BomLine);
+
+    await expect(service.updateBomLine(line.data.id, { role: "reusable" }, line.data.version, context)).rejects.toMatchObject({ code: "conflict" });
+    await expect(service.updateBomLine(line.data.id, { role: "consumed" }, line.data.version, context)).resolves.toMatchObject({ data: { role: "consumed", version: 2 } });
+  });
+
   it("removes a project only with exact-name confirmation and returns released reservation evidence", async () => {
     const ports = fakePorts();
     const tombstone: ProjectTombstone = {
@@ -159,11 +184,13 @@ describe("ApplicationService", () => {
     const ports = fakePorts(legacy);
     const line: BomLine = {
       id: "legacy-tool-line", revisionId: "rev-1", name: legacy.name, itemId: legacy.id,
+      role: "consumed",
       requiredQuantity: 1, unit: "metre", optional: false, constraints: {}, alternatives: [],
       createdAt: legacy.createdAt, updatedAt: legacy.updatedAt, version: 1,
     };
     ports.projects.listBomLines = async () => [line];
     ports.projects.listReservations = async () => [];
+    ports.projects.getReservationDetails = async () => ({ reservation: { id: "legacy-reservation", lineId: line.id, itemId: legacy.id, quantity: 1, status: "active", unit: legacy.unit, createdAt: legacy.createdAt, updatedAt: legacy.updatedAt, version: 1 }, projectId: "project-1", projectRevisionId: "rev-1", bomLine: { ...line, role: "consumed" } });
     const service = new ApplicationService(ports);
 
     await expect(service.getInventoryItem(legacy.id)).resolves.toMatchObject({ unitStatus: "needs_correction", unitCorrectionReason: expect.stringMatching(/tool items use/i) });
@@ -171,7 +198,7 @@ describe("ApplicationService", () => {
     await expect(service.evaluateBomGaps("rev-1")).resolves.toMatchObject({
       lines: [{ status: "inspect_first", matchedItemIds: [legacy.id], candidates: [{ itemId: legacy.id, inspectQuantity: 0, reason: expect.stringMatching(/unit needs correction/i) }] }]
     });
-    await expect(service.recordUsage({ projectId: "project-1", itemId: legacy.id, quantity: 1, unit: "metre" }, context)).rejects.toMatchObject({ code: "validation", message: expect.stringMatching(/needs unit correction/i) });
+    await expect(service.recordUsage({ reservationId: "legacy-reservation", projectId: "project-1", itemId: legacy.id, quantity: 1, unit: "metre" }, context)).rejects.toMatchObject({ code: "validation", message: expect.stringMatching(/needs unit correction/i) });
     await expect(service.createReservation("rev-1", { lineId: line.id, itemId: legacy.id, quantity: 1 }, context)).rejects.toMatchObject({ code: "validation", message: expect.stringMatching(/needs unit correction/i) });
     await expect(Promise.resolve().then(() => buildReconciliationDocument({
       projectId: "project-1", projectRevisionId: "rev-1", lines: [line],
@@ -187,8 +214,12 @@ describe("ApplicationService", () => {
       return validLongTail;
     };
     await expect(new ApplicationService(updatePorts).updateInventoryItem(validLongTail.id, { kind: "tool" }, validLongTail.version, context))
-      .rejects.toMatchObject({ code: "validation", message: expect.stringMatching(/needs unit correction/i) });
+      .rejects.toMatchObject({ code: "validation", message: expect.stringMatching(/corrected replacement/i) });
     expect(updateCalled).toBe(false);
+
+    const compatiblePair = item({ id: "generic-each", name: "Generic item", kind: "other", unit: "each" });
+    await expect(new ApplicationService(fakePorts(compatiblePair)).updateInventoryItem(compatiblePair.id, { kind: "tool" }, compatiblePair.version, context))
+      .rejects.toMatchObject({ code: "validation", message: expect.stringMatching(/corrected replacement/i) });
   });
 
   it("serves inventory reads, not-found responses, and bounded stock-event pages", async () => {
@@ -404,9 +435,26 @@ describe("ApplicationService", () => {
 
     const projectRevision = await service.createProjectRevision("project-1", { id: "revision-new", name: "r02", status: "CAD complete", notes: "First CAD pass" }, context);
     expect(projectRevision).toMatchObject({ data: { id: "revision-new", status: "CAD complete" }, audit: { action: "project.revision.create" } });
+    const generatedRevision = await service.createProjectRevision("project-1", { name: "Generated route", status: "concept", fabricationRoute: "printed" }, context);
+    expect(generatedRevision).toMatchObject({ data: { id: "rev-1", fabricationRoute: "printed" } });
+    expect(generatedRevision.data).toMatchObject({ intendedPrinterItemId: null });
+
+    ports.projects.updateProjectRevision = async (id, input) => ({
+      id, projectId: "project-1", number: 1, name: "r1", status: "concept",
+      fabricationRoute: input.fabricationRoute ?? "undecided",
+      ...(Object.prototype.hasOwnProperty.call(input, "intendedPrinterItemId") ? { intendedPrinterItemId: input.intendedPrinterItemId } : {}),
+      createdAt: "2026-08-30T00:00:00.000Z", version: 2
+    });
+    const printedRevision = await service.updateProjectRevision("rev-1", { fabricationRoute: "printed" }, 1, context);
+    expect(printedRevision.data).toMatchObject({ fabricationRoute: "printed", version: 2 });
+    expect(printedRevision.data).toMatchObject({ intendedPrinterItemId: null });
+    const clearedRevision = await service.updateProjectRevision("rev-1", { intendedPrinterItemId: null }, 1, context);
+    expect(clearedRevision.data).toMatchObject({ fabricationRoute: "undecided", version: 2 });
+    expect(clearedRevision.data).toMatchObject({ intendedPrinterItemId: null });
     await expect(service.getProjectRevision("rev-1")).resolves.toMatchObject({ id: "rev-1" });
-    ports.projects.getProjectRevision = async (id) => id === "rev-1" ? { id: "rev-1", projectId: "project-1", number: 1, name: "r1", status: "concept", createdAt: "2026-08-30T00:00:00.000Z", version: 1 } : null;
+    ports.projects.getProjectRevision = async (id) => id === "rev-1" ? { id: "rev-1", projectId: "project-1", number: 1, name: "r1", status: "concept", fabricationRoute: "undecided", createdAt: "2026-08-30T00:00:00.000Z", version: 1 } : null;
     await expect(service.getProjectRevision("missing-revision")).rejects.toMatchObject({ code: "not_found" });
+    await expect(service.updateProjectRevision("missing-revision", { fabricationRoute: "none" }, 1, context)).rejects.toMatchObject({ code: "not_found" });
 
     const workRevision = await service.createWorkItemRevision("work-1", { id: "work-revision-new", name: "r02", status: "DFAM reviewed" }, context);
     expect(workRevision).toMatchObject({ data: { id: "work-revision-new", workItemId: "work-1" }, audit: { action: "project.work_item_revision.create" } });
@@ -686,13 +734,20 @@ describe("ApplicationService", () => {
       project: { id: "setup-source-project", name: "Setup source", status: "planned" as const },
       revision: { id: "setup-source-revision", name: "Initial", status: "concept" as const },
       workItems: [],
-      bomLines: [{ localRef: "source", id: "setup-source-line", name: "Setup source", itemId: "setup-source-item", requiredQuantity: 1, unit: "gram" as const, optional: false, constraints: {}, alternatives: [] }],
+      bomLines: [{ localRef: "source", id: "setup-source-line", name: "Setup source", role: "consumed" as const, itemId: "setup-source-item", requiredQuantity: 1, unit: "gram" as const, optional: false, constraints: {}, alternatives: [] }],
       reservations: []
     };
     const preview = await service.previewProjectSetup(proposal, context);
     expect(preview.gaps.totals).toMatchObject({ requiredLines: 1, suppliedLines: 1, readyLines: 1, checkLines: 0, decideLines: 0, sourceLines: 0, optionalLines: 0 });
     const committed = await service.commitProjectSetup({ previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmReservations: false }, { ...context, idempotencyKey: "setup-source-key" });
     expect(committed.data.gaps).toEqual(preview.gaps);
+  });
+
+  it("rejects a printer assignment in setup preview unless the route is printed", async () => {
+    const service = new ApplicationService(fakePorts());
+    await expect(service.previewProjectSetup(setupProposal({
+      revision: { id: "setup-route-revision", name: "Initial", status: "concept", intendedPrinterItemId: "item-1" }
+    }), context)).rejects.toMatchObject({ code: "validation", message: expect.stringMatching(/printed fabrication route/i) });
   });
 
   it("canonicalizes LED resistor specifications in setup preview and durable commit", async () => {
@@ -702,7 +757,7 @@ describe("ApplicationService", () => {
     const proposal = setupProposal({
       project: { id: "setup-led-project", name: "LED setup", status: "planned" },
       revision: { id: "setup-led-revision", name: "Initial", status: "concept" },
-      bomLines: [{ localRef: "led-line", id: "setup-led-line", name: "LED limiting resistor", itemId: "setup-resistor", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }],
+      bomLines: [{ localRef: "led-line", id: "setup-led-line", name: "LED limiting resistor", role: "consumed", itemId: "setup-resistor", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [] }],
     });
 
     const preview = await service.previewProjectSetup(proposal, context);
@@ -975,10 +1030,33 @@ describe("ApplicationService", () => {
     expect(usage).toMatchObject({ data: { event: { type: "consume" }, item: { quantity: 998 } }, audit: { action: "project.usage.record" } });
     expect(usageInput).toEqual({ reservationId: "reservation-flow", projectId: "project-1", itemId: "item-1", quantity: 2, unit: "gram", note: "used on prototype" });
 
-    await expect(service.recordUsage({ projectId: "bad/id", itemId: "item-1", quantity: 1, unit: "gram" }, context)).rejects.toMatchObject({ code: "validation" });
-    await expect(service.recordUsage({ projectId: "project-1", itemId: "missing-item", quantity: 1, unit: "gram" }, context)).rejects.toMatchObject({ code: "not_found" });
-    await expect(service.recordUsage({ projectId: "project-1", itemId: "item-1", quantity: 1, unit: "each" }, context)).rejects.toMatchObject({ code: "validation" });
+    await expect(service.recordUsage({ reservationId: "reservation-flow", projectId: "bad/id", itemId: "item-1", quantity: 1, unit: "gram" }, context)).rejects.toMatchObject({ code: "validation" });
+    await expect(service.recordUsage({ reservationId: "reservation-flow", projectId: "project-1", itemId: "missing-item", quantity: 1, unit: "gram" }, context)).rejects.toMatchObject({ code: "not_found" });
+    await expect(service.recordUsage({ reservationId: "reservation-flow", projectId: "project-1", itemId: "item-1", quantity: 1, unit: "each" }, context)).rejects.toMatchObject({ code: "validation" });
     await expect(service.getReservationDetails("missing-reservation")).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("uses reusable stock for readiness without reserving or consuming it and fails closed for legacy roles", async () => {
+    const reusablePorts = fakePorts(item({ kind: "tool", unit: "each", quantity: 1, availableQuantity: 1 }));
+    const reusableService = new ApplicationService(reusablePorts);
+    const reusable = await reusableService.createBomLine("rev-1", { id: "bom-reusable", name: "Soldering iron", role: "reusable", itemId: "item-1", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context);
+    await expect(reusableService.evaluateBomGaps("rev-1")).resolves.toMatchObject({ lines: [{ lineId: reusable.data.id, status: "supplied", decision: "ready" }] });
+    await expect(reusableService.createReservation("rev-1", { lineId: reusable.data.id, itemId: "item-1", quantity: 1 }, context)).rejects.toMatchObject({ code: "validation", message: expect.stringMatching(/only consumed/i) });
+
+    reusablePorts.projects.getReservationDetails = async () => ({ reservation: { id: "reusable-reservation", lineId: reusable.data.id, itemId: "item-1", quantity: 1, status: "active", unit: "each", createdAt: reusable.data.createdAt, updatedAt: reusable.data.updatedAt, version: 1 }, projectId: "project-1", projectRevisionId: "rev-1", bomLine: reusable.data });
+    await expect(reusableService.recordUsage({ reservationId: "reusable-reservation", projectId: "project-1", itemId: "item-1", quantity: 1, unit: "each" }, context)).rejects.toMatchObject({ code: "validation", message: expect.stringMatching(/only consumed/i) });
+
+    const legacyPorts = fakePorts(item({ unit: "each", quantity: 1, availableQuantity: 1 }));
+    const legacyService = new ApplicationService(legacyPorts);
+    const legacy = await legacyService.createBomLine("rev-1", { id: "bom-legacy-role", name: "Unreviewed part", role: null, itemId: "item-1", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context);
+    await expect(legacyService.evaluateBomGaps("rev-1")).resolves.toMatchObject({ lines: [{ lineId: legacy.data.id, status: "supplied", decision: "check" }] });
+    await expect(legacyService.createReservation("rev-1", { lineId: legacy.data.id, itemId: "item-1", quantity: 1 }, context)).rejects.toMatchObject({ code: "validation", message: expect.stringMatching(/review/i) });
+  });
+
+  it("keeps printers out of BOM requirements", async () => {
+    const printerService = new ApplicationService(fakePorts(item({ kind: "printer", unit: "each" })));
+    await expect(printerService.createBomLine("rev-1", { name: "Workshop printer", role: "reusable", itemId: "item-1", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context)).rejects.toMatchObject({ code: "validation", message: expect.stringMatching(/build configuration/i) });
+    await expect(printerService.createBomLine("rev-1", { name: "Printer requirement", role: "reusable", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: { kind: "printer" } }, context)).rejects.toMatchObject({ code: "validation", message: expect.stringMatching(/build configuration/i) });
   });
 
   it("lists and creates supplier offers with bounded limits", async () => {
@@ -1052,7 +1130,7 @@ describe("ApplicationService", () => {
     };
     ports.artifacts.readArtifact = async (id) => ({ artifact: { ...artifact, id }, body: new Uint8Array([1, 2, 3, 4]) });
     ports.artifacts.retireArtifact = async (id, _version, _ctx) => ({ ...artifact, id, retired: true, currentCandidate: false, version: 2 });
-    ports.projects.getProjectRevision = async (id) => id === "rev-1" ? { id, projectId: "project-1", number: 1, name: "Project revision", status: "concept", createdAt: "2026-08-30T00:00:00.000Z", version: 1 } : null;
+    ports.projects.getProjectRevision = async (id) => id === "rev-1" ? { id, projectId: "project-1", number: 1, name: "Project revision", status: "concept", fabricationRoute: "undecided", createdAt: "2026-08-30T00:00:00.000Z", version: 1 } : null;
     ports.projects.getWorkItemRevision = async (id) => id === "work-rev-1" ? { id, workItemId: "work-1", projectId: "project-1", number: 1, name: "Enclosure revision", status: "concept", createdAt: "2026-08-30T00:00:00.000Z", version: 1 } : null;
     const service = new ApplicationService(ports);
 
@@ -1082,7 +1160,7 @@ describe("ApplicationService", () => {
 
   it("resolves valid project and work-item upload ancestry before creating a session", async () => {
     const ports = fakePorts();
-    const projectRevision: ProjectRevision = { id: "project-only-rev", projectId: "project-1", number: 1, name: "Project revision", status: "concept", createdAt: "2026-08-30T00:00:00.000Z", version: 1 };
+    const projectRevision: ProjectRevision = { id: "project-only-rev", projectId: "project-1", number: 1, name: "Project revision", status: "concept", fabricationRoute: "undecided", createdAt: "2026-08-30T00:00:00.000Z", version: 1 };
     const workItem: WorkItem = { id: "work-valid", projectId: "project-1", name: "Housing", kind: "part", createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1 };
     const workRevision: WorkItemRevision = { id: "work-valid-rev", workItemId: workItem.id, projectId: workItem.projectId, number: 1, name: "Housing revision", status: "concept", createdAt: "2026-08-30T00:00:00.000Z", version: 1 };
     ports.projects.getProjectRevision = async (id) => id === projectRevision.id ? projectRevision : null;
@@ -1556,7 +1634,7 @@ describe("ApplicationService", () => {
       project: { id: "setup-overage-project", name: "Converted setup", status: "planned" },
       revision: { id: "setup-overage-revision", name: "Initial", status: "concept" },
       workItems: [],
-      bomLines: [{ localRef: "led-line", id: "setup-overage-line", name: "LEDs", itemId: "missing-led", requiredQuantity: 15, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: {
+      bomLines: [{ localRef: "led-line", id: "setup-overage-line", name: "LEDs", role: "consumed", itemId: "missing-led", requiredQuantity: 15, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: {
         inventory: { quantity: 1, unit: "set" },
         requirement: { quantity: 10, unit: "each" },
         evidence: { basis: "package_label", observedAt: "2026-09-02T10:00:00.000Z" }
@@ -1578,7 +1656,7 @@ describe("ApplicationService", () => {
       project: { id: "setup-invalid-conversion-project", name: "Invalid conversion setup", status: "planned" },
       revision: { id: "setup-invalid-conversion-revision", name: "Initial", status: "concept" },
       workItems: [],
-      bomLines: [{ localRef: "led-line", id: "setup-invalid-conversion-line", name: "LEDs", itemId: "missing-led", requiredQuantity: 10, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: setItem.id, compatible: "confirmed" }] }],
+      bomLines: [{ localRef: "led-line", id: "setup-invalid-conversion-line", name: "LEDs", role: "consumed", itemId: "missing-led", requiredQuantity: 10, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: setItem.id, compatible: "confirmed" }] }],
       reservations: [{ localRef: "led-reservation", bomLineLocalRef: "led-line", id: "setup-invalid-conversion-reservation", itemId: setItem.id, quantity: 1, unit: "each" }],
     }, context);
 
@@ -1597,7 +1675,7 @@ describe("ApplicationService", () => {
       project: { id: "setup-blocked-conversion-project", name: "Blocked conversion setup", status: "planned" },
       revision: { id: "setup-blocked-conversion-revision", name: "Initial", status: "concept" },
       workItems: [],
-      bomLines: [{ localRef: "led-line", id: "setup-blocked-conversion-line", name: "LEDs", itemId: "missing-led", requiredQuantity: 10, unit: "each", optional: false, constraints: { manufacturer: "Required maker", specification: { status: "insufficient", missingDecisions: ["voltage"] } }, alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: {
+      bomLines: [{ localRef: "led-line", id: "setup-blocked-conversion-line", name: "LEDs", role: "consumed", itemId: "missing-led", requiredQuantity: 10, unit: "each", optional: false, constraints: { manufacturer: "Required maker", specification: { status: "insufficient", missingDecisions: ["voltage"] } }, alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: {
         inventory: { quantity: 1, unit: "set" },
         requirement: { quantity: 10, unit: "each" },
         evidence: { basis: "package_label", observedAt: "2026-09-02T10:00:00.000Z" }
@@ -1626,7 +1704,7 @@ describe("ApplicationService", () => {
       project: { id: "setup-conversion-project", name: "Converted setup", status: "planned" },
       revision: { id: "setup-conversion-revision", name: "Initial", status: "concept" },
       workItems: [],
-      bomLines: [{ localRef: "led-line", id: "setup-conversion-line", name: "LEDs", itemId: "missing-led", requiredQuantity: 15, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: conversion }] }],
+      bomLines: [{ localRef: "led-line", id: "setup-conversion-line", name: "LEDs", role: "consumed", itemId: "missing-led", requiredQuantity: 15, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: conversion }] }],
       reservations: [{ localRef: "led-reservation", bomLineLocalRef: "led-line", id: "setup-conversion-reservation", itemId: setItem.id, quantity: 2, unit: "set" }],
     }, context);
 
@@ -1650,7 +1728,7 @@ describe("ApplicationService", () => {
       project: { id: "setup-commit-project", name: "Converted setup", status: "planned" },
       revision: { id: "setup-commit-revision", name: "Initial", status: "concept" },
       workItems: [],
-      bomLines: [{ localRef: "led-line", id: "setup-commit-line", name: "LEDs", itemId: "missing-led", requiredQuantity: 15, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: conversion }] }],
+      bomLines: [{ localRef: "led-line", id: "setup-commit-line", name: "LEDs", role: "consumed", itemId: "missing-led", requiredQuantity: 15, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: conversion }] }],
       reservations: [{ localRef: "led-reservation", bomLineLocalRef: "led-line", id: "setup-commit-reservation", itemId: setItem.id, quantity: 2, unit: "set" }],
     }, context);
     const unconfirmed = { ...setItem, evidence: { state: "delivered_uncounted" as const } };
@@ -1686,7 +1764,7 @@ describe("ApplicationService", () => {
 
   it("validates project, work-item, and revision ancestry before opening an upload", async () => {
     const ports = fakePorts();
-    const projectRevision: ProjectRevision = { id: "project-revision-1", projectId: "project-1", number: 1, name: "Project r01", status: "concept", createdAt: "2026-08-30T00:00:00.000Z", version: 1 };
+    const projectRevision: ProjectRevision = { id: "project-revision-1", projectId: "project-1", number: 1, name: "Project r01", status: "concept", fabricationRoute: "undecided", createdAt: "2026-08-30T00:00:00.000Z", version: 1 };
     const workItem: WorkItem = { id: "work-item-1", projectId: "project-1", name: "Enclosure", kind: "part", createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1 };
     const workItemRevision: WorkItemRevision = { id: "work-revision-1", workItemId: workItem.id, projectId: workItem.projectId, number: 1, name: "Enclosure r01", status: "concept", createdAt: "2026-08-30T00:00:00.000Z", version: 1 };
     ports.projects.getProjectRevision = async (id) => id === projectRevision.id ? projectRevision : null;
@@ -1727,7 +1805,7 @@ describe("ApplicationService", () => {
 
   it("normalizes each strict artifact scope before persistence and rejects cross-project scope before audit/session", async () => {
     const ports = fakePorts();
-    const projectRevision: ProjectRevision = { id: "strict-project-revision", projectId: "project-1", number: 1, name: "Project", status: "concept", createdAt: "2026-08-30T00:00:00.000Z", version: 1 };
+    const projectRevision: ProjectRevision = { id: "strict-project-revision", projectId: "project-1", number: 1, name: "Project", status: "concept", fabricationRoute: "undecided", createdAt: "2026-08-30T00:00:00.000Z", version: 1 };
     const workItem: WorkItem = { id: "strict-work-item", projectId: "project-1", name: "Housing", kind: "part", createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1 };
     const workItemRevision: WorkItemRevision = { id: "strict-work-revision", workItemId: workItem.id, projectId: workItem.projectId, number: 1, name: "Housing", status: "concept", createdAt: "2026-08-30T00:00:00.000Z", version: 1 };
     ports.projects.getProjectRevision = async (id) => id === projectRevision.id ? projectRevision : null;
@@ -1763,7 +1841,7 @@ describe("ApplicationService", () => {
 
   it("lists all project artifacts or one exact revision scope", async () => {
     const ports = fakePorts();
-    const projectRevision: ProjectRevision = { id: "list-project-revision", projectId: "project-1", number: 1, name: "Project", status: "concept", createdAt: "2026-08-30T00:00:00.000Z", version: 1 };
+    const projectRevision: ProjectRevision = { id: "list-project-revision", projectId: "project-1", number: 1, name: "Project", status: "concept", fabricationRoute: "undecided", createdAt: "2026-08-30T00:00:00.000Z", version: 1 };
     const workItem: WorkItem = { id: "list-work-item", projectId: "project-1", name: "Housing", kind: "part", createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1 };
     const workItemRevision: WorkItemRevision = { id: "list-work-revision", workItemId: workItem.id, projectId: workItem.projectId, number: 1, name: "Housing", status: "concept", createdAt: "2026-08-30T00:00:00.000Z", version: 1 };
     ports.projects.getProjectRevision = async (id) => id === projectRevision.id ? projectRevision : null;
@@ -1886,6 +1964,8 @@ describe("ApplicationService", () => {
         name: input.revision.name,
         ...(input.revision.notes === undefined ? {} : { notes: input.revision.notes }),
         status: input.revision.status,
+        fabricationRoute: input.revision.fabricationRoute ?? "undecided",
+        ...(input.revision.intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId: input.revision.intendedPrinterItemId }),
         createdAt: project.createdAt,
         version: 1
       };
@@ -1901,6 +1981,17 @@ describe("ApplicationService", () => {
     expect(atomicCalls).toBe(1);
     expect(result.data).toMatchObject({ project: { id: "project-atomic", currentRevisionId: "revision-atomic" }, revision: { id: "revision-atomic", projectId: "project-atomic", number: 1 } });
     expect(result.audit).toMatchObject({ action: "project.create_with_initial_revision", entityType: "project", entityId: "project-atomic", idempotencyKey: "atomic-service-1" });
+  });
+
+  it("fails clearly when an adapter cannot persist revision planning changes", async () => {
+    const service = new ApplicationService(fakePorts());
+
+    await expect(service.updateProjectRevision("rev-1", { fabricationRoute: "none" }, 1, context))
+      .rejects.toMatchObject({ code: "integrity_error", message: expect.stringMatching(/does not support revision planning updates/i) });
+    await expect(service.createProjectWithInitialRevision({
+      project: { name: "Unsupported atomic project", status: "planned" },
+      revision: { name: "Initial", status: "concept", fabricationRoute: "undecided" }
+    }, context)).rejects.toMatchObject({ code: "integrity_error", message: expect.stringMatching(/does not support atomic project creation/i) });
   });
 
   it("replays idempotent mutations, rejects fingerprint conflicts, and supports legacy records", async () => {
@@ -2046,7 +2137,7 @@ describe("ApplicationService", () => {
 
   it("allows reviewed_no_change only as the sole outcome on an unreserved line", () => {
     const line: BomLine = {
-      id: "bom-reconcile", revisionId: "rev-1", name: "Unused filament", requiredQuantity: 100, unit: "gram", optional: false,
+      id: "bom-reconcile", revisionId: "rev-1", name: "Unused filament", role: "consumed", requiredQuantity: 100, unit: "gram", optional: false,
       constraints: {}, alternatives: [], createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1
     };
     const noChange: ReconciliationLine = {
@@ -2062,11 +2153,45 @@ describe("ApplicationService", () => {
     expect(() => buildReconciliationDocument(reservedSource, [{ ...noChange, outcomes: [noChange.outcomes[0]!, consumed] }], false)).toThrow(/sole outcome.*zero active reserved quantity/i);
   });
 
+  it.each([
+    ["returned", null],
+    ["usable_leftover", null],
+    ["returned", "reusable"],
+    ["usable_leftover", "reusable"]
+  ] as const)("rejects %s reconciliation for a %s-role BOM line", (kind, role) => {
+    const line: BomLine = {
+      id: `bom-reconcile-${kind}-${role ?? "legacy"}`, revisionId: "rev-reconcile-role", name: "Reviewed stock", role, requiredQuantity: 100, unit: "gram", optional: false,
+      constraints: {}, alternatives: [], createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1
+    };
+    const reservedItem = item({ id: `reconcile-${kind}-${role ?? "legacy"}`, quantity: 100, availableQuantity: 0 });
+    const reservation = { id: `reservation-${kind}-${role ?? "legacy"}`, lineId: line.id, itemId: reservedItem.id, quantity: 100, status: "active" as const, unit: "gram" as const, version: 1 };
+    const source: ReconciliationSourceSnapshot = { projectId: "project-reconcile-role", projectRevisionId: "rev-reconcile-role", lines: [line], reservations: [reservation], items: [reservedItem] };
+    const outcome: ReconciliationLine = {
+      bomLineId: line.id, outcomes: [{ kind, reservationId: reservation.id, itemId: reservation.itemId, quantity: 100, unit: "gram", evidence: { state: "physically_counted" } }]
+    };
+
+    expect(() => buildReconciliationDocument(source, [outcome], false)).toThrow(/role|only consumed/i);
+  });
+
+  it.each([null, "reusable"] as const)("rejects reviewed_no_change for a %s-role BOM line", (role) => {
+    const line: BomLine = {
+      id: `bom-reconcile-no-change-${role ?? "legacy"}`, revisionId: "rev-reconcile-role", name: "Unreviewed stock", role, requiredQuantity: 100, unit: "gram", optional: false,
+      constraints: {}, alternatives: [], createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1
+    };
+    const source: ReconciliationSourceSnapshot = { projectId: "project-reconcile-role", projectRevisionId: "rev-reconcile-role", lines: [line], reservations: [], items: [item()] };
+    const outcome: ReconciliationLine = {
+      bomLineId: line.id, outcomes: [{ kind: "reviewed_no_change", quantity: 0, unit: "gram", evidence: { state: "physically_counted" } }]
+    };
+
+    expect(() => buildReconciliationDocument(source, [outcome], false)).toThrow(/role|only consumed/i);
+  });
+
   it("completes close-out from active reservations without reviewing every zero-reservation BOM line", () => {
     const lines: BomLine[] = Array.from({ length: 22 }, (_, index) => ({
       id: `bom-closeout-${index + 1}`,
       revisionId: "rev-closeout",
       name: `Fitzroy Cafe part ${index + 1}`,
+      role: "consumed",
       requiredQuantity: 1,
       unit: index < 3 ? "each" : "gram",
       optional: false,
@@ -2168,7 +2293,7 @@ describe("ApplicationService", () => {
       project: { id: "setup-mixed-project", name: "Mixed setup", status: "planned" },
       revision: { id: "setup-mixed-revision", name: "Initial", status: "concept" },
       workItems: [],
-      bomLines: [{ localRef: "mixed-line", id: "setup-mixed-line", name: "LED package", itemId: eachItem.id, requiredQuantity: 20, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: { inventory: { quantity: 1, unit: "set" }, requirement: { quantity: 10, unit: "each" }, evidence: { basis: "package_label", observedAt: "2026-09-02T00:00:00.000Z" } } }] }],
+      bomLines: [{ localRef: "mixed-line", id: "setup-mixed-line", name: "LED package", role: "consumed", itemId: eachItem.id, requiredQuantity: 20, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: { inventory: { quantity: 1, unit: "set" }, requirement: { quantity: 10, unit: "each" }, evidence: { basis: "package_label", observedAt: "2026-09-02T00:00:00.000Z" } } }] }],
       reservations: [
         { localRef: "each-reservation", bomLineLocalRef: "mixed-line", id: "setup-each-reservation", itemId: eachItem.id, quantity: 1, unit: "each" },
         { localRef: "set-reservation", bomLineLocalRef: "mixed-line", id: "setup-set-reservation", itemId: setItem.id, quantity: 1, unit: "set" }

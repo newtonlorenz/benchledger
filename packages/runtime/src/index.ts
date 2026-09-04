@@ -125,11 +125,12 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
     const events = new ProductionEventBus();
     const health = new ProductionHealth(database, artifacts);
     const canonicalCatalog = new CanonicalCatalogRepository(database);
+    const catalog = new ProductionCatalogAdapter(database, state, unitOfWork, canonicalCatalog.products, canonicalCatalog.profiles);
     const reconciliationRepository = new ReconciliationRepository(database);
     const inspectionRepository = new InspectionRepository(database);
     const projectAdapter = new ProductionProjectAdapter(database, projectRepository, bomRepository, reservationRepository, inventory, state);
     const projectSetupRepository = new ProjectSetupRepository(database);
-    const projectSetup = new ProductionProjectSetupAdapter(projectSetupRepository, projectAdapter, inventory);
+    const projectSetup = new ProductionProjectSetupAdapter(projectSetupRepository, projectAdapter, inventory, catalog);
     const ports: ApplicationPorts = {
       inventory,
       inventoryCategories,
@@ -137,7 +138,7 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
       projectSetups: projectSetup,
       offers: new ProductionOfferAdapter(database, procurementRepository, inventoryRepository, state),
       artifacts: new ProductionArtifactAdapter(artifacts, state, unitOfWork, canonicalCatalog.bindings),
-      catalog: new ProductionCatalogAdapter(database, state, unitOfWork, canonicalCatalog.products, canonicalCatalog.profiles),
+      catalog,
       buildConfigurations: new ProductionBuildConfigurationAdapter(database, canonicalCatalog.snapshots, unitOfWork),
       reconciliations: new ProductionReconciliationAdapter(database, reconciliationRepository, projectRepository, bomRepository, reservationRepository, inventoryRepository, inventory, projectAdapter, state, unitOfWork),
       inspections: new ProductionInspectionAdapter(database, inspectionRepository, inventoryRepository, bomRepository, state, unitOfWork),

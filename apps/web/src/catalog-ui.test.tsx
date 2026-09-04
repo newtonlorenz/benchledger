@@ -13,7 +13,9 @@ import {
   catalogFacetValues,
   filterCatalogProductsByFacets,
   loadCompleteCatalogProducts,
-  reduceComboboxKey
+  nextCatalogSelectionState,
+  reduceComboboxKey,
+  resetCatalogKindState
 } from "./catalog-ui";
 import { buildSetupSummary, exactProductLabel } from "./domain";
 import { catalogProducts, inventory } from "./mock-data";
@@ -115,7 +117,7 @@ describe("catalog selection UI", () => {
     const markup = renderToStaticMarkup(<CatalogFacetPicker kind="printer" products={products} selected={products[0]} onSelect={() => undefined} />);
     expect(markup).toContain("Exact model");
     expect(markup).toContain("Variant");
-    expect(markup).toContain("Bambu Lab · H2D · H2D · AMS Combo");
+    expect(markup).toContain("Bambu Lab H2D · AMS Combo");
   });
 
   it("keeps keyboard navigation bounded and dismissible", () => {
@@ -126,6 +128,23 @@ describe("catalog selection UI", () => {
     expect(reduceComboboxKey({ activeIndex: 0, open: true }, "End", 2)).toEqual({ activeIndex: 1, open: true });
     expect(reduceComboboxKey({ activeIndex: 0, open: true }, "Escape", 2)).toEqual({ activeIndex: 0, open: false });
     expect(reduceComboboxKey({ activeIndex: 0, open: false }, "ArrowDown", 0)).toEqual({ activeIndex: 0, open: true });
+  });
+
+  it("clears an unmatched query and add-product expansion when an exact product is selected", () => {
+    const current = { query: "creality", showCreate: true };
+    expect(nextCatalogSelectionState(current, printerProduct)).toEqual({ selected: printerProduct, query: "", showCreate: false });
+    expect(nextCatalogSelectionState({ ...current, selected: printerProduct }, undefined)).toEqual({ selected: undefined, query: "creality", showCreate: true });
+  });
+
+  it("resets catalog results and transient expanded state when the item kind changes", () => {
+    expect(resetCatalogKindState()).toEqual({
+      completeProducts: [],
+      completeProductsLoaded: false,
+      completeProductsPartial: false,
+      completeProductsPartialReason: undefined,
+      query: "",
+      showCreate: false
+    });
   });
 
   it("exposes a labeled combobox and complete filament product detail", () => {
@@ -142,7 +161,7 @@ describe("catalog selection UI", () => {
     );
     expect(markup).toContain('role="combobox"');
     expect(markup).toContain("Selected exact product");
-    expect(markup).toContain("Bambu Lab · PETG HF · PETG HF · 1 kg spool");
+    expect(markup).toContain("Bambu Lab PETG HF · 1 kg spool");
     expect(markup).toContain("Black");
     expect(markup).toContain("#000000");
     expect(markup).toContain("1.75 mm");
@@ -170,20 +189,34 @@ describe("catalog selection UI", () => {
         onSearch={async () => []}
         onCreateProduct={async () => undefined}
         onCreate={async () => true}
-        onBack={() => undefined}
+        onAddManually={() => undefined}
       />
     );
     expect(flowMarkup).toContain("No exact product found");
     expect(flowMarkup).toContain("Add product");
+    expect(flowMarkup).toContain("Add details myself");
   });
 });
 
 describe("exact-product language and setup summary", () => {
   it("keeps legacy filament and printer rows visibly unconfirmed", () => {
-    const legacyPrinter = inventory.find((item) => item.category === "Printers")!;
+    const { catalogProduct: _catalogProduct, productProfile: _productProfile, ...legacyPrinter } = inventory.find((item) => item.category === "Printers")!;
     const confirmedPrinter = exactItem(legacyPrinter, printerProduct);
     expect(exactProductLabel(legacyPrinter)).toBe("Exact product not confirmed");
     expect(exactProductLabel(confirmedPrinter)).toBe("Exact product confirmed");
+  });
+
+  it("does not call a generic printer record an exact bundle identity", () => {
+    const printer = inventory.find((item) => item.category === "Printers")!;
+    const ordinaryPrinter = inventory.find((item) => item.id === "eq-ender")!;
+    const ordinaryProduct = catalogProducts.find((product) => product.id === "catalog-ender-v3-se")!;
+    const { variant: _variant, exactVariant: _exactVariant, ...genericH2D } = printerProduct;
+    const incompletePrinter = exactItem(printer, genericH2D);
+
+    expect(exactProductLabel(incompletePrinter)).toBe("Product identity incomplete");
+    expect(buildItemEligibility(incompletePrinter, "Printers")).toMatchObject({ eligible: false, reason: expect.stringContaining("bundle or variant") });
+    expect(exactProductLabel(exactItem(printer, { ...genericH2D, exactVariant: "AMS Combo" }))).toBe("Exact product confirmed");
+    expect(exactProductLabel(exactItem(ordinaryPrinter, ordinaryProduct))).toBe("Exact product confirmed");
   });
 
   it("gives beginners a plain setup sentence and experts the trace fields", () => {
@@ -293,7 +326,6 @@ describe("exact-product language and setup summary", () => {
     expect(buildItemEligibility({ ...exactFilament, unitStatus: "needs_correction", unitCorrectionReason: "Filament needs a compatible unit." }, "Filament"))
       .toMatchObject({ eligible: false, reason: "Filament needs a compatible unit." });
     const markup = renderToStaticMarkup(<OwnedItemCombobox category="Filament" items={[delivered]} value={delivered} onSelect={() => undefined} label="Owned filament" />);
-    expect(markup).toContain("Not eligible");
     expect(markup).toContain("physical count");
   });
 

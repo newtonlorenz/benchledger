@@ -1,6 +1,7 @@
 import type {
   Artifact, BomGap, BomLine, CreateBomLine, CreateInventoryItem, CreateOffer,
   CreateProject, CreateProjectRevision, CreateProjectWithInitialRevision, CreateReservation, CreateWorkItem,
+  UpdateProjectRevision as ApiUpdateProjectRevision,
   CreateWorkItemRevision, InventoryBulkUpdate as ApiInventoryBulkUpdate, InventoryBulkUpdateChanges as ApiInventoryBulkUpdateChanges,
   InventoryBulkUpdateTarget as ApiInventoryBulkUpdateTarget, InventoryItem, InventoryListQuery, Offer, Project,
   ProjectRevision, ProjectWithInitialRevision, Reservation, StockEvent, StockEventInput, UploadSession,
@@ -55,6 +56,7 @@ export type WorkspaceSecurityStatus = ApiWorkspaceSecurityStatus;
 export type ArtifactScope = ApiArtifactScope;
 export type BeginArtifactUpload = ApiBeginUpload;
 export type ArtifactListQuery = ApiArtifactListQuery;
+export type UpdateProjectRevision = ApiUpdateProjectRevision;
 
 /**
  * Storage-facing workspace access boundary. The encoded hash members are
@@ -317,6 +319,8 @@ export interface ProjectPort {
   getWorkItem(id: string): Promise<WorkItem | null>;
   listWorkItems(projectId: string): Promise<readonly WorkItem[]>;
   createProjectRevision(projectId: string, input: CreateProjectRevision, ctx: RequestContext): Promise<ProjectRevision>;
+  /** Narrow optimistic update for revision planning fields only. */
+  updateProjectRevision?(id: string, input: UpdateProjectRevision, expectedVersion: number | undefined, ctx: RequestContext): Promise<ProjectRevision>;
   /** Create a project and its first revision atomically in the adapter's transaction boundary. */
   createProjectWithInitialRevision?(input: CreateProjectWithInitialRevision, ctx: RequestContext): Promise<ProjectWithInitialRevision>;
   getProjectRevision(id: string): Promise<ProjectRevision | null>;

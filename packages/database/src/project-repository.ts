@@ -64,7 +64,7 @@ export class ProjectRepository {
 
   createRevision(revision: ProjectRevision): ProjectRevision {
     if (this.get(revision.projectId) === undefined) throw new DomainError("project_not_found", `project ${revision.projectId} does not exist`);
-    this.database.run("INSERT INTO project_revisions (id, project_id, revision_number, label, status, machine_id, material, notes, created_at, supersedes_revision_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [revision.id, revision.projectId, revision.number, revision.label, revision.status, revision.machineId ?? null, revision.material ?? null, revision.notes ?? null, revision.createdAt, revision.supersedesRevisionId ?? null]);
+    this.database.run("INSERT INTO project_revisions (id, project_id, revision_number, label, status, fabrication_route, intended_printer_item_id, machine_id, material, notes, created_at, supersedes_revision_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [revision.id, revision.projectId, revision.number, revision.label, revision.status, revision.fabricationRoute ?? "undecided", revision.intendedPrinterItemId ?? null, revision.machineId ?? null, revision.material ?? null, revision.notes ?? null, revision.createdAt, revision.supersedesRevisionId ?? null]);
     return revision;
   }
 
@@ -80,6 +80,15 @@ export class ProjectRepository {
 
   hasRevisionId(id: string): boolean {
     return this.database.get<SqliteRow>("SELECT id FROM project_revisions WHERE id = ?", [id]) !== undefined;
+  }
+
+  updateRevision(revision: ProjectRevision): ProjectRevision {
+    if (this.getRevision(revision.id) === undefined) throw new DomainError("project_revision_not_found", `project revision ${revision.id} does not exist`);
+    this.database.run(
+      "UPDATE project_revisions SET fabrication_route = ?, intended_printer_item_id = ? WHERE id = ?",
+      [revision.fabricationRoute ?? "undecided", revision.intendedPrinterItemId ?? null, revision.id]
+    );
+    return revision;
   }
 
   createWorkItemRevision(revision: WorkItemRevision): WorkItemRevision {
@@ -107,7 +116,7 @@ export class BomRepository {
   constructor(private readonly database: BenchDatabase) {}
 
   createLine(line: BomLine): BomLine {
-    this.database.run("INSERT INTO bom_lines (id, revision_id, name, quantity, unit, required, optional, item_id, alternative_item_ids_json, constraints_json, notes, retired_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [line.id, line.revisionId, line.name, line.quantity, line.unit, line.required ? 1 : 0, line.optional === true ? 1 : 0, line.itemId ?? null, jsonValue(line.alternativeItemIds), jsonValue(line.constraints), line.notes ?? null, line.retiredAt ?? null]);
+    this.database.run("INSERT INTO bom_lines (id, revision_id, name, quantity, unit, role, required, optional, item_id, alternative_item_ids_json, constraints_json, notes, retired_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [line.id, line.revisionId, line.name, line.quantity, line.unit, line.role ?? null, line.required ? 1 : 0, line.optional === true ? 1 : 0, line.itemId ?? null, jsonValue(line.alternativeItemIds), jsonValue(line.constraints), line.notes ?? null, line.retiredAt ?? null]);
     return line;
   }
 
@@ -150,6 +159,10 @@ export class ReservationRepository {
   create(input: Parameters<typeof createReservation>[0]): Reservation {
     const item = this.inventory.get(input.itemId);
     if (item === undefined) throw new DomainError("inventory_not_found", `inventory item ${input.itemId} does not exist`);
+    const line = this.database.get<SqliteRow>("SELECT role FROM bom_lines WHERE id = ?", [input.bomLineId]);
+    if (line !== undefined && line.role !== "consumed") {
+      throw new DomainError(line.role === "reusable" ? "reusable_requirement_not_reservable" : "bom_line_role_required", line.role === "reusable" ? "Reusable requirements do not reserve consumable stock" : "Review the BOM line requirement role before reservation");
+    }
     const balance = this.inventory.balance(input.itemId);
     const existing = this.list(input.itemId);
     const reservation = createReservation(input, balance, existing);

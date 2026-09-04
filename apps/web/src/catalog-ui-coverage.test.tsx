@@ -137,11 +137,12 @@ describe("exact-product UI edge rendering", () => {
         onSearch={async () => []}
         onCreateProduct={async () => undefined}
         onCreate={async () => false}
-        onBack={() => calls.push("back")}
+        onAddManually={() => calls.push("manual")}
       />
     );
     expect(markup).toContain("No exact product found");
     expect(markup).toContain("Add product");
+    expect(markup).toContain("Add details myself");
     expect(markup).toContain("Exact printer model");
     expect(calls).toEqual([]);
   });

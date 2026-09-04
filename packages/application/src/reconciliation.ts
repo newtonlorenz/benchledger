@@ -51,6 +51,15 @@ function nonNegative(value: number, label: string): void {
   if (!Number.isFinite(value) || value < 0) throw new ApplicationError("validation", `${label} must be zero or greater`);
 }
 
+function assertReconciliationRole(line: Pick<BomLine, "id" | "role">): void {
+  if (line.role === undefined || line.role === null) {
+    throw new ApplicationError("validation", `BOM line '${line.id}' has no requirement role; review it as consumed or reusable before reconciliation`);
+  }
+  if (line.role === "reusable") {
+    throw new ApplicationError("validation", `Reusable BOM line '${line.id}' cannot be reconciled; only consumed requirements may be reconciled`);
+  }
+}
+
 function itemMap(snapshot: ReconciliationSourceSnapshot): Map<string, InventoryItem> {
   const result = new Map<string, InventoryItem>();
   for (const item of snapshot.items) {
@@ -126,6 +135,9 @@ function stockChangesFor(
   const outcomes: Array<{ readonly outcome: ReconciliationOutcome; readonly reservation: ReconciliationReservationSource; readonly lineId: string; readonly index: number }> = [];
   const createdAssets: ReconciliationPreview["createdAssets"] = [];
   for (const line of normalizedLines) {
+    const sourceLine = snapshot.lines.find((candidate) => candidate.id === line.bomLineId);
+    if (sourceLine === undefined) throw new ApplicationError("not_found", `BOM line '${line.bomLineId}' was not found`);
+    assertReconciliationRole(sourceLine);
     const activeReservedQuantity = [...reservations.values()]
       .filter((reservation) => reservation.lineId === line.bomLineId && reservation.status === "active")
       .reduce((sum, reservation) => sum + reservation.quantity, 0);
@@ -138,8 +150,7 @@ function stockChangesFor(
         if (outcome.quantity !== 0 || outcome.reservationId !== undefined || outcome.itemId !== undefined || outcome.convertedAsset !== undefined) {
           throw new ApplicationError("validation", "reviewed_no_change must have zero quantity and no reservation, item, or asset");
         }
-        const lineRecord = snapshot.lines.find((candidate) => candidate.id === line.bomLineId);
-        if (lineRecord !== undefined && outcome.unit !== lineRecord.unit) throw new ApplicationError("validation", `BOM line '${line.bomLineId}' uses ${lineRecord.unit}, outcome uses ${outcome.unit}`);
+        if (outcome.unit !== sourceLine.unit) throw new ApplicationError("validation", `BOM line '${line.bomLineId}' uses ${sourceLine.unit}, outcome uses ${outcome.unit}`);
         continue;
       }
       if (outcome.reservationId === undefined) throw new ApplicationError("validation", `${outcome.kind} requires a reservation`);
@@ -259,7 +270,7 @@ export function buildReconciliationDocument(snapshot: ReconciliationSourceSnapsh
   });
   const basisItems = [...items.values()].sort((a, b) => a.id.localeCompare(b.id)).map((item) => ({ itemId: item.id, version: item.version, onHand: item.quantity, allocated: item.quantity - item.availableQuantity, available: item.availableQuantity, unit: item.unit }));
   const basisReservations = [...snapshot.reservations].sort((a, b) => a.id.localeCompare(b.id)).map((reservation) => ({ reservationId: reservation.id, lineId: reservation.lineId, itemId: reservation.itemId, quantity: reservation.quantity, unit: reservation.unit, status: reservation.status, version: reservation.version }));
-  const basisBomLines = [...snapshot.lines].sort((a, b) => a.id.localeCompare(b.id)).map((line) => ({ bomLineId: line.id, version: line.version, requiredQuantity: line.requiredQuantity, unit: line.unit }));
+  const basisBomLines = [...snapshot.lines].sort((a, b) => a.id.localeCompare(b.id)).map((line) => ({ bomLineId: line.id, version: line.version, requiredQuantity: line.requiredQuantity, unit: line.unit, role: line.role ?? null }));
   const basisValue = { bomLines: basisBomLines, reservations: basisReservations, items: basisItems };
   const basis = { hash: hash(basisValue), ...basisValue };
   const changes = stockChangesFor(snapshot, normalizedLines, reservations, items, requireComplete);

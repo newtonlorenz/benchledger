@@ -418,6 +418,11 @@ describe("McpAdapter", () => {
     });
 
     const bomCreate = adapter.listTools().find((tool) => tool.name === "create_bom_line");
+    const bomRole = bomCreate?.inputSchema.properties.role as Record<string, any>;
+    expect(bomRole).toMatchObject({ oneOf: expect.arrayContaining([{ type: "null" }, expect.objectContaining({ enum: ["consumed", "reusable"] })]) });
+    expect(bomCreate?.description).toMatch(/legacy|review/i);
+    expect(adapter.listTools().find((tool) => tool.name === "update_bom_line")?.description).toMatch(/only consumed/i);
+    expect(adapter.listTools().find((tool) => tool.name === "list_bom_lines")?.description).toMatch(/null.*legacy|legacy.*null/i);
     const alternative = (bomCreate?.inputSchema.properties.alternatives as Record<string, any>).items as Record<string, any>;
     expect(alternative.properties.quantityConversion).toMatchObject({
       required: ["inventory", "requirement", "evidence"],
@@ -440,6 +445,8 @@ describe("McpAdapter", () => {
     expect(JSON.stringify(adapter.capabilityDocument())).toContain("power_rating");
     expect(JSON.stringify(adapter.capabilityDocument())).toContain("quantityConversions");
     expect(JSON.stringify(adapter.capabilityDocument())).toContain("piece");
+    expect(JSON.stringify(adapter.capabilityDocument())).toMatch(/only consumed.*reserve|consumed.*reusable/i);
+    expect(JSON.stringify(adapter.capabilityDocument())).toMatch(/printers.*build configuration|build configuration.*printers/i);
     expect(JSON.stringify(adapter.capabilityDocument())).toContain("zero-reservation lines may be omitted");
     expect(JSON.stringify(adapter.capabilityDocument())).toContain("every active reservation must be fully and exactly accounted");
 
@@ -818,7 +825,7 @@ describe("McpAdapter", () => {
       ["read_reservation", { reservationId: "reservation-1" }],
       ["create_reservation", { projectRevisionId: "project-revision-1", bomLineId: "bom-1", itemId: "item-esp32", quantity: { value: 1, unit: "piece" } }],
       ["release_reservation", { reservationId: "reservation-1" }],
-      ["record_usage", { projectRevisionId: "project-revision-1", itemId: "item-esp32", quantity: { value: 1, unit: "piece" } }],
+      ["record_usage", { projectRevisionId: "project-revision-1", reservationId: "reservation-1", itemId: "item-esp32", quantity: { value: 1, unit: "piece" } }],
       ["create_build_configuration", { projectRevisionId: "project-revision-1", printerItemSnapshot: { itemId: "printer-1", catalogProductId: "catalog-printer-1" }, filamentSelections: [{ itemId: "item-esp32", catalogProductId: "catalog-filament-1" }], activeHotend: { side: "left" }, nozzle: { diameterMm: 0.4 }, plate: "Cool Plate", accessories: [], firmware: { version: "01.08.00.00" }, slicer: { name: "Bambu Studio", version: "1.10.0" }, profile: { name: "0.20mm Standard" }, calibration: { state: "current" }, explicitUnknowns: [] }],
       ["list_build_configurations", { projectRevisionId: "project-revision-1", limit: 5 }],
       ["read_build_configuration", { buildConfigurationId: "build-config-1" }],

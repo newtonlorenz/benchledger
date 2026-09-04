@@ -6,7 +6,16 @@ import {
   mapInventoryProductProfile,
   mapInventoryItem
 } from "./api";
-import type { CatalogProduct } from "./domain";
+import type { CatalogProduct, InventoryItem } from "./domain";
+import { ownedItemLabel } from "./catalog-ui";
+
+it("does not repeat a linked product name while distinguishing physical duplicates", () => {
+  const base = { id: "petg-a", name: "Bambu Lab PETG Basic", kind: "filament", category: "Filament", variant: "PETG Basic", description: "Spool", quantity: 1000, unit: "g", reserved: 0, state: "available", evidence: "counted", location: "Shelf A", tags: [], compatibility: [], accent: "orange", catalogProduct: { id: "petg", kind: "filament", manufacturer: "Bambu Lab", productName: "PETG Basic" } } satisfies InventoryItem;
+  const items = [base, { ...base, id: "petg-b" }, { ...base, id: "petg-c" }];
+  const labels = items.map((item) => ownedItemLabel(item, items));
+  expect(new Set(labels).size).toBe(3);
+  expect(labels.every((label) => !label.includes("Bambu Lab PETG Basic · Bambu Lab PETG Basic"))).toBe(true);
+});
 
 const jsonResponse = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), {
   status,
