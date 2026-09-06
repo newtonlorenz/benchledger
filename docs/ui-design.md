@@ -80,3 +80,17 @@ data writes. Screenshots use isolated sample records, not the live workspace.
 Local verification is not deployment evidence. The design requires a separate
 approved release before it appears on the live service. The existing large
 JavaScript chunk warning remains; this pass does not claim a performance audit.
+
+## Task-oriented home and project pages
+
+The home page supports multiple projects with search, local pins, status views
+and recent-project resume. Attention entries link to the relevant project and
+work, not to a generic landing page. Counts use loaded records and exclude
+unknown readiness from Check/Source totals. The page states that limitation.
+
+Place the normal action beside its records: add/import above requirements,
+quotes at the start of Shopping, build plans in their own tab and file selection
+with the chosen revision. Keep archive and removal controls in project settings.
+See the dated [workflow review](reviews/2026-09-07-workflow-polish.md) for scope,
+competitor references and the latest test results. Earlier counts above describe
+the original technical-design commit, not this later workflow revision.

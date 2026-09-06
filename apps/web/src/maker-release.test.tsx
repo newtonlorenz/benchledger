@@ -31,7 +31,7 @@ it("keeps import and planning controls contextual and read-only for archived pro
   expect(renderToStaticMarkup(<ExistingBomImport project={{ ...project, status: "archived" }} onRefresh={async () => true} />)).toBe("");
   expect(renderToStaticMarkup(<WorkstreamPlanning project={project} />)).toContain("Add workstream");
   expect(renderToStaticMarkup(<WorkstreamPlanning project={project} readOnly />)).not.toContain("Add workstream");
-  expect(renderToStaticMarkup(<ProjectQuoteTools project={project} />)).toContain("Supplier quotes for requirements");
+  expect(renderToStaticMarkup(<ProjectQuoteTools project={project} />)).toContain("Supplier quotes for this project");
 });
 it("handles minor currency units without silently rounding excessive precision", () => {
   expect(quotedMinor("2.50", "EUR")).toBe(250); expect(quotedMinor("250", "JPY")).toBe(250);

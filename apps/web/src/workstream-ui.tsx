@@ -14,7 +14,7 @@ export function WorkstreamPlanning({ project, readOnly = false }: { project: Pro
     <h2>Workstreams</h2><p>Track design, electronics, firmware and assembly separately. A workstream marked done does not certify a physical build.</p>
     {source.loading && <p role="status">Loading workstreams…</p>}{source.error && <p role="alert">{source.error}</p>}
     {source.data?.data.map((row) => <WorkstreamRow key={`${row.item.id}:${row.assignment?.version ?? 0}`} row={row} root={root} members={team.data?.members ?? []} readOnly={readOnly || project.status === "archived"} onSaved={source.reload} />)}
-    {source.data?.total === 0 && <p>No workstreams yet. Add a bounded piece of work to start.</p>}
+    {source.data?.total === 0 && <p>No workstreams recorded. Add a task group, such as firmware or assembly.</p>}
     {!readOnly && project.status !== "archived" && (creating ? <NewWorkstream root={root} onCancel={() => setCreating(false)} onSaved={() => { setCreating(false); source.reload(); }} /> : <button type="button" className="button button-secondary" onClick={() => setCreating(true)}>Add workstream</button>)}
     <div className="workflow-pagination">{cursor && <button type="button" className="button button-quiet" onClick={() => setCursor(undefined)}>First workstreams</button>}{source.data?.nextCursor && <button type="button" className="button button-quiet" onClick={() => setCursor(source.data!.nextCursor)}>Next workstreams</button>}<button type="button" className="text-button" onClick={source.reload}>Refresh workstreams</button></div>
     <RevisionHistory project={project} />

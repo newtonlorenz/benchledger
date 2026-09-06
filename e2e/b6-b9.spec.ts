@@ -164,7 +164,7 @@ test("keeps inventory and shopping actions usable at 390px without horizontal ov
   await page.getByRole("button", { name: "Open navigation" }).click();
   await page.getByRole("dialog", { name: "Primary navigation" }).getByRole("button", { name: /^Projects/ }).click();
   await page.getByRole("tab", { name: /^Shopping list/ }).click();
-  await expect(page.locator(".shopping-section")).toBeVisible();
+  await page.getByText("Inventory-linked supplier records", { exact: true }).click(); await expect(page.locator(".shopping-section")).toBeVisible();
   const shoppingControls = page.locator(".shopping-actions .button, .shopping-section .offer-row, .shopping-section .expert-detail > summary");
   for (const control of await shoppingControls.all()) {
     const box = await control.boundingBox();

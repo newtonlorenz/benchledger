@@ -42,7 +42,7 @@ const artifact = (id: string, overrides: Partial<Artifact> = {}): Artifact => ({
 describe("artifact scope selection", () => {
   it("keeps the maker home action-led and makes expert detail visibly additive", () => {
     const beginner = renderToStaticMarkup( <OverviewPage items={inventory} projects={[project]} expert={false} sampleMode={false} onNavigate={() => undefined} onOpenProject={() => undefined} onSelectItem={() => undefined} onNewProject={() => undefined} /> ); const expert = renderToStaticMarkup( <OverviewPage items={inventory} projects={[project]} expert sampleMode={false} onNavigate={() => undefined} onOpenProject={() => undefined} onSelectItem={() => undefined} onNewProject={() => undefined} /> );
-    expect(beginner).toContain("Workspace overview"); expect(beginner).toContain("Continue Lamp");
+    expect(beginner).toContain("Workspace overview"); expect(beginner).toContain("Open project Lamp");
     expect(beginner).toContain("Workshop equipment");
     expect(beginner).not.toContain("Technical project context");
     expect(expert).toContain("Technical project context");
