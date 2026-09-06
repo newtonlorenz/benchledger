@@ -27,6 +27,7 @@ import type {
   ProjectWorkItem
 } from "./domain";
 import { filterArtifactsForScope } from "./artifact-scope";
+import { sha256 } from "@noble/hashes/sha2.js";
 import type { ArtifactUploadTarget } from "./artifact-scope";
 import type {
   ReconciliationEvidenceState,
@@ -1743,10 +1744,28 @@ function mutationFailureIsAmbiguous(error: unknown): boolean {
   return !(error instanceof ApiError && error.status < 500 && ["validation", "forbidden", "unauthenticated", "csrf"].includes(error.kind));
 }
 
-async function sha256Hex(file: Blob): Promise<string> {
-  if (!globalThis.crypto?.subtle) throw new ApiError("This browser cannot verify an artifact upload", { kind: "server", status: 501 });
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", await file.arrayBuffer());
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+export async function sha256Hex(file: Blob): Promise<string> {
+  // Plain HTTP LAN origins do not expose crypto.subtle. Hashing still needs
+  // to work there without weakening the server's byte-integrity check.
+  const digest = sha256(new Uint8Array(await file.arrayBuffer()));
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export async function fetchArtifactDownload(id: string, expectedHash: string): Promise<Blob> {
+  let response: Response;
+  try {
+    response = await fetch(`${apiRoot()}/artifacts/${encodeURIComponent(id)}/download`, {
+      credentials: "include", redirect: "error", signal: AbortSignal.timeout(120_000)
+    });
+  } catch {
+    throw new ApiError("Check the connection and retry the download.", { kind: "offline" });
+  }
+  if (!response.ok) throw new ApiError(response.status === 401 ? "Sign in again to download this file." : "This file could not be downloaded. Refresh the project and try again.", { kind: errorKind(response.status), status: response.status });
+  const blob = await response.blob();
+  if (!/^[a-f0-9]{64}$/iu.test(expectedHash) || await sha256Hex(blob) !== expectedHash.toLowerCase()) {
+    throw new ApiError("The file failed its integrity check. It was not saved; retry the download.", { kind: "validation" });
+  }
+  return blob;
 }
 
 function serverArtifactRole(role: string): string {
@@ -2124,7 +2143,7 @@ function reconciliationInitialModel(project: Project, reservations: readonly Ser
   };
 }
 
-async function binaryRequest<T>(url: string, body: ArrayBuffer, csrfToken: string): Promise<T> {
+export async function binaryRequest<T>(url: string, body: ArrayBuffer, csrfToken: string): Promise<T> {
   const configuredRoot = apiRoot();
   const target = url.startsWith("http")
     ? url
@@ -2133,9 +2152,14 @@ async function binaryRequest<T>(url: string, body: ArrayBuffer, csrfToken: strin
       : url.startsWith("/api/v1")
         ? url
         : `${configuredRoot}${url.startsWith("/") ? url : `/${url}`}`;
+  const base = new URL(configuredRoot, typeof window === "undefined" ? "http://localhost" : window.location.origin);
+  const uploadTarget = new URL(target, base);
+  if (uploadTarget.origin !== base.origin || uploadTarget.username || uploadTarget.password) {
+    throw new ApiError("The service returned an unsafe upload destination.", { kind: "validation" });
+  }
   let response: Response;
   try {
-    response = await fetch(target, { method: "PUT", body, credentials: "include", headers: { "Accept": "application/json", "Content-Type": "application/octet-stream", "X-CSRF-Token": csrfToken } });
+    response = await fetch(target, { method: "PUT", body, credentials: "include", redirect: "error", headers: { "Accept": "application/json", "Content-Type": "application/octet-stream", "X-CSRF-Token": csrfToken } });
   } catch (error) {
     throw new ApiError(error instanceof Error ? error.message : "The BenchLedger service could not be reached", { kind: "offline" });
   }

@@ -7,6 +7,9 @@ first public release; all current work is under **Unreleased**.
 
 ### Added
 
+- Integrity-checked browser downloads and an explicit-revision host file-transfer
+  helper with project-scoped access, redirect rejection and no download overwrites
+
 - Evidence-aware inventory ledger and availability states
 - Projects, revisions, BOM evaluation, reservations, offers, and audit history
 - Exact printer, filament, nozzle, accessory, and electronics product profiles
@@ -16,6 +19,15 @@ first public release; all current work is under **Unreleased**.
 - LAN deployment, backup/restore, privacy scanning, and public-project community files
 
 ### Changed
+
+- Beginner requirements can reuse owned stock without enabling technical mode
+- Project next actions lead directly to setup, requirements and shopping
+- Files and long mobile forms keep their primary actions accessible
+- Upload notifications no longer cover or intercept the next modal action
+- Removed non-editable preferences, duplicate setup prompts and unsupported MCP
+  transfer actions from discovery; cached transfer calls still fail closed
+- Browser file hashing works on trusted plain-HTTP LAN origins; Unicode
+  download names and rejected-form recovery are preserved
 
 - Adopted the BenchLedger name, package scope, MCP resource scheme, environment
   namespace, deployment identity, and visual lockup before the first public release

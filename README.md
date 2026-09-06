@@ -80,8 +80,9 @@ top-level category such as “Workshop” or “Electronics”; you can add one 
 subcategories such as “Workshop / Measuring tools”. Rename or change the order
 when your storage changes, or archive a category that should no longer be used.
 
-When you choose **Inventory → Add item**, select the item type first and then an
-active managed category. The item type remains the semantic kind used for
+When you choose **Inventory → Add item**, select the item type first. Beginner
+mode derives its category; technical mode lets you choose an active managed
+category. The item type remains the semantic kind used for
 matching (for example, `tool` or `electronic`); the managed category is the
 display label and is used by the Category filter. Existing legacy items can stay
 unassigned until you edit them. If no category is available, the add form links
@@ -114,7 +115,7 @@ by the web UI.
 
 Use the bundled [`$benchledger` skill](skills/benchledger/SKILL.md) when your
 runtime supports skills. Otherwise begin with the
-[ten-minute agent quickstart](docs/AGENTS.md) and
+[ten-minute agent quickstart](docs/agent-quickstart.md) and
 [capability map](docs/capability-map.md).
 
 Agents can inspect inventory, calculate BOM gaps, prepare shopping proposals,
@@ -123,6 +124,13 @@ cannot buy, publish, purge permanently, control a printer, or bypass physical
 verification. Browser access mode does not grant MCP access: `/api/v1/mcp`
 always requires a scoped bearer token, including when the browser is in
 `lan_open` mode.
+
+For file bytes, use browser Files or the trusted host helper
+`node scripts/artifact-transfer.mjs --help`. The helper requires separately
+authorised host filesystem access and privately configured credentials. It
+transfers one file to an explicit revision, verifies SHA-256 and byte length,
+and refuses redirects and download overwrites. MCP exposes metadata, not
+local paths, file bytes or credentials.
 
 ## Architecture
 

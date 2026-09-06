@@ -458,8 +458,25 @@ async function authorizeScopedBuildConfigurationReference(request: FastifyReques
   await buildConfigurationForRequest(request, service, configurationId);
 }
 
+async function requireArtifactReferenceScope(request: FastifyRequest, service: ApplicationService, id: string, upload = false): Promise<void> {
+  if (request.principal?.projectIds === undefined) return;
+  try {
+    const record = upload ? await service.getUploadSessionDetails(id) : await service.getArtifact(id);
+    requireProjectScope(request, record.projectId);
+  } catch {
+    // Do not disclose existence or state of indirect IDs outside the allow-list.
+    throw new ApplicationError("forbidden", "Artifact reference is not available to this token");
+  }
+}
+
 function mutationBody<T>(mutation: Mutation<T>): Mutation<T> {
   return mutation;
+}
+
+function artifactContentDisposition(filename: string): string {
+  const fallback = filename.replace(/[^A-Za-z0-9._-]/gu, "_") || "artifact";
+  const encoded = encodeURIComponent(filename).replace(/['()*]/gu, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
 function jsonOpenApi(version: string): Record<string, unknown> {
@@ -1137,6 +1154,39 @@ function jsonOpenApi(version: string): Record<string, unknown> {
           summary: "Begin a revision-scoped artifact upload",
           requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/BeginUpload" } } } },
           responses: { "201": { description: "Upload session" }, "400": { description: "Invalid, ambiguous, legacy, or unrevisioned scope" }, "403": { description: "Project-scoped access denied" }, "404": { description: "Revision scope not found in the project" } }
+        }
+      },
+      "/artifacts/uploads/{id}": {
+        put: {
+          summary: "Write the bytes for an existing artifact upload",
+          description: "Requires write access. Project-scoped bearer tokens resolve the upload's durable project ancestry before writing. Send the exact declared bytes; maximum 100 MiB, subject to the configured server limit. Browser sessions require CSRF protection.",
+          parameters: [{ name: "id", in: "path", required: true, schema: artifactIdSchema }],
+          requestBody: { required: true, content: { "application/octet-stream": { schema: { type: "string", format: "binary" } } } },
+          responses: { "200": { description: "Bytes received", content: { "application/json": { schema: { type: "object", required: ["receivedBytes"], properties: { receivedBytes: { type: "integer", minimum: 0 } } } } } }, "403": { description: "Write access or upload project scope denied" }, "413": { description: "Configured byte limit exceeded" } }
+        }
+      },
+      "/artifacts/uploads/{id}/finalize": {
+        post: {
+          summary: "Finalize and verify an existing artifact upload",
+          description: "Requires write access and durable upload project allow-list membership. No body is required. The shared application service checks project state, byte length and SHA-256 before committing. The response is a mutation envelope with artifact metadata in data. After an ambiguous response inspect the revision before repeating an upload.",
+          parameters: [{ name: "id", in: "path", required: true, schema: artifactIdSchema }],
+          responses: { "200": { description: "Finalized artifact mutation", content: { "application/json": { schema: { type: "object", required: ["data"], properties: { data: { type: "object", description: "Artifact metadata including id, projectId, revisionId, optional workItemId, role, filename, byteSize and sha256" } } } } } }, "403": { description: "Write access or upload project scope denied" }, "409": { description: "Project state or integrity conflict" } }
+        }
+      },
+      "/artifacts/{id}": {
+        get: {
+          summary: "Read artifact metadata without downloading bytes",
+          description: "Requires read access and durable artifact project allow-list membership. revisionId is the stored revision identifier; workItemId distinguishes work-item scope from project-revision scope.",
+          parameters: [{ name: "id", in: "path", required: true, schema: artifactIdSchema }],
+          responses: { "200": { description: "Artifact metadata", content: { "application/json": { schema: { type: "object", required: ["id", "projectId", "role", "filename", "byteSize", "sha256"], properties: { id: artifactIdSchema, projectId: artifactIdSchema, revisionId: artifactIdSchema, workItemId: artifactIdSchema, role: artifactRoleSchema, filename: { type: "string" }, byteSize: { type: "integer", minimum: 0 }, sha256: { type: "string", pattern: "^[a-f0-9]{64}$" } } } } } }, "403": { description: "Read access or artifact project scope denied" }, "404": { description: "Artifact not found" } }
+        }
+      },
+      "/artifacts/{id}/download": {
+        get: {
+          summary: "Download stored artifact bytes",
+          description: "Requires read access and durable artifact project allow-list membership. Verify returned bytes against metadata byteSize and sha256. Content-Type is the stored media type; Content-Disposition includes an ASCII fallback and RFC5987 UTF-8 filename.",
+          parameters: [{ name: "id", in: "path", required: true, schema: artifactIdSchema }],
+          responses: { "200": { description: "Artifact bytes", headers: { "Content-Disposition": { schema: { type: "string" } } }, content: { "*/*": { schema: { type: "string", format: "binary" } } } }, "403": { description: "Read access or artifact project scope denied" }, "404": { description: "Artifact not found" } }
         }
       },
       "/transfers/uploads/{id}": { put: { security: [{ transferAuth: [] }], responses: { "200": { description: "Uploaded bytes" }, "403": { description: "Invalid or expired transfer capability" }, "410": { description: "Expired transfer capability" } } } },
@@ -1899,8 +1949,8 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const mutation = await service.beginArtifactUpload(input, requestContext(request));
     return reply.code(201).send(mutation);
   });
-  app.put(route("/artifacts/uploads/:id"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; const body = request.body; if (!(body instanceof Uint8Array)) throw new ApplicationError("validation", "Upload body must be binary"); return service.writeArtifactUpload(params.id, body); });
-  app.post(route("/artifacts/uploads/:id/finalize"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.finalizeArtifactUpload(params.id, requestContext(request)); });
+  app.put(route("/artifacts/uploads/:id"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id, true); const body = request.body; if (!(body instanceof Uint8Array)) throw new ApplicationError("validation", "Upload body must be binary"); return service.writeArtifactUpload(params.id, body); });
+  app.post(route("/artifacts/uploads/:id/finalize"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id, true); return service.finalizeArtifactUpload(params.id, requestContext(request)); });
   app.put(route("/transfers/uploads/:id"), async (request, reply) => {
     const params = request.params as { id: string };
     const body = request.body;
@@ -1934,8 +1984,8 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     for (const [name, value] of Object.entries(TRANSFER_RESPONSE_HEADERS)) reply.header(name, value);
     return mutation;
   });
-  app.get(route("/artifacts/:id"), async (request) => { requireScope(request, "read", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.getArtifact(params.id); });
-  app.get(route("/artifacts/:id/download"), async (request, reply) => { requireScope(request, "read", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; const downloaded = await service.readArtifact(params.id); return reply.type(downloaded.artifact.mediaType).header("content-disposition", `attachment; filename="${downloaded.artifact.filename.replace(/"/gu, "")}"`).send(Buffer.from(downloaded.body)); });
+  app.get(route("/artifacts/:id"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id); return service.getArtifact(params.id); });
+  app.get(route("/artifacts/:id/download"), async (request, reply) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id); const downloaded = await service.readArtifact(params.id); return reply.type(downloaded.artifact.mediaType).header("content-disposition", artifactContentDisposition(downloaded.artifact.filename)).send(Buffer.from(downloaded.body)); });
   app.get(route("/transfers/artifacts/:id/download"), async (request, reply) => {
     const params = request.params as { id: string };
     const token = request.headers[TRANSFER_TOKEN_HEADER];
@@ -1950,8 +2000,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
       throw error;
     }
     for (const [name, value] of Object.entries(TRANSFER_RESPONSE_HEADERS)) reply.header(name, value);
-    const filename = downloaded.artifact.filename.replace(/["\r\n]/gu, "");
-    return reply.type(downloaded.artifact.mediaType).header("content-disposition", `attachment; filename="${filename}"`).send(Buffer.from(downloaded.body));
+    return reply.type(downloaded.artifact.mediaType).header("content-disposition", artifactContentDisposition(downloaded.artifact.filename)).send(Buffer.from(downloaded.body));
   });
   app.delete(route("/artifacts/:id"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.retireArtifact(params.id, parseExpectedVersion(request), requestContext(request)); });
 

@@ -105,7 +105,7 @@ and invalid hashes. Mutating tools use optimistic versions where applicable.
 | Reconciliation | `save_reconciliation_draft`, `commit_reconciliation` | `bom:write` | Draft save / commit |
 | Build setup | `list_build_configurations`, `read_build_configuration` | `projects:read` | No |
 | Build setup | `create_build_configuration` | `projects:write` | Yes, immutable create |
-| Artifacts | `list_artifacts`, `read_artifact_metadata`, `read_artifact_download_metadata` / `download_artifact` | `artifacts:read` | No; list one exact project revision, one exact work-item revision, or the read-only all-project view |
+| Artifacts | `list_artifacts`, `read_artifact_metadata` | `artifacts:read` | No; list one exact project revision, one exact work-item revision, or the read-only all-project view |
 | Artifacts | `retire_artifact` | `artifacts:write` | Yes; browser/HTTP Files upload is authenticated and revision-scoped; raw MCP transfer tools fail closed |
 | Offers | `list_offers` | `offers:read` | No |
 | Offers | `record_offer_snapshot` | `offers:write` | Yes |
@@ -302,7 +302,8 @@ retirement, partial, undo, and import operations are outside this command.
 
 Generic MCP never returns live artifact-transfer URLs, headers, tokens, or
 credentials, including through `_meta`. Raw begin, finalize, and download tools
-fail closed with `HOST_TRANSFER_UNAVAILABLE`. The authenticated browser/HTTP
+are absent from discovery; cached-client calls still fail closed with
+`HOST_TRANSFER_UNAVAILABLE`. The authenticated browser/HTTP
 Files surface selects exactly one project revision or work-item revision (the
 all-files view is read-only), carries the selected role, hashes the bytes, and
 uses the existing begin → write → finalize flow. No base64, inline bytes, paths,
@@ -310,6 +311,19 @@ or diagnostics cross MCP. Direct authenticated browser and HTTP transfer routes
 retain short-lived, action-, actor-, project-, byte-length-, and SHA-256-bound
 header capabilities. Download capabilities are one-use after a successful
 read.
+
+The trusted host helper `scripts/artifact-transfer.mjs` provides single-file
+upload and download over the same authenticated HTTP application routes.
+Credentials and base origin come from the host environment, never MCP or CLI
+arguments. Upload requires a local path, exact revision scope, role and media
+type; download additionally identifies the artifact and refuses an existing
+destination. Both verify byte length and SHA-256. The helper bounds files to
+100 MiB, rejects redirects, emits metadata only and never retries an ambiguous
+write automatically. Scoped HTTP raw upload write/finalize and artifact
+read/download resolve durable ancestry before dispatch; read-only credentials
+cannot write and a different project's token is denied. Generic MCP still
+cannot execute the helper or access host files. Atomic batch transfer remains
+deferred. Browser Files also offers integrity-checked downloads.
 
 `list_artifacts` accepts either exact scope or a project-only read-only view that
 includes retained legacy/unbound records. Exact project-revision results exclude

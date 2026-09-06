@@ -1,4 +1,4 @@
-import { CAPABILITY_DOCUMENT, RESOURCE_TEMPLATES, RESOURCES, TOOL_DEFINITIONS } from "./capabilities.js";
+import { CAPABILITY_DOCUMENT, LEGACY_TRANSFER_DEFINITIONS, RESOURCE_TEMPLATES, RESOURCES, TOOL_DEFINITIONS } from "./capabilities.js";
 import { McpAdapterError, mapBackendError } from "./errors.js";
 import {
   artifactList,
@@ -141,7 +141,7 @@ const TRANSFER_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   CONFLICT: "The artifact transfer could not be completed because the record changed.",
   UNSAFE_LINK: "Artifact transfer metadata failed safety validation.",
   RESOURCE_TOO_LARGE: "The artifact transfer result is too large.",
-  HOST_TRANSFER_UNAVAILABLE: "Artifact transfer is unavailable through generic MCP; use the authenticated browser/HTTP Files flow.",
+  HOST_TRANSFER_UNAVAILABLE: "Artifact transfer is unavailable through generic MCP; use browser Files or the trusted host helper: node scripts/artifact-transfer.mjs --help. The helper requires separate host filesystem access and environment credentials.",
   BACKEND_ERROR: "The artifact transfer could not be completed.",
 };
 
@@ -426,7 +426,7 @@ export class McpAdapter {
     this.backend = backend;
     this.maxToolResultBytes = options.maxToolResultBytes ?? DEFAULT_TOOL_RESULT_BYTES;
     this.maxResourceBytes = options.maxResourceBytes ?? DEFAULT_RESOURCE_BYTES;
-    this.definitions = new Map(TOOL_DEFINITIONS.map((definition) => [definition.name, definition]));
+    this.definitions = new Map([...TOOL_DEFINITIONS, ...LEGACY_TRANSFER_DEFINITIONS].map((definition) => [definition.name, definition]));
     this.handlers = new Map<string, ToolHandler>([
       ["read_inventory_summary", (input, context) => this.backend.inventory.summary(parsePageInput(input), context)],
       ["list_inventory", (input, context) => this.backend.inventory.list(inventoryList(input), context)],

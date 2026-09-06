@@ -387,11 +387,10 @@ describe("McpAdapter", () => {
       expect.objectContaining({ required: expect.arrayContaining(["projectId", "workItemId", "workItemRevisionId"]) }),
     ]) });
     expect(artifactList?.inputSchema).not.toHaveProperty("properties.revisionId");
-    const artifactBegin = adapter.listTools().find((tool) => tool.name === "begin_artifact_upload");
-    expect(artifactBegin?.inputSchema).toMatchObject({ oneOf: expect.arrayContaining([
-      expect.objectContaining({ required: expect.arrayContaining(["projectId", "projectRevisionId"]) }),
-      expect.objectContaining({ required: expect.arrayContaining(["projectId", "workItemId", "workItemRevisionId"]) }),
-    ]) });
+    for (const name of ["begin_artifact_upload", "finalize_artifact_upload", "read_artifact_download_metadata", "download_artifact"]) {
+      expect(adapter.listTools().some((tool) => tool.name === name)).toBe(false);
+      expect(adapter.capabilityDocument().tools).not.toEqual(expect.arrayContaining([expect.objectContaining({ name })]));
+    }
     const offerList = adapter.listTools().find((tool) => tool.name === "list_offers");
     expect(offerList?.inputSchema.properties.cursor).toMatchObject({ description: expect.stringContaining("512") });
     const categoryRead = adapter.listTools().find((tool) => tool.name === "read_inventory_category");
