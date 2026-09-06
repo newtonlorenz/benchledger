@@ -158,8 +158,14 @@ container after the command completes.
   `X-Bench-Transfer-Token` header; these capabilities are scoped to one action
   and expire. Generic MCP currently returns `HOST_TRANSFER_UNAVAILABLE` before
   creating a session or reading artifact metadata and never returns the private
-  origin, URL, header, or token. Do not enable a future bridge until it is
-  transactional and host-mediated.
+  origin, URL, header, or token. Transfer actions are not advertised in MCP
+  discovery; cached clients still receive that explicit failure. A separately
+  authorised agent host can use `node scripts/artifact-transfer.mjs --help`
+  from its source checkout, with `BENCHLEDGER_URL` and `BENCHLEDGER_TOKEN`
+  supplied privately in its environment. This helper uses the existing scoped
+  HTTP routes, verifies length and SHA-256, rejects redirects and refuses
+  download overwrites. It is not installed in the application container and
+  does not grant host filesystem access through MCP.
 - Create an online SQLite backup and artifact manifest.
 - Restore into a separate temporary directory and verify counts and hashes.
 - Confirm neighbouring containers and services remain healthy.

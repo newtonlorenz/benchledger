@@ -43,7 +43,7 @@ describe("Project Plan Checks", () => {
     expect(markup).toContain("Count the candidate for requirement 3.");
     expect(markup).not.toContain("Count the candidate for requirement 4.");
     expect(markup).toContain("Candidate item 1");
-    expect(markup).toContain("1 affected BOM line");
+    expect(markup).toContain("1 affected requirement");
     expect(markup).toContain("View all");
   });
 
@@ -142,9 +142,9 @@ describe("Project Plan Checks", () => {
     expect(lineReferences({ ...action(1), lineVersions: [] })).toBe("None");
     expect(gapQuantities(undefined)).toBe("not evaluated");
     expect(gapQuantities({ suppliedQuantity: 1, inspectQuantity: 2, missingQuantity: 3, unit: "each" } as never)).toBe("1 supplied · 2 inspect · 3 missing each");
-    expect(previewDescription({ affectedLines: [] } as never)).toContain("no affected BOM lines");
-    expect(previewDescription({ affectedLines: [{ lineId: "a" }] } as never)).toContain("1 BOM line will");
-    expect(previewDescription({ affectedLines: [{ lineId: "a" }, { lineId: "b" }] } as never)).toContain("2 BOM lines");
+    expect(previewDescription({ affectedLines: [] } as never)).toContain("No project requirements are affected");
+    expect(previewDescription({ affectedLines: [{ lineId: "a" }] } as never)).toContain("1 requirement will");
+    expect(previewDescription({ affectedLines: [{ lineId: "a" }, { lineId: "b" }] } as never)).toContain("2 requirements");
   });
 
   it("renders sparse expert traceability and load failures without private DOM helpers", () => {
@@ -160,7 +160,7 @@ describe("Project Plan Checks", () => {
     const emptyMarkup = renderToStaticMarkup(<InspectionQueuePanel actions={[]} loadError="Checks unavailable" />);
     const dialogMarkup = renderToStaticMarkup(<InspectionResultDialog action={sparse} expert onClose={() => undefined} />);
 
-    expect(expertMarkup).toContain("2 affected BOM lines");
+    expect(expertMarkup).toContain("2 affected requirements");
     expect(expertMarkup).toContain("None");
     expect(expertMarkup).toContain("physically_counted");
     expect(expertMarkup).toContain("Recheck affected project requirements.");

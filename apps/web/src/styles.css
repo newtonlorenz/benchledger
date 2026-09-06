@@ -151,6 +151,9 @@ kbd { display: inline-block; padding: 1px 5px; border: 1px solid var(--line); bo
 .build-approach-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .build-approach-heading .eyebrow { margin-bottom: 4px; }
 .build-approach-heading h2 { font-size: 1rem; }
+.build-approach-card > * { min-width: 0; }
+.dossier-column .build-approach-heading { flex-direction: column; gap: 7px; }
+.dossier-column .build-approach-heading .status-pill { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .build-approach-card > p { color: var(--ink-soft); font-size: 0.76rem; }
 .route-chip { padding: 4px 7px; color: var(--moss-dark); background: var(--moss-soft); font-size: 0.65rem; font-weight: 680; white-space: nowrap; }
 .build-approach-fit { display: flex; align-items: baseline; gap: 5px; padding: 9px 10px; color: var(--ink-soft); background: var(--surface-soft); font-size: 0.7rem; }
@@ -308,9 +311,10 @@ kbd { display: inline-block; padding: 1px 5px; border: 1px solid var(--line); bo
 .dossier-column > p { margin-top: 9px; color: var(--ink-soft); font-size: 0.84rem; }
 .dossier-next { margin-top: 27px; padding: 15px; border: 1px solid oklch(79% 0.09 77 / 0.55); border-top: 1px solid oklch(79% 0.09 77 / 0.55); box-shadow: inset 0 2px 0 var(--amber); background: var(--amber-soft); }
 .dossier-next .eyebrow { margin-bottom: 6px; color: oklch(50% 0.1 74); }
-.dossier-next strong, .dossier-next span:last-child { display: block; }
+.dossier-next strong, .dossier-next > span { display: block; }
 .dossier-next strong { font-size: 0.82rem; }
-.dossier-next span:last-child { margin-top: 4px; color: oklch(46% 0.065 74); font-size: 0.72rem; }
+.dossier-next > span:not(.eyebrow) { margin-top: 4px; color: oklch(46% 0.065 74); font-size: 0.72rem; }
+.dossier-next > .button { margin-top: 10px; max-width: 100%; white-space: normal; }
 .dossier-facts { margin: 25px 0 0; border-top: 1px solid var(--line); }
 .dossier-facts div { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .dossier-facts dt { color: var(--ink-muted); font-size: 0.71rem; }
@@ -462,16 +466,16 @@ kbd { display: inline-block; padding: 1px 5px; border: 1px solid var(--line); bo
 .file-scope-identity code { margin-top: 2px; color: var(--ink-muted); font-size: 0.65rem; }
 .file-scope-context { margin-left: auto; color: var(--ink-muted); white-space: nowrap; }
 .files-table td { white-space: nowrap; }
+.files-table-simple { table-layout: fixed; }
+.files-table-simple th:last-child { width: 108px; }
+.files-table-simple td { white-space: normal; padding-inline: 8px; }
+.files-table-simple .file-name { min-width: 0; overflow-wrap: anywhere; }
+.files-table-simple .file-name > svg { flex-shrink: 0; }
+.files-table-simple .file-name > span { min-width: 0; }
+.files-table-simple .button { padding-inline: 10px; }
 .file-scope-cell { color: var(--ink-soft); font-size: 0.7rem; }
 .file-name { min-width: 240px; }
 .file-name small { margin-top: 2px; color: var(--ink-muted); font-size: 0.66rem; }
-.file-type { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 5px; color: var(--slate); background: var(--slate-soft); }
-.type-editable-cad { color: var(--moss-dark); background: var(--moss-soft); }
-.revision-tag { padding: 3px 5px; color: var(--ink-soft); background: var(--surface-muted); font-size: 0.67rem; }
-.file-state { font-size: 0.71rem; }
-.state-candidate { color: var(--slate); }
-.state-validated { color: var(--moss-dark); }
-.state-superseded { color: var(--ink-muted); }
 .hash-cell { color: var(--ink-muted); font-size: 0.67rem; }
 .expert-detail { margin-top: 17px; border-top: 1px solid var(--line); }
 .expert-detail > summary { display: flex; align-items: center; justify-content: space-between; min-height: 41px; color: var(--moss-dark); font-size: 0.74rem; font-weight: 680; }
@@ -799,7 +803,8 @@ kbd { display: inline-block; padding: 1px 5px; border: 1px solid var(--line); bo
 .advanced-setup .form-field { margin-top: 13px; }
 .detail-drawer[inert] ~ .dialog-scrim { z-index: 12; }
 .detail-drawer[inert] ~ .dialog { z-index: 13; }
-.toast { position: fixed; z-index: 20; right: 22px; bottom: 22px; max-width: min(430px, calc(100% - 44px)); display: flex; align-items: center; gap: 9px; padding: 12px 12px 12px 14px; border: 1px solid oklch(67% 0.075 158 / 0.45); box-shadow: var(--shadow); color: var(--moss-dark); background: var(--moss-soft); font-size: 0.75rem; animation: toast-in 220ms ease-out; }
+/* Workspace notifications must stay below modal scrims and their actions. */
+.toast { position: fixed; z-index: 9; right: 22px; bottom: 22px; max-width: min(430px, calc(100% - 44px)); display: flex; align-items: center; gap: 9px; padding: 12px 12px 12px 14px; border: 1px solid oklch(67% 0.075 158 / 0.45); box-shadow: var(--shadow); color: var(--moss-dark); background: var(--moss-soft); font-size: 0.75rem; animation: toast-in 220ms ease-out; }
 .toast > svg { flex: 0 0 auto; }
 .toast span { flex: 1; }
 .toast-close { width: 28px; height: 28px; display: grid; place-items: center; border: 0; color: var(--ink-muted); background: transparent; cursor: pointer; }
@@ -1469,6 +1474,15 @@ kbd { display: inline-block; padding: 1px 5px; border: 1px solid var(--line); bo
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+.dialog > form > * { flex-shrink: 0; }
+.dialog > form > .dialog-actions {
+  position: sticky;
+  z-index: 1;
+  bottom: 0;
+  margin-top: 16px;
+  padding-block: 14px;
+  background: var(--surface-strong);
 }
 .dialog:has(.fabrication-route-options) .dialog-actions {
   bottom: 0;

@@ -77,7 +77,7 @@ describe("artifact transfer model boundary", () => {
       structuredContent: {
         error: {
           code: "HOST_TRANSFER_UNAVAILABLE",
-          message: "Artifact transfer is unavailable through generic MCP; use the authenticated browser/HTTP Files flow.",
+          message: "Artifact transfer is unavailable through generic MCP; use browser Files or the trusted host helper: node scripts/artifact-transfer.mjs --help. The helper requires separate host filesystem access and environment credentials.",
         },
       },
     });

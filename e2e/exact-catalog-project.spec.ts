@@ -258,7 +258,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   });
   await expect(page.getByRole("status").filter({ hasText: "1 of 1 file uploaded" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Files 1", exact: true })).toBeVisible();
-  await expect(page.getByRole("cell", { name: /e2e-bound-setup\.step/u })).toBeVisible();
+  await expect(page.locator(".file-name").filter({ hasText: /e2e-bound-setup\.step/u })).toBeVisible();
 
   const persistedAfterUpload = await readPersistedSnapshot();
   expect(persistedAfterUpload.status).toBe(200);

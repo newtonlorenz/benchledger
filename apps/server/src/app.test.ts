@@ -633,6 +633,10 @@ describe("BenchLedger HTTP API", () => {
       expect(document.components.schemas.BeginUpload).toMatchObject({ oneOf: expect.any(Array) });
       expect(document.paths["/projects/{id}/artifacts"]).toMatchObject({ get: { parameters: expect.arrayContaining([expect.objectContaining({ name: "projectRevisionId", in: "query" }), expect.objectContaining({ name: "workItemRevisionId", in: "query" })]) } });
       expect(document.paths["/artifacts/uploads"]).toMatchObject({ post: { requestBody: { content: { "application/json": { schema: { $ref: "#/components/schemas/BeginUpload" } } } } } });
+      expect(document.paths["/artifacts/uploads/{id}"]).toMatchObject({ put: { requestBody: { content: { "application/octet-stream": { schema: { type: "string", format: "binary" } } } }, responses: { "403": expect.any(Object) } } });
+      expect(document.paths["/artifacts/uploads/{id}/finalize"]).toMatchObject({ post: { responses: { "200": expect.any(Object), "403": expect.any(Object) } } });
+      expect(document.paths["/artifacts/{id}"]).toMatchObject({ get: { responses: { "200": { content: { "application/json": { schema: { required: expect.arrayContaining(["id", "byteSize", "sha256"]) } } } } } } });
+      expect(document.paths["/artifacts/{id}/download"]).toMatchObject({ get: { responses: { "200": { content: { "*/*": { schema: { type: "string", format: "binary" } } } }, "403": expect.any(Object) } } });
       expect(document.components.schemas.CreateInventoryWithProductProfile).toMatchObject({ required: ["item", "profile"], additionalProperties: false });
       expect(document.components.schemas.CreateInventoryCategory).toMatchObject({ required: ["name"], additionalProperties: false });
       expect(document.components.schemas.UpdateInventoryCategory).toMatchObject({ minProperties: 1, additionalProperties: false });

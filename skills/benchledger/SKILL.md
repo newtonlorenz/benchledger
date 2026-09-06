@@ -52,7 +52,10 @@ Inspection completion and close-out require the server preview and explicit
 confirmation before commit. A reservation is not consumption; planned amounts
 are not actual usage. Preserve evidence and accepted artefacts. Generic MCP
 transfer failures remain fail-closed: never insert file bytes as base64 or
-invent a host transfer. Report a committed write as committed even if a later
+invent a host transfer. With separately authorised host filesystem access, use
+`node scripts/artifact-transfer.mjs --help`; see the host-transfer section in
+[the MCP quickstart](../../apps/mcp/QUICKSTART.md#6-store-cad-and-build-files).
+Report a committed write as committed even if a later
 refresh fails; do not duplicate it.
 
 Purchasing/carts, external publication, deployment, credential changes,

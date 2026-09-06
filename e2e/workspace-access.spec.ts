@@ -157,7 +157,7 @@ test("completes the LAN-open to password and back access journey without exposin
   const harness = await mockWorkspaceAccess(page);
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "What are you making?", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Open account settings" }).click();
+  await page.getByRole("button", { name: "Open workspace settings" }).click();
   await expect(page.getByRole("heading", { name: "Workspace access" })).toBeVisible();
   await expect(page.getByText("LAN open", { exact: true })).toBeVisible();
   await expect(page.getByRole("alert").filter({ hasText: LAN_WARNING })).toContainText(LAN_WARNING);
@@ -209,7 +209,7 @@ test("keeps the access warning and password controls usable on mobile", async ({
   await mockWorkspaceAccess(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
-  await page.getByRole("button", { name: "Open account settings" }).click();
+  await page.getByRole("button", { name: "Open workspace settings" }).click();
   await expect(page.getByRole("heading", { name: "Workspace access" })).toBeVisible();
   await expect(page.getByRole("alert").filter({ hasText: LAN_WARNING })).toHaveText(LAN_WARNING);
   await expect(page.getByLabel("New workspace password", { exact: true })).toBeVisible();
@@ -220,7 +220,7 @@ test("keeps the access warning and password controls usable on mobile", async ({
 test("retries a malformed access response immediately with the same request key", async ({ page }) => {
   const harness = await mockWorkspaceAccess(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Open account settings" }).click();
+  await page.getByRole("button", { name: "Open workspace settings" }).click();
   await page.getByLabel("New workspace password", { exact: true }).fill("malformed-response-password");
   await page.getByLabel("Confirm new workspace password", { exact: true }).fill("malformed-response-password");
   harness.malformedNextAccessResponse();
@@ -237,7 +237,7 @@ test("retries a malformed access response immediately with the same request key"
 test("retries a lost access response immediately with the same request key", async ({ page }) => {
   const harness = await mockWorkspaceAccess(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Open account settings" }).click();
+  await page.getByRole("button", { name: "Open workspace settings" }).click();
   await page.getByLabel("New workspace password", { exact: true }).fill("immediate-retry-password");
   await page.getByLabel("Confirm new workspace password", { exact: true }).fill("immediate-retry-password");
   harness.loseNextAccessResponse();
@@ -253,7 +253,7 @@ test("retries a lost access response immediately with the same request key", asy
 test("replays a lost enable response after reauthentication without retaining the password", async ({ page }) => {
   const harness = await mockWorkspaceAccess(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Open account settings" }).click();
+  await page.getByRole("button", { name: "Open workspace settings" }).click();
   await page.getByLabel("New workspace password", { exact: true }).fill("lost-enable-password");
   await page.getByLabel("Confirm new workspace password", { exact: true }).fill("lost-enable-password");
   harness.loseNextAccessResponse();
@@ -268,7 +268,7 @@ test("replays a lost enable response after reauthentication without retaining th
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
   await page.getByLabel("Workspace password").fill("lost-enable-password");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await page.getByRole("button", { name: "Open account settings" }).click();
+  await page.getByRole("button", { name: "Open workspace settings" }).click();
   await expect(page.getByRole("form", { name: "Retry enabling workspace password" })).toBeVisible();
   await page.getByLabel("New workspace password", { exact: true }).fill("lost-enable-password");
   await page.getByLabel("Confirm new workspace password", { exact: true }).fill("lost-enable-password");
@@ -281,7 +281,7 @@ test("replays a lost enable response after reauthentication without retaining th
 test("replays a lost password change after logging in with the replacement", async ({ page }) => {
   const harness = await mockWorkspaceAccess(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Open account settings" }).click();
+  await page.getByRole("button", { name: "Open workspace settings" }).click();
   await page.getByLabel("New workspace password", { exact: true }).fill("first-change-password");
   await page.getByLabel("Confirm new workspace password", { exact: true }).fill("first-change-password");
   await page.getByRole("button", { name: "Enable password" }).click();
@@ -298,7 +298,7 @@ test("replays a lost password change after logging in with the replacement", asy
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
   await page.getByLabel("Workspace password").fill("second-change-password");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await page.getByRole("button", { name: "Open account settings" }).click();
+  await page.getByRole("button", { name: "Open workspace settings" }).click();
   await page.getByLabel("Current workspace password", { exact: true }).fill("first-change-password");
   await page.getByLabel("New workspace password", { exact: true }).fill("second-change-password");
   await page.getByLabel("Confirm new workspace password", { exact: true }).fill("second-change-password");
@@ -311,7 +311,7 @@ test("replays a lost password change after logging in with the replacement", asy
 test("replays a lost disable response after LAN bootstrap", async ({ page }) => {
   const harness = await mockWorkspaceAccess(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Open account settings" }).click();
+  await page.getByRole("button", { name: "Open workspace settings" }).click();
   await page.getByLabel("New workspace password", { exact: true }).fill("disable-password-please");
   await page.getByLabel("Confirm new workspace password", { exact: true }).fill("disable-password-please");
   await page.getByRole("button", { name: "Enable password" }).click();

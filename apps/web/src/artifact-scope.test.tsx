@@ -66,16 +66,17 @@ describe("artifact scope selection", () => {
     expect(markup).toContain("SHA-256"); expect(markup).not.toContain("/work-items/"); expect(markup).not.toContain("legacy-summary-only");
   });
 
-  it("keeps settings beginner-friendly while preserving canonical units for experts", () => {
+  it("keeps settings actionable and technical detail optional", () => {
     const props = { sampleMode: true, connection: "sample" as const,
       categories: [],
       categoriesLoading: false, onRetryCategories: () => undefined, onCreateCategory: async () => undefined, onUpdateCategory: async () => undefined, onArchiveCategory: async () => undefined, hideLogout: false, onExpert: () => undefined, onLogout: () => undefined };
     const beginnerMarkup = renderToStaticMarkup(<SettingsPage {...props} expert={false} />);
     expect(beginnerMarkup).toContain( "Categories organize your workspace. Item type controls stock rules." );
-    expect(beginnerMarkup).toContain("mm · g · m · millilitres"); expect(beginnerMarkup).toContain("pieces");
-    expect(beginnerMarkup).toContain("millilitres"); expect(beginnerMarkup).toContain("sets"); expect(beginnerMarkup).not.toContain("millilitre · g · m · millilitre"); expect(beginnerMarkup).toContain("Connection and agent access"); expect(beginnerMarkup).toContain("Show technical details"); expect(beginnerMarkup).toContain( "Show identifiers, evidence, and compatibility details when you need them." ); const expertMarkup = renderToStaticMarkup(<SettingsPage {...props} expert />);
+    expect(beginnerMarkup).not.toContain("Measurements");
+    expect(beginnerMarkup).not.toContain("Source currency");
+    expect(beginnerMarkup).toContain("Connection and agent access"); expect(beginnerMarkup).toContain("Show technical details"); expect(beginnerMarkup).toContain( "Show identifiers, evidence, and compatibility details when you need them." ); const expertMarkup = renderToStaticMarkup(<SettingsPage {...props} expert />);
 
-    expect(expertMarkup).toContain( "millimetre · gram · metre · millilitre · each · set" );
+    expect(expertMarkup).not.toContain("Measurements");
     expect(expertMarkup).toContain("Hide technical details");
     expect(expertMarkup).toContain( "Hide identifiers and technical evidence for a simpler view." );
   });

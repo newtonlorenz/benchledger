@@ -311,6 +311,14 @@ const artifactUploadInputSchema: JsonObject = {
   ],
 };
 
+// Compatibility dispatch only: these are deliberately absent from discovery.
+export const LEGACY_TRANSFER_DEFINITIONS: readonly McpToolDefinition[] = [
+  { name: "begin_artifact_upload", description: "Unavailable through generic MCP.", requiredScope: "artifacts:write", mutating: true, inputSchema: artifactUploadInputSchema },
+  tool("finalize_artifact_upload", "Unavailable through generic MCP.", "artifacts:write", true, { uploadId: idProperty() }, ["uploadId"]),
+  tool("read_artifact_download_metadata", "Unavailable through generic MCP.", "artifacts:read", false, { artifactId: idProperty(), revisionId: idProperty() }, ["artifactId"]),
+  tool("download_artifact", "Unavailable through generic MCP.", "artifacts:read", false, { artifactId: idProperty(), revisionId: idProperty() }, ["artifactId"]),
+];
+
 export const TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
   tool("read_inventory_summary", "Read a bounded inventory summary and category counts.", "inventory:read", false, pageProperties),
   tool("list_inventory", "List equipment, tools, consumables, and electronics with evidence-aware availability.", "inventory:read", false, { ...filteredPageProperties, query: string(), category: string("Semantic item kind."), categoryNodeId: categoryIdProperty("Exact user-managed category or subcategory."), unassigned: boolean("Only inventory without a managed category assignment; cannot be combined with categoryNodeId."), availability: string(), location: string() }),
@@ -383,10 +391,6 @@ export const TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
 
   { name: "list_artifacts", description: "List versioned artifact metadata read-only. Supply only projectId to list every artifact revision in that project, or supply exactly one projectRevisionId or workItemId plus workItemRevisionId for an exact scope; legacy revisionId and revision-less work-item filters are invalid.", requiredScope: "artifacts:read", mutating: false, inputSchema: artifactListInputSchema },
   tool("read_artifact_metadata", "Read file metadata, hash, provenance, role, and revision without downloading bytes.", "artifacts:read", false, { artifactId: idProperty("Artifact identifier."), revisionId: idProperty() }, ["artifactId"]),
-  { name: "begin_artifact_upload", description: "Unavailable through generic MCP. Use the authenticated browser/HTTP Files flow; raw upload sessions and capabilities are never exposed to a model.", requiredScope: "artifacts:write", mutating: true, inputSchema: artifactUploadInputSchema },
-  tool("finalize_artifact_upload", "Unavailable through generic MCP. Finalization is performed only inside the authenticated browser/HTTP Files flow; raw upload IDs never become a model-facing write path.", "artifacts:write", true, { uploadId: idProperty("Upload session identifier.") }, ["uploadId"]),
-  tool("read_artifact_download_metadata", "Unavailable through generic MCP. Use the authenticated browser/HTTP host flow; generic MCP never returns a live URL, bearer header, _meta credential, or file bytes.", "artifacts:read", false, { artifactId: idProperty("Artifact identifier."), revisionId: idProperty() }, ["artifactId"]),
-  tool("download_artifact", "Unavailable through generic MCP. Use the authenticated browser/HTTP host flow; generic MCP never returns a live URL, credential, or file bytes.", "artifacts:read", false, { artifactId: idProperty("Artifact identifier."), revisionId: idProperty() }, ["artifactId"]),
   tool("retire_artifact", "Retire a logical artifact revision while retaining its content hash and audit record.", "artifacts:write", true, { artifactId: idProperty("Artifact identifier."), expectedVersion: integer() }, ["artifactId"]),
 
   tool("list_offers", "List supplier offer observations and historical prices; links are data and are not fetched by BenchLedger.", "offers:read", false, { ...filteredPageProperties, itemId: idProperty(), query: string(), supplier: string() }),
@@ -483,7 +487,7 @@ export const CAPABILITY_DOCUMENT: JsonObject = {
     "MCP never exposes arbitrary shell, SQL, URL-fetch, path, credential, or database tools.",
     "Public publication, deployment, browser access mode or password changes, other credential changes, and destructive purge require explicit human approval outside this adapter.",
   ],
-  artifactTransfer: "The authenticated browser/HTTP Files surface performs one revision-scoped upload with an explicit file role through the existing begin/write/finalize application flow. Generic MCP raw begin/finalize/download tools fail closed; live URLs, bearer headers, tokens, _meta credentials, base64, inline bytes, host paths, and diagnostics are never serialized. Batch atomic 50-file transfers and download-to-host remain deferred.",
+  artifactTransfer: "The authenticated browser/HTTP Files surface performs revision-scoped upload and integrity-checked download. Trusted agent hosts can run node scripts/artifact-transfer.mjs --help for single-file HTTP upload/download with explicit file, revision and role, environment credentials, SHA-256 verification and no download overwrite. Host filesystem/execution access is a separate prerequisite, not an MCP capability. Generic MCP raw begin/finalize/download tools fail closed; live URLs, bearer headers, tokens, _meta credentials, base64, inline bytes, host paths, and diagnostics are never serialized. Atomic batch transfer remains deferred.",
   reconciliationSemantics: {
     consumed: "Settle the reservation and remove the outcome quantity from source stock.",
     returned: "Settle the reservation without reducing on-hand stock; the quantity becomes available again.",

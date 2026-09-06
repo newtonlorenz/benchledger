@@ -317,7 +317,8 @@ listed artifact exposes its exact `projectRevisionId` or
 The authenticated Files flow hashes the browser-selected bytes, calls the
 existing application begin → write → finalize sequence, and returns the final
 artifact metadata. Generic MCP does not expose that upload session or transfer
-capability: raw `begin_artifact_upload`, `finalize_artifact_upload`, and
+capability: transfer actions are absent from discovery, while cached clients
+calling `begin_artifact_upload`, `finalize_artifact_upload`, and
 download tools fail closed with `HOST_TRANSFER_UNAVAILABLE`. MCP never embeds
 CAD, STL, STEP, 3MF, build, firmware, or other large files as base64, and never
 accepts an absolute host path, shell command, SQL statement, or executable
@@ -327,6 +328,21 @@ Typical roles include `source`, `cad`, `step`, `stl`, `three_mf`,
 `slicer_project`, `gcode`, `drawing`, `validation`, and `document`. Manifest
 freezing is deferred in the current application service; treat hashes and
 revision status as review evidence until a dedicated freeze operation exists.
+
+A trusted agent host with explicitly authorized filesystem access can use
+`node scripts/artifact-transfer.mjs --help` from a source checkout. Supply
+`BENCHLEDGER_URL` and `BENCHLEDGER_TOKEN` privately through the environment;
+never put credentials in arguments or MCP messages. The helper accepts one
+explicit `--file`, `--project`, `--role`, and either `--project-revision` or
+`--work-item` plus `--work-item-revision`. Upload also requires `--media-type`;
+download requires `--artifact`. It uses authenticated HTTP with project
+allow-list enforcement, verifies SHA-256 and length, refuses redirects and
+download overwrites, and returns metadata only. The local path is never sent
+to BenchLedger (only the upload basename is stored). Files are bounded to
+100 MiB and buffered on the host. Use HTTPS except on a trusted LAN. There
+are no automatic retries: after an interrupted finalization, inspect the
+revision before repeating an upload. A host without filesystem/execution access
+still uses browser Files; this helper does not add filesystem access to MCP.
 
 Build-configuration filament selections are a strict one-of: an exact
 selection contains both `itemId` and `catalogProductId` (with an optional

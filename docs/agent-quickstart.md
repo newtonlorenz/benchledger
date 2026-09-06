@@ -82,8 +82,8 @@ blocked while active children or active inventory references remain.
 
 For the web UI, open **Settings → Manage inventory categories** to add a
 top-level category and, if useful, one level of subcategories. Then open
-**Inventory → Add item**: choose the semantic item type first and the managed
-category second. The category selector and inventory Category filter use the
+**Inventory → Add item**: choose the item type; the beginner form derives its
+category automatically. The expert category selector and inventory Category filter use the
 managed category tree and `categoryNodeId`; the separate Kind filter continues
 to use `kind`. If the add form has no active categories, choose **Open Settings**
 from that form, create one, and return to Inventory. Existing legacy items may
@@ -242,11 +242,20 @@ browser-computed byte length and SHA-256. Keep source, STEP, STL, 3MF, slicer,
 drawing, and validation revisions separate; do not overwrite an accepted
 artifact.
 
-Generic MCP does not expose upload sessions or transfer capabilities. Its raw
+Generic MCP does not advertise transfer actions or expose upload sessions or
+transfer capabilities. Cached clients calling its former raw
 `begin_artifact_upload`, `finalize_artifact_upload`, and download tools fail
 closed with `HOST_TRANSFER_UNAVAILABLE`. MCP never embeds CAD, STL, STEP, 3MF,
 build, firmware, or other large files as base64, and never accepts an absolute
 host path, shell command, SQL statement, or executable upload.
+
+For agent-host file transfer, use the checkout's
+`node scripts/artifact-transfer.mjs --help` with privately supplied
+`BENCHLEDGER_URL`/`BENCHLEDGER_TOKEN`. This host-only helper transfers one exact
+revision/role, checks SHA-256, and refuses redirects and download overwrites.
+See the [MCP host-transfer instructions](../apps/mcp/QUICKSTART.md#6-store-cad-and-build-files).
+Generic MCP remains fail-closed; host execution/filesystem permission is a
+separate prerequisite, not a capability supplied by the server.
 
 ## Minute 9–10: shopping proposal
 

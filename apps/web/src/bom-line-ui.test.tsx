@@ -17,7 +17,7 @@ describe("BOM line version and expert context", () => {
     expect(markup).toContain("Part or material (used up or built in)");
     expect(markup).toContain('value="reusable"');
     expect(markup).toContain("Reusable tool or equipment");
-    expect(markup).not.toContain("Search matching inventory");
+    expect(markup).toContain("Search matching inventory");
     expect(markup).not.toContain(project.currentRevision);
     expect(markup).not.toContain(project.serverRevisionId!);
   });
