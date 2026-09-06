@@ -1,0 +1,51 @@
+import { expect, it } from "vitest";
+import { ApplicationService } from "@benchledger/application";
+import type { RequestContext } from "@benchledger/application";
+import { createProductionRuntime } from "@benchledger/runtime";
+import { createSyntheticRuntime } from "./memory-store.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
+for (const durable of [false, true]) it(`retains maker planning and sourced requirements consistently in ${durable ? "SQLite" : "memory"}`, async () => {
+  const dir = await mkdtemp(join(tmpdir(), "benchledger-maker-unit-"));
+  const runtime = durable ? await createProductionRuntime({ dataDir: dir }) : createSyntheticRuntime();
+  const service = new ApplicationService(runtime.ports); let sequence = 0;
+  const context = (key?: string): RequestContext => ({ actor: "synthetic-reviewer", source: "api", scopes: new Set(["read", "write", "admin"]), correlationId: "maker-test", idempotencyKey: key ?? `maker-command-${++sequence}` });
+  try {
+    const project = (await service.createProject({ name: "Synthetic project", status: "idea" }, context())).data;
+    const revision = (await service.createProjectRevision(project.id, { name: "Initial", status: "concept", fabricationRoute: "printed" }, context())).data;
+    const line = (await service.createBomLine(revision.id, { name: "M3 screws", requiredQuantity: 7, unit: "each", role: "consumed", optional: false, alternatives: [], constraints: {} }, context())).data;
+    const before = await service.listInventory({ limit: 200 });
+    const input = { bomLineId: line.id, expectedBomLineVersion: line.version, supplier: "Synthetic supplier", title: "Screws, pack of four", url: "https://supplier.example/screws", packageQuantity: 4, packageUnit: "each", priceMinor: 250, shippingMinor: 200, taxIncluded: "yes", currency: "EUR", observedAt: new Date().toISOString() };
+    const offer = await service.makerWorkflows.recordOffer(project.id, revision.id, input, context("quote-once"));
+    expect((await service.makerWorkflows.recordOffer(project.id, revision.id, input, context("quote-once"))).replayed).toBe(true);
+    const choice = { bomLineId: line.id, expectedBomLineVersion: line.version, offerId: offer.data.id, expectedVersion: 0, confirmedFit: true };
+    await expect(service.makerWorkflows.chooseOffer(project.id, revision.id, { ...choice, confirmedFit: false }, context())).rejects.toMatchObject({ code: "validation" });
+    await service.makerWorkflows.chooseOffer(project.id, revision.id, choice, context());
+    let sourcing = await service.makerWorkflows.sourcing(project.id, revision.id);
+    expect(sourcing.data[0]!.estimate).toMatchObject({ status: "estimated", packages: 2, partsSupplied: 8, totalMinor: 700 });
+    await service.updateBomLine(line.id, { requiredQuantity: 8 }, line.version, context());
+    sourcing = await service.makerWorkflows.sourcing(project.id, revision.id); expect(sourcing.data[0]!.estimate.reason).toContain("requirement changed");
+    expect(await service.listInventory({ limit: 200 })).toEqual(before);
+    const spool = (await service.createInventoryItem({ name: "Synthetic PLA", kind: "filament", quantity: 1000, unit: "gram", tags: [], links: [], evidence: { state: "physically_counted" } }, context())).data;
+    const plan = { expectedVersion: 0, name: "Bracket batch", parts: [{ id: "bracket", name: "Bracket", quantity: 5 }], plates: [{ id: "plate-one", name: "First plate", copies: 2, parts: [{ partId: "bracket", quantity: 3 }], materials: [{ itemId: spool.id, grams: 12, role: "model", side: "single" }], minutes: 40 }] };
+    const saved = await service.makerWorkflows.saveBuildPlan(project.id, revision.id, plan, context());
+    expect(saved.data.totals).toMatchObject({ parts: [{ required: 5, planned: 6, excess: 1 }], materialGrams: [{ grams: 24 }], minutes: 80 });
+    await expect(service.makerWorkflows.saveBuildPlan(project.id, revision.id, plan, context())).rejects.toMatchObject({ code: "conflict" });
+    await service.makerWorkflows.saveBuildPlan(project.id, revision.id, { ...plan, expectedVersion: 1, name: "Revised batch" }, context());
+    expect((await service.makerWorkflows.buildPlanHistory(project.id, revision.id)).data.map((entry) => entry.version)).toEqual([2, 1]);
+    expect(await service.getInventoryItem(spool.id)).toMatchObject({ quantity: 1000, availableQuantity: 1000 });
+    const work = await service.makerWorkflows.createWorkstream(project.id, { name: "Electronics", kind: "electronics" }, context());
+    expect(work.data.item.currentRevisionId).toBe(work.data.revision.id);
+    await service.makerWorkflows.assignWork(project.id, work.data.item.id, { expectedVersion: 0, status: "in_progress", notes: "Measure first" }, context());
+    expect((await service.makerWorkflows.workstreams(project.id)).data[0]!.assignment).toMatchObject({ status: "in_progress" });
+    const rows = [{ name: "Spacer", requiredQuantity: 2, unit: "each", role: "consumed", optional: false, constraints: {}, alternatives: [] }, { name: "Hex key", requiredQuantity: 1, unit: "each", role: "reusable", optional: false, constraints: {}, alternatives: [] }];
+    const preview = await service.makerWorkflows.previewImport(project.id, revision.id, { rows }, context());
+    expect(await service.listBomLines(revision.id)).toHaveLength(1);
+    const confirmation = { previewId: preview.id, expectedPreviewVersion: preview.version, contentSha256: preview.contentSha256, confirmed: true };
+    await service.makerWorkflows.commitImport(project.id, revision.id, confirmation, context("import-once"));
+    expect((await service.makerWorkflows.commitImport(project.id, revision.id, confirmation, context("import-once"))).replayed).toBe(true);
+    expect(await service.listBomLines(revision.id)).toHaveLength(3);
+  } finally { if ("close" in runtime) await runtime.close(); await rm(dir, { recursive: true, force: true }); }
+});

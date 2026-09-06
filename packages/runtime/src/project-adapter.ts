@@ -426,6 +426,12 @@ export class ProductionProjectAdapter implements ProjectPort {
     });
   }
 
+  async listProjectRevisions(projectId: string): Promise<readonly ApiProjectRevision[]> {
+    return attempt(() => this.projects.listRevisions(projectId).map((revision) => apiProjectRevisionFromNative(revision, this.state.getVersion(PROJECT_REVISION, revision.id))));
+  }
+  async listWorkItemRevisions(workItemId: string): Promise<readonly ApiWorkItemRevision[]> {
+    return attempt(() => { const work = this.projects.getWorkItem(workItemId); if (!work) throw new ApplicationError("not_found", "Workstream not found"); return this.projects.listWorkItemRevisions(workItemId).map((revision) => apiWorkItemRevisionFromNative(revision, work.projectId, this.state.getVersion(WORK_ITEM_REVISION, revision.id))); });
+  }
   async getProjectRevision(id: string): Promise<ApiProjectRevision | null> {
     return attempt(() => {
       const found = this.findProjectRevision(id);

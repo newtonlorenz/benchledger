@@ -1613,3 +1613,35 @@ kbd { display: inline-block; padding: 1px 5px; border: 1px solid var(--line); bo
 .requirement-filters .text-button { grid-column: 1 / -1; justify-self: start; min-height: 44px; }
 .requirements-no-match { padding-block: 18px; }
 @media (max-width: 480px) { .requirement-filters { grid-template-columns: minmax(0, 1fr); } }
+
+.guided-setup { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.guided-setup > fieldset { min-width: 0; }
+.guided-setup summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 650; }
+.guided-setup p, .guided-setup li { font-size: 0.8rem; overflow-wrap: anywhere; }
+.setup-entry { margin-bottom: 14px; max-width: 100%; white-space: normal; }
+.intake-row, .csv-mapping { padding: 14px; border: 1px solid var(--line); display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.intake-row .form-row, .intake-row input, .intake-row select { min-width: 0; max-width: 100%; }
+.setup-template-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.setup-template-actions .button { white-space: normal; }
+.workflow-error { white-space: pre-wrap; }
+.setup-review-lines { padding-left: 24px; }
+.setup-review-lines li { margin-block: 10px; }
+.setup-review-lines span, .setup-review-lines small { display: block; }
+.guided-setup > .dialog-actions { position: sticky; bottom: 0; background: var(--surface-strong); padding-block: 12px; z-index: 1; }
+.dialog:has(.guided-setup) { width: min(740px, calc(100% - 32px)); }
+
+.maker-tool-group { margin-block: 16px; padding: 16px; min-width: 0; }
+.maker-tool-group > summary, .workstream-row > summary, .revision-history > summary, .build-planning details > summary, .plate-editor > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 650; }
+.maker-tool-group .surface { border: 0; box-shadow: none; padding: 16px 0; min-width: 0; }
+.maker-tool-group h2, .maker-tool-group h3, .maker-tool-group h4 { margin-block: 14px 8px; overflow-wrap: anywhere; }
+.maker-tool-group p, .maker-tool-group a, .maker-tool-group summary { overflow-wrap: anywhere; }
+.maker-tool-group p { font-size: 0.84rem; line-height: 1.5; margin-block: 8px; }
+.maker-tool-group input, .maker-tool-group select, .maker-tool-group textarea { min-width: 0; max-width: 100%; }
+.maker-tool-group button { white-space: normal; min-height: 44px; }
+.workflow-table-scroll { width: 100%; max-width: 100%; overflow-x: auto; }
+.workflow-pagination, .workflow-section-heading { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-block: 12px; }
+.workflow-form, .workflow-review, .sourcing-requirement, .quote-card, .plate-editor, .workstream-row { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 12px; }
+.quote-card.is-selected { border-left: 3px solid var(--moss); padding-left: 12px; }
+.identifier-value { overflow-wrap: anywhere; font-family: monospace; font-size: 0.72rem; }
+.maker-tool-group .dialog-actions { position: static; margin: 16px 0 0; padding: 12px 0 0; }
+@media (max-width: 480px) { .maker-tool-group { padding: 12px; } .maker-tool-group .form-row { grid-template-columns: minmax(0, 1fr); } }

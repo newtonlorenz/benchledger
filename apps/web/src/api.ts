@@ -186,6 +186,7 @@ export interface WorkspaceAccess {
   demo: boolean;
   authenticated?: boolean;
   version?: number;
+  teamEnabled?: boolean;
 }
 export type WorkspaceAccessUpdateInput =
   | { operation: "enable"; newPassword: string }
@@ -196,8 +197,8 @@ export interface WorkspaceAccessUpdateResult {
   access: WorkspaceAccess;
   session?: LoginResult;
 }
-export interface SessionResult { authenticated: true; actor: string; source?: string; scopes: string[]; projectIds?: string[] }
-export interface WorkspaceSnapshot { inventory: InventoryItem[]; projects: Project[]; offers: Offer[]; source: "api" | "synthetic"; fetchedAt: string; health?: ServerHealth; capabilities?: readonly string[] }
+export interface SessionResult { authenticated: true; actor: string; source?: string; scopes: string[]; projectIds?: string[]; memberId?: string; memberVersion?: number; teamEnabled?: boolean }
+export interface WorkspaceSnapshot { inventory: InventoryItem[]; projects: Project[]; offers: Offer[]; source: "api" | "synthetic"; fetchedAt: string; health?: ServerHealth; capabilities?: readonly string[]; session?: SessionResult }
 export interface InventoryCategoryPage { data: readonly ManagedInventoryCategory[]; nextCursor?: string; limit: number; total?: number }
 export type InventoryKindQuery = "printer" | "tool" | "accessory" | "consumable" | "electronic" | "fastener" | "filament" | "wire" | "adhesive" | "other";
 export interface InventoryListQuery {
@@ -254,7 +255,7 @@ export interface WorkspaceAdapter {
   getWorkspaceAccessRetry(): WorkspaceAccessRetry | undefined;
   clearWorkspaceAccessRetry(): void;
   session(): Promise<SessionResult>;
-  login(password: string): Promise<LoginResult>;
+  login(password: string, username?: string): Promise<LoginResult>;
   logout(): Promise<void>;
   loadWorkspace(): Promise<WorkspaceSnapshot>;
   listArchivedProjects(): Promise<Project[]>;
@@ -462,7 +463,7 @@ export function mapWorkspaceAccess(value: unknown): WorkspaceAccess {
   const demo = typeof record.demo === "boolean" ? record.demo : false;
   const authenticated = typeof record.authenticated === "boolean" ? record.authenticated : undefined;
   const version = typeof record.version === "number" && Number.isSafeInteger(record.version) && record.version > 0 ? record.version : undefined;
-  return { mode, demo, ...(authenticated === undefined ? {} : { authenticated }), ...(version === undefined ? {} : { version }) };
+  return { mode, demo, ...(authenticated === undefined ? {} : { authenticated }), ...(version === undefined ? {} : { version }), ...(typeof record.teamEnabled === "boolean" ? { teamEnabled: record.teamEnabled } : {}) };
 }
 
 function mapLoginResult(value: unknown): LoginResult {
@@ -2900,8 +2901,8 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
     getWorkspaceAccessRetry() { return getWorkspaceAccessRetry(); },
     clearWorkspaceAccessRetry() { clearWorkspaceAccessRetryRecord(); },
     async session() { return request<SessionResult>("/auth/session"); },
-    async login(password) {
-      const result = await request<LoginResult>("/auth/login", { method: "POST", body: JSON.stringify({ password }) });
+    async login(password, username) {
+      const result = await request<LoginResult>(username ? "/auth/member-login" : "/auth/login", { method: "POST", redirect: "error", body: JSON.stringify(username ? { username, password } : { password }) });
       csrfToken = result.csrfToken || cookieValue("forge_csrf");
       if (!csrfToken) throw new ApiError("The service did not provide a CSRF token", { kind: "csrf", status: 403 });
       return result;
@@ -2928,7 +2929,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       projectCache.clear();
       mappedProjects.forEach((project) => projectCache.set(project.id, project));
       const capabilities = Array.isArray(workspace.capabilities) ? workspace.capabilities.filter((action): action is string => typeof action === "string") : [];
-      return { inventory: mappedInventory, projects: mappedProjects, offers: workspace.offers.map(mapOffer), source: "api", fetchedAt: workspace.fetchedAt || new Date().toISOString(), health: currentHealth, capabilities };
+      return { inventory: mappedInventory, projects: mappedProjects, offers: workspace.offers.map(mapOffer), source: "api", fetchedAt: workspace.fetchedAt || new Date().toISOString(), health: currentHealth, capabilities, session: currentSession };
     },
     async listArchivedProjects() {
       const payload = await request<unknown>("/projects?status=archived&limit=200");
@@ -3601,3 +3602,12 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
   };
   return adapter;
 }
+
+/** Same-origin typed workflow transport. The caller retains its command key until the acknowledgement is confirmed. */
+export async function workflowRequest<T>(path: string, method: "GET" | "POST" | "PUT" | "PATCH" = "GET", body?: unknown, commandKey?: string): Promise<T> {
+  if (!path.startsWith("/") || path.startsWith("//")) throw new ApiError("Invalid workflow path", { kind: "validation", status: 400 });
+  const csrf = cookieValue("forge_csrf");
+  if (method !== "GET" && !csrf && !path.startsWith("/auth/")) throw new ApiError("Sign in again before saving this workflow.", { kind: "csrf", status: 403 });
+  return request<T>(path, { method, redirect: "error", signal: AbortSignal.timeout(120_000), ...(body === undefined ? {} : { body: JSON.stringify(body) }), ...(commandKey ? { headers: { "Idempotency-Key": commandKey } } : {}) }, csrf);
+}
+export function workflowCommandKey(prefix: string): string { return idempotencyKey(prefix); }

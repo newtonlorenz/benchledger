@@ -1,3 +1,6 @@
+import { memberLoginSchema } from "@benchledger/api-contract";
+import type { TeamMember } from "@benchledger/api-contract";
+import { registerMakerWorkflowRoutes, makerWorkflowOpenApi } from "./maker-workflow-routes.js";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -51,6 +54,8 @@ export interface ServerOptions {
   readonly runtime?: RuntimeHandle;
   readonly auth?: Partial<AuthConfig>;
   readonly demo?: boolean;
+  /** Explicit opt-in while named-account UI and rollout are under evaluation. */
+  readonly teamAccessPreview?: boolean;
   readonly dataDir?: string;
   readonly maxUploadBytes?: number;
   readonly maxStorageBytes?: number;
@@ -69,7 +74,7 @@ export interface RuntimeHandle {
   readonly close?: () => Promise<void>;
 }
 
-const PUBLIC_PATHS = new Set(["/api/v1/health", "/api/v1/ready", "/api/v1/auth/login", "/api/v1/auth/access", "/api/v1/auth/lan-session", "/api/v1/openapi.json", "/api/v1/capabilities"]);
+const PUBLIC_PATHS = new Set(["/api/v1/health", "/api/v1/ready", "/api/v1/auth/login", "/api/v1/auth/member-login", "/api/v1/auth/access", "/api/v1/auth/lan-session", "/api/v1/openapi.json", "/api/v1/capabilities"]);
 const UUID_OR_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
 
 function randomSecret(): string {
@@ -970,6 +975,7 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       }
     },
     paths: {
+      ...makerWorkflowOpenApi(),
       "/health": { get: { security: [], responses: { "200": { description: "Service health" } } } },
       "/ready": { get: { security: [], responses: { "200": { description: "Readiness checks" }, "503": { description: "Not ready" } } } },
       "/auth/login": { post: { security: [], responses: { "200": { description: "Session created" }, "401": { description: "Invalid credentials" }, "429": { description: "Too many attempts" } } } },
@@ -1283,10 +1289,10 @@ async function hydrateWorkspaceInventory(
   });
 }
 
-async function workspaceSnapshot(service: ApplicationService): Promise<WorkspaceSnapshot> {
+async function workspaceSnapshot(service: ApplicationService, projectIds?: ReadonlySet<string>): Promise<WorkspaceSnapshot> {
   const [inventory, projects, offers] = await Promise.all([
     service.listInventory({ limit: 200 }),
-    service.listProjects({ limit: 200 }),
+    projectIds === undefined ? service.listProjects({ limit: 200 }) : scopedProjectPage(service, { limit: 200 }, projectIds),
     service.listOffers(undefined, 200)
   ]);
   const enrichedProjects = await Promise.all(projects.data.map(async (project): Promise<WorkspaceProject> => {
@@ -1318,7 +1324,7 @@ async function workspaceSnapshot(service: ApplicationService): Promise<Workspace
     offers: offers.data,
     source: "api",
     fetchedAt: new Date().toISOString(),
-    capabilities: service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : [],
+    capabilities: [...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : []), ...(service.makerWorkflows.supports() ? ["maker_workflows.read", "maker_workflows.write"] : [])],
     pagination: {
       inventory: { limit: inventory.limit, ...(inventory.total === undefined ? {} : { total: inventory.total }), ...(inventory.nextCursor === undefined ? {} : { nextCursor: inventory.nextCursor }) },
       projects: { limit: projects.limit, ...(projects.total === undefined ? {} : { total: projects.total }), ...(projects.nextCursor === undefined ? {} : { nextCursor: projects.nextCursor }) },
@@ -1398,6 +1404,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   const suppliedBearerTokens = options.auth?.bearerTokens ?? [];
   const workspaceSecurity = ports.workspaceSecurity;
   let credentialRevision = 1;
+  let teamState = await service.team.sessionState();
   const fallbackSecurityStatus = {
     mode: demo || adminPasswordHash !== undefined ? "password" as const : "lan_open" as const,
     passwordConfigured: demo || adminPasswordHash !== undefined,
@@ -1416,6 +1423,12 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     ...(options.auth?.passwordVerifier ? { passwordVerifier: options.auth.passwordVerifier } : {}),
     ...(workspaceSecurity === undefined ? {} : { workspacePasswordVerifier: (password: string) => service.verifyWorkspacePassword(password) }),
     credentialRevision: () => credentialRevision,
+    sharedSessionsAllowed: () => !teamState.enabled,
+    memberSession: (id, version) => {
+      const member = teamState.members.find((entry) => entry.id === id);
+      if (!teamState.enabled || !member?.enabled || member.version !== version) return null;
+      return { actor: `member:${member.id}`, source: "ui", via: "session", memberId: member.id, memberVersion: member.version, scopes: new Set<AuthScope>(member.role === "admin" ? ["read", "write", "admin"] : member.role === "editor" ? ["read", "write"] : ["read"]), ...(member.projectIds === undefined ? {} : { projectIds: new Set(member.projectIds) }) };
+    },
     ...(demo ? { demo: true, demoPassword: options.auth?.demoPassword ?? process.env.BENCHLEDGER_DEMO_PASSWORD ?? "demo-password-please-change" } : {}),
     ...(suppliedBearerTokens.length > 0 ? { bearerTokens: suppliedBearerTokens } : {}),
     secureCookies: options.auth?.secureCookies ?? false,
@@ -1515,6 +1528,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
       return reply;
     }
     if (!request.url.startsWith("/api/v1")) return;
+    teamState = await service.team.sessionState();
     // An explicitly supplied Authorization header is never ignored, including
     // on public discovery/auth bootstrap routes. This prevents a malformed
     // header from silently falling through to a cookie or public response.
@@ -1553,6 +1567,10 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   });
 
   const route = (path: string) => `/api/v1${path}`;
+  registerMakerWorkflowRoutes(app, service, {
+    check: (request, write) => { requireScope(request, write ? "write" : "read", auth); requireProjectScope(request, (request.params as { projectId: string }).projectId); },
+    context: requestContext
+  });
   app.get(route("/health"), async () => {
     const result = await service.health();
     const { checks: _checks, ...health } = result;
@@ -1568,15 +1586,16 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     name: "BenchLedger", version: service.getVersion(), protocol: "rest-v1", demo,
     authentication: { accessModes: ["lan_open", "password"], access: "/api/v1/auth/access", explicitLanSession: "/api/v1/auth/lan-session", bearerRequiredForMcp: true },
     vocabulary: { confirmed: "physically counted or commissioned stock", inspect_first: "recorded stock requiring a physical count", missing: "no confirmed or inspect-first candidate" },
-    actions: ["inventory.read", "inventory.write", "inventory.categories.read", "inventory.categories.write", "catalog.read", "catalog.write", "inventory.product_profile.read", "inventory.product_profile.write", "projects.read", "projects.write", "projects.remove", "projects.removed_history", "build_configurations.read", "build_configurations.create", "bom.evaluate", "artifacts.version", "offers.compare", "events.subscribe", ...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : [])],
+    actions: ["inventory.read", "inventory.write", "inventory.categories.read", "inventory.categories.write", "catalog.read", "catalog.write", "inventory.product_profile.read", "inventory.product_profile.write", "projects.read", "projects.write", "projects.remove", "projects.removed_history", "build_configurations.read", "build_configurations.create", "bom.evaluate", "artifacts.version", "offers.compare", "events.subscribe", ...(service.makerWorkflows.supports() ? ["project_setup.guided", "requirement_offers.read", "requirement_offers.write", "build_plan.read", "build_plan.write", "workstreams.read", "workstreams.write", "bom.import"] : []), ...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : [])],
     approvalBoundaries: ["purchasing", "external publication", "permanent deletion", "credential changes", "printer control"]
   }));
   app.get(route("/openapi.json"), async () => jsonOpenApi(service.getVersion()));
   app.get(route("/docs"), async (_request, reply) => reply.type("text/html; charset=utf-8").send(`<!doctype html><title>BenchLedger API</title><p>OpenAPI: <a href="/api/v1/openapi.json">/api/v1/openapi.json</a></p>`));
 
-  app.get(route("/auth/access"), async () => readWorkspaceSecurity());
+  app.get(route("/auth/access"), async () => { const access = await readWorkspaceSecurity(); return teamState.enabled ? { ...access, mode: "password", passwordConfigured: true, teamEnabled: true } : access; });
   app.post(route("/auth/lan-session"), async (_request, reply) => {
     const access = await readWorkspaceSecurity();
+    if (teamState.enabled) throw new ApplicationError("forbidden", "Sign in with a named account. Shared LAN sessions are disabled.");
     if (access.mode !== "lan_open") return reply.code(403).send({ error: { code: "password_required", message: "Workspace password protection is enabled", correlationId: _request.correlationId } });
     const session = auth.issueSession(reply);
     return { ...access, authenticated: true, actor: "workspace-admin", csrfToken: session.csrf, expiresAt: new Date(session.expiresAt).toISOString(), credentialRevision: session.credentialRevision, correlationId: _request.correlationId };
@@ -1607,7 +1626,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const body = request.body as { password?: unknown };
     const valid = await verifyPasswordWithThrottle(async () => {
       const access = await readWorkspaceSecurity();
-      return access.mode === "password" && typeof body?.password === "string" && body.password.length >= 12 && body.password.length <= 512
+      return !teamState.enabled && access.mode === "password" && typeof body?.password === "string" && body.password.length >= 12 && body.password.length <= 512
         && await auth.verifyPassword(body.password as string);
     }, "login verification");
     if (!valid) {
@@ -1618,7 +1637,33 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const session = auth.issueSession(reply);
     return { authenticated: true, actor: "workspace-admin", csrfToken: session.csrf, expiresAt: new Date(session.expiresAt).toISOString(), credentialRevision: session.credentialRevision, correlationId: request.correlationId };
   });
+  app.post(route("/auth/member-login"), async (request, reply) => {
+    const key = request.ip; rateLimitWindow(passwordAttempts, key, "login");
+    const body = memberLoginSchema.safeParse(request.body); let member: TeamMember | null = null;
+    const valid = await verifyPasswordWithThrottle(async () => { member = await service.team.verifyMember(body.success ? body.data.username : "invalid-member", body.success ? body.data.password : "invalid-password"); return member !== null; }, "login verification");
+    if (!valid || !member) { recordFailedAttempt(passwordAttempts, key); return reply.code(401).send({ error: { code: "invalid_credentials", message: "Username or password is invalid", correlationId: request.correlationId } }); }
+    passwordAttempts.delete(key); const verified = member as TeamMember; const session = auth.issueSession(reply, `member:${verified.id}`, verified);
+    return { authenticated: true, actor: `member:${verified.id}`, csrfToken: session.csrf, expiresAt: new Date(session.expiresAt).toISOString() };
+  });
+  const adminSession = (request: FastifyRequest) => { const principal = requireScope(request, "admin", auth); if (principal.via !== "session" || principal.projectIds !== undefined) throw new ApplicationError("forbidden", "A workspace administrator browser session is required."); return principal; };
+  app.get(route("/team/directory"), async (request) => { const principal = requireScope(request, "read", auth); return service.team.directory(principal.projectIds ? [...principal.projectIds] : undefined); });
+  app.get(route("/team/members"), async (request) => { adminSession(request); return service.team.adminDirectory(requestContext(request)); });
+  app.post(route("/team/enable"), async (request, reply) => {
+    adminSession(request);
+    if (!(options.teamAccessPreview ?? process.env.BENCHLEDGER_TEAM_ACCESS_PREVIEW === "true")) throw new ApplicationError("forbidden", "Named-account switching is disabled for this release. Existing workspace access is unchanged.");
+    const current = await readWorkspaceSecurity(); const body = request.body as { currentPassword?: unknown };
+    const result = await runPasswordHashMutation(request.ip, async () => { if (current.mode === "password" && (typeof body?.currentPassword !== "string" || !await auth.verifyPassword(body.currentPassword))) throw new ApplicationError("forbidden", "Verify the current workspace password before switching to named accounts."); return service.team.enable(request.body, requestContext(request)); });
+    auth.clearSession(reply); return result;
+  });
+  app.post(route("/team/members"), async (request) => { adminSession(request); return runPasswordHashMutation(request.ip, () => service.team.create(request.body, requestContext(request))); });
+  app.patch(route("/team/members/:id"), async (request) => { adminSession(request); return runPasswordHashMutation(request.ip, () => service.team.update((request.params as { id: string }).id, request.body, requestContext(request))); });
+  app.post(route("/team/members/:id/password"), async (request, reply) => {
+    const principal = requirePrincipal(request); if (principal.via !== "session" || !principal.memberId) throw new ApplicationError("forbidden", "Sign in with a named account before changing member credentials.");
+    const id = (request.params as { id: string }).id; const result = await runPasswordHashMutation(request.ip, () => service.team.changePassword(id, request.body, requestContext(request)));
+    if (id === principal.memberId) auth.clearSession(reply); return result;
+  });
   const securityMutation = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (teamState.enabled) throw new ApplicationError("forbidden", "Named-account access is enabled. Manage member credentials in Team access; shared workspace credentials cannot be re-enabled.");
     if (demo) throw new ApplicationError("forbidden", "Workspace security settings are unavailable in the demo workspace");
     const principal = requirePrincipal(request);
     if (principal.source !== "ui" || principal.via !== "session" || principal.projectIds !== undefined || !auth.hasScope(principal, "admin")) throw new ApplicationError("forbidden", "Only an unscoped workspace administrator session may change security settings");
@@ -1684,9 +1729,9 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   app.patch(route("/auth/access"), securityMutation);
   app.post(route("/auth/security"), securityMutation);
   app.post(route("/auth/logout"), async (request, reply) => { requirePrincipal(request); auth.clearSession(reply); return { authenticated: false, correlationId: request.correlationId }; });
-  app.get(route("/auth/session"), async (request) => { const principal = requirePrincipal(request); return { authenticated: true, actor: principal.actor, source: principal.source, scopes: [...principal.scopes], projectIds: principal.projectIds ? [...principal.projectIds] : undefined }; });
+  app.get(route("/auth/session"), async (request) => { const principal = requirePrincipal(request); return { authenticated: true, actor: principal.actor, source: principal.source, scopes: [...principal.scopes], projectIds: principal.projectIds ? [...principal.projectIds] : undefined, ...(principal.memberId ? { memberId: principal.memberId, memberVersion: principal.memberVersion } : {}), teamEnabled: teamState.enabled }; });
 
-  app.get(route("/workspace"), async (request) => { requireScope(request, "read", auth); rejectScopedGlobalAccess(request); return workspaceSnapshot(service); });
+  app.get(route("/workspace"), async (request) => { const principal = requireScope(request, "read", auth); if (principal.via === "bearer") rejectScopedGlobalAccess(request); return workspaceSnapshot(service, principal.projectIds); });
   app.get(route("/catalog/products"), async (request) => {
     requireScope(request, "read", auth);
     return service.listCatalogProducts(parseCatalogQuery(request.query));

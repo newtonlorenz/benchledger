@@ -204,3 +204,11 @@ See [CHANGELOG.md](CHANGELOG.md) and the
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE).
+
+## Reviewed setup, sourcing and build planning
+
+Use maker templates or a mapped CSV to preview and create a project. Existing
+projects support reviewed requirement imports, supplier quotes without invented
+owned stock, repeated-part/plate plans and workstream progress. See
+[reviewed maker workflows](docs/maker-workflows.md) for entry points, limits,
+HTTP/MCP contracts and the separate named-account rollout boundary.

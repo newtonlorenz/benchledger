@@ -375,3 +375,11 @@ tool. The browser session mode described above does not add a browser-automation
 tool or bypass MCP bearer authentication.
 Offer links are stored as observations; the backend does not fetch them. Public
 publication and deployment are proposals that require explicit human approval.
+
+## Reviewed maker planning and sourcing
+
+The [maker workflow contract](maker-workflows.md) documents guided CSV/setup,
+requirement-bound quotes, immutable plate plans, workstreams and revision history.
+These operations reuse the shared application, expected versions and stable
+command keys. Planning and quote review never imply stock, purchasing or
+physical execution authority. Named-account activation remains gated off.

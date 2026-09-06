@@ -26,6 +26,8 @@ export interface AuthConfig {
   readonly workspacePasswordVerifier?: (password: string) => Promise<boolean>;
   /** Current durable credential revision, captured by the server host. */
   readonly credentialRevision?: () => number;
+  readonly sharedSessionsAllowed?: () => boolean;
+  readonly memberSession?: (id: string, version: number) => Principal | null;
 }
 
 const TOKEN_HASH_PATTERN = /^[a-f0-9]{64}$/u;
@@ -145,10 +147,14 @@ export interface Principal {
   readonly scopes: ReadonlySet<AuthScope>;
   readonly projectIds?: ReadonlySet<string>;
   readonly via: "session" | "bearer";
+  readonly memberId?: string;
+  readonly memberVersion?: number;
 }
 
 interface SessionPayload {
   readonly actor: string;
+  readonly memberId?: string;
+  readonly memberVersion?: number;
   readonly issuedAt: number;
   readonly expiresAt: number;
   readonly csrf: string;
@@ -198,7 +204,9 @@ function decodeSession(value: string, secret: string): SessionPayload | null {
     const parsed = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as Partial<SessionPayload>;
     if (typeof parsed.actor !== "string" || typeof parsed.issuedAt !== "number" || typeof parsed.expiresAt !== "number" || typeof parsed.csrf !== "string" || typeof parsed.credentialRevision !== "number" || !Number.isSafeInteger(parsed.credentialRevision) || parsed.credentialRevision < 1) return null;
     if (parsed.expiresAt <= Date.now()) return null;
-    return { actor: parsed.actor, issuedAt: parsed.issuedAt, expiresAt: parsed.expiresAt, csrf: parsed.csrf, credentialRevision: parsed.credentialRevision };
+    if ((parsed.memberId === undefined) !== (parsed.memberVersion === undefined)) return null;
+    if (parsed.memberId !== undefined && (typeof parsed.memberId !== "string" || !PROJECT_ID_PATTERN.test(parsed.memberId) || !Number.isSafeInteger(parsed.memberVersion) || parsed.memberVersion! < 1)) return null;
+    return { actor: parsed.actor, issuedAt: parsed.issuedAt, expiresAt: parsed.expiresAt, csrf: parsed.csrf, credentialRevision: parsed.credentialRevision, ...(parsed.memberId === undefined ? {} : { memberId: parsed.memberId, memberVersion: parsed.memberVersion! }) };
   } catch {
     return null;
   }
@@ -276,10 +284,10 @@ export class AuthManager {
     return false;
   }
 
-  issueSession(reply: FastifyReply, actor = "workspace-admin"): { readonly csrf: string; readonly expiresAt: number; readonly credentialRevision: number } {
+  issueSession(reply: FastifyReply, actor = "workspace-admin", member?: { id: string; version: number }): { readonly csrf: string; readonly expiresAt: number; readonly credentialRevision: number } {
     const now = Date.now();
     const csrf = randomBytes(24).toString("base64url");
-    const payload: SessionPayload = { actor, issuedAt: now, expiresAt: now + this.sessionTtlMs, csrf, credentialRevision: this.config.credentialRevision?.() ?? 1 };
+    const payload: SessionPayload = { actor, issuedAt: now, expiresAt: now + this.sessionTtlMs, csrf, credentialRevision: this.config.credentialRevision?.() ?? 1, ...(member ? { memberId: member.id, memberVersion: member.version } : {}) };
     const value = encodeSession(payload, this.config.sessionSecret);
     const secure = this.config.secureCookies ?? true;
     reply.setCookie(SESSION_COOKIE, value, {
@@ -313,6 +321,8 @@ export class AuthManager {
     if (!session) return null;
     const payload = decodeSession(session, this.config.sessionSecret);
     if (!payload) return null;
+    if (payload.memberId !== undefined) return this.config.memberSession?.(payload.memberId, payload.memberVersion!) ?? null;
+    if (this.config.sharedSessionsAllowed?.() === false) return null;
     if (payload.credentialRevision !== (this.config.credentialRevision?.() ?? 1)) return null;
     return { actor: payload.actor, source: "ui", scopes: new Set<AuthScope>(["read", "write", "admin"]), via: "session" };
   }

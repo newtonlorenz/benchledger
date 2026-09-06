@@ -7,6 +7,11 @@ first public release; all current work is under **Unreleased**.
 
 ### Added
 
+- Reviewed maker templates and CSV project setup, plus atomic append-only BOM imports
+- Requirement-bound supplier quotes, explicit fit review and currency-separated estimates
+- Versioned repeated-part/plate planning, workstream progress and revision history
+- HTTP/MCP parity and focused browser, DOM, persistence and recovery regressions
+
 - Project details/stage editing, full requirement correction and reversible removal history
 - Read-only JSON project briefs and spreadsheet-safe requirements CSV exports
 

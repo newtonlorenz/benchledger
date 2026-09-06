@@ -1,3 +1,5 @@
+import { TeamService } from "./team-service.js";
+import { MakerWorkflowService } from "./maker-workflows.js";
 import { changesReservedRequirement } from "@benchledger/api-contract";
 import type { UpdateBomLine } from "@benchledger/api-contract";
 import { createHash, randomUUID } from "node:crypto";
@@ -1144,7 +1146,9 @@ async function linkedProfile(
 }
 
 export class ApplicationService {
-  constructor(private readonly ports: ApplicationPorts, private readonly version = "0.1.0") {}
+  readonly makerWorkflows: MakerWorkflowService;
+  readonly team: TeamService;
+  constructor(private readonly ports: ApplicationPorts, private readonly version = "0.1.0") { this.makerWorkflows = new MakerWorkflowService(ports, this, (ctx, action, entityType, id, operation) => this.mutate(ctx, action, entityType, id, operation)); this.team = new TeamService(ports, this, (ctx, action, entityType, id, operation) => this.mutate(ctx, action, entityType, id, operation)); }
 
   getVersion(): string {
     return this.version;
@@ -1972,6 +1976,7 @@ export class ApplicationService {
       }
       for (const itemId of [line.itemId, ...line.alternatives.map((alternative) => alternative.itemId)].filter((value): value is string => value !== undefined)) {
         const item = inventory.find((candidate) => candidate.id === itemId);
+        if (item === undefined) fieldErrors.push({ path: `bomLines.${index}.itemId`, code: "inventory_not_found", message: "The selected inventory identifier does not exist. Clear it or select an existing item." });
         if (item?.kind === "printer") {
           fieldErrors.push({ path: `bomLines.${index}.itemId`, code: "printer_requirement_not_allowed", message: "Printers are selected through build configuration, not BOM requirements" });
         }
@@ -2220,20 +2225,23 @@ export class ApplicationService {
     });
   }
 
-  async createBomLine(revisionId: string, input: CreateBomLine | LegacyBomLineInput, ctx: RequestContext): Promise<Mutation<BomLine>> {
+  /** Internal shared validation for single writes and atomic reviewed imports. No mutation or event occurs here. */
+  async prepareBomLine(revisionId: string, input: CreateBomLine | LegacyBomLineInput): Promise<CreateBomLine> {
     const parsed = canonicalizeBomLineWrite(legacyCreateBomLineSchema.parse(input) as CreateBomLine);
+    await this.assertProjectActiveFromRevision(requireId(revisionId, "revision id"));
+    if (bomRequirementRequestsPrinter(parsed)) throw new ApplicationError("validation", "Printers are selected through build configuration, not BOM requirements");
+    for (const itemId of [parsed.itemId, ...parsed.alternatives.map((alternative) => alternative.itemId)].filter((value): value is string => value !== undefined)) {
+      const item = await this.ports.inventory.getItem(itemId);
+      if (item?.kind === "printer") throw new ApplicationError("validation", "Printers are selected through build configuration, not BOM requirements");
+    }
+    return parsed;
+  }
+
+  async createBomLine(revisionId: string, input: CreateBomLine | LegacyBomLineInput, ctx: RequestContext): Promise<Mutation<BomLine>> {
+    const initial = canonicalizeBomLineWrite(legacyCreateBomLineSchema.parse(input) as CreateBomLine);
     const parentId = requireId(revisionId, "revision id");
-    return this.mutate(ctx, "project.bom_line.create", "bom_line", parsed.id ?? "pending", async () => {
-      await this.assertProjectActiveFromRevision(parentId);
-      if (bomRequirementRequestsPrinter(parsed)) {
-        throw new ApplicationError("validation", "Printers are selected through build configuration, not BOM requirements");
-      }
-      for (const itemId of [parsed.itemId, ...parsed.alternatives.map((alternative) => alternative.itemId)].filter((value): value is string => value !== undefined)) {
-        const item = await this.ports.inventory.getItem(itemId);
-        if (item?.kind === "printer") {
-          throw new ApplicationError("validation", "Printers are selected through build configuration, not BOM requirements");
-        }
-      }
+    return this.mutate(ctx, "project.bom_line.create", "bom_line", initial.id ?? "pending", async () => {
+      const parsed = await this.prepareBomLine(parentId, initial);
       const line = await this.ports.projects.createBomLine(parentId, parsed, ctx);
       return { value: line, entityId: line.id, version: line.version };
     });

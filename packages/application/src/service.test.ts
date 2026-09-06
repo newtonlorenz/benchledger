@@ -1704,7 +1704,7 @@ describe("ApplicationService", () => {
       project: { id: "setup-conversion-project", name: "Converted setup", status: "planned" },
       revision: { id: "setup-conversion-revision", name: "Initial", status: "concept" },
       workItems: [],
-      bomLines: [{ localRef: "led-line", id: "setup-conversion-line", name: "LEDs", role: "consumed", itemId: "missing-led", requiredQuantity: 15, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: conversion }] }],
+      bomLines: [{ localRef: "led-line", id: "setup-conversion-line", name: "LEDs", role: "consumed", requiredQuantity: 15, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: conversion }] }],
       reservations: [{ localRef: "led-reservation", bomLineLocalRef: "led-line", id: "setup-conversion-reservation", itemId: setItem.id, quantity: 2, unit: "set" }],
     }, context);
 
@@ -1728,7 +1728,7 @@ describe("ApplicationService", () => {
       project: { id: "setup-commit-project", name: "Converted setup", status: "planned" },
       revision: { id: "setup-commit-revision", name: "Initial", status: "concept" },
       workItems: [],
-      bomLines: [{ localRef: "led-line", id: "setup-commit-line", name: "LEDs", role: "consumed", itemId: "missing-led", requiredQuantity: 15, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: conversion }] }],
+      bomLines: [{ localRef: "led-line", id: "setup-commit-line", name: "LEDs", role: "consumed", requiredQuantity: 15, unit: "each", optional: false, constraints: {}, alternatives: [{ itemId: setItem.id, compatible: "confirmed", quantityConversion: conversion }] }],
       reservations: [{ localRef: "led-reservation", bomLineLocalRef: "led-line", id: "setup-commit-reservation", itemId: setItem.id, quantity: 2, unit: "set" }],
     }, context);
     const unconfirmed = { ...setItem, evidence: { state: "delivered_uncounted" as const } };

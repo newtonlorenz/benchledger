@@ -1,3 +1,5 @@
+import { MAKER_TOOL_DEFINITIONS, parseMakerTool } from "./maker-workflows.js";
+import type { MakerToolName } from "./maker-workflows.js";
 import { CAPABILITY_DOCUMENT, LEGACY_TRANSFER_DEFINITIONS, RESOURCE_TEMPLATES, RESOURCES, TOOL_DEFINITIONS } from "./capabilities.js";
 import { McpAdapterError, mapBackendError } from "./errors.js";
 import {
@@ -428,6 +430,7 @@ export class McpAdapter {
     this.maxResourceBytes = options.maxResourceBytes ?? DEFAULT_RESOURCE_BYTES;
     this.definitions = new Map([...TOOL_DEFINITIONS, ...LEGACY_TRANSFER_DEFINITIONS].map((definition) => [definition.name, definition]));
     this.handlers = new Map<string, ToolHandler>([
+      ...MAKER_TOOL_DEFINITIONS.map((definition): [string, ToolHandler] => [definition.name, (input, context) => { if (!this.backend.makerWorkflows) throw new McpAdapterError("BACKEND_ERROR", "This runtime does not support maker workflows."); const name = definition.name as MakerToolName; return this.backend.makerWorkflows(name, parseMakerTool(name, input), context); }]),
       ["read_inventory_summary", (input, context) => this.backend.inventory.summary(parsePageInput(input), context)],
       ["list_inventory", (input, context) => this.backend.inventory.list(inventoryList(input), context)],
       ["read_inventory_item", (input, context) => this.backend.inventory.get({ itemId: singleId(input, "itemId") }, context)],

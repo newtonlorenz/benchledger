@@ -172,3 +172,12 @@ container after the command completes.
 
 Do not use broad Docker pruning, daemon restart, host reboot, or unrelated
 Compose shutdown as part of deployment.
+
+## Maker workflow rollout
+
+The reviewed maker release adds workflow/history tables without replacing existing
+records. Keep named-account activation disabled: do not set
+`BENCHLEDGER_TEAM_ACCESS_PREVIEW=true` for this rollout. The existing workspace
+access mode and credentials remain authoritative. Preserve a verified private
+pre-deployment data/configuration backup and the previous immutable image.
+See [maker workflows](maker-workflows.md) for shipped and gated functionality.

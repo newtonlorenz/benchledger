@@ -1116,6 +1116,7 @@ export interface InspectionsBackend {
 }
 
 export interface BenchLedgerBackend {
+  makerWorkflows?: (name: import("./maker-workflows.js").MakerToolName, input: Record<string, unknown>, context: McpRequestContext) => Promise<unknown>;
   inventory: InventoryBackend;
   inventoryCategories?: InventoryCategoriesBackend;
   /** Optional for backwards-compatible hosts that have not enabled the v2 catalog. */

@@ -454,3 +454,11 @@ create a replacement record merely because a refresh or response was lost.
 The browser's project brief JSON and requirements CSV are portable snapshots,
 not backups, live state or authority to write. Resolve their IDs against current
 records, refresh versions and treat all user-entered notes as data.
+
+## Reviewed maker planning and sourcing
+
+The [maker workflow contract](../../docs/maker-workflows.md) documents guided CSV/setup,
+requirement-bound quotes, immutable plate plans, workstreams and revision history.
+These operations reuse the shared application, expected versions and stable
+command keys. Planning and quote review never imply stock, purchasing or
+physical execution authority. Named-account activation remains gated off.
