@@ -1,3 +1,7 @@
+import { TeamService } from "./team-service.js";
+import { MakerWorkflowService } from "./maker-workflows.js";
+import { changesReservedRequirement } from "@benchledger/api-contract";
+import type { UpdateBomLine } from "@benchledger/api-contract";
 import { createHash, randomUUID } from "node:crypto";
 import {
   bomAlternativeSchema, bomGapSchema, bomLineSchema, bomLineRoleSchema, bomSpecificationDecisionSchema, bomSpecificationSchema, createInventoryCategorySchema, createInventoryItemSchema, createOfferSchema,
@@ -97,7 +101,7 @@ const legacyCreateBomLineSchema = z.object({
 }).strict();
 const legacyUpdateBomLineSchema = z.object({
   name: z.string().min(1).max(240).optional(),
-  itemId: idSchema.optional(),
+  itemId: idSchema.nullable().optional(),
   role: bomLineRoleSchema.nullable().optional(),
   requiredQuantity: z.number().finite().positive().optional(),
   unit: quantityUnitSchema.optional(),
@@ -1142,7 +1146,9 @@ async function linkedProfile(
 }
 
 export class ApplicationService {
-  constructor(private readonly ports: ApplicationPorts, private readonly version = "0.1.0") {}
+  readonly makerWorkflows: MakerWorkflowService;
+  readonly team: TeamService;
+  constructor(private readonly ports: ApplicationPorts, private readonly version = "0.1.0") { this.makerWorkflows = new MakerWorkflowService(ports, this, (ctx, action, entityType, id, operation) => this.mutate(ctx, action, entityType, id, operation)); this.team = new TeamService(ports, this, (ctx, action, entityType, id, operation) => this.mutate(ctx, action, entityType, id, operation)); }
 
   getVersion(): string {
     return this.version;
@@ -1970,6 +1976,7 @@ export class ApplicationService {
       }
       for (const itemId of [line.itemId, ...line.alternatives.map((alternative) => alternative.itemId)].filter((value): value is string => value !== undefined)) {
         const item = inventory.find((candidate) => candidate.id === itemId);
+        if (item === undefined) fieldErrors.push({ path: `bomLines.${index}.itemId`, code: "inventory_not_found", message: "The selected inventory identifier does not exist. Clear it or select an existing item." });
         if (item?.kind === "printer") {
           fieldErrors.push({ path: `bomLines.${index}.itemId`, code: "printer_requirement_not_allowed", message: "Printers are selected through build configuration, not BOM requirements" });
         }
@@ -2218,20 +2225,23 @@ export class ApplicationService {
     });
   }
 
-  async createBomLine(revisionId: string, input: CreateBomLine | LegacyBomLineInput, ctx: RequestContext): Promise<Mutation<BomLine>> {
+  /** Internal shared validation for single writes and atomic reviewed imports. No mutation or event occurs here. */
+  async prepareBomLine(revisionId: string, input: CreateBomLine | LegacyBomLineInput): Promise<CreateBomLine> {
     const parsed = canonicalizeBomLineWrite(legacyCreateBomLineSchema.parse(input) as CreateBomLine);
+    await this.assertProjectActiveFromRevision(requireId(revisionId, "revision id"));
+    if (bomRequirementRequestsPrinter(parsed)) throw new ApplicationError("validation", "Printers are selected through build configuration, not BOM requirements");
+    for (const itemId of [parsed.itemId, ...parsed.alternatives.map((alternative) => alternative.itemId)].filter((value): value is string => value !== undefined)) {
+      const item = await this.ports.inventory.getItem(itemId);
+      if (item?.kind === "printer") throw new ApplicationError("validation", "Printers are selected through build configuration, not BOM requirements");
+    }
+    return parsed;
+  }
+
+  async createBomLine(revisionId: string, input: CreateBomLine | LegacyBomLineInput, ctx: RequestContext): Promise<Mutation<BomLine>> {
+    const initial = canonicalizeBomLineWrite(legacyCreateBomLineSchema.parse(input) as CreateBomLine);
     const parentId = requireId(revisionId, "revision id");
-    return this.mutate(ctx, "project.bom_line.create", "bom_line", parsed.id ?? "pending", async () => {
-      await this.assertProjectActiveFromRevision(parentId);
-      if (bomRequirementRequestsPrinter(parsed)) {
-        throw new ApplicationError("validation", "Printers are selected through build configuration, not BOM requirements");
-      }
-      for (const itemId of [parsed.itemId, ...parsed.alternatives.map((alternative) => alternative.itemId)].filter((value): value is string => value !== undefined)) {
-        const item = await this.ports.inventory.getItem(itemId);
-        if (item?.kind === "printer") {
-          throw new ApplicationError("validation", "Printers are selected through build configuration, not BOM requirements");
-        }
-      }
+    return this.mutate(ctx, "project.bom_line.create", "bom_line", initial.id ?? "pending", async () => {
+      const parsed = await this.prepareBomLine(parentId, initial);
       const line = await this.ports.projects.createBomLine(parentId, parsed, ctx);
       return { value: line, entityId: line.id, version: line.version };
     });
@@ -2239,20 +2249,23 @@ export class ApplicationService {
 
   async updateBomLine(id: string, input: unknown, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<BomLine>> {
     const lineId = requireId(id, "BOM line id");
-    const parsed = legacyUpdateBomLineSchema.parse(input) as Partial<CreateBomLine>;
+    const parsed = legacyUpdateBomLineSchema.parse(input) as UpdateBomLine;
     return this.mutate(ctx, "project.bom_line.update", "bom_line", lineId, async () => {
       const existing = await this.ports.projects.getBomLine(lineId);
       if (existing === null) throw notFound("BOM line", lineId);
       await this.assertProjectActiveFromRevision(existing.revisionId);
-      if (Object.prototype.hasOwnProperty.call(parsed, "role") && (parsed.role === "reusable" || (existing.role === "consumed" && parsed.role !== "consumed"))) {
+      if (changesReservedRequirement(existing, parsed)) {
         const hasActiveReservation = (await this.ports.projects.listReservations(existing.revisionId))
           .some((reservation) => reservation.lineId === lineId && reservation.status === "active");
-        if (hasActiveReservation) throw conflict("Release or reconcile active reservations before changing this requirement from a part or material", { lineId });
+        if (hasActiveReservation) throw conflict("Release or reconcile active reservations before changing this requirement’s stock, quantity, unit or use", { lineId });
       }
       const merged = canonicalizeBomLineWrite({
         ...existing,
         ...parsed,
-        ...(parsed.constraints === undefined ? { constraints: existing.constraints } : {}),
+        name: parsed.name ?? existing.name,
+        itemId: parsed.itemId === null ? undefined : parsed.itemId ?? existing.itemId,
+        constraints: parsed.constraints ?? existing.constraints,
+        alternatives: parsed.alternatives ?? existing.alternatives,
       });
       if (bomRequirementRequestsPrinter(merged)) {
         throw new ApplicationError("validation", "Printers are selected through build configuration, not BOM requirements");

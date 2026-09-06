@@ -1,7 +1,8 @@
 # Product roadmap
 
-This roadmap records intentionally deferred work. It is not part of the first
-private LAN deployment gate.
+This roadmap distinguishes delivered capability from intentionally deferred work.
+It is not deployment evidence. The dated [CX review](reviews/2026-09-06-customer-experience.md)
+records the latest core-workflow assessment and remaining product gaps.
 
 The consolidated product outcome and simplified beginner-to-expert experience are
 defined in [`maker-project-management-prd.md`](maker-project-management-prd.md).
@@ -91,7 +92,11 @@ preview/commit patterns; do not create a parallel MCP or web implementation.
 
 - [ ] `BL-AW-006` → `REQ-006`: normalized, ranked structured inventory search,
   including LED, hyphenated heat-shrink, and multi-token PETG/manufacturer
-  fixtures. **Proposed.**
+  fixtures. **Partial: shared discovery normalisation is implemented.** Words
+  match in any order across indexed fields; punctuation and accents are
+  normalised consistently in the durable, demo and browser-sample adapters.
+  Search never changes compatibility or stock evidence. Ranked matching and
+  broader structured search remain separate work.
 - [ ] `BL-AW-007` → `REQ-007`: distinguish missing stock from missing
   specification with `specify_first` decisions and shopping exclusions.
   **Partially implemented on the current feature branch:** BOM requirements can
@@ -139,8 +144,10 @@ output; package/unit migrations precede reliable component reservations.
   one-file begin/write/finalize upload with an explicit project/work-item scope
   and file role; generic MCP transfer tools remain fail-closed. Exact filters do
   not mix project files with work-item files; the all-project view preserves
-  legacy/unbound visibility. Atomic 50-file batch transfers and download-to-host
-  remain deferred.
+  legacy/unbound visibility. Browser downloads and the trusted single-file
+  host helper are implemented with integrity checks and explicit revision
+  scope. Generic MCP does not transfer bytes or expose local paths. Atomic
+  50-file batch transfer remains deferred.
 
 Dependency gate: bind build-plan files only to the secure staging boundary and
 retain human approval for physical statuses; never imply that a print occurred.
@@ -250,66 +257,49 @@ releases should retain the selected configuration as versioned evidence.
 
 ### Self-service password change
 
-Status: proposed.
+Status: implemented. Settings supports the browser access mode and password
+changes, revokes existing sessions and handles ambiguous responses. This does
+not grant MCP access or expose credentials; scoped bearer authentication remains
+independent. See the workspace-access browser and server security regressions.
 
-Add a password-change action in Settings that verifies the current password,
-validates and confirms the replacement, rotates it through a supported credential
-store, and invalidates other active sessions. The UI must never expose or retain a
-plaintext password or hash. Deployments whose password is owned by an external
-secret store should show an explicit administrator rotation path instead of
-claiming that an in-app change succeeded.
+### Discoverable project creation and correction
 
-### Discoverable project creation
-
-Status: partially implemented. The project API and Workbench “New project” dialog
-exist, but project creation is not discoverable enough from the Projects journey.
-
-Make “New project” a clear primary action on the Projects list and empty state as
-well as the Workbench. After creation, open the new project and its initial
-revision so the next action is obvious. Preserve entered values on failure and
-provide a specific retry path.
+Status: implemented. Both empty and populated Projects views offer New project,
+open its initial revision and preserve rejected drafts. Project name, brief and
+stage can be edited without changing manufacturing evidence. Requirements can
+be corrected, removed without deleting history and restored. Active reservations
+protect their planning assumptions. Acknowledged saves survive failed readiness
+refreshes; unchanged retries reuse their original command identity.
 
 ### Managed categories and subcategories
 
-Status: proposed. Inventory creation currently starts with a fixed, flat category
-picker.
+Status: implemented. Settings manages stable category identities and one level
+of subcategories, including rename, order and guarded archive operations.
+Beginner inventory entry derives its category from the item type; technical
+mode retains an explicit selector. Existing evidence and history remain intact.
 
-Add a Settings area for creating, renaming, ordering, nesting, and archiving
-inventory categories and one level of subcategories. Use stable identifiers so a
-rename does not rewrite inventory or evidence history. Prevent destructive removal
-while records still use a category, or require an explicit reviewed migration.
-The add-inventory flow must always require a category and offer the relevant
-subcategory when one exists.
+### Curated printer and filament catalogue
 
-### Curated printer and filament catalog
-
-Status: proposed catalog content; exact printer/filament product records and local
-product creation are implemented.
-
-Ship a versioned starter catalog covering the major current 3D-printer
-manufacturers and models plus major filament brands and product lines. Printer
-selection should start with manufacturer, model, and exact variant. Filament
-selection should progressively choose brand/manufacturer, product line, material
-family and subtype, colour and manufacturer code, diameter, and spool/net mass,
-with the remaining typical spool details available before saving. Keep an
-“unlisted/custom product” path. A preloaded catalog record is a reusable product
-identity only; it never proves that the user owns the item or that stock is
-currently available.
+Status: implemented foundation. Versioned starter records, exact identities,
+physical profiles and an unlisted/manual-product path are available. Catalogue
+identity does not establish ownership or usable stock. Continued source-led
+catalogue coverage and maintenance are ongoing product work, not a completed
+claim of universal manufacturer coverage.
 
 ### Scalable inventory management
 
-Status: proposed for the web UI. The application and MCP layers already expose
-bounded cursor pagination.
+Status: implemented. Inventory has server-backed pagination, stable query and
+filter state, row selection and reviewed descriptive bulk edits. Quantity changes
+remain explicit stock events. Shared multi-word, punctuation- and accent-aware
+search improves discovery without weakening exact matching or evidence rules.
 
-Add server-backed pagination to Inventory with an explicit page size, next/previous
-controls, result count, and stable search/filter state. Add row selection and a
-reviewed bulk-edit flow for descriptive fields such as category, subcategory,
-location, condition, and tags. Quantity changes must remain explicit stock events,
-and bulk actions must not overwrite append-only evidence or audit history.
+### Read-only project handoff
 
-Simplify the default Inventory page by removing the summary bar for tracked items,
-printers, filaments, and electronics. Remove the “Evidence source” table column;
-retain provenance and evidence state in the item detail and expert/audit views.
+Status: implemented for the browser. Export requirements as spreadsheet-safe CSV
+or a versioned JSON project brief containing IDs, observed versions and file
+metadata. Exports are snapshots, not backups or import templates. Agents must
+refresh current records and permissions before acting; no command authority or
+file bytes are embedded in the handoff. Native bulk import remains deferred.
 
 ### No-key online item lookup
 

@@ -7,6 +7,14 @@ first public release; all current work is under **Unreleased**.
 
 ### Added
 
+- Reviewed maker templates and CSV project setup, plus atomic append-only BOM imports
+- Requirement-bound supplier quotes, explicit fit review and currency-separated estimates
+- Versioned repeated-part/plate planning, workstream progress and revision history
+- HTTP/MCP parity and focused browser, DOM, persistence and recovery regressions
+
+- Project details/stage editing, full requirement correction and reversible removal history
+- Read-only JSON project briefs and spreadsheet-safe requirements CSV exports
+
 - Integrity-checked browser downloads and an explicit-revision host file-transfer
   helper with project-scoped access, redirect rejection and no download overwrites
 
@@ -19,6 +27,13 @@ first public release; all current work is under **Unreleased**.
 - LAN deployment, backup/restore, privacy scanning, and public-project community files
 
 ### Changed
+
+- Search and decision-state filtering for larger requirement lists without changing the underlying plan
+- Shared multi-word, accent- and punctuation-aware inventory discovery
+- Explicit selected-item clearing and project-scoped HTTP requirement corrections
+- Reserved planning fields now share one application/storage guard
+- Acknowledged requirement saves survive failed readiness refreshes; ambiguous retries keep their command identity
+- Removed the duplicate undecided build-approach card from project pages
 
 - Beginner requirements can reuse owned stock without enabling technical mode
 - Project next actions lead directly to setup, requirements and shopping

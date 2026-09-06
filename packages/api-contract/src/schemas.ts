@@ -620,7 +620,7 @@ const createBomLineShape = bomLineShape.pick({
   constraints: true, alternatives: true, notes: true
 }).extend({ id: idSchema.optional() }).strict();
 export const createBomLineSchema = createBomLineShape;
-export const updateBomLineSchema = createBomLineShape.omit({ id: true }).partial().strict();
+export const updateBomLineSchema = createBomLineShape.omit({ id: true }).partial().extend({ itemId: idSchema.nullable().optional() }).strict();
 
 /**
  * Bounded, review-first project graph setup. The local references are

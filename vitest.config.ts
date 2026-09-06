@@ -1,6 +1,10 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  // Exercise the shared application source in integration tests, rather than
+  // its last compiled workspace copy. Build/typecheck retain package boundaries.
+  resolve: { alias: [{ find: /^@benchledger\/application$/u, replacement: fileURLToPath(new URL("./packages/application/src/index.ts", import.meta.url)) }] },
   test: {
     include: ["apps/**/*.test.ts", "apps/**/*.test.tsx", "packages/**/*.test.ts"],
     coverage: {
@@ -28,8 +32,8 @@ export default defineConfig({
       exclude: [
         "apps/server/src/main.ts",
         // App.tsx and main.tsx are browser lifecycle/bootstrap surfaces. Their
-        // DOM focus behavior is covered by Playwright; unit coverage remains
-        // intentionally Node-only so web tests do not need a DOM dependency.
+        // DOM focus behavior is covered by Playwright. Focused workflow component
+        // tests opt into jsdom; other unit suites retain the Node environment.
         "apps/web/src/App.tsx",
         "apps/web/src/main.tsx",
         "**/*.test.ts",

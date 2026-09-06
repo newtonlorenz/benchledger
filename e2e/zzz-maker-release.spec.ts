@@ -1,0 +1,71 @@
+import { test, expect, type Page } from "@playwright/test";
+async function login(page: Page) {
+  await page.goto("/"); await page.getByLabel("Workspace password").fill("demo-password-please-change"); await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "What are you making?", exact: true })).toBeVisible();
+  if ((page.viewportSize()?.width ?? 1440) < 801) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
+  await page.getByRole("button", { name: /^Projects/u }).click();
+}
+async function guided(page: Page, name: string) {
+  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await page.getByRole("button", { name: "Use a template or import a BOM", exact: true }).click();
+  await page.getByLabel("Guided project name").fill(name); await page.getByLabel("Guided project goal").fill("Synthetic acceptance of reviewed maker requirements.");
+  await page.getByLabel("Guided build approach").selectOption("printed");
+  await page.getByText("Import requirements CSV", { exact: true }).click();
+  await page.getByLabel("BOM CSV text").fill("name,quantity,unit\nPrinted bracket,5,each\nM3 mounting screw,7,each");
+  await page.getByRole("button", { name: "Review CSV mapping", exact: true }).click();
+  await page.getByRole("button", { name: "Use mapped requirements in draft", exact: true }).click();
+  await page.getByLabel("Setup workstreams").fill("Design review\nAssembly");
+  await page.getByRole("button", { name: "Preview complete project", exact: true }).click();
+  await expect(page.getByRole("heading", { name: `Review ${name}`, exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Create reviewed project", exact: true }).click();
+  await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+}
+for (const width of [1440, 390]) test(`reviewed setup, append and quotes are usable at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 }); await login(page); await guided(page, `Release workshop ${width}`);
+  await expect(page.locator(".bom-row")).toHaveCount(2);
+  const inventoryBefore = await (await page.request.get("/api/v1/inventory")).json();
+  await page.getByText("Import requirements from CSV", { exact: true }).click();
+  await page.getByLabel("Requirements CSV text").fill("name,qty,unit\nReview spacer,2,each");
+  await page.getByRole("button", { name: "Map import columns", exact: true }).click();
+  await page.getByRole("button", { name: "Preview requirement append", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Review 1 new requirements", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Confirm append requirements", exact: true }).click();
+  await expect(page.locator(".bom-row")).toHaveCount(3);
+  await page.getByRole("tab", { name: /^Shopping list/u }).click();
+  await page.getByText("Supplier quotes for requirements", { exact: true }).click();
+  const row = page.locator(".sourcing-requirement").filter({ has: page.getByRole("heading", { name: "M3 mounting screw", exact: true }) });
+  await row.getByRole("button", { name: "Record quote for M3 mounting screw", exact: true }).click();
+  await row.getByLabel("Supplier", { exact: true }).fill("Synthetic supplier"); await row.getByLabel("Supplier source URL").fill("https://supplier.example/fasteners");
+  await row.getByLabel("Quantity per pack", { exact: true }).fill("4"); await row.getByLabel("Pack price", { exact: true }).fill("2.50");
+  await row.getByLabel("Shipping for this quote, blank if unknown").fill("2.00"); await row.getByLabel("Quoted tax included").selectOption("yes");
+  await row.getByRole("button", { name: "Save supplier observation", exact: true }).click();
+  await row.getByLabel("I checked that this quoted item meets the current requirement").check(); await row.getByRole("button", { name: "Use reviewed quote", exact: true }).click();
+  await expect(page.locator(".sourcing-totals")).toContainText("€7.00");
+  expect(await (await page.request.get("/api/v1/inventory")).json()).toEqual(inventoryBefore);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.reload(); await page.getByText("Supplier quotes for requirements", { exact: true }).click(); await expect(page.locator(".sourcing-totals")).toContainText("€7.00");
+});
+test("a maker saves repeated plate plans and workstream progress without consuming stock", async ({ page }) => {
+  await login(page); await guided(page, "Release repeated plates");
+  await page.getByText("Parts, plates and workstreams", { exact: true }).click();
+  await page.getByRole("button", { name: "Create build plan", exact: true }).click();
+  await page.getByRole("button", { name: "Add build part", exact: true }).click();
+  await page.getByLabel("Build part 1 name").fill("Bracket"); await page.getByLabel("Build part 1 quantity").fill("5");
+  await page.getByRole("button", { name: "Add plate layout", exact: true }).click();
+  await page.getByLabel("Plate 1 runs").fill("2"); await page.getByLabel("Plate 1 quantity Bracket").fill("3");
+  await page.getByRole("button", { name: "Review build plan", exact: true }).click();
+  await page.getByRole("button", { name: "Save planning snapshot", exact: true }).click();
+  const coverage = page.getByRole("table").filter({ has: page.getByText("Part coverage", { exact: true }) });
+  await expect(coverage).toContainText("Bracket"); await expect(coverage.getByRole("row").last()).toContainText("6");
+  await page.getByRole("button", { name: "Add workstream", exact: true }).click();
+  await page.getByLabel("Workstream name", { exact: true }).fill("Fit validation"); await page.getByRole("button", { name: "Create workstream", exact: true }).click();
+  await page.locator(".workstream-row > summary").filter({ hasText: "Fit validation" }).click();
+  await page.getByLabel("Status for Fit validation", { exact: true }).selectOption("in_progress");
+  await page.locator(".workstream-row").filter({ hasText: "Fit validation" }).getByRole("button", { name: "Save workstream progress", exact: true }).click();
+  await expect(page.locator(".workstream-row > summary").filter({ hasText: "Fit validation" })).toContainText("in progress");
+  await page.reload(); await page.getByText("Parts, plates and workstreams", { exact: true }).click();
+  await expect(page.locator(".build-planning")).toContainText("2 planned runs");
+  await page.getByText("Project revision history", { exact: true }).click();
+  await page.getByRole("button", { name: /Read revision 1:/u }).click();
+  await expect(page.getByRole("region", { name: "Read-only revision snapshot" })).toContainText("2 requirements");
+});

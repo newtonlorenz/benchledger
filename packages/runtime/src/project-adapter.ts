@@ -1,3 +1,5 @@
+import { changesReservedRequirement } from "@benchledger/api-contract";
+import type { UpdateBomLine } from "@benchledger/api-contract";
 import { createBomLine, createId, createProject, createProjectRevision, createWorkItem, createWorkItemRevision, DomainError } from "@benchledger/domain";
 import { bomSpecificationSchema } from "@benchledger/api-contract";
 import type {
@@ -424,6 +426,12 @@ export class ProductionProjectAdapter implements ProjectPort {
     });
   }
 
+  async listProjectRevisions(projectId: string): Promise<readonly ApiProjectRevision[]> {
+    return attempt(() => this.projects.listRevisions(projectId).map((revision) => apiProjectRevisionFromNative(revision, this.state.getVersion(PROJECT_REVISION, revision.id))));
+  }
+  async listWorkItemRevisions(workItemId: string): Promise<readonly ApiWorkItemRevision[]> {
+    return attempt(() => { const work = this.projects.getWorkItem(workItemId); if (!work) throw new ApplicationError("not_found", "Workstream not found"); return this.projects.listWorkItemRevisions(workItemId).map((revision) => apiWorkItemRevisionFromNative(revision, work.projectId, this.state.getVersion(WORK_ITEM_REVISION, revision.id))); });
+  }
   async getProjectRevision(id: string): Promise<ApiProjectRevision | null> {
     return attempt(() => {
       const found = this.findProjectRevision(id);
@@ -515,16 +523,16 @@ export class ProductionProjectAdapter implements ProjectPort {
     });
   }
 
-  async updateBomLine(id: string, input: Partial<CreateBomLine>, expectedVersion: number | undefined, _ctx: RequestContext): Promise<ApiBomLine> {
+  async updateBomLine(id: string, input: UpdateBomLine, expectedVersion: number | undefined, _ctx: RequestContext): Promise<ApiBomLine> {
     return attempt(() => {
       const native = this.boms.getLine(id);
       if (native === undefined) throw new DomainError("bom_line_not_found", `BOM line ${id} does not exist`);
       return this.database.transaction(() => {
         this.state.ensureVersion(BOM, id, expectedVersion);
         const current = this.toApiBom(native);
-        if (Object.prototype.hasOwnProperty.call(input, "role") && (input.role === "reusable" || (current.role === "consumed" && input.role !== "consumed"))
+        if (changesReservedRequirement(current, input)
           && this.reservations.list().some((reservation) => reservation.bomLineId === id && reservation.status === "active")) {
-          throw new ApplicationError("conflict", "Release or reconcile active reservations before changing this requirement from a part or material", { lineId: id });
+          throw new ApplicationError("conflict", "Release or reconcile active reservations before changing this requirement’s stock, quantity, unit or use", { lineId: id });
         }
         const optional = input.optional ?? current.optional;
         const alternatives = canonicalBomAlternatives(input.alternatives ?? current.alternatives);
@@ -532,7 +540,7 @@ export class ProductionProjectAdapter implements ProjectPort {
         if (constraints.kind === "printer") {
           throw new ApplicationError("validation", "Printers are selected through build configuration, not BOM requirements");
         }
-        for (const itemId of [input.itemId ?? current.itemId, ...alternatives.map((alternative) => alternative.itemId)].filter((value): value is string => value !== undefined)) {
+        for (const itemId of [input.itemId === null ? undefined : input.itemId ?? current.itemId, ...alternatives.map((alternative) => alternative.itemId)].filter((value): value is string => value !== undefined)) {
           const item = this.inventory.native(itemId);
           if (item !== undefined && item.category === "printer") {
             throw new ApplicationError("validation", "Printers are selected through build configuration, not BOM requirements");
@@ -549,7 +557,7 @@ export class ProductionProjectAdapter implements ProjectPort {
           : { role: input.role }),
         required: !optional,
           optional,
-          ...(input.itemId === undefined && native.itemId === undefined ? {} : { itemId: input.itemId ?? native.itemId }),
+          ...(input.itemId === null ? { itemId: undefined } : input.itemId === undefined && native.itemId === undefined ? {} : { itemId: input.itemId ?? native.itemId }),
           alternativeItemIds: alternatives.map((alternative) => alternative.itemId),
           constraints: nativeConstraintsFromApi(constraints),
           ...(input.notes === undefined && native.notes === undefined ? {} : { notes: input.notes ?? native.notes })

@@ -1,3 +1,4 @@
+import { invokeMakerTool } from "./maker-workflows.js";
 import { createHash, randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { ApplicationError, inventoryBulkUpdateFingerprint, type ApplicationService, type Mutation, type Page as AppPage, type RequestContext } from "@benchledger/application";
@@ -240,6 +241,7 @@ export function createApplicationBackend(service: ApplicationService, options: P
   const listRemovedProjectsPageCommand = (service as unknown as { listRemovedProjectPage?: ApplicationService["listRemovedProjectPage"] }).listRemovedProjectPage;
   const readRemovedProjectHistoryCommand = (service as unknown as { readRemovedProjectHistory?: ApplicationService["readRemovedProjectHistory"] }).readRemovedProjectHistory;
   return {
+    makerWorkflows: (name, input, context) => invokeMakerTool(service, name, input, context),
     catalog: {
       search: async (input: CatalogProductSearchInput) => {
         const result = await service.listCatalogProducts({

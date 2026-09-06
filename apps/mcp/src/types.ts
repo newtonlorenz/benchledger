@@ -710,7 +710,7 @@ export interface BomLineUpdateInput {
   unit?: Quantity["unit"];
   requirement?: BomLine["requirement"];
   role?: BomLine["role"];
-  itemId?: string;
+  itemId?: string | null;
   alternatives?: readonly BomAlternative[];
   /** @deprecated Use alternatives when compatibility state or reason matters. */
   compatibleItemIds?: readonly string[];
@@ -1116,6 +1116,7 @@ export interface InspectionsBackend {
 }
 
 export interface BenchLedgerBackend {
+  makerWorkflows?: (name: import("./maker-workflows.js").MakerToolName, input: Record<string, unknown>, context: McpRequestContext) => Promise<unknown>;
   inventory: InventoryBackend;
   inventoryCategories?: InventoryCategoriesBackend;
   /** Optional for backwards-compatible hosts that have not enabled the v2 catalog. */

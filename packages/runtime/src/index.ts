@@ -1,3 +1,7 @@
+import { TeamRepository, migrateTeamSchema } from "@benchledger/database";
+import { ProductionTeamAdapter } from "./team-adapter.js";
+import { MakerWorkflowRepository, migrateMakerWorkflowSchema } from "@benchledger/database";
+import { ProductionMakerWorkflowAdapter } from "./maker-workflow-adapter.js";
 import { mkdirSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ApplicationPorts } from "@benchledger/application";
@@ -100,6 +104,8 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
   const database = new BenchDatabase(databasePath);
   try {
     migrateRuntimeSchema(database);
+    migrateMakerWorkflowSchema(database);
+    migrateTeamSchema(database);
     migrateCatalogSchema(database);
     migrateProjectSchema(database);
     migrateProjectSetupSchema(database);
@@ -143,6 +149,8 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
       reconciliations: new ProductionReconciliationAdapter(database, reconciliationRepository, projectRepository, bomRepository, reservationRepository, inventoryRepository, inventory, projectAdapter, state, unitOfWork),
       inspections: new ProductionInspectionAdapter(database, inspectionRepository, inventoryRepository, bomRepository, state, unitOfWork),
       workspaceSecurity,
+      makerWorkflows: new ProductionMakerWorkflowAdapter(new MakerWorkflowRepository(database)),
+      teamSecurity: new ProductionTeamAdapter(new TeamRepository(database)),
       audit: new ProductionAuditAdapter(auditRepository, database, state, unitOfWork),
       events,
       idempotency: new ProductionIdempotency(state),

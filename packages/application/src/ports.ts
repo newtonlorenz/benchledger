@@ -1,3 +1,6 @@
+import type { TeamMember, TeamStatus } from "@benchledger/api-contract";
+import type { WorkflowRecord, WorkflowKind } from "@benchledger/api-contract";
+import type { UpdateBomLine } from "@benchledger/api-contract";
 import type {
   Artifact, BomGap, BomLine, CreateBomLine, CreateInventoryItem, CreateOffer,
   CreateProject, CreateProjectRevision, CreateProjectWithInitialRevision, CreateReservation, CreateWorkItem,
@@ -324,13 +327,15 @@ export interface ProjectPort {
   /** Create a project and its first revision atomically in the adapter's transaction boundary. */
   createProjectWithInitialRevision?(input: CreateProjectWithInitialRevision, ctx: RequestContext): Promise<ProjectWithInitialRevision>;
   getProjectRevision(id: string): Promise<ProjectRevision | null>;
+  listProjectRevisions?(projectId: string): Promise<readonly ProjectRevision[]>;
+  listWorkItemRevisions?(workItemId: string): Promise<readonly WorkItemRevision[]>;
   createWorkItemRevision(workItemId: string, input: CreateWorkItemRevision, ctx: RequestContext): Promise<WorkItemRevision>;
   getWorkItemRevision(id: string): Promise<WorkItemRevision | null>;
   listBomLines(revisionId: string, options?: { readonly includeRetired?: boolean }): Promise<readonly BomLine[]>;
   /** Resolve a BOM line across all revisions, including historical ones. */
   getBomLine(id: string): Promise<BomLine | null>;
   createBomLine(revisionId: string, input: CreateBomLine, ctx: RequestContext): Promise<BomLine>;
-  updateBomLine(id: string, input: Partial<CreateBomLine>, expectedVersion: number | undefined, ctx: RequestContext): Promise<BomLine>;
+  updateBomLine(id: string, input: UpdateBomLine, expectedVersion: number | undefined, ctx: RequestContext): Promise<BomLine>;
   retireBomLine(id: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<BomLine>;
   restoreBomLine(id: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<BomLine>;
   createReservation(revisionId: string, input: CreateReservation, ctx: RequestContext): Promise<Reservation>;
@@ -503,6 +508,8 @@ export interface ApplicationPorts {
   readonly projectSetups?: ProjectSetupPort;
   readonly inspections?: InspectionPort;
   readonly workspaceSecurity?: WorkspaceSecurityPort;
+  readonly makerWorkflows?: MakerWorkflowPort;
+  readonly teamSecurity?: TeamSecurityPort;
   readonly audit: AuditPort;
   readonly events: EventBusPort;
   readonly idempotency: IdempotencyPort;
@@ -539,4 +546,22 @@ export interface GapEvaluation {
     readonly decideLines: number;
     readonly sourceLines: number;
   };
+}
+
+/** Internal typed persistence seam. It is never exposed as a generic API/MCP operation. */
+export interface MakerWorkflowPort {
+  get(kind: WorkflowKind, id: string): Promise<WorkflowRecord | null>;
+  list(kind: WorkflowKind, projectId: string, options: { revisionId?: string; limit: number; cursor?: string }): Promise<Page<WorkflowRecord>>;
+  put(record: WorkflowRecord, expectedVersion: number): Promise<WorkflowRecord>;
+  history(kind: WorkflowKind, id: string, limit: number, cursor?: string): Promise<Page<WorkflowRecord>>;
+}
+
+/** Encoded credentials are internal only; no transport may serialise this record. */
+export interface TeamMemberSecret extends TeamMember { readonly passwordHash: string }
+export interface TeamSecurityPort {
+  status(): Promise<TeamStatus>;
+  enable(expectedVersion: number): Promise<TeamStatus>;
+  members(): Promise<TeamMemberSecret[]>;
+  get(id: string): Promise<TeamMemberSecret | null>;
+  put(member: TeamMemberSecret, expectedVersion: number): Promise<TeamMemberSecret>;
 }

@@ -947,7 +947,7 @@ export function bomLineUpdate(value: unknown): BomLineUpdateInput {
   result.unit = optionalEnum(input.unit, "arguments.unit", ["piece", "gram", "millimetre", "millilitre", "metre", "roll", "set"] as const);
   result.requirement = optionalEnum(input.requirement, "arguments.requirement", ["required", "optional"] as const);
   result.role = optionalNullableEnum(input.role, "arguments.role", ["consumed", "reusable"] as const);
-  result.itemId = optionalId(input.itemId, "arguments.itemId");
+  result.itemId = input.itemId === null ? null : optionalId(input.itemId, "arguments.itemId");
   Object.assign(result, parseBomAlternatives(input));
   result.constraints = optionalBomConstraints(input.constraints, "arguments.constraints");
   result.notes = optionalString(input.notes, "arguments.notes", 2000);

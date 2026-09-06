@@ -791,7 +791,8 @@ test("resumes project and build-approach drafts after adding a printer", async (
   await expect(projectDialog.getByRole("radio", { name: /^3D-print parts/u })).toBeChecked();
   await projectDialog.getByRole("button", { name: "Cancel", exact: true }).click();
 
-  await page.getByRole("button", { name: "Change build approach", exact: true }).click();
+  // An undecided project now has one setup action, not a duplicate card.
+  await page.getByRole("button", { name: "Set build approach", exact: true }).click();
   let approachDialog = page.getByRole("dialog", { name: "Edit build approach" });
   await approachDialog.getByRole("radio", { name: /^3D-print parts/u }).check();
   await approachDialog.getByRole("button", { name: "Add printer", exact: true }).click();

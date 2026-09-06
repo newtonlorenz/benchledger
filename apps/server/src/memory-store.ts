@@ -1,3 +1,8 @@
+import { MemoryTeam } from "./memory-team.js";
+import { MemoryMakerWorkflows } from "./memory-maker-workflows.js";
+import { changesReservedRequirement } from "@benchledger/api-contract";
+import type { UpdateBomLine } from "@benchledger/api-contract";
+import { matchesInventorySearch } from "@benchledger/domain/inventory-search";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -244,7 +249,7 @@ class MemoryInventory implements InventoryPort {
       if (normalizedOptions.categoryNodeId !== undefined && item.categoryNodeId !== normalizedOptions.categoryNodeId) return false;
       if (normalizedOptions.unassigned === true && item.categoryNodeId !== undefined) return false;
       if (!normalized) return true;
-      return [item.name, item.description, item.manufacturer, item.model, item.sku, item.location, ...item.tags].filter(Boolean).join(" ").toLocaleLowerCase().includes(normalized);
+      return matchesInventorySearch([item.name, item.description, item.manufacturer, item.model, item.sku, item.location, ...item.tags], normalized);
     }).sort((a, b) => a.name.trim().toLocaleLowerCase().localeCompare(b.name.trim().toLocaleLowerCase()) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
     const offset = parseInventoryCursor(normalizedOptions.cursor);
     const selected = items.slice(offset, offset + normalizedOptions.limit);
@@ -895,6 +900,8 @@ class MemoryProjects implements ProjectPort {
     this.projectRevisions.set(revisionId, clone(updated));
     return Promise.resolve(clone(updated));
   }
+  async listProjectRevisions(projectId: string) { return clone([...this.projectRevisions.values()].filter((revision) => revision.projectId === projectId).sort((a,b) => a.number - b.number)); }
+  async listWorkItemRevisions(workItemId: string) { return clone([...this.workItemRevisions.values()].filter((revision) => revision.workItemId === workItemId).sort((a,b) => a.number - b.number)); }
   getProjectRevision(idValue: string): Promise<ProjectRevision | null> { const value = this.projectRevisions.get(idValue); return Promise.resolve(value ? clone(value) : null); }
   createWorkItemRevision(workItemId: string, input: CreateWorkItemRevision): Promise<WorkItemRevision> {
     const work = this.workItems.get(workItemId); if (!work) throw new ApplicationError("not_found", `Work item '${workItemId}' was not found`);
@@ -929,11 +936,11 @@ class MemoryProjects implements ProjectPort {
     } as BomLine;
     this.bomLines.set(line.id, line); return Promise.resolve(clone(line));
   }
-  updateBomLine(lineId: string, input: Partial<CreateBomLine>, expectedVersion: number | undefined): Promise<BomLine> {
+  updateBomLine(lineId: string, input: UpdateBomLine, expectedVersion: number | undefined): Promise<BomLine> {
     const current = this.bomLines.get(lineId); if (!current) throw new ApplicationError("not_found", `BOM line '${lineId}' was not found`); ensureVersion(current.version, expectedVersion, "BOM line");
-    if (Object.prototype.hasOwnProperty.call(input, "role") && (input.role === "reusable" || (current.role === "consumed" && input.role !== "consumed"))
+    if (changesReservedRequirement(current, input)
       && [...this.reservations.values()].some((reservation) => reservation.lineId === lineId && reservation.status === "active")) {
-      throw new ApplicationError("conflict", "Release or reconcile active reservations before changing this requirement from a part or material", { lineId });
+      throw new ApplicationError("conflict", "Release or reconcile active reservations before changing this requirement’s stock, quantity, unit or use", { lineId });
     }
     const next = {
       ...current,
@@ -943,6 +950,7 @@ class MemoryProjects implements ProjectPort {
       updatedAt: iso(),
       version: current.version + 1
     } as BomLine;
+    if (input.itemId === null) delete next.itemId;
     this.bomLines.set(lineId, next); return Promise.resolve(clone(next));
   }
   retireBomLine(lineId: string, expectedVersion: number | undefined): Promise<BomLine> {
@@ -1494,6 +1502,8 @@ class MemoryHealth implements HealthPort { check(): Promise<Readonly<Record<stri
  * across awaited port calls without exposing a lock to application code.
  */
 export class MemoryUnitOfWork implements UnitOfWorkPort {
+  private readonly rollbackParticipants: Array<() => (() => void)> = [];
+  registerRollback(snapshot: () => (() => void)): void { this.rollbackParticipants.push(snapshot); }
   private readonly scope = new AsyncLocalStorage<true>();
   private tail: Promise<void> = Promise.resolve();
 
@@ -1506,11 +1516,12 @@ export class MemoryUnitOfWork implements UnitOfWorkPort {
   }
 
   run<T>(operation: UnitOfWorkOperation<T>): Promise<T> {
-    return this.enqueue(operation);
+    if (this.scope.getStore() === true) return Promise.resolve().then(operation);
+    return this.enqueue(async () => { const rollbacks = this.rollbackParticipants.map((snapshot) => snapshot()); try { return await operation(); } catch (error) { for (const restore of rollbacks.reverse()) restore(); throw error; } });
   }
 
   transactional<T>(operation: UnitOfWorkOperation<T>): Promise<T> {
-    return this.enqueue(operation);
+    return this.run(operation);
   }
 
   exclusive<T>(operation: UnitOfWorkOperation<T>): Promise<T> {
@@ -1538,9 +1549,17 @@ export function createMemoryRuntime(seed: readonly InventoryItem[] = []): Memory
   const unitOfWork = new MemoryUnitOfWork();
   const audit = new MemoryAudit();
   const idempotency = new MemoryIdempotency();
+  const makerWorkflows = new MemoryMakerWorkflows();
+  const teamSecurity = new MemoryTeam();
+  unitOfWork.registerRollback(() => teamSecurity.snapshot());
+  unitOfWork.registerRollback(() => makerWorkflows.snapshot());
+  unitOfWork.registerRollback(() => { const snapshot = projects.snapshotState(); return () => projects.restoreState(snapshot); });
+  unitOfWork.registerRollback(() => { const snapshot = inventory.snapshotState(); return () => inventory.restoreState(snapshot); });
+  unitOfWork.registerRollback(() => { const snapshot = audit.snapshotState(); return () => audit.restoreState(snapshot); });
+  unitOfWork.registerRollback(() => { const snapshot = idempotency.snapshotState(); return () => idempotency.restoreState(snapshot); });
   const projectSetups = new MemoryProjectSetup(projects, inventory, catalog, audit, idempotency);
   const inspections = new MemoryInspections(inventory, projects);
-  const ports: ApplicationPorts = { inventory, inventoryCategories, projects, projectSetups, inspections, offers: new MemoryOffers(), artifacts: new MemoryArtifacts(), catalog, buildConfigurations, audit, events: new MemoryEvents(), idempotency, unitOfWork, health: new MemoryHealth() };
+  const ports: ApplicationPorts = { inventory, inventoryCategories, projects, projectSetups, inspections, makerWorkflows, teamSecurity, offers: new MemoryOffers(), artifacts: new MemoryArtifacts(), catalog, buildConfigurations, audit, events: new MemoryEvents(), idempotency, unitOfWork, health: new MemoryHealth() };
   return { ports, inventory, inventoryCategories, projects, catalog, buildConfigurations, inspections, unitOfWork };
 }
 
