@@ -1,8 +1,8 @@
 interface:
   display_name: "BenchLedger"
-  short_description: "Maker inventory and project lifecycle"
+  short_description: "Evidence-backed maker project decisions"
   brand_color: "#3F5F55"
-  default_prompt: "Use $benchledger to take this maker project from inventory and exact build setup through BOM, sourcing, revisioned files, and evidence-backed close-out."
+  default_prompt: "Use $benchledger to answer the current maker-project request from the existing inventory and revision. Perform only the relevant stage, preserve evidence and approval boundaries, and report the verified result."
 
 dependencies:
   tools:
