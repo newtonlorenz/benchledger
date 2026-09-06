@@ -1,3 +1,6 @@
+import { changesReservedRequirement } from "@benchledger/api-contract";
+import type { UpdateBomLine } from "@benchledger/api-contract";
+import { matchesInventorySearch } from "@benchledger/domain/inventory-search";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -244,7 +247,7 @@ class MemoryInventory implements InventoryPort {
       if (normalizedOptions.categoryNodeId !== undefined && item.categoryNodeId !== normalizedOptions.categoryNodeId) return false;
       if (normalizedOptions.unassigned === true && item.categoryNodeId !== undefined) return false;
       if (!normalized) return true;
-      return [item.name, item.description, item.manufacturer, item.model, item.sku, item.location, ...item.tags].filter(Boolean).join(" ").toLocaleLowerCase().includes(normalized);
+      return matchesInventorySearch([item.name, item.description, item.manufacturer, item.model, item.sku, item.location, ...item.tags], normalized);
     }).sort((a, b) => a.name.trim().toLocaleLowerCase().localeCompare(b.name.trim().toLocaleLowerCase()) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
     const offset = parseInventoryCursor(normalizedOptions.cursor);
     const selected = items.slice(offset, offset + normalizedOptions.limit);
@@ -929,11 +932,11 @@ class MemoryProjects implements ProjectPort {
     } as BomLine;
     this.bomLines.set(line.id, line); return Promise.resolve(clone(line));
   }
-  updateBomLine(lineId: string, input: Partial<CreateBomLine>, expectedVersion: number | undefined): Promise<BomLine> {
+  updateBomLine(lineId: string, input: UpdateBomLine, expectedVersion: number | undefined): Promise<BomLine> {
     const current = this.bomLines.get(lineId); if (!current) throw new ApplicationError("not_found", `BOM line '${lineId}' was not found`); ensureVersion(current.version, expectedVersion, "BOM line");
-    if (Object.prototype.hasOwnProperty.call(input, "role") && (input.role === "reusable" || (current.role === "consumed" && input.role !== "consumed"))
+    if (changesReservedRequirement(current, input)
       && [...this.reservations.values()].some((reservation) => reservation.lineId === lineId && reservation.status === "active")) {
-      throw new ApplicationError("conflict", "Release or reconcile active reservations before changing this requirement from a part or material", { lineId });
+      throw new ApplicationError("conflict", "Release or reconcile active reservations before changing this requirement’s stock, quantity, unit or use", { lineId });
     }
     const next = {
       ...current,
@@ -943,6 +946,7 @@ class MemoryProjects implements ProjectPort {
       updatedAt: iso(),
       version: current.version + 1
     } as BomLine;
+    if (input.itemId === null) delete next.itemId;
     this.bomLines.set(lineId, next); return Promise.resolve(clone(next));
   }
   retireBomLine(lineId: string, expectedVersion: number | undefined): Promise<BomLine> {

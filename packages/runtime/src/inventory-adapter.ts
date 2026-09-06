@@ -1,3 +1,4 @@
+import { matchesInventorySearch } from "@benchledger/domain/inventory-search";
 import { createId, createStockEvent, DomainError } from "@benchledger/domain";
 import type { CommissionInventoryItem, InventoryItem as ApiInventoryItem, CreateInventoryItem, StockEvent as ApiStockEvent, StockEventInput } from "@benchledger/api-contract";
 import type { InventoryItem, StockEvent } from "@benchledger/domain";
@@ -21,12 +22,7 @@ function ensureDescriptiveUpdate(input: UpdateInventoryInput): void {
 
 function isSearchMatch(item: ApiInventoryItem, query: string | undefined): boolean {
   if (query === undefined || query.trim().length === 0) return true;
-  const needle = query.trim().toLocaleLowerCase();
-  return [item.name, item.description, item.manufacturer, item.model, item.sku, item.location, ...item.tags]
-    .filter((value): value is string => value !== undefined)
-    .join(" ")
-    .toLocaleLowerCase()
-    .includes(needle);
+  return matchesInventorySearch([item.name, item.description, item.manufacturer, item.model, item.sku, item.location, ...item.tags], query);
 }
 
 function compareInventoryItems(left: Pick<ApiInventoryItem, "name" | "id">, right: Pick<ApiInventoryItem, "name" | "id">): number {

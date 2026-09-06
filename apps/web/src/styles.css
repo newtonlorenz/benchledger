@@ -1576,3 +1576,40 @@ kbd { display: inline-block; padding: 1px 5px; border: 1px solid var(--line); bo
     height: 44px;
   }
 }
+
+/* Customer correction workflows reuse the existing modal and focus boundary. */
+.project-management-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-block: 16px; min-width: 0; }
+.project-stage { margin-right: auto; font-size: 0.85rem; color: var(--ink-soft); }
+.project-stage strong { color: var(--ink); }
+.project-export { max-width: 100%; }
+.project-export > summary, .removed-requirements > summary, .requirement-removal > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 650; font-size: 0.8rem; }
+.project-export-options { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; border: 1px solid var(--line); background: var(--surface-strong); max-width: 100%; }
+.project-export-options p { flex-basis: 100%; color: var(--ink-soft); font-size: 0.75rem; }
+.project-export-options .button { white-space: normal; text-align: left; }
+.correction-fields { margin: 0; padding: 0; border: 0; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.correction-fields .form-row { min-width: 0; }
+.correction-fields select, .correction-fields input, .correction-fields textarea { min-width: 0; max-width: 100%; }
+.correction-form p { overflow-wrap: anywhere; }
+.requirement-edit-action { min-height: 44px; padding-block: 8px; font-size: 0.72rem; }
+.requirement-removal { border-top: 1px solid var(--line); margin-top: 16px; }
+.requirement-removal p { font-size: 0.76rem; color: var(--ink-soft); margin-bottom: 10px; }
+.requirement-removal .button { margin-top: 12px; white-space: normal; }
+.removed-requirements { margin-top: 16px; padding: 12px 18px; min-width: 0; }
+.removed-requirements p { color: var(--ink-soft); font-size: 0.76rem; margin-block: 8px; }
+.removed-requirement { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding-block: 8px; border-bottom: 1px solid var(--line); font-size: 0.8rem; }
+.removed-requirement > span { min-width: 0; overflow-wrap: anywhere; }
+.removed-requirement > button { flex-shrink: 0; }
+.removed-requirements .text-button { min-height: 44px; }
+@media (max-width: 480px) {
+  .project-management-bar { align-items: stretch; }
+  .project-management-bar .project-stage { align-self: center; }
+  .project-export { flex-basis: 100%; }
+  .project-export-options > .button { width: 100%; }
+}
+
+.requirement-filters { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); align-items: end; gap: 10px 14px; margin-block: 12px 18px; }
+.requirement-filters > * { min-width: 0; }
+.requirement-filters p, .requirements-no-match { color: var(--ink-soft); font-size: 0.75rem; grid-column: 1 / -1; }
+.requirement-filters .text-button { grid-column: 1 / -1; justify-self: start; min-height: 44px; }
+.requirements-no-match { padding-block: 18px; }
+@media (max-width: 480px) { .requirement-filters { grid-template-columns: minmax(0, 1fr); } }

@@ -710,7 +710,7 @@ export interface BomLineUpdateInput {
   unit?: Quantity["unit"];
   requirement?: BomLine["requirement"];
   role?: BomLine["role"];
-  itemId?: string;
+  itemId?: string | null;
   alternatives?: readonly BomAlternative[];
   /** @deprecated Use alternatives when compatibility state or reason matters. */
   compatibleItemIds?: readonly string[];

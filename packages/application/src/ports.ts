@@ -1,3 +1,4 @@
+import type { UpdateBomLine } from "@benchledger/api-contract";
 import type {
   Artifact, BomGap, BomLine, CreateBomLine, CreateInventoryItem, CreateOffer,
   CreateProject, CreateProjectRevision, CreateProjectWithInitialRevision, CreateReservation, CreateWorkItem,
@@ -330,7 +331,7 @@ export interface ProjectPort {
   /** Resolve a BOM line across all revisions, including historical ones. */
   getBomLine(id: string): Promise<BomLine | null>;
   createBomLine(revisionId: string, input: CreateBomLine, ctx: RequestContext): Promise<BomLine>;
-  updateBomLine(id: string, input: Partial<CreateBomLine>, expectedVersion: number | undefined, ctx: RequestContext): Promise<BomLine>;
+  updateBomLine(id: string, input: UpdateBomLine, expectedVersion: number | undefined, ctx: RequestContext): Promise<BomLine>;
   retireBomLine(id: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<BomLine>;
   restoreBomLine(id: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<BomLine>;
   createReservation(revisionId: string, input: CreateReservation, ctx: RequestContext): Promise<Reservation>;

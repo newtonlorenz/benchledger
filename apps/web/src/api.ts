@@ -1,3 +1,4 @@
+import { matchesInventorySearch } from "@benchledger/domain/inventory-search";
 import { catalogProducts as fallbackCatalogProducts, inventory as fallbackInventory, offers as fallbackOffers, projects as fallbackProjects } from "./mock-data";
 import type {
   Artifact,
@@ -107,6 +108,8 @@ type ServerReservation = { id: string; lineId: string; itemId: string; quantity:
 export type RevisionInput = { name: string; notes?: string; status?: string; fabricationRoute?: FabricationRoute; intendedPrinterItemId?: string | null; buildConfig?: BuildConfigInput };
 export type ProjectRevisionUpdateInput = { fabricationRoute?: FabricationRoute; intendedPrinterItemId?: string | null };
 export type ProjectCreateInput = Pick<Project, "name" | "description"> & { fabricationRoute?: FabricationRoute; intendedPrinterItemId?: string };
+export type ProjectEditInput = { name: string; description: string; status: Exclude<Project["status"], "archived"> };
+export type BomUpdateInput = Partial<Omit<BomInput, "itemId">> & { itemId?: string | null };
 export type BomInput = { name: string; requiredQuantity: number; unit: BomLine["unit"]; role?: NonNullable<BomLine["role"]>; itemId?: string; optional?: boolean; note?: string };
 export type InventoryCreateInput = { name: string; category: InventoryItem["category"]; categoryNodeId?: string; kind?: string; quantity: number; unit: InventoryItem["unit"]; description?: string; manufacturer?: string; model?: string; sku?: string; location?: string };
 export type InventoryUpdateInput = Pick<InventoryItem, "name" | "description" | "manufacturer" | "location" | "sku" | "tags"> & { model: string; categoryNodeId?: string | null };
@@ -272,6 +275,11 @@ export interface WorkspaceAdapter {
   createExactInventoryItem(input: ExactInventoryInput): Promise<InventoryItem>;
   linkExactInventoryItem(itemId: string, input: ExactInventoryInput, expectedProfileVersion?: number): Promise<InventoryItem>;
   createProject(input: ProjectCreateInput): Promise<Project>;
+  updateProject(projectId: string, input: ProjectEditInput, expectedVersion: number): Promise<Project>;
+  updateBomLine(projectId: string, lineId: string, input: BomUpdateInput, expectedVersion: number): Promise<Project>;
+  retireBomLine(projectId: string, lineId: string, expectedVersion: number): Promise<Project>;
+  restoreBomLine(projectId: string, lineId: string, expectedVersion: number): Promise<Project>;
+  listRetiredBomLines(projectId: string): Promise<BomLine[]>;
   previewProjectSetup(input: ProjectSetupProposalInput): Promise<ProjectSetupPreviewResult>;
   commitProjectSetup(input: ProjectSetupCommitInput): Promise<ProjectSetupCommitResult>;
   listInspections(revisionId: string): Promise<InspectionAction[]>;
@@ -2225,7 +2233,7 @@ function sampleInventoryPage(items: readonly InventoryItem[], query: InventoryLi
     if (query.categoryNodeId !== undefined && item.categoryNodeId !== query.categoryNodeId) return false;
     if (query.unassigned === true && item.categoryNodeId !== undefined) return false;
     if (!normalized) return true;
-    return [item.name, item.variant, item.description, item.location, item.manufacturer, item.model, item.sku, ...item.tags].filter(Boolean).join(" ").toLocaleLowerCase().includes(normalized);
+    return matchesInventorySearch([item.name, item.variant, item.description, item.location, item.manufacturer, item.model, item.sku, ...item.tags], normalized);
   }).sort(compareInventoryItems);
   const selected = filtered.slice(offset, offset + query.limit);
   const nextOffset = offset + selected.length < filtered.length ? offset + selected.length : undefined;
@@ -2262,7 +2270,10 @@ function applySampleBulkChanges(item: InventoryItem, changes: InventoryBulkChang
 
 /** Explicit sample-only adapter. The UI enables it only after the service reports demo mode. */
 export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
+  const retiredRequirements = new Map<string, { projectId: string; line: BomLine }>();
   const state = syntheticSnapshot();
+  state.projects = state.projects.map((project) => ({ ...project, version: project.version ?? 1 }));
+  let sampleSequence = 0;
   const catalogState = structuredClone(fallbackCatalogProducts);
   let categoryState = structuredClone(DEFAULT_MANAGED_INVENTORY_CATEGORIES);
   const sampleCatalogPage = (kind: CatalogKind, query = "", options?: CatalogSearchOptions): CatalogProductPage => {
@@ -2521,7 +2532,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
       return linked;
     },
     async createProject(input) {
-      const project: Project = { id: `sample-project-${Date.now()}`, name: input.name, description: input.description, subtitle: "A new maker project", status: "idea", updated: "Just now", currentRevision: "r01", workItem: "First work item", railStep: 0, bom: [], artifacts: [], notes: [], accent: "orange", serverRevisionId: `sample-revision-${Date.now()}`, serverRevisionVersion: 1, ...(input.fabricationRoute === undefined ? {} : { fabricationRoute: input.fabricationRoute }), ...(input.intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId: input.intendedPrinterItemId }) };
+      const project: Project = { id: `sample-project-${Date.now()}-${++sampleSequence}`, version: 1, name: input.name, description: input.description, subtitle: "A new maker project", status: "idea", updated: "Just now", currentRevision: "r01", workItem: "First work item", railStep: 0, bom: [], artifacts: [], notes: [], accent: "orange", serverRevisionId: `sample-revision-${Date.now()}`, serverRevisionVersion: 1, ...(input.fabricationRoute === undefined ? {} : { fabricationRoute: input.fabricationRoute }), ...(input.intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId: input.intendedPrinterItemId }) };
       state.projects = [project, ...state.projects];
       return project;
     },
@@ -2543,6 +2554,45 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     async commitInspectionCompletion() {
       throw new ApiError("Project check commits require a connected workspace.", { kind: "validation", status: 409 });
     },
+    async updateProject(projectId, input, expectedVersion) {
+      const current = state.projects.find((entry) => entry.id === projectId);
+      if (!current || current.status === "archived") throw new ApiError("Restore or reload this project before editing it.", { kind: "validation", status: 409 });
+      if (current.version !== expectedVersion) throw new ApiError("This project changed; reload before editing.", { kind: "validation", status: 409 });
+      if (!input.name.trim() || input.name.length > 240 || input.description.length > 5000) throw new ApiError("Check the project name and description.", { kind: "validation", status: 400 });
+      const updated = { ...current, ...input, name: input.name.trim(), version: expectedVersion + 1 };
+      state.projects = state.projects.map((entry) => entry.id === projectId ? updated : entry);
+      return structuredClone(updated);
+    },
+    async updateBomLine(projectId, lineId, input, expectedVersion) {
+      const current = state.projects.find((entry) => entry.id === projectId);
+      const line = current?.bom.find((entry) => entry.id === lineId);
+      if (!current || current.status === "archived" || !line || line.version !== expectedVersion) throw new ApiError("This requirement changed; reload before editing.", { kind: "validation", status: 409 });
+      const { itemId: priorItemId, ...withoutItem } = line;
+      if (input.name !== undefined && (!input.name.trim() || input.name.length > 240) || input.requiredQuantity !== undefined && (!Number.isFinite(input.requiredQuantity) || input.requiredQuantity <= 0) || input.note !== undefined && input.note.length > 2000) throw new ApiError("Check the requirement name, positive quantity and note length.", { kind: "validation", status: 400 });
+      const updatedLine: BomLine = { ...withoutItem, ...(input.itemId === null ? {} : (input.itemId ?? priorItemId) ? { itemId: (input.itemId ?? priorItemId)! } : {}), ...(input.name === undefined ? {} : { label: input.name }), ...(input.requiredQuantity === undefined ? {} : { required: input.requiredQuantity }), ...(input.unit === undefined ? {} : { unit: input.unit }), ...(input.role === undefined ? {} : { role: input.role }), ...(input.optional === undefined ? {} : { optional: input.optional }), ...(input.note === undefined ? {} : { note: input.note }), version: expectedVersion + 1 };
+      const updated = { ...current, bom: current.bom.map((entry) => entry.id === lineId ? updatedLine : entry) };
+      state.projects = state.projects.map((entry) => entry.id === projectId ? updated : entry);
+      return structuredClone(updated);
+    },
+    async retireBomLine(projectId, lineId, expectedVersion) {
+      const current = state.projects.find((entry) => entry.id === projectId);
+      const line = current?.bom.find((entry) => entry.id === lineId);
+      if (!current || current.status === "archived" || !line || line.version !== expectedVersion) throw new ApiError("This requirement changed; reload before removing it.", { kind: "validation", status: 409 });
+      retiredRequirements.set(lineId, { projectId, line: { ...line, version: expectedVersion + 1 } });
+      const updated = { ...current, bom: current.bom.filter((entry) => entry.id !== lineId) };
+      state.projects = state.projects.map((entry) => entry.id === projectId ? updated : entry);
+      return structuredClone(updated);
+    },
+    async restoreBomLine(projectId, lineId, expectedVersion) {
+      const current = state.projects.find((entry) => entry.id === projectId);
+      const record = retiredRequirements.get(lineId);
+      if (!current || current.status === "archived" || record?.projectId !== projectId || record.line.version !== expectedVersion) throw new ApiError("This removed requirement changed; refresh before restoring it.", { kind: "validation", status: 409 });
+      const updated = { ...current, bom: [...current.bom, { ...record.line, version: expectedVersion + 1 }] };
+      retiredRequirements.delete(lineId);
+      state.projects = state.projects.map((entry) => entry.id === projectId ? updated : entry);
+      return structuredClone(updated);
+    },
+    async listRetiredBomLines(projectId) { return structuredClone([...retiredRequirements.values()].filter((entry) => entry.projectId === projectId).map((entry) => entry.line)); },
     async archiveProject(projectId, expectedVersion) {
       const current = state.projects.find((candidate) => candidate.id === projectId);
       if (!current) throw new ApiError("Project not found", { kind: "validation", status: 404 });
@@ -2611,7 +2661,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     async createBomLine(projectId, input) {
       const project = state.projects.find((candidate) => candidate.id === projectId);
       if (!project) throw new ApiError("Project not found", { kind: "validation", status: 404 });
-      const line: BomLine = { id: `sample-bom-${Date.now()}`, version: 1, label: input.name, required: input.requiredQuantity, unit: input.unit, ...(input.role === undefined ? {} : { role: input.role }), optional: input.optional ?? false, ...(input.itemId ? { itemId: input.itemId } : {}), ...(input.note ? { note: input.note } : {}) };
+      const line: BomLine = { id: `sample-bom-${Date.now()}-${++sampleSequence}`, version: 1, label: input.name, required: input.requiredQuantity, unit: input.unit, ...(input.role === undefined ? {} : { role: input.role }), optional: input.optional ?? false, ...(input.itemId ? { itemId: input.itemId } : {}), ...(input.note ? { note: input.note } : {}) };
       const updated = { ...project, bom: [...project.bom, line] };
       state.projects = state.projects.map((candidate) => candidate.id === projectId ? updated : candidate);
       return updated;
@@ -2682,12 +2732,61 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
   const pendingReconciliationDraftCommands = new Map<string, PendingReconciliationCommand<ReconciliationDraftRequestBody>>();
   const pendingReconciliationCommitCommands = new Map<string, PendingReconciliationCommand<ReconciliationCommitRequestBody>>();
   const pendingInspectionCompletionCommands = new Map<string, PendingInspectionCompletionCommand>();
+  const pendingRequirementCommands = new Map<string, string>();
+  const pendingProjectEdits = new Map<string, string>();
+  const retiredRequirementOwners = new Map<string, { projectId: string; revisionId: string; version: number }>();
+  const confirmedRequirement = (payload: { data?: ServerBomLine }, revisionId: string, expectedId?: string): BomLine => {
+    const saved = mutationData(payload);
+    if (!saved || typeof saved.id !== "string" || !saved.id || saved.revisionId !== revisionId || (expectedId !== undefined && saved.id !== expectedId) || !Number.isSafeInteger(saved.version) || saved.version < 1 || typeof saved.name !== "string" || !saved.name.trim() || !Number.isFinite(saved.requiredQuantity) || saved.requiredQuantity <= 0 || !["each", "gram", "metre", "millimetre", "millilitre", "set"].includes(saved.unit)) {
+      throw new ApiError("The service did not confirm this requirement. Retry unchanged or reload the project before making a different change.", { kind: "server", status: 502 });
+    }
+    return mapBomLine(saved);
+  };
+  const refreshChangedBom = async (current: Project, bom: BomLine[]): Promise<Project> => {
+    const { gapEvaluation: _oldGaps, readinessUnavailable: _oldReadiness, ...stable } = current;
+    const committed: Project = { ...stable, bom, readinessUnavailable: true };
+    projectCache.set(current.id, committed);
+    try {
+      const gaps = mapGapEvaluation(await request<ServerGapEvaluation>(`/project-revisions/${encodeURIComponent(current.serverRevisionId!)}/gaps`), bom);
+      if (gaps === undefined) return committed;
+      const refreshed = { ...committed, gapEvaluation: gaps, readinessUnavailable: false };
+      projectCache.set(current.id, refreshed);
+      return refreshed;
+    } catch { return committed; }
+  };
+  const changeRequirement = async (projectId: string, lineId: string, expectedVersion: number, operation: "update" | "retire" | "restore", input?: BomUpdateInput): Promise<Project> => {
+    const token = csrfToken ?? cookieValue("forge_csrf");
+    const current = projectCache.get(projectId);
+    if (!token) throw new ApiError("Sign in again before changing a requirement.", { kind: "csrf", status: 403 });
+    if (!current?.serverRevisionId || current.status === "archived" || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1) throw new ApiError("Reload this active project before changing a requirement.", { kind: "validation", status: 409 });
+    if (operation === "restore" ? (retiredRequirementOwners.get(lineId)?.projectId !== projectId || retiredRequirementOwners.get(lineId)?.revisionId !== current.serverRevisionId) : !current.bom.some((line) => line.id === lineId)) throw new ApiError("Read this requirement in the selected project before changing it.", { kind: "validation", status: 409 });
+    const body = input === undefined ? undefined : { ...(input.name === undefined ? {} : { name: input.name }), ...(input.requiredQuantity === undefined ? {} : { requiredQuantity: input.requiredQuantity }), ...(input.unit === undefined ? {} : { unit: input.unit === "g" ? "gram" : input.unit === "m" ? "metre" : input.unit }), ...(input.role === undefined ? {} : { role: input.role }), ...(input.itemId === undefined ? {} : { itemId: input.itemId }), ...(input.optional === undefined ? {} : { optional: input.optional }), ...(input.note === undefined ? {} : { notes: input.note }) };
+    const commandId = JSON.stringify({ projectId, lineId, expectedVersion, operation, body });
+    const key = pendingRequirementCommands.get(commandId) ?? idempotencyKey("requirement");
+    pendingRequirementCommands.set(commandId, key);
+    let line: BomLine;
+    try {
+      const result = await request<{ data: ServerBomLine }>(`/bom-lines/${encodeURIComponent(lineId)}${operation === "restore" ? "/restore" : ""}`, { method: operation === "update" ? "PATCH" : operation === "retire" ? "DELETE" : "POST", headers: { "If-Match": String(expectedVersion), "Idempotency-Key": key }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, token);
+      line = confirmedRequirement(result, current.serverRevisionId, lineId);
+      pendingRequirementCommands.delete(commandId);
+    } catch (error) {
+      if (!mutationFailureIsAmbiguous(error)) pendingRequirementCommands.delete(commandId);
+      throw error;
+    }
+    const latest = projectCache.get(projectId) ?? current;
+    const without = latest.bom.filter((entry) => entry.id !== lineId);
+    const bom = operation === "retire" ? without : operation === "restore" ? [...without, line] : latest.bom.map((entry) => entry.id === lineId ? line : entry);
+    if (operation === "retire") retiredRequirementOwners.set(lineId, { projectId, revisionId: current.serverRevisionId, version: line.version });
+    if (operation === "restore") retiredRequirementOwners.delete(lineId);
+    return refreshChangedBom(latest, bom);
+  };
   const adapter: WorkspaceAdapter = {
     clearAuthenticatedState() {
       csrfToken = undefined;
       serverUnits.clear();
       inventoryCache.clear();
       projectCache.clear();
+      pendingRequirementCommands.clear(); pendingProjectEdits.clear(); retiredRequirementOwners.clear();
     },
     async checkHealth() { health = await request<ServerHealth>("/health"); return health; },
     async getWorkspaceAccess() {
@@ -3148,6 +3247,33 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         throw error;
       }
     },
+    async updateProject(projectId, input, expectedVersion) {
+      const token = csrfToken ?? cookieValue("forge_csrf");
+      const current = projectCache.get(projectId);
+      if (!token) throw new ApiError("Sign in again before editing the project.", { kind: "csrf", status: 403 });
+      if (!current || current.status === "archived" || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1) throw new ApiError("Restore or reload this project before editing it.", { kind: "validation", status: 409 });
+      const commandId = JSON.stringify({ projectId, input, expectedVersion });
+      const key = pendingProjectEdits.get(commandId) ?? idempotencyKey("project-edit");
+      pendingProjectEdits.set(commandId, key);
+      try {
+        const payload = await request<{ data: ServerProject }>(`/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", headers: { "If-Match": String(expectedVersion), "Idempotency-Key": key }, body: JSON.stringify(input) }, token);
+        const saved = mapProject(mutationData(payload));
+        if (saved.id !== projectId || saved.version === undefined || !Number.isSafeInteger(saved.version) || saved.version < 1) throw new ApiError("The service did not confirm the project version. Reload before retrying.", { kind: "server", status: 502 });
+        const project: Project = { ...current, name: saved.name, description: saved.description, status: saved.status, version: saved.version, updated: saved.updated };
+        pendingProjectEdits.delete(commandId); projectCache.set(projectId, project); return project;
+      } catch (error) { if (!mutationFailureIsAmbiguous(error)) pendingProjectEdits.delete(commandId); throw error; }
+    },
+    async updateBomLine(projectId, lineId, input, expectedVersion) { return changeRequirement(projectId, lineId, expectedVersion, "update", input); },
+    async retireBomLine(projectId, lineId, expectedVersion) { return changeRequirement(projectId, lineId, expectedVersion, "retire"); },
+    async restoreBomLine(projectId, lineId, expectedVersion) { return changeRequirement(projectId, lineId, expectedVersion, "restore"); },
+    async listRetiredBomLines(projectId) {
+      const current = projectCache.get(projectId);
+      if (!current?.serverRevisionId) throw new ApiError("Reload the project before reading removed requirements.", { kind: "validation", status: 409 });
+      const payload = await request<unknown>(`/project-revisions/${encodeURIComponent(current.serverRevisionId)}/bom?includeRetired=true`);
+      const lines = responseList(payload).filter((value) => typeof asRecord(value)?.retiredAt === "string").map((value) => mapBomLine(value as ServerBomLine));
+      for (const line of lines) retiredRequirementOwners.set(line.id, { projectId, revisionId: current.serverRevisionId, version: line.version });
+      return lines;
+    },
     async archiveProject(projectId, expectedVersion) {
       const token = csrfToken ?? cookieValue("forge_csrf");
       if (!token) throw new ApiError("Sign in again before archiving a project", { kind: "csrf", status: 403 });
@@ -3367,18 +3493,20 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
     },
     async createBomLine(projectId, input) {
       const token = csrfToken ?? cookieValue("forge_csrf");
-      if (!token) throw new ApiError("Your session needs a fresh CSRF token before adding a requirement", { kind: "csrf", status: 403 });
       const current = projectCache.get(projectId);
       const revisionId = current?.serverRevisionId;
-      if (!revisionId) throw new ApiError("Create a project revision before adding a requirement", { kind: "validation", status: 409 });
-      const payload = await request<{ data: ServerBomLine }>(`/project-revisions/${encodeURIComponent(revisionId)}/bom`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey("bom") }, body: JSON.stringify({ name: input.name, requiredQuantity: input.requiredQuantity, unit: input.unit === "g" ? "gram" : input.unit === "m" ? "metre" : input.unit, ...(input.role === undefined ? {} : { role: input.role }), ...(input.itemId ? { itemId: input.itemId } : {}), optional: input.optional ?? false, constraints: {}, alternatives: [], ...(input.note ? { notes: input.note } : {}) }) }, token);
-      const line = mutationData(payload);
-      if (!current) throw new ApiError("The project is not available in this workspace snapshot", { kind: "validation", status: 409 });
-      const nextBom = [...current.bom, mapBomLine(line)];
-      const gapEvaluation = mapGapEvaluation(await request<ServerGapEvaluation>(`/project-revisions/${encodeURIComponent(revisionId)}/gaps`), nextBom);
-      const project = { ...current, bom: nextBom, ...(gapEvaluation === undefined ? {} : { gapEvaluation }) };
-      projectCache.set(projectId, project);
-      return project;
+      if (!token) throw new ApiError("Sign in again before adding a requirement.", { kind: "csrf", status: 403 });
+      if (!current || !revisionId) throw new ApiError("Create or reload a project revision before adding a requirement.", { kind: "validation", status: 409 });
+      const body = { name: input.name, requiredQuantity: input.requiredQuantity, unit: input.unit === "g" ? "gram" : input.unit === "m" ? "metre" : input.unit, ...(input.role === undefined ? {} : { role: input.role }), ...(input.itemId ? { itemId: input.itemId } : {}), optional: input.optional ?? false, constraints: {}, alternatives: [], ...(input.note ? { notes: input.note } : {}) };
+      const commandId = JSON.stringify({ projectId, revisionId, body });
+      const key = pendingRequirementCommands.get(commandId) ?? idempotencyKey("requirement-create");
+      pendingRequirementCommands.set(commandId, key);
+      let line: BomLine;
+      try {
+        const payload = await request<{ data: ServerBomLine }>(`/project-revisions/${encodeURIComponent(revisionId)}/bom`, { method: "POST", headers: { "Idempotency-Key": key }, body: JSON.stringify(body) }, token);
+        line = confirmedRequirement(payload, revisionId); pendingRequirementCommands.delete(commandId);
+      } catch (error) { if (!mutationFailureIsAmbiguous(error)) pendingRequirementCommands.delete(commandId); throw error; }
+      return refreshChangedBom(current, [...current.bom.filter((entry) => entry.id !== line.id), line]);
     },
     async updateBomLineRole(projectId, lineId, role, expectedVersion) {
       const token = csrfToken ?? cookieValue("forge_csrf");

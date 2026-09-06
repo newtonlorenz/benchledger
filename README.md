@@ -24,6 +24,8 @@ BenchLedger keeps the information around a maker project together. Use it to:
 - Keep exact product profiles for printers, filament, nozzles, plates, and parts.
 - Keep an append-only stock ledger with confirmed, uncertain, reserved, and unavailable states.
 - Start projects with work items, revisions, bills of materials (BOMs), and build gaps.
+- Correct project details and requirements, with reversible removal and retained history.
+- Export a read-only project brief or requirements CSV for review and handoff.
 - See what you can reuse, what needs a physical check, and what is missing.
 - Compare recorded supplier offers, package quantities, observed prices, and alternatives.
 - Keep versioned CAD, STEP, STL, 3MF, firmware, drawing, and validation files.

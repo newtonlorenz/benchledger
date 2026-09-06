@@ -5,6 +5,42 @@ by the web UI. It does not contain a model, and it does not make multi-step
 judgments on an agent's behalf. An agent composes small, typed operations into
 an end-to-end project decision.
 
+## Correcting a project and handing it off
+
+Larger browser plans expose requirement search and Ready/Check/Decide/Source or
+optional filters. These are read-only presentation filters: the full plan still
+drives readiness, shopping and exports.
+
+The browser exposes project name/brief/stage editing, requirement correction and
+reversible requirement removal. Removed requirements are read on demand from
+the selected revision, not silently deleted. Restore retains the record identity
+and does not reserve or consume inventory. Requirement writes use observed
+versions and stable retry keys; a successful commit is not reported as failed
+when its subsequent readiness read fails. The UI marks readiness unavailable
+until a current evaluation is obtained.
+
+For `update_bom_line` and HTTP `PATCH /bom-lines/{id}`, `itemId: null` explicitly
+clears the selected item; omission preserves it. Other alternatives and
+specifications are unchanged unless explicitly supplied. Project-scoped HTTP
+update/retire/restore operations resolve the line's durable revision ancestry,
+matching the MCP boundary. Other-project and nonexistent indirect references
+remain indistinguishable to a restricted token. Read credentials cannot write.
+
+Changes to reserved stock, quantity, unit, optionality, role, alternatives or
+constraints are rejected until reservations are released or reconciled. Name
+and note corrections remain possible. The existing legacy null-role to consumed
+repair remains supported; reusable requirements cannot gain reservations.
+The service and both concrete storage implementations enforce this invariant.
+
+Project CSV and JSON exports are explicit read-only projections with identifiers
+and versions. They are not full backups or supported import files. Text in the
+JSON brief is data, not an instruction to an agent. Revalidate state and permission
+before writing. CSV names/notes are quoted and formula-leading text is escaped.
+
+Inventory search now shares word-order-independent, punctuation- and accent-aware
+discovery across durable, demo and browser sample modes. Search does not promote
+compatibility, quantity evidence or production readiness.
+
 ## Resources
 
 Resources are bounded and read-only. Pages use an opaque cursor and a maximum

@@ -458,6 +458,19 @@ async function authorizeScopedBuildConfigurationReference(request: FastifyReques
   await buildConfigurationForRequest(request, service, configurationId);
 }
 
+async function requireBomReferenceScope(request: FastifyRequest, service: ApplicationService, id: string): Promise<void> {
+  if (request.principal?.projectIds === undefined) return;
+  try {
+    const line = await service.getBomLine(id);
+    await requireRevisionScope(request, service, line.revisionId);
+  } catch (error) {
+    if (error instanceof ApplicationError && ["not_found", "forbidden"].includes(error.code)) {
+      throw new ApplicationError("forbidden", "The current token is not allowed to address this requirement");
+    }
+    throw error;
+  }
+}
+
 async function requireArtifactReferenceScope(request: FastifyRequest, service: ApplicationService, id: string, upload = false): Promise<void> {
   if (request.principal?.projectIds === undefined) return;
   try {
@@ -855,7 +868,7 @@ function jsonOpenApi(version: string): Record<string, unknown> {
     required: ["name", "requiredQuantity", "unit", "optional", "alternatives"],
     properties: { id: artifactIdSchema, ...bomWriteProperties }
   };
-  const updateBomLineOpenApiSchema = { type: "object", additionalProperties: false, properties: bomWriteProperties };
+  const updateBomLineOpenApiSchema = { type: "object", additionalProperties: false, properties: { ...bomWriteProperties, itemId: { anyOf: [artifactIdSchema, { type: "null" }], description: "Null clears the selected inventory item; omission preserves it." } } };
   const artifactRoleSchema = {
     type: "string",
     enum: ["source", "cad", "document", "brief", "design_record", "cad_source", "step", "stl", "three_mf", "slicer_project", "gcode", "firmware", "drawing", "validation", "photo", "text", "other"]
@@ -1875,9 +1888,9 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const body = parseBody(commitInspectionCompletionBodySchema, request.body);
     return service.commitInspectionCompletion(params.revisionId, { ...body, actionId: params.inspectionId }, requestContext(request));
   });
-  app.patch(route("/bom-lines/:id"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.updateBomLine(params.id, parseBody(updateBomLineSchema, request.body) as never, parseExpectedVersion(request), requestContext(request)); });
-  app.delete(route("/bom-lines/:id"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.retireBomLine(params.id, parseRequiredExpectedVersion(request), requestContext(request)); });
-  app.post(route("/bom-lines/:id/restore"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.restoreBomLine(params.id, parseRequiredExpectedVersion(request), requestContext(request)); });
+  app.patch(route("/bom-lines/:id"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireBomReferenceScope(request, service, params.id); return service.updateBomLine(params.id, parseBody(updateBomLineSchema, request.body) as never, parseExpectedVersion(request), requestContext(request)); });
+  app.delete(route("/bom-lines/:id"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireBomReferenceScope(request, service, params.id); return service.retireBomLine(params.id, parseRequiredExpectedVersion(request), requestContext(request)); });
+  app.post(route("/bom-lines/:id/restore"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireBomReferenceScope(request, service, params.id); return service.restoreBomLine(params.id, parseRequiredExpectedVersion(request), requestContext(request)); });
   app.get(route("/project-revisions/:id/gaps"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireRevisionScope(request, service, params.id); return service.evaluateBomGaps(params.id); });
   app.get(route("/project-revisions/:id/reservations"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireRevisionScope(request, service, params.id); return service.listReservations(params.id); });
   app.post(route("/project-revisions/:id/reservations"), async (request, reply) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireRevisionScope(request, service, params.id); const mutation = await service.createReservation(params.id, parseBody(createReservationSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });

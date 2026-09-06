@@ -1,3 +1,5 @@
+import { changesReservedRequirement } from "@benchledger/api-contract";
+import type { UpdateBomLine } from "@benchledger/api-contract";
 import { createHash, randomUUID } from "node:crypto";
 import {
   bomAlternativeSchema, bomGapSchema, bomLineSchema, bomLineRoleSchema, bomSpecificationDecisionSchema, bomSpecificationSchema, createInventoryCategorySchema, createInventoryItemSchema, createOfferSchema,
@@ -97,7 +99,7 @@ const legacyCreateBomLineSchema = z.object({
 }).strict();
 const legacyUpdateBomLineSchema = z.object({
   name: z.string().min(1).max(240).optional(),
-  itemId: idSchema.optional(),
+  itemId: idSchema.nullable().optional(),
   role: bomLineRoleSchema.nullable().optional(),
   requiredQuantity: z.number().finite().positive().optional(),
   unit: quantityUnitSchema.optional(),
@@ -2239,20 +2241,23 @@ export class ApplicationService {
 
   async updateBomLine(id: string, input: unknown, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<BomLine>> {
     const lineId = requireId(id, "BOM line id");
-    const parsed = legacyUpdateBomLineSchema.parse(input) as Partial<CreateBomLine>;
+    const parsed = legacyUpdateBomLineSchema.parse(input) as UpdateBomLine;
     return this.mutate(ctx, "project.bom_line.update", "bom_line", lineId, async () => {
       const existing = await this.ports.projects.getBomLine(lineId);
       if (existing === null) throw notFound("BOM line", lineId);
       await this.assertProjectActiveFromRevision(existing.revisionId);
-      if (Object.prototype.hasOwnProperty.call(parsed, "role") && (parsed.role === "reusable" || (existing.role === "consumed" && parsed.role !== "consumed"))) {
+      if (changesReservedRequirement(existing, parsed)) {
         const hasActiveReservation = (await this.ports.projects.listReservations(existing.revisionId))
           .some((reservation) => reservation.lineId === lineId && reservation.status === "active");
-        if (hasActiveReservation) throw conflict("Release or reconcile active reservations before changing this requirement from a part or material", { lineId });
+        if (hasActiveReservation) throw conflict("Release or reconcile active reservations before changing this requirement’s stock, quantity, unit or use", { lineId });
       }
       const merged = canonicalizeBomLineWrite({
         ...existing,
         ...parsed,
-        ...(parsed.constraints === undefined ? { constraints: existing.constraints } : {}),
+        name: parsed.name ?? existing.name,
+        itemId: parsed.itemId === null ? undefined : parsed.itemId ?? existing.itemId,
+        constraints: parsed.constraints ?? existing.constraints,
+        alternatives: parsed.alternatives ?? existing.alternatives,
       });
       if (bomRequirementRequestsPrinter(merged)) {
         throw new ApplicationError("validation", "Printers are selected through build configuration, not BOM requirements");
