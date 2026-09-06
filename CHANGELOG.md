@@ -7,6 +7,9 @@ first public release; all current work is under **Unreleased**.
 
 ### Added
 
+- Technical workspace design with Light, Dark and System themes, compact rows and a collapsible navigation rail
+- Keyboard workspace commands, a project register and counts from loaded records
+
 - Reviewed maker templates and CSV project setup, plus atomic append-only BOM imports
 - Requirement-bound supplier quotes, explicit fit review and currency-separated estimates
 - Versioned repeated-part/plate planning, workstream progress and revision history
@@ -27,6 +30,9 @@ first public release; all current work is under **Unreleased**.
 - LAN deployment, backup/restore, privacy scanning, and public-project community files
 
 ### Changed
+
+- Shared semantic colour tokens, locally served interface fonts and simplified technical copy
+- Focus restoration respects later navigation and newly opened dialogs
 
 - Search and decision-state filtering for larger requirement lists without changing the underlying plan
 - Shared multi-word, accent- and punctuation-aware inventory discovery

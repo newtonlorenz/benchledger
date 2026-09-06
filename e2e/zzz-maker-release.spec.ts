@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 async function login(page: Page) {
   await page.goto("/"); await page.getByLabel("Workspace password").fill("demo-password-please-change"); await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "What are you making?", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
   if ((page.viewportSize()?.width ?? 1440) < 801) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
   await page.getByRole("button", { name: /^Projects/u }).click();
 }

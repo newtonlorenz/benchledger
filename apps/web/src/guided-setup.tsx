@@ -58,15 +58,15 @@ export function GuidedSetup({ adapter, items, onDone, onBusy }: { adapter: Works
   };
   const expired = preview !== undefined && Date.parse(preview.expiresAt) <= Date.now();
   return <div className="guided-setup">
-    <p className="dialog-intro">Describe → review the requirements and their field mapping → create one project atomically. This flow never reserves stock, buys parts or certifies a build.</p>
+    <p className="dialog-intro">Enter the project details. Check the requirements and CSV columns. Review the preview, then create the project. No stock is reserved.</p>
     {receipt ? <section role="status"><h3>Project created</h3><p>{receipt.project.name} and {receipt.bomLines.length} requirements were saved. A refresh can be retried without creating the project again.</p></section> : preview ? <section className="setup-review">
       <h3>Review {preview.proposal.project.name}</h3><p>{preview.proposal.bomLines.length} requirements · {preview.proposal.workItems.length} workstreams · no stock reservations.</p>
       <p>Ready {preview.gaps.totals.readyLines ?? 0} · Check {preview.gaps.totals.checkLines ?? 0} · Decide {preview.gaps.totals.decideLines ?? 0} · Source {preview.gaps.totals.sourceLines ?? 0}</p>
       <ol className="setup-review-lines">{preview.proposal.bomLines.map((line) => <li key={line.localRef}><strong>{line.name}</strong><span>{line.requiredQuantity} {line.unit} · {line.role} · {line.optional ? "optional" : "required"}</span>{line.itemId && <small>Selected stock: {line.itemId}. Selection does not prove availability.</small>}</li>)}</ol>
       {preview.fieldErrors.map((issue, index) => <p role="alert" className="form-error" key={index}>{issue.path}: {issue.message}</p>)}
-      {preview.unresolvedSpecifications.length > 0 && <p>Some requirements remain Decide. They will be retained as unresolved, not converted into purchase or reservation authority.</p>}
+      {preview.unresolvedSpecifications.length > 0 && <p>Some requirements still need a decision. They will remain marked Decide. No stock will be reserved.</p>}
       {expired && !uncertain && <p role="alert">This preview has expired. Return to the draft and review again.</p>}
-      {uncertain && <p role="alert">Creation was not confirmed. Retry this unchanged preview to resolve the same command. Do not create a replacement project.</p>}
+      {uncertain && <p role="alert">Creation is not confirmed. Retry this preview without changes. Do not create a second project.</p>}
     </section> : <fieldset disabled={busy} className="correction-fields">
       <label className="form-field"><span>Project name</span><input aria-label="Guided project name" maxLength={240} value={name} onChange={(event) => setName(event.target.value)} /></label>
       <label className="form-field"><span>Project goal</span><textarea aria-label="Guided project goal" rows={3} maxLength={5000} value={goal} onChange={(event) => setGoal(event.target.value)} /></label>

@@ -36,7 +36,7 @@ describe("build route UI", () => {
   it("uses maker language when the project build approach is undecided", () => {
     const markup = renderToStaticMarkup(<BuildApproachCard project={{ ...projects[0]!, fabricationRoute: "undecided" }} items={[]} expert={false} />);
 
-    expect(markup).toContain("You can choose an approach when you know how you want to build it.");
+    expect(markup).toContain("Select a build approach when the requirements are known.");
     expect(markup).not.toContain("fabrication need");
   });
 
@@ -45,7 +45,7 @@ describe("build route UI", () => {
     const printedProject = { ...projectWithoutPlanningPrinter, fabricationRoute: "printed" as const, artifacts: [] };
     const markup = renderToStaticMarkup(<BuildApproachCard project={printedProject} items={[]} expert={false} />);
     expect(markup).toContain("No printer selected yet");
-    expect(markup).toContain("That’s fine");
+    expect(markup).toContain("Choose or add an owned printer when needed.");
     expect(markup).toContain("Not checked yet");
     expect(markup).toContain("Add a printable file to check fit.");
     expect(markup).not.toContain("compatible");
@@ -123,7 +123,7 @@ describe("build route UI", () => {
 
   it("shows actionable beginner workshop copy and responsive printer cards", () => {
     const markup = renderToStaticMarkup(<OverviewPage items={[]} projects={[{ ...projects[0]!, fabricationRoute: "none" }]} expert={false} sampleMode={false} onNavigate={noop} onOpenProject={noop} onSelectItem={noop} onNewProject={noop} onAddPrinter={noop} />);
-    expect(markup).toContain("That’s fine for electronics and ready-made builds.");
+    expect(markup).toContain("Electronics and ready-made builds do not need a printer.");
     expect(markup).toContain("Add printer");
     expect(markup).toContain("build-approach-card");
     expect(markup).not.toContain("workshop-agent-link");

@@ -14,7 +14,7 @@ const project = { ...structuredClone(projects[0]!), fabricationRoute: "printed" 
 const plan: BuildPlan = { id: "plan", projectId: project.id, projectRevisionId: project.serverRevisionId!, version: 1, name: "Bracket plan", contentSha256: "a".repeat(64), createdAt: "2026-09-06T00:00:00.000Z", createdBy: "synthetic", parts: [{ id: "bracket", name: "Bracket", quantity: 5 }], plates: [{ id: "plate", name: "First plate", copies: 2, parts: [{ partId: "bracket", quantity: 3 }], materials: [{ itemId: "filament", role: "model", side: "single", grams: 12 }], minutes: 40 }], warnings: ["Planning only"], artifactBasis: [], totals: { parts: [{ id: "bracket", required: 5, planned: 6, missing: 0, excess: 1 }], materialGrams: [{ itemId: "filament", grams: 24 }], minutes: 80, timeComplete: true } };
 it("renders bounded guided setup without executing an import", () => {
   const html = renderToStaticMarkup(<GuidedSetup adapter={createSampleWorkspaceAdapter()} items={inventory} onDone={async () => undefined} onBusy={() => undefined} />);
-  expect(html).toContain("Review CSV mapping"); expect(html).toContain("Preview complete project"); expect(html).toContain("never reserves stock");
+  expect(html).toContain("Review CSV mapping"); expect(html).toContain("Preview complete project"); expect(html).toContain("No stock is reserved.");
 });
 it("renders repeated-plate planning and preserves evidence warnings", () => {
   const html = renderToStaticMarkup(<BuildEditor project={project} items={inventory} initial={plan} root="/synthetic" onCancel={() => undefined} onSaved={() => undefined} />);

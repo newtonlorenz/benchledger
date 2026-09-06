@@ -14,6 +14,8 @@
   "dependencies": {
     "@benchledger/api-contract": "0.1.0",
     "@benchledger/domain": "0.1.0",
+    "@fontsource-variable/ibm-plex-sans": "5.3.0",
+    "@fontsource/ibm-plex-mono": "5.3.0",
     "@noble/hashes": "2.4.0",
     "@vitejs/plugin-react": "^5.0.4",
     "react": "^19.1.1",

@@ -156,7 +156,7 @@ async function mockWorkspaceAccess(page: Page) {
 test("completes the LAN-open to password and back access journey without exposing secrets", async ({ page }) => {
   const harness = await mockWorkspaceAccess(page);
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "What are you making?", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Open workspace settings" }).click();
   await expect(page.getByRole("heading", { name: "Workspace access" })).toBeVisible();
   await expect(page.getByText("LAN open", { exact: true })).toBeVisible();
