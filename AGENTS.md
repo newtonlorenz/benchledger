@@ -1,89 +1,71 @@
-# BenchLedger contributor-agent guidance
+# BenchLedger contributor guidance
 
-These instructions apply to the whole repository. The nested `docs/AGENTS.md`
-and `apps/mcp/AGENTS.md` files describe how an agent uses BenchLedger; read them
-when changing MCP capabilities or agent-facing behavior.
+Applies throughout this repository; nested AGENTS.md files add only local
+contributor rules. Runtime user manuals live in docs/agent-quickstart.md and
+apps/mcp/QUICKSTART.md. Read the relevant sections when changing that behaviour,
+not both manuals before every coding task. Skill instructions are workflow
+helpers, not authority to override platform, security or approval boundaries.
 
-## Project boundaries
+## Outcome and architecture
 
-BenchLedger is a beginner-friendly through expert-capable maker inventory and
-project-planning tool for 3D-printing and electronics work. Every product change
-should help answer: what does the user have, what does a project need, what can
-be reused, and what genuinely needs to be bought? Preserve agent-readable
-context for equipment, accessories, consumables, and electronic parts; sourced
-shopping proposals; explicit evidence and provenance; and progressive
-disclosure so expert IDs, dimensions, compatibility, uncertainty, and history do
-not crowd the default UI.
+BenchLedger is a maker inventory and project workspace. Preserve the distinction
+between what is owned, what is confirmed usable, what a project requires, and
+what genuinely needs sourcing. Keep beginner UI simple and expose exact identity,
+compatibility, uncertainty and provenance when decision-relevant.
 
-BenchLedger is a TypeScript modular monolith. Keep domain rules in
-`packages/domain`, orchestration and ports in `packages/application`, durable
-adapters in `packages/database`, `packages/artifacts`, and `packages/runtime`,
-and transport/UI concerns in `apps/server`, `apps/mcp`, and `apps/web`. The web,
-HTTP, and MCP surfaces must share application behavior instead of bypassing it.
+Keep domain rules in packages/domain, orchestration and ports in
+packages/application, durable adapters in packages/database, packages/artifacts
+and packages/runtime, and transport/UI in apps/server, apps/mcp and apps/web.
+All surfaces share application behaviour. Preserve append-only evidence and
+optimistic concurrency; never fix a failure by weakening a security invariant.
 
-This is a public repository. Use synthetic fixtures only. Never commit private
-inventory, projects, artifacts, supplier or order history, email identifiers,
-hostnames or private addresses, local filesystem paths, credentials, tokens,
-environment files, databases, logs, backups, or remote-service output that
-contains private data. Plaintext secrets belong in a local secret store; runtime
-configuration and persistent data stay outside the checkout.
+## Work on the requested change
 
-Preserve append-only evidence and audit history. Keep purchasing, publication,
-deployment, credential changes, destructive cleanup, printer control, firmware,
-heating, and physical validation behind explicit human approval.
+Inspect branch/worktree state, nearby code, relevant instructions and existing
+tests. Preserve unrelated changes. Use a focused branch from current main
+(codex/ prefix for Codex-created branches), never direct commits to main.
+Proceed on reversible work within the authorised task; ask only when a missing
+answer materially changes correctness, risk or scope. Do not turn a small edit
+into a full project lifecycle, redesign or deployment.
 
-## Required lifecycle
+Use actual advertised tools and current schemas. A reference to a service is
+not a live connection. Report the specific blocked step and continue independent
+safe work. Delegate only with available tools, separate ownership and a real
+benefit; the lead remains responsible for integration and verification.
 
-1. **Local development**
-   - Start by reading `git status`, the current branch/worktree state, and the
-     instructions nearest the files you will change.
-   - Work on a focused branch from current `main`; Codex-created branches use the
-     `codex/` prefix. Do not commit directly to `main`.
-   - Use Node.js 24 and npm 11. Install exactly from the lockfile with `npm ci`.
-   - Write or update the smallest useful test before implementation for behavior
-     changes. Preserve the repository's 80% coverage thresholds.
-2. **Local verification**
-   - During iteration, run the focused workspace/unit/type/browser check that
-     covers the change.
-   - Run `npm run public:check` before any branch is shared. It is a mandatory
-     privacy and public-source gate, not a substitute for tests.
-   - Run `npm run check` before requesting review. It builds all packages/apps,
-     typechecks, runs coverage-gated Vitest tests, and runs Playwright flows.
-   - Review `git diff` and `git status`; confirm generated output and private
-     runtime files are absent.
-3. **Remote Docker integration testing**
-   - The maintainer-provided LAN endpoint is a development/test deployment, not
-     production. Its base URL and credentials are private configuration supplied
-     out of band; never add them to tracked files or public reports.
-   - First check the public `/api/v1/health` and `/api/v1/ready` endpoints. A
-     healthy response proves service reachability and dependency readiness only;
-     it does not prove the deployed revision matches the local branch.
-   - Treat the remote service as read-only unless the user explicitly approves a
-     scoped integration mutation. Use synthetic, isolated records and least-
-     privilege credentials for approved authenticated tests.
-   - Do not run remote `docker compose up/down/build`, restart, exec, prune,
-     migration, import, restore, or deployment commands without explicit user
-     approval. Do not inspect or copy remote environment variables, credentials,
-     databases, volumes, artifacts, or backups.
-   - Record the local commit, endpoint role, checks performed, and observed
-     service identity/version. Report legacy or mismatched deployment identity;
-     do not silently redeploy it.
-4. **Open-source contribution**
-   - Keep commits focused and use conventional subjects where practical.
-   - Contributions flow through a branch and pull request. Never push, publish,
-     open or merge a pull request, create a release, or change GitHub settings
-     without explicit user approval.
-   - The PR must state outcome, focused and full checks, remote integration
-     evidence or why it was not run, privacy/security impact, and migration or
-     rollback notes. Required GitHub checks remain authoritative.
+## Verification and contribution
 
-## Documentation and capability parity
+Use Node.js 24 and npm 11; install from the lockfile with npm ci. For behaviour
+changes, write/update the smallest useful regression test and run focused
+checks while iterating. Preserve the 80% coverage thresholds.
 
-Update `docs/capability-map.md`, the relevant agent quickstart, OpenAPI-facing
-behavior, and UI documentation together when a capability changes. Keep the
-beginner path clear while preserving exact evidence for expert use. Shopping
-lists must retain source, observation time, package quantity, price/currency,
-reuse alternatives, and inspect-first uncertainty; they are proposals, never
-purchase authority. Deployment examples must remain generic and safe for public
-source; maintainer-specific hosts and credentials belong only in private
-configuration.
+Run npm run public:check before sharing source and npm run check before
+requesting review. Required GitHub checks remain authoritative. Never present
+unrun, stale or failed checks as passing. Where execution is unavailable, keep
+the contribution draft and state which gates are outstanding. Review the final
+diff separately for private data, unintended files and broken references.
+
+Use focused commits and pull requests, with the outcome, exact checks/results,
+security impact and rollback notes. Push, PR, merge and release require user
+authorisation; approval for one does not authorise deployment. Follow
+CONTRIBUTING.md and docs/development-workflow.md for the detailed workflow.
+
+## Privacy and external effects
+
+This repository is public: synthetic fixtures only. Never commit real inventory,
+orders, email identifiers, private project files, hosts/addresses, local paths,
+credentials, environment files, databases, logs, backups or private tool output.
+Secrets and persistent runtime data stay outside the checkout.
+
+Purchasing, publication, deployment, credential changes, destructive cleanup,
+printer control/heating, firmware flashing and physical tests require explicit
+human approval. Remote integration is read-only unless separately authorised.
+Check health/readiness and deployed identity; reachability is not revision
+parity. Do not inspect remote secrets or alter containers, volumes or databases
+as an incidental fix. See docs/approval-boundaries.md.
+
+Update affected capability, API, UI and agent documentation together when
+behaviour changes. Preserve offer source/time, package quantities, price/currency,
+reuse alternatives and inspect-first uncertainty. Shopping is a proposal, never
+purchase authority. Store dated findings in task/PR records, not as permanent
+instructions. Finish with what changed, what was verified and any real blocker.
