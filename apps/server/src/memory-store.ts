@@ -311,7 +311,7 @@ class MemoryInventory implements InventoryPort {
     const current = this.items.get(itemId);
     if (!current || current.retiredAt !== undefined) throw new ApplicationError("not_found", `Inventory item '${itemId}' was not found`);
     ensureVersion(current.version, expectedVersion, "Inventory item");
-    if ((current.allocatedQuantity ?? (canCount(current.evidence.state) ? current.quantity - current.availableQuantity : 0)) > 0) throw new ApplicationError("conflict", "Release stock set aside for projects before deleting this item. Archive the project or release its reservation, then try again.");
+    if (canCount(current.evidence.state) && current.quantity > current.availableQuantity) throw new ApplicationError("conflict", "Release stock set aside for projects before deleting this item. Archive the project or release its reservation, then try again.");
     const retiredAt = iso();
     const next = { ...current, retiredAt, updatedAt: retiredAt, version: current.version + 1 };
     this.items.set(itemId, next);
