@@ -1,2 +1,8 @@
 blank_issues_enabled: false
-contact_links: []
+contact_links:
+  - name: Questions, setup help, and ideas
+    url: https://github.com/newtonlorenz/benchledger/discussions
+    about: Use Discussions when you want help, want to show what you are building, or have an idea that is not yet a focused feature request.
+  - name: Security vulnerabilities
+    url: https://github.com/newtonlorenz/benchledger/security/policy
+    about: Please report vulnerabilities privately through the security policy rather than opening a public issue.
