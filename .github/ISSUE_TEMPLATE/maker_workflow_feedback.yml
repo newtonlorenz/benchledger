@@ -1,0 +1,69 @@
+name: Maker workflow feedback
+description: Tell us where BenchLedger got in the way of a real maker workflow
+title: "[Workflow]: "
+labels: [enhancement, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        BenchLedger is shaped by real workshop workflows. Describe the friction, not a perfect solution. Use synthetic or generalized examples only — never upload private inventory, project files, order details, credentials, databases, or tokens.
+  - type: textarea
+    id: build
+    attributes:
+      label: What were you trying to make?
+      description: A short, non-private description of the project and your maker setup.
+      placeholder: A printed electronics enclosure using an FFF printer and an ESP32 board.
+    validations:
+      required: true
+  - type: textarea
+    id: friction
+    attributes:
+      label: Where did the workflow become confusing or slow?
+      description: Tell us the step, decision, or information you could not find or trust.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What would have made the next action obvious?
+      description: Describe the outcome you wanted. You do not need to propose an implementation.
+    validations:
+      required: true
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Where were you in the project?
+      options:
+        - Setting up the workshop
+        - Checking inventory
+        - Starting a project
+        - Defining requirements / BOM
+        - Checking compatibility or quantity
+        - Sourcing missing items
+        - Managing files / revisions
+        - Planning or validating a build
+        - Closing out the project
+        - Using an AI agent / MCP client
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: experience
+    attributes:
+      label: Which view were you using?
+      options:
+        - Beginner / default view
+        - Technical details enabled
+        - Agent / MCP only
+        - Not sure
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: Any example data in this report is synthetic or generalized.
+          required: true
+        - label: This is workflow feedback, not a security vulnerability or credential disclosure.
+          required: true
