@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/v3";
 import { idSchema, isoDateSchema } from "./schemas.js";
 export const memberRoleSchema = z.enum(["viewer", "editor", "admin"]);
 const username = z.string().trim().toLowerCase().min(3).max(80).regex(/^[a-z0-9][a-z0-9._@+-]*$/u);

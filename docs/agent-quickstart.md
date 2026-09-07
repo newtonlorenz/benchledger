@@ -321,3 +321,12 @@ requirement-bound quotes, immutable plate plans, workstreams and revision histor
 These operations reuse the shared application, expected versions and stable
 command keys. Planning and quote review never imply stock, purchasing or
 physical execution authority. Named-account activation remains gated off.
+
+## Removing records from the workspace
+
+Use **Delete project** in the project header, or open an inventory item or printer
+and choose **Delete item** or **Delete printer**. Confirm once. History remains
+retained, but these actions cannot be undone. Archive a project from Project
+settings if you may need to restore it. Release allocated stock before deleting
+an inventory item; do not change its physical count to bypass this safeguard.
+Inventory deletion is a browser/HTTP action, not an advertised MCP tool.

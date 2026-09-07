@@ -1060,7 +1060,12 @@ function jsonOpenApi(version: string): Record<string, unknown> {
           }
         }
       },
-      "/inventory/{id}": { get: { responses: { "200": { description: "Inventory item" } } }, patch: { responses: { "200": { description: "Updated inventory item" } } } },
+      "/inventory/{id}": { delete: {
+        summary: "Delete an inventory item or printer from active lists, retaining history",
+        description: "Workspace-wide write access and session CSRF protection apply. Allocated stock must be released first. No physical stock event is invented. Existing project references retain their identity and need replacement stock. Use a stable Idempotency-Key when retrying.",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }, { name: "If-Match", in: "header", required: true, schema: { type: "integer", minimum: 1 } }, { name: "Idempotency-Key", in: "header", schema: { type: "string" } }],
+        responses: { "200": { description: "Retired item with audit receipt" }, "400": { description: "Current item version required" }, "401": { description: "Authentication required" }, "403": { description: "Write access or CSRF rejected" }, "404": { description: "Item not found" }, "409": { description: "Stale version or allocated stock; refresh or release stock first" } }
+      }, get: { responses: { "200": { description: "Inventory item" } } }, patch: { responses: { "200": { description: "Updated inventory item" } } } },
       "/inventory/{id}/commission": {
         post: {
           summary: "Commission an uncertain inventory item",
@@ -1814,6 +1819,11 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     if (requestIdempotencyKey(request) === undefined) throw new ApplicationError("validation", "Idempotency-Key is required when commissioning inventory");
     const mutation = await service.commissionInventoryItem(params.id, parseBody(commissionInventoryItemSchema, request.body), expectedVersion, requestContext(request));
     return reply.code(201).send(mutation);
+  });
+  app.delete(route("/inventory/:id"), async (request) => {
+    requireScope(request, "write", auth); rejectScopedGlobalAccess(request);
+    const params = request.params as { id: string };
+    return service.deleteInventoryItem(params.id, parseExpectedVersion(request), requestContext(request));
   });
   app.patch(route("/inventory/:id"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.updateInventoryItem(params.id, parseBody(updateInventoryItemSchema, request.body) as never, parseExpectedVersion(request), requestContext(request)); });
   app.get(route("/inventory/:id/product-profile"), async (request) => {

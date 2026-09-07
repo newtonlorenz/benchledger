@@ -73,7 +73,15 @@ test("both themes retain text contrast and serve fonts from the application", as
     await theme(page, name);
     const contrast = await page.evaluate(() => {
       const style = getComputedStyle(document.documentElement);
-      const luminance = (token: string) => { const hex = style.getPropertyValue(token).trim().replace("#", ""); const rgb = [0, 2, 4].map((index) => parseInt(hex.slice(index, index + 2), 16) / 255).map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4); return rgb[0]! * 0.2126 + rgb[1]! * 0.7152 + rgb[2]! * 0.0722; };
+      // CSS minifiers may shorten hex values or emit named/rgb colours.
+      // Measure the browser's rendered sRGB value instead of assuming six hex digits.
+      const canvas = document.createElement("canvas"); canvas.width = canvas.height = 1;
+      const context = canvas.getContext("2d")!;
+      const luminance = (token: string) => {
+        context.fillStyle = style.getPropertyValue(token).trim(); context.fillRect(0, 0, 1, 1);
+        const rgb = Array.from(context.getImageData(0, 0, 1, 1).data).slice(0, 3).map((channel) => channel / 255).map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+        return rgb[0]! * 0.2126 + rgb[1]! * 0.7152 + rgb[2]! * 0.0722;
+      };
       return [["--ink", "--surface"], ["--ink-soft", "--surface-strong"], ["--ink-muted", "--surface-soft"], ["--on-accent", "--accent"], ["--moss-dark", "--moss-soft"], ["--amber-ink", "--amber-soft"], ["--red", "--red-soft"], ["--slate", "--slate-soft"]].map(([a, b]) => { const first = luminance(a!), second = luminance(b!); return { token: a, ratio: (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05) }; });
     });
     for (const pair of contrast) expect(pair.ratio, `${name} ${pair.token}`).toBeGreaterThanOrEqual(4.5);

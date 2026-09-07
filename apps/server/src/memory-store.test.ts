@@ -5,6 +5,25 @@ import { ApplicationService } from "@benchledger/application";
 import { createMemoryRuntime, MemoryUnitOfWork } from "./memory-store.js";
 
 describe("MemoryInventory", () => {
+  it("uses live stock allocation when deleting seeded inventory", async () => {
+    const runtime = createMemoryRuntime([{
+      id: "delete-reserved-item", name: "Reserved item", kind: "electronic", quantity: 1, availableQuantity: 1, allocatedQuantity: 0, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" }, createdAt: "2026-09-07T00:00:00.000Z", updatedAt: "2026-09-07T00:00:00.000Z", version: 1
+    }]);
+    await runtime.projects.createProject({ id: "delete-reserved-project", name: "Delete reservation test", status: "planned" });
+    const revision = await runtime.projects.createProjectRevision("delete-reserved-project", { name: "Initial", status: "concept" });
+    const line = await runtime.projects.createBomLine(revision.id, { name: "Reserved item", role: "consumed", itemId: "delete-reserved-item", requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} });
+    const reservation = await runtime.projects.createReservation(revision.id, { lineId: line.id, itemId: "delete-reserved-item", quantity: 1 });
+    const reserved = (await runtime.inventory.getItem("delete-reserved-item"))!;
+    expect(reserved).toMatchObject({ allocatedQuantity: 0, availableQuantity: 0 });
+    await expect(Promise.resolve().then(() => runtime.inventory.retireItem(reserved.id, reserved.version))).rejects.toMatchObject({ code: "conflict" });
+    // A cached positive allocation is equally stale after release.
+    runtime.inventory.items.set(reserved.id, { ...reserved, allocatedQuantity: 1 });
+    await runtime.projects.releaseReservation(reservation.id, reservation.version);
+    const released = (await runtime.inventory.getItem(reserved.id))!;
+    expect(released).toMatchObject({ allocatedQuantity: 1, availableQuantity: 1 });
+    await expect(runtime.inventory.retireItem(released.id, released.version)).resolves.toMatchObject({ retiredAt: expect.any(String) });
+  });
+
   it("does not change a directly reserved BOM line to reusable", async () => {
     const runtime = createMemoryRuntime([{
       id: "reserved-role-item", name: "Reserved board", kind: "electronic", quantity: 1, availableQuantity: 1, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" }, createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1

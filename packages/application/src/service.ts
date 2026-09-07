@@ -43,7 +43,7 @@ import type {
   ReservationDetails, StockMutation, UpdateInventoryInput, UploadSessionDetails, UsageInput,
   CatalogProductListOptions, BuildConfigurationListOptions, InventoryCategoryListOptions, InventoryCategoryPort, InspectionPort
 } from "./ports.js";
-import { z } from "zod";
+import { z } from "zod/v3";
 import { buildReconciliationDocument, reconciliationCommitId, reconciliationDraftId, type ReconciliationSourceSnapshot } from "./reconciliation.js";
 import { canonicalInventoryBulkUpdate, inventoryBulkUpdateFingerprint, normalizeInventoryBulkChanges } from "./inventory-bulk.js";
 import { deriveInspectionActions, hashInspectionBasis, pageInspectionActions } from "./inspection.js";
@@ -1587,6 +1587,16 @@ export class ApplicationService {
         }
         throw error;
       }
+    });
+  }
+
+  async deleteInventoryItem(id: string, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<InventoryItem>> {
+    const itemId = requireId(id, "item id");
+    if (!Number.isSafeInteger(expectedVersion) || (expectedVersion ?? 0) < 1) throw new ApplicationError("validation", "Reload the item before deleting it; its current version is required");
+    const commandCtx = commandContext(ctx, "inventory.item.delete", { itemId, expectedVersion });
+    return this.mutate(commandCtx, "inventory.item.delete", "inventory_item", itemId, async () => {
+      const item = await this.ports.inventory.retireItem(itemId, expectedVersion!, commandCtx);
+      return { value: item, entityId: itemId, version: item.version };
     });
   }
 

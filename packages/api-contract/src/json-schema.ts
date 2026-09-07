@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/v3";
 /** Closed subset used by typed maker commands. Unsupported schema types fail at startup instead of advertising a misleading tool. Refinements remain enforced by Zod on execution. */
 export function commandJsonSchema(schema: z.ZodTypeAny): Record<string, unknown> {
   if (schema instanceof z.ZodOptional) return commandJsonSchema(schema.unwrap());
