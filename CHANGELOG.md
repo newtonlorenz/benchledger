@@ -34,6 +34,11 @@ first public release; all current work is under **Unreleased**.
 
 ### Changed
 
+- Corrected atomic-setup MCP discovery, explicit evidence/unit enums and object-root tool unions
+- Added official-client discovery and transport regression checks, including authenticated no-SSE responses
+- Added a private-config host MCP bridge with scoped credentials, no redirects and unchanged-command recovery
+- Uncounted candidates remain inspect-first; file roles and project context no longer imply validation or arbitrary workstream selection
+
 - Project quotes now precede legacy inventory offers; requirement add/import actions sit above the plan
 - Guided setup shows actual progress steps; import dialogs have explicit focus and isolated background controls
 

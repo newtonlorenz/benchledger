@@ -148,7 +148,9 @@ Generic MCP does not expose upload sessions or transfer capabilities: its raw
 `begin_artifact_upload`, `finalize_artifact_upload`, and download tools fail
 closed. Never send binary files as base64 MCP payloads, reveal transfer tokens,
 use host paths, execute an upload, or replace evidence from an older revision.
-Atomic 50-file transfers and download-to-host remain deferred.
+Atomic multi-file transfer remains deferred. The authorised host helper supports
+single-file upload and verified download; see references/client-setup.md and
+apps/mcp/QUICKSTART.md. No filesystem capability is added to generic MCP.
 
 Output: revision binding, role, filename, byte length, SHA-256, and build-
 configuration hash/unknowns.

@@ -1241,7 +1241,8 @@ function mapGapEvaluation(value: ServerGapEvaluation | undefined, bom: readonly 
 type ArtifactScopeHint = { readonly projectRevisionId?: string; readonly workItemId?: string; readonly workItemRevisionId?: string };
 
 function mapArtifact(artifact: ServerArtifact, revision?: ServerRevision, hint?: ArtifactScopeHint): Artifact {
-  const role: Artifact["role"] = artifact.role === "step" ? "STEP" : artifact.role === "stl" ? "STL" : artifact.role === "three_mf" || artifact.role === "slicer_project" || artifact.role === "gcode" ? "Build plate" : artifact.role === "cad_source" ? "Editable CAD" : artifact.role === "text" || artifact.role === "brief" ? "Notes" : "Validation";
+  const labels: Readonly<Record<string, Artifact["role"]>> = { step: "STEP", stl: "STL", three_mf: "Build plate", slicer_project: "Build plate", gcode: "Build plate", cad_source: "Editable CAD", cad: "Editable CAD", source: "Editable CAD", text: "Notes", brief: "Notes", design_record: "Document", document: "Document", drawing: "Drawing", firmware: "Firmware", photo: "Photo", validation: "Validation" };
+  const role: Artifact["role"] = labels[artifact.role] ?? "File";
   const workItemId = artifact.workItemId ?? hint?.workItemId;
   const projectRevisionId = artifact.projectRevisionId
     ?? (workItemId === undefined ? artifact.revisionId : undefined)
@@ -1400,7 +1401,6 @@ function mapProject(project: ServerProject): Project {
   const projectRevisions = [...(project.projectRevisions ?? []), ...(project.revisions ?? []), ...(revision ? [revision] : [])]
     .map(mapRevisionReference)
     .filter((candidate, index, values) => values.findIndex((value) => value.id === candidate.id) === index);
-  const workItem = workItems[0];
   const currentRevision = revision ? `r${String(revision.number).padStart(2, "0")}` : project.currentRevisionId ?? "No revision";
   const rawBuildConfig = revision?.buildConfigSnapshot ?? revision?.buildConfiguration;
   const buildConfigSnapshot = revision && rawBuildConfig !== undefined
@@ -1412,13 +1412,13 @@ function mapProject(project: ServerProject): Project {
   return {
     id: project.id,
     name: project.name,
-    subtitle: workItem?.description ?? project.description ?? "A maker project in the workspace",
+    subtitle: project.description ?? "A maker project in the workspace",
     description: project.description ?? "Add a project goal to define the next task.",
     status,
     version: typeof project.version === "number" ? project.version : 1,
     updated: project.updatedAt.slice(0, 10),
     currentRevision,
-    workItem: workItem?.name ?? "Project setup",
+    workItem: "Project setup",
     railStep: railStepFor(revision?.status),
     bom: mappedBom,
     artifacts: currentArtifacts,

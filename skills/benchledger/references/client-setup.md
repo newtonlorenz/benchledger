@@ -53,3 +53,32 @@ Before calling an integration ready, use synthetic data to check that the agent:
 Run evaluations against an isolated synthetic instance. Do not forward-test a
 write-capable skill against private production inventory without explicit user
 authorization.
+
+## Verified host connection
+
+A skill is not a connection. A client must complete MCP initialisation and
+`tools/list` with a credential authorised by the server before any work is
+attributed to live MCP. Browser LAN access is not a substitute.
+
+A host with Node.js 24 can run `scripts/mcp-http-client.mjs --config <private-file>`
+for stdio clients. The private file contains the exact MCP endpoint, bearer token
+and (only for a trusted private HTTP LAN) `allowInsecureLan: true`. It must be a
+regular file owned by that user with mode 0600. Keep it outside the repository.
+The bridge sends credentials only to the fixed endpoint, refuses redirects and
+makes no automatic retries. Unconfirmed unchanged commands reuse their key in
+that running connection; after a restart, re-read state before a new write.
+
+Register only the intended project in the server token allow-list. A restricted
+project token can update that project but cannot create a new workspace-global
+project or change shared inventory. Project setup that creates new identities
+requires a separately authorised creator, not a silently widened project token.
+Keep the installed skill folder in sync with its versioned repository copy.
+
+## Schema dialects
+
+Use the advertised schema for each tool. Legacy item and quantity tools use
+`piece` and evidence labels such as `physical_count`, `delivery` and `order`.
+The atomic setup, quote, build-plan and close-out contracts use canonical
+application units such as `each`. A delivery is not counted stock. Do not copy
+REST evidence labels into legacy MCP input fields, or infer compatibility from
+a name or catalogue record. Generic documents are not validation evidence.

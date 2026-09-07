@@ -397,3 +397,15 @@ append actions together. Shopping shows project quotes first and retains older
 inventory-linked offers separately. Files supports scoped search and drop staging;
 the user must still confirm Add files. No new API, permission or stock semantics
 are introduced by these navigation changes.
+
+## Strict MCP client readiness
+
+All advertised input schemas are validated as JSON Schema and against the
+supported MCP client envelope. The SDK integration test reads capabilities,
+creates a reviewed project, and verifies that delivery candidates stay
+inspect-first even when their exact-item relationship is confirmed.
+The standalone host stdio bridge is a credentialed transport, not an added
+MCP filesystem or shell tool. Server-side project allow-lists remain authoritative.
+Browser-only project pages identify the project, not an arbitrary first workstream.
+Document, drawing, firmware and photo roles are displayed separately from
+explicit validation artefacts; unknown roles display as File.

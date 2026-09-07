@@ -4,7 +4,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   // Exercise the shared application source in integration tests, rather than
   // its last compiled workspace copy. Build/typecheck retain package boundaries.
-  resolve: { alias: [{ find: /^@benchledger\/application$/u, replacement: fileURLToPath(new URL("./packages/application/src/index.ts", import.meta.url)) }] },
+  resolve: { alias: [{ find: /^@benchledger\/application$/u, replacement: fileURLToPath(new URL("./packages/application/src/index.ts", import.meta.url)) }, { find: /^@benchledger\/mcp$/u, replacement: fileURLToPath(new URL("./apps/mcp/src/index.ts", import.meta.url)) }] },
   test: {
     include: ["apps/**/*.test.ts", "apps/**/*.test.tsx", "packages/**/*.test.ts"],
     coverage: {

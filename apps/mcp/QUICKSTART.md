@@ -462,3 +462,18 @@ requirement-bound quotes, immutable plate plans, workstreams and revision histor
 These operations reuse the shared application, expected versions and stable
 command keys. Planning and quote review never imply stock, purchasing or
 physical execution authority. Named-account activation remains gated off.
+
+## Client readiness and schema checks
+
+Discovery is checked against the official MCP SDK and a JSON Schema validator
+for every advertised tool. Atomic project setup accepts project/revision/BOM
+properties directly, not a second schema wrapper. Object unions retain an
+object root for strict clients. Legacy evidence and quantity enums are explicit;
+canonical setup and maker commands retain their separate application vocabulary.
+
+The authenticated HTTP transport supports JSON request/response MCP. It returns
+202 without a body for notifications and 405 for unsupported GET/SSE and DELETE
+methods. Origin headers, when present, must match the configured application
+origin. Bearer authentication and project ancestry checks apply independently
+of browser access. See the host setup in the BenchLedger skill's
+`references/client-setup.md` and `node scripts/mcp-http-client.mjs --help`.

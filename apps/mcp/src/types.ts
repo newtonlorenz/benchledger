@@ -1,3 +1,5 @@
+export const MCP_QUANTITY_UNITS = ["piece", "gram", "millimetre", "millilitre", "metre", "roll", "set"] as const;
+export const MCP_EVIDENCE_STATES = ["physical_count", "commissioned", "measured", "manufacturer", "order", "delivery", "user_reported", "inferred", "unknown"] as const;
 /**
  * Public, model-neutral contracts for the BenchLedger MCP adapter.
  *
