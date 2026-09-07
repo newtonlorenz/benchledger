@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 async function login(page: Page) {
   await page.goto("/"); await page.getByLabel("Workspace password").fill("demo-password-please-change"); await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "What are you making?", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
   if ((page.viewportSize()?.width ?? 1440) < 801) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
   await page.getByRole("button", { name: /^Projects/u }).click();
 }
@@ -31,8 +31,9 @@ for (const width of [1440, 390]) test(`reviewed setup, append and quotes are usa
   await expect(page.getByRole("heading", { name: "Review 1 new requirements", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Confirm append requirements", exact: true }).click();
   await expect(page.locator(".bom-row")).toHaveCount(3);
+  await page.keyboard.press("Escape");
   await page.getByRole("tab", { name: /^Shopping list/u }).click();
-  await page.getByText("Supplier quotes for requirements", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Supplier quotes for this project", exact: true })).toBeVisible();
   const row = page.locator(".sourcing-requirement").filter({ has: page.getByRole("heading", { name: "M3 mounting screw", exact: true }) });
   await row.getByRole("button", { name: "Record quote for M3 mounting screw", exact: true }).click();
   await row.getByLabel("Supplier", { exact: true }).fill("Synthetic supplier"); await row.getByLabel("Supplier source URL").fill("https://supplier.example/fasteners");
@@ -43,11 +44,11 @@ for (const width of [1440, 390]) test(`reviewed setup, append and quotes are usa
   await expect(page.locator(".sourcing-totals")).toContainText("€7.00");
   expect(await (await page.request.get("/api/v1/inventory")).json()).toEqual(inventoryBefore);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.reload(); await page.getByText("Supplier quotes for requirements", { exact: true }).click(); await expect(page.locator(".sourcing-totals")).toContainText("€7.00");
+  await page.reload(); await expect(page.getByRole("heading", { name: "Supplier quotes for this project", exact: true })).toBeVisible(); await expect(page.locator(".sourcing-totals")).toContainText("€7.00");
 });
 test("a maker saves repeated plate plans and workstream progress without consuming stock", async ({ page }) => {
   await login(page); await guided(page, "Release repeated plates");
-  await page.getByText("Parts, plates and workstreams", { exact: true }).click();
+  await page.getByRole("tab", { name: "Build planning", exact: true }).click();
   await page.getByRole("button", { name: "Create build plan", exact: true }).click();
   await page.getByRole("button", { name: "Add build part", exact: true }).click();
   await page.getByLabel("Build part 1 name").fill("Bracket"); await page.getByLabel("Build part 1 quantity").fill("5");
@@ -63,7 +64,7 @@ test("a maker saves repeated plate plans and workstream progress without consumi
   await page.getByLabel("Status for Fit validation", { exact: true }).selectOption("in_progress");
   await page.locator(".workstream-row").filter({ hasText: "Fit validation" }).getByRole("button", { name: "Save workstream progress", exact: true }).click();
   await expect(page.locator(".workstream-row > summary").filter({ hasText: "Fit validation" })).toContainText("in progress");
-  await page.reload(); await page.getByText("Parts, plates and workstreams", { exact: true }).click();
+  await page.reload(); await page.getByRole("tab", { name: "Build planning", exact: true }).click();
   await expect(page.locator(".build-planning")).toContainText("2 planned runs");
   await page.getByText("Project revision history", { exact: true }).click();
   await page.getByRole("button", { name: /Read revision 1:/u }).click();

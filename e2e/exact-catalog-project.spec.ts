@@ -7,7 +7,7 @@ async function signIn(page: Page): Promise<void> {
   await page.goto("/");
   await page.getByLabel("Workspace password").fill(demoPassword);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("heading", { name: "What are you making?" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Workspace overview" })).toBeVisible();
 }
 
 function catalogResponse(kind: "filament" | "printer", query: string) {
@@ -70,7 +70,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
 
   await signIn(page);
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "What do you have?" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Inventory" })).toBeVisible();
 
   const printerResponse = await addExactInventory(
     page,

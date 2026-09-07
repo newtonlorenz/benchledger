@@ -383,3 +383,17 @@ requirement-bound quotes, immutable plate plans, workstreams and revision histor
 These operations reuse the shared application, expected versions and stable
 command keys. Planning and quote review never imply stock, purchasing or
 physical execution authority. Named-account activation remains gated off.
+
+## Task-oriented browser navigation
+
+The home page derives attention from loaded projects and existing readiness
+results. It does not invent inventory totals or validation evidence. Unknown
+results remain explicit. Pins, filters, sort and recently opened project IDs
+are browser preferences, filtered against the projects the workspace returned.
+Home Check/Decide actions open the selected project with that requirement filter.
+
+Build planning is a direct project route. Plan exposes add and reviewed CSV
+append actions together. Shopping shows project quotes first and retains older
+inventory-linked offers separately. Files supports scoped search and drop staging;
+the user must still confirm Add files. No new API, permission or stock semantics
+are introduced by these navigation changes.

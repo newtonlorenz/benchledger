@@ -9,9 +9,9 @@ revision and bounded requirements/workstreams atomically, without reservations.
 An acknowledged creation is not repeated when a subsequent workspace refresh
 fails.
 
-The Plan tab has **Parts, plates and workstreams** and **Import requirements
-from CSV** disclosures. Larger workflows are loaded on demand so the ordinary
-requirements view remains usable. CSV append supports 1–24 rows and a 256 KiB
+The **Build planning** tab opens parts, plates and workstreams directly. Its
+route can be bookmarked. The Plan toolbar opens **Import requirements from CSV**
+in a review dialog. Larger workflows still load only when opened. CSV append supports 1–24 rows and a 256 KiB
 source. Columns and decimal conventions are reviewed explicitly. Exact owned
 inventory IDs are never auto-mapped. A preview is actor-owned and expires;
 changed revision, requirement or selected-stock data requires a new review.
@@ -26,7 +26,9 @@ remain warnings, not invented validation. No slicer, printer or stock operation
 is performed. Workstreams retain independent progress/notes/due dates and
 provide read-only access to project revision history.
 
-The Shopping list offers **Supplier quotes for requirements**. These quotes can
+The Shopping list opens **Supplier quotes for this project** first, with views
+for Needs sourcing, Needs review and All requirements. Filtering applies to the
+loaded page and does not change the full quote totals. These quotes can
 be recorded before owning the item, unlike inventory-linked supplier offers.
 An observation includes its source URL, date, pack quantity/unit, price/currency,
 shipping and tax information. The application does not fetch the URL or place
@@ -34,7 +36,8 @@ an order. A reviewed selection is tied to the observed requirement version.
 Stale quotes and changed requirements need renewed review. Only required Source
 gaps contribute to the quote estimate; currencies are kept separate, missing
 shipping/tax remain explicit, and incompatible units are never guessed.
-The existing inventory-offer totals and requirement-quote totals are separate.
+Existing offers remain under **Inventory-linked supplier records**. Their totals
+and requirement-quote totals are separate.
 
 ## HTTP and agent parity
 

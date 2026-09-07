@@ -26,6 +26,7 @@ BenchLedger keeps the information around a maker project together. Use it to:
 - Start projects with work items, revisions, bills of materials (BOMs), and build gaps.
 - Correct project details and requirements, with reversible removal and retained history.
 - Export a read-only project brief or requirements CSV for review and handoff.
+- Use light or dark themes, compact rows and keyboard commands. See the [interface guide](docs/ui-design.md).
 - See what you can reuse, what needs a physical check, and what is missing.
 - Compare recorded supplier offers, package quantities, observed prices, and alternatives.
 - Keep versioned CAD, STEP, STL, 3MF, firmware, drawing, and validation files.

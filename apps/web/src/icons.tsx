@@ -1,6 +1,9 @@
 import type { ReactNode, SVGProps } from "react";
 
 export type IconName =
+  | "pin"
+  | "command"
+  | "panel-left"
   | "arrow-left"
   | "arrow-right"
   | "arrow-up-right"
@@ -45,6 +48,9 @@ export type IconName =
   | "wrench";
 
 const paths: Record<IconName, ReactNode> = {
+  pin: <><path d="m9 3 7 1-2 5 4 4-1 1-5-1-3 3-1-1 2-5-3-4 2-3ZM9 15l-5 5" /></>,
+  command: <><path d="M8 8H5a3 3 0 1 1 3-3v14a3 3 0 1 1-3-3h14a3 3 0 1 1-3 3V5a3 3 0 1 1 3 3H8Z" /></>,
+  "panel-left": <><rect x="3" y="4" width="18" height="16" rx="1" /><path d="M9 4v16" /></>,
   "arrow-left": <path d="M19 12H5m6 6-6-6 6-6" />,
   "arrow-right": <path d="M5 12h14m-6-6 6 6-6 6" />,
   "arrow-up-right": <><path d="M7 17 17 7" /><path d="M7 7h10v10" /></>,
