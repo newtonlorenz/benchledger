@@ -100,7 +100,7 @@ failures. It never substitutes old records from another project or revision.
 A committed save is not described as failed when its following read fails.
 Inline build, quote and workstream drafts and staged file selections block
 accidental navigation. Users can keep editing or explicitly discard a draft;
-an unconfirmed save must be resolved first. No draft content is stored locally.
+an unconfirmed save must be resolved first. Draft content is not persisted in browser storage.
 Workstream creation refreshes the shared project context so its file scope is
 available without reloading the browser. The physical-stock rules are unchanged.
 

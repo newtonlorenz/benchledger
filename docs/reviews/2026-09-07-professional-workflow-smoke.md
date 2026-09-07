@@ -30,7 +30,7 @@ and permissions, not that agents receive broader authority than humans.
 ## Verification result
 
 The final clean-install release gate passed 951 unit/integration tests and
-105 browser flows. Builds, typechecks, existing 80% coverage thresholds and
+108 browser flows. Builds, typechecks, existing 80% coverage thresholds and
 privacy/public-source checks passed. The production dependency audit reported
 no known vulnerabilities. The sourcing regression was observed failing before
 its correction; the shared behaviour is now tested against SQLite and memory,
@@ -51,3 +51,13 @@ idempotent retry. No duplicate record or silent discard is accepted.
 A deployment still requires passing GitHub checks, exact merged-image acceptance,
 a verified data/configuration backup, preserved credentials and a live close-out.
 Execution of that release is recorded on the pull request, not inferred here.
+
+Repository review identified two additional regressions before merge. Guarded
+Back/Forward now restores the original indexed history position instead of
+replacing its destination. Repeated cancellation and multi-entry traversal have
+explicit browser tests. A quote observation-date-only edit is now registered as
+an unsaved provenance change against the form's initial date.
+
+The WebKit functional run also passed all 15 new smoke flows, including repeated
+Back/Forward, multi-entry traversal and lost-save recovery. Type-only changes in
+a new workstream are protected like date-only quote changes.

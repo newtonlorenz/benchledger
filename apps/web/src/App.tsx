@@ -98,7 +98,21 @@ function readInventoryUrlState(): { readonly search: string; readonly categoryNo
   const evidence = evidenceValues.includes(evidenceValue as InventoryEvidenceState) ? (evidenceValue as InventoryEvidenceState) : "All";
   const availability = availableValue === "true" ? "available" : availableValue === "false" ? "unavailable" : "All";
   return { search: params.get("q")?.trim().slice(0, MAX_INVENTORY_SEARCH_LENGTH) ?? "", categoryNodeId, kind, evidence, availability };
-} export function readNavigationUrlState(): { page: Page; projectId?: string; tab: ProjectTab; projectView?: ProjectView; } {
+} export const navigationEpoch = () => `navigation-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+function navigationEntryEpoch(state: unknown): string | undefined {
+  const value = state !== null && typeof state === "object" ? (state as Record<string, unknown>).benchledgerEpoch : undefined;
+  return typeof value === "string" ? value : undefined;
+}
+function navigationEntryIndex(state: unknown): number | undefined {
+  if (state === null || typeof state !== "object") return undefined;
+  const index = (state as Record<string, unknown>).benchledgerIndex;
+  return typeof index === "number" && Number.isSafeInteger(index) ? index : undefined;
+}
+function replaceNavigationHistory(state: unknown, title: string, url?: string | URL | null): void {
+  const record = state !== null && typeof state === "object" ? state as Record<string, unknown> : {};
+  window.history.replaceState({ ...record, benchledgerIndex: navigationEntryIndex(record) ?? navigationEntryIndex(window.history.state) ?? 0, benchledgerEpoch: navigationEntryEpoch(record) ?? navigationEntryEpoch(window.history.state) ?? navigationEpoch() }, title, url);
+}
+function readNavigationUrlState(): { page: Page; projectId?: string; tab: ProjectTab; projectView?: ProjectView; } {
   if (typeof window === "undefined") return { page: "overview", tab: "plan" };
   let parts: string[];
   try {
@@ -193,6 +207,8 @@ export function formatSourceReadyMessage(count: number): string {
   const appearance = useAppearance();
   const navigationGuard = useNavigationGuard();
   const lastNavigation = useRef({ url: window.location.href, state: window.history.state as unknown });
+  const historyTravel = useRef<{ phase: "restore" | "proceed"; destination: { url: string; state: unknown }; delta: number } | undefined>(undefined);
+  useLayoutEffect(() => { replaceNavigationHistory(window.history.state, "", window.location.href); lastNavigation.current = { url: window.location.href, state: window.history.state }; }, []);
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [editingRequirement, setEditingRequirement] = useState<{ projectId: string; line: BomLine }>();
   const [editingProject, setEditingProject] = useState<Project>();
@@ -281,7 +297,7 @@ export function formatSourceReadyMessage(count: number): string {
       const requestedNavigation = readNavigationUrlState();
       const initialProjectView: ProjectView = requestedNavigation.projectView ?? (requestedNavigation.projectId && archived.some( (project) => project.id === requestedNavigation.projectId ) ? "archived" : snapshot.projects.length > 0 || archived.length === 0 ? "active" : "archived");
       setProjectView(initialProjectView);
-      setOffers(snapshot.offers); setServiceCapabilities(snapshot.capabilities ?? []); const requestedProjectId = requestedNavigation.projectId; const selectedId = requestedProjectId ? requestedProjectId : (initialProjectView === "archived" ? (archived[0]?.id ?? "") : (snapshot.projects[0]?.id ?? archived[0]?.id ?? "")); setSelectedProjectId(selectedId); if ( requestedNavigation.page === "projects" && selectedId !== requestedProjectId ) { window.history.replaceState( { projectView: initialProjectView }, "", navigationHash("projects", selectedId, requestedNavigation.tab) ); } setSampleMode(snapshot.source === "synthetic");
+      setOffers(snapshot.offers); setServiceCapabilities(snapshot.capabilities ?? []); const requestedProjectId = requestedNavigation.projectId; const selectedId = requestedProjectId ? requestedProjectId : (initialProjectView === "archived" ? (archived[0]?.id ?? "") : (snapshot.projects[0]?.id ?? archived[0]?.id ?? "")); setSelectedProjectId(selectedId); if ( requestedNavigation.page === "projects" && selectedId !== requestedProjectId ) { replaceNavigationHistory( { projectView: initialProjectView }, "", navigationHash("projects", selectedId, requestedNavigation.tab) ); } setSampleMode(snapshot.source === "synthetic");
       setWorkspaceAccess((current) => current ? { ...current, demo: current.demo || Boolean(snapshot.health?.demo) } : current);
       setDemoAvailable(Boolean(snapshot.health?.demo));
       setConnection(snapshot.source === "synthetic" ? "sample" : "ready");
@@ -371,18 +387,44 @@ export function formatSourceReadyMessage(count: number): string {
   }, [page, selectedProjectId, projectTab, projectView]); useEffect(() => {
     const restoreNavigation = () => {
       const restored = readNavigationUrlState(), destination = { url: window.location.href, state: window.history.state as unknown };
-      const apply = () => { window.history.replaceState(destination.state, "", destination.url); lastNavigation.current = destination; pendingMainFocusRef.current = true; const restoredView: ProjectView = restored.projectView ?? (restored.projectId && archivedProjects.some((project) => project.id === restored.projectId) ? "archived" : restored.page === "projects" && projects.length === 0 && archivedProjects.length > 0 ? "archived" : "active"); setProjectView(restoredView); setPage(restored.page); setProjectTab(restored.tab); setSelectedProjectId(restored.projectId ?? (restoredView === "archived" ? archivedProjects : projects)[0]?.id ?? ""); setMobileNav(false); setSelectedItemId(undefined); };
-      if (navigationGuard.registry.hasDraft() && destination.url !== lastNavigation.current.url) { window.history.replaceState(lastNavigation.current.state, "", lastNavigation.current.url); navigationGuard.registry.request(apply); } else apply();
+      const apply = () => { replaceNavigationHistory(destination.state, "", destination.url); lastNavigation.current = { ...destination, state: window.history.state }; pendingMainFocusRef.current = true; const restoredView: ProjectView = restored.projectView ?? (restored.projectId && archivedProjects.some((project) => project.id === restored.projectId) ? "archived" : restored.page === "projects" && projects.length === 0 && archivedProjects.length > 0 ? "archived" : "active"); setProjectView(restoredView); setPage(restored.page); setProjectTab(restored.tab); setSelectedProjectId(restored.projectId ?? (restoredView === "archived" ? archivedProjects : projects)[0]?.id ?? ""); setMobileNav(false); setSelectedItemId(undefined); };
+      const travel = historyTravel.current;
+      if (travel) {
+        if (travel.phase === "restore") {
+          if (destination.url !== lastNavigation.current.url || navigationEntryIndex(destination.state) !== navigationEntryIndex(lastNavigation.current.state) || navigationEntryEpoch(destination.state) !== navigationEntryEpoch(lastNavigation.current.state)) return;
+          historyTravel.current = undefined;
+          navigationGuard.registry.request(() => { historyTravel.current = { ...travel, phase: "proceed" }; window.history.go(travel.delta); });
+        } else if (destination.url === travel.destination.url) { historyTravel.current = undefined; apply(); }
+        return;
+      }
+      if (destination.url === lastNavigation.current.url && navigationEntryIndex(destination.state) === navigationEntryIndex(lastNavigation.current.state) && navigationEntryEpoch(destination.state) === navigationEntryEpoch(lastNavigation.current.state)) return;
+      if (!navigationGuard.registry.hasDraft()) { apply(); return; }
+      const previousIndex = navigationEntryIndex(lastNavigation.current.state), targetIndex = navigationEntryIndex(destination.state);
+      if (previousIndex !== undefined && targetIndex !== undefined && navigationEntryEpoch(lastNavigation.current.state) === navigationEntryEpoch(destination.state) && previousIndex !== targetIndex) {
+        const delta = targetIndex - previousIndex;
+        historyTravel.current = { phase: "restore", destination, delta };
+        window.history.go(-delta);
+      } else {
+        // Entries from outside the app have no position marker. Keep the target
+        // intact and insert the current page rather than overwriting that target.
+        const epoch = navigationEpoch();
+        const targetState = { ...(destination.state && typeof destination.state === "object" ? destination.state : {}), benchledgerIndex: 0, benchledgerEpoch: epoch };
+        const currentState = { ...(lastNavigation.current.state && typeof lastNavigation.current.state === "object" ? lastNavigation.current.state : {}), benchledgerIndex: 1, benchledgerEpoch: epoch };
+        window.history.replaceState(targetState, "", destination.url);
+        window.history.pushState(currentState, "", lastNavigation.current.url);
+        lastNavigation.current = { ...lastNavigation.current, state: currentState };
+        navigationGuard.registry.request(() => { historyTravel.current = { phase: "proceed", destination: { ...destination, state: targetState }, delta: -1 }; window.history.back(); });
+      }
     };
     window.addEventListener("popstate", restoreNavigation); window.addEventListener("hashchange", restoreNavigation);
     return () => { window.removeEventListener("popstate", restoreNavigation); window.removeEventListener("hashchange", restoreNavigation); };
-  }, [archivedProjects, projects, navigationGuard.registry]); const recordNavigation = ( nextPage: Page, projectId = selectedProjectId, tab = projectTab, view: ProjectView = projectViewRef.current ) => { const intraProjectTabNavigation = nextPage === "projects" && projectId === selectedProjectId && tab !== projectTab; if (intraProjectTabNavigation) pendingMainFocusRef.current = false; const nextView = nextPage === "projects" ? archivedProjects.some((project) => project.id === projectId) ? "archived" : projects.some((project) => project.id === projectId) ? "active" : view : view; const nextHash = navigationHash(nextPage, projectId, tab); const currentState = window.history.state as NavigationHistoryState | null; const nextState: NavigationHistoryState = nextPage === "projects" ? { projectView: nextView } : {}; const sameView = nextPage !== "projects" || currentState?.projectView === nextView; if (window.location.hash !== nextHash || !sameView) window.history.pushState(nextState, "", nextHash); lastNavigation.current = { url: window.location.href, state: window.history.state };
+  }, [archivedProjects, projects, navigationGuard.registry]); const recordNavigation = ( nextPage: Page, projectId = selectedProjectId, tab = projectTab, view: ProjectView = projectViewRef.current ) => { const intraProjectTabNavigation = nextPage === "projects" && projectId === selectedProjectId && tab !== projectTab; if (intraProjectTabNavigation) pendingMainFocusRef.current = false; const nextView = nextPage === "projects" ? archivedProjects.some((project) => project.id === projectId) ? "archived" : projects.some((project) => project.id === projectId) ? "active" : view : view; const nextHash = navigationHash(nextPage, projectId, tab); const currentState = window.history.state as NavigationHistoryState | null; const nextState: NavigationHistoryState = nextPage === "projects" ? { projectView: nextView } : {}; const sameView = nextPage !== "projects" || currentState?.projectView === nextView; if (window.location.hash !== nextHash || !sameView) window.history.pushState({ ...nextState, benchledgerIndex: (navigationEntryIndex(window.history.state) ?? 0) + 1, benchledgerEpoch: navigationEntryEpoch(window.history.state) ?? navigationEpoch() }, "", nextHash); lastNavigation.current = { url: window.location.href, state: window.history.state };
   };
 
   const navigate = (nextPage: Page) => navigationGuard.registry.request(() => { pendingMainFocusRef.current = !searchHandoffRef.current; recordNavigation(nextPage); setPage(nextPage); setMobileNav(false); setSelectedItemId(undefined); if (nextPage === page) resetMainScrollAndFocus(); });
   const openProject = (projectId: string, tab: ProjectTab = "plan") => navigationGuard.registry.request(() => { recordOpenedProject(projectId, sampleMode); setHomeTask(undefined); pendingMainFocusRef.current = true; recordNavigation("projects", projectId, tab); setSelectedProjectId(projectId); setProjectTab(tab); setPage("projects"); setMobileNav(false); });
   const selectProject = (projectId: string) => openProject(projectId, projectTab);
-  const selectProjectTab = (tab: ProjectTab, replace = false) => { if (tab === projectTab) return; navigationGuard.registry.request(() => { const nextHash = navigationHash("projects", selectedProjectId, tab); if (replace) window.history.replaceState({}, "", nextHash); else recordNavigation("projects", selectedProjectId, tab); lastNavigation.current = { url: window.location.href, state: window.history.state }; setProjectTab(tab); }); };
+  const selectProjectTab = (tab: ProjectTab, replace = false) => { if (tab === projectTab) return; navigationGuard.registry.request(() => { const nextHash = navigationHash("projects", selectedProjectId, tab); if (replace) replaceNavigationHistory({}, "", nextHash); else recordNavigation("projects", selectedProjectId, tab); lastNavigation.current = { url: window.location.href, state: window.history.state }; setProjectTab(tab); }); };
   const changeProjectView = (view: "active" | "archived") => navigationGuard.registry.request(() => { const nextProjectId = (view === "archived" ? archivedProjects : projects)[0]?.id ?? ""; setProjectView(view); if (nextProjectId) openProject(nextProjectId, projectTab); else { recordNavigation("projects", "", projectTab); setSelectedProjectId(""); } });
  const launchInventorySearch = () => { if (page === "inventory") { if (mainFocusFrameRef.current !== undefined) { window.cancelAnimationFrame(mainFocusFrameRef.current); mainFocusFrameRef.current = undefined; } searchInputRef.current?.focus(); return; } searchHandoffRef.current = true; navigate("inventory"); }; const openNewProject = (event: React.MouseEvent<HTMLButtonElement>) => { newProjectTriggerRef.current = event.currentTarget; setShowNewProject(true); }; const closeNewProject = () => { setShowNewProject(false); const trigger = newProjectTriggerRef.current; if (trigger) window.setTimeout(() => trigger.focus(), 32); }; const openNewPrinter = () => { setReplacementFor(undefined); setShowNewItem(true); }; const openNewPrinterDetails = (item: InventoryItem) => { setReplacementFor(item); setShowNewItem(true); }; const closeNewItem = () => { catalogSearchSequence.current += 1; setCatalogQuery(""); setCatalogProducts([]); setShowNewItem(false); setReplacementFor(undefined); }; const retryConnection = () => { setConnectionError(undefined); setReloadNonce((current) => current + 1); }; const refreshWorkspace = async (): Promise<boolean> => { try { const snapshot = await adapter.loadWorkspace();
       const archived = await adapter.listArchivedProjects().catch((error: unknown) => error instanceof ApiError && error.status === 404 ? [] : Promise.reject(error));
@@ -413,7 +455,7 @@ export function formatSourceReadyMessage(count: number): string {
       const remaining = projects.filter((candidate) => candidate.id !== project.id);
       setProjects(remaining);
       setArchivedProjects((current) => [archived, ...current.filter((candidate) => candidate.id !== archived.id)]); const nextId = remaining[0]?.id ?? archived.id; const nextView: ProjectView = remaining.length > 0 ? "active" : "archived"; setProjectView(nextView);
-      setSelectedProjectId(nextId); window.history.replaceState( { projectView: nextView }, "", navigationHash("projects", nextId, projectTab) );
+      setSelectedProjectId(nextId); replaceNavigationHistory( { projectView: nextView }, "", navigationHash("projects", nextId, projectTab) );
       setToast(expert ? "Project archived. It is hidden from active lists; reservations were released, audit history was retained, and the archive is reversible." : "Project archived. It is hidden from active lists; stock set aside for it was released, its project history was kept, and it can be restored.");
     } catch (error: unknown) {
       handleMutationError(error, "archiving that project");
@@ -427,7 +469,7 @@ export function formatSourceReadyMessage(count: number): string {
       setArchivedProjects((current) => current.filter((candidate) => candidate.id !== project.id));
       setProjects((current) => [restored, ...current.filter((candidate) => candidate.id !== restored.id)]);
       setProjectView("active");
-      setSelectedProjectId(restored.id); window.history.replaceState( { projectView: "active" }, "", navigationHash("projects", restored.id, projectTab) ); setToast(expert ? `${project.name} was restored to Idea. Released reservations were not recreated.` : `${project.name} was restored to Idea. Previously released stock was not set aside again.`);
+      setSelectedProjectId(restored.id); replaceNavigationHistory( { projectView: "active" }, "", navigationHash("projects", restored.id, projectTab) ); setToast(expert ? `${project.name} was restored to Idea. Released reservations were not recreated.` : `${project.name} was restored to Idea. Previously released stock was not set aside again.`);
     } catch (error: unknown) {
       handleMutationError(error, "restoring that project");
       throw error;
@@ -441,7 +483,7 @@ export function formatSourceReadyMessage(count: number): string {
       const remainingArchived = archivedProjects.filter((candidate) => candidate.id !== project.id);
       setProjects(remainingProjects);
       setArchivedProjects(remainingArchived);
-      const nextView: ProjectView = remainingProjects.length > 0 ? "active" : remainingArchived.length > 0 ? "archived" : "active"; setProjectView(nextView); const nextId = (remainingProjects[0] ?? remainingArchived[0])?.id ?? ""; setSelectedProjectId(nextId); window.history.replaceState( { projectView: nextView }, "", navigationHash("projects", nextId, projectTab) );
+      const nextView: ProjectView = remainingProjects.length > 0 ? "active" : remainingArchived.length > 0 ? "archived" : "active"; setProjectView(nextView); const nextId = (remainingProjects[0] ?? remainingArchived[0])?.id ?? ""; setSelectedProjectId(nextId); replaceNavigationHistory( { projectView: nextView }, "", navigationHash("projects", nextId, projectTab) );
       setToast(expert ? "Project permanently removed from the workspace. Its reservation releases and audit history remain retained; it cannot be restored." : "Project permanently removed from the workspace. Its project history was kept, but it cannot be restored.");
     } catch (error: unknown) {
       handleMutationError(error, "removing that project");
@@ -1194,7 +1236,7 @@ function InventoryPage({ adapter, categories, expert, search, searchInputRef, re
     if (evidence !== "All") params.set("evidence", evidence);
     if (availability !== "All") params.set("available", String(availability === "available"));
     const query = params.toString();
-    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
+    replaceNavigationHistory(null, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
   }, [search, categoryNodeId, kind, evidence, availability]);
 
   useLayoutEffect(() => {

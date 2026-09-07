@@ -25,7 +25,7 @@ test("build draft navigation keeps edits until a deliberate discard", async ({ p
   await tab(page, "Files"); await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click(); await expect(page.getByRole("heading", { name: "Build files", exact: true })).toBeVisible();
 });
 test("browser Back does not silently discard a workstream draft", async ({ page }) => {
-  await login(page); await seed(page, "Smoke browser history"); await tab(page, "Build planning"); await page.getByRole("button", { name: "Add workstream", exact: true }).click(); await page.getByLabel("Workstream name").fill("Do not lose this task");
+  await login(page); await seed(page, "Smoke browser history"); await tab(page, "Build planning"); await page.getByRole("button", { name: "Add workstream", exact: true }).click(); await page.getByLabel("Workstream type").selectOption("firmware"); await tab(page, "Files"); await page.getByRole("button", { name: "Keep editing", exact: true }).click(); await expect(page.getByLabel("Workstream type")).toHaveValue("firmware"); await page.getByLabel("Workstream name").fill("Do not lose this task");
   await page.goBack(); await expect(page.getByRole("alertdialog")).toBeVisible(); await page.getByRole("button", { name: "Keep editing", exact: true }).click(); await expect(page.getByLabel("Workstream name")).toHaveValue("Do not lose this task"); expect(page.url()).toMatch(/\/build$/u);
   await tab(page, "Plan"); await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click(); await expect(page.locator(".bom-section")).toBeVisible();
 });
@@ -82,4 +82,23 @@ test("a committed workstream remains reported saved when its list refresh fails"
   await page.route("**/workstreams*", async (route) => { if (route.request().method() === "POST") { const response = await route.fetch(); created = true; await route.fulfill({ response }); } else if (created) await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: { code: "unavailable", message: "Synthetic read outage" } }) }); else await route.continue(); });
   await page.getByRole("button", { name: "Create workstream", exact: true }).click(); await expect(page.getByText("Workstream created.", { exact: true })).toBeVisible(); await expect(page.locator(".workstream-planning").getByRole("alert")).toBeVisible(); await expect(page.getByText("No workstreams recorded. Add a task group, such as firmware or assembly.", { exact: true })).toHaveCount(0);
   await page.unroute("**/workstreams*"); await page.getByRole("button", { name: "Refresh workstreams", exact: true }).click(); await expect(page.locator(".workstream-row")).toHaveCount(1); await expect(page.locator(".workstream-row")).toContainText("Saved task");
+});
+test("cancelled Back retains the destination for repeated Back and Forward", async ({ page }) => {
+  await login(page); const { id } = await seed(page, "Smoke retained history"); await tab(page, "Files"); await tab(page, "Build planning"); await page.getByRole("button", { name: "Add workstream", exact: true }).click(); await page.getByLabel("Workstream name").fill("Keep history intact");
+  for (let i = 0; i < 2; i++) { await page.goBack(); await expect(page.getByRole("alertdialog")).toBeVisible(); await page.getByRole("button", { name: "Keep editing", exact: true }).click(); expect(page.url()).toContain(`/${id}/build`); }
+  await page.goBack(); await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click(); await expect(page.getByRole("heading", { name: "Build files", exact: true })).toBeVisible(); expect(page.url()).toContain(`/${id}/files`);
+  await page.goBack(); await expect(page.locator(".bom-section")).toBeVisible(); expect(page.url()).toContain(`/${id}/plan`); await page.goForward(); await expect(page.getByRole("heading", { name: "Build files", exact: true })).toBeVisible();
+  await page.getByLabel("Choose files to upload").setInputFiles({ name: "forward-draft.txt", mimeType: "text/plain", buffer: Buffer.from("Synthetic forward test") });
+  await page.goForward(); await page.getByRole("button", { name: "Keep editing", exact: true }).click(); expect(page.url()).toContain(`/${id}/files`);
+  await page.goForward(); await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click(); await expect(page.getByRole("heading", { name: "Parts and build plates", exact: true })).toBeVisible();
+});
+test("multi-entry traversal restores the original history position when cancelled", async ({ page }) => {
+  await login(page); const { id } = await seed(page, "Smoke multi-step history"); await tab(page, "Files"); await tab(page, "Build planning"); await page.getByRole("button", { name: "Add workstream", exact: true }).click(); await page.getByLabel("Workstream name").fill("Retain multi-step history");
+  await page.evaluate(() => window.history.go(-2)); await expect(page.getByRole("alertdialog")).toBeVisible(); await page.getByRole("button", { name: "Keep editing", exact: true }).click(); expect(page.url()).toContain(`/${id}/build`);
+  await page.evaluate(() => window.history.go(-2)); await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click(); await expect(page.locator(".bom-section")).toBeVisible(); expect(page.url()).toContain(`/${id}/plan`);
+  await page.goForward(); await expect(page.getByRole("heading", { name: "Build files", exact: true })).toBeVisible();
+});
+test("changing only the observation date protects the quote provenance draft", async ({ page }) => {
+  await login(page); await seed(page, "Smoke observation-only draft", 1); await tab(page, "Shopping list"); await page.getByRole("button", { name: "Record quote for Café rear-panel connector", exact: true }).click(); await page.getByLabel("Observation date", { exact: true }).fill("2026-01-02");
+  await tab(page, "Plan"); await expect(page.getByRole("alertdialog")).toBeVisible(); await page.getByRole("button", { name: "Keep editing", exact: true }).click(); await expect(page.getByLabel("Observation date", { exact: true })).toHaveValue("2026-01-02"); await page.getByRole("button", { name: "Cancel quote", exact: true }).click();
 });
