@@ -111,3 +111,17 @@ while a protected draft or operation exists. Appearance settings remain local.
 Accessibility checks now test rendered pages and dialogs with axe in addition
 to token contrast checks. Passing an automated scan does not establish full
 WCAG conformance or replace assistive-technology and user testing.
+
+## Inline acceptance dialogs
+
+Stock approval and inspection use an explicit modal boundary, including a safe
+initial control, background isolation, deterministic Tab/Shift-Tab navigation,
+Escape handling and focus restoration. Keyboard behaviour must be tested in
+Chromium and WebKit rather than inferred from one engine's default button focus.
+When an approval is unconfirmed, Escape does not abandon it; unchanged recovery
+remains available inside the dialog.
+
+Embed stock close-out beneath the existing project heading. Do not repeat the
+project's large top-level title. After confirmation, show a read-only result
+receipt and focus the saved acknowledgement. Do not leave a disabled edit form
+or a conflicting review-incomplete prompt as the primary saved state.

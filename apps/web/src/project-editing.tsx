@@ -1,3 +1,5 @@
+import { UnsavedWorkContext } from "./unsaved-work";
+import { Icon } from "./icons";
 import { createContext, useContext, useEffect, useState } from "react";
 import type { BomLine, BomLineStatus, InventoryItem, Project } from "./domain";
 import { ApiError } from "./api";
@@ -10,6 +12,7 @@ export const ProjectEditingContext = createContext<{
   project: Project;
   editRequirement(line: BomLine): void;
   editProject(): void;
+  refreshProject?: (() => Promise<boolean>) | undefined;
   listRemoved(): Promise<BomLine[]>;
   restore(line: BomLine): Promise<void>;
 } | null>(null);
@@ -29,14 +32,26 @@ export function RequirementEditAction({ line }: { line: BomLine }) {
 export function ProjectManagementBar() {
   const actions = useContext(ProjectEditingContext);
   const [error, setError] = useState<string>();
+  const navigation = useContext(UnsavedWorkContext);
+  const [refreshing, setRefreshing] = useState(false), [refreshed, setRefreshed] = useState(false);
+  useEffect(() => { setError(undefined); setRefreshed(false); }, [actions?.project.id]);
+  const refresh = async () => {
+    if (!actions?.refreshProject || refreshing) return;
+    setRefreshing(true); setError(undefined); setRefreshed(false);
+    try { if (await actions.refreshProject()) setRefreshed(true); else setError("Project refresh failed. Previous records remain visible. Retry before using stock."); }
+    catch { setError("Project refresh failed. Previous records remain visible. Retry before using stock."); }
+    finally { setRefreshing(false); }
+  };
   if (!actions) return null;
   const { project } = actions;
   const download = (format: "json" | "csv") => { try { saveProjectHandoff(project, format); setError(undefined); } catch { setError("The export could not be created. Retry in this browser."); } };
   return <section className="project-management-bar" aria-label="Project management">
     <span className="project-stage">Stage: <strong>{project.status.charAt(0).toUpperCase() + project.status.slice(1)}</strong></span>
+    {actions.refreshProject && <button type="button" className="button button-quiet" disabled={refreshing} onClick={() => navigation ? navigation.request(() => { void refresh(); }) : void refresh()} aria-label="Refresh project"><Icon name="refresh" size={15} />{refreshing ? "Refreshing…" : "Refresh"}</button>}
     {project.status !== "archived" && <button type="button" className="button button-quiet" onClick={actions.editProject}>Edit project</button>}
     <details className="project-export"><summary>Export project</summary><div className="project-export-options"><p>Includes project names, notes and identifiers. Review before sharing. These are snapshots, not backups.</p><button type="button" className="button button-quiet" onClick={() => download("csv")}>Download requirements CSV</button><button type="button" className="button button-quiet" onClick={() => download("json")}>Download project brief JSON</button></div></details>
     {error && <p role="alert" className="form-error">{error}</p>}
+    {refreshed && !refreshing && !error && <p role="status" className="project-refresh-status">Project refreshed from the workspace.</p>}
   </section>;
 }
 

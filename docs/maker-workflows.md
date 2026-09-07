@@ -109,3 +109,22 @@ available without reloading the browser. The physical-stock rules are unchanged.
 bounded `limit` and `cursor`. Omitted filters preserve the previous all-row
 behaviour. Only required Source lines enter estimates. A narrowed view never
 changes quote selection, purchase authority or full-revision cost totals.
+
+## Review, approval and interrupted responses
+
+Stock close-out has three separate states: local results, a saved server preview
+and an approved stock update. A pending or unconfirmed request freezes its input.
+Retry that exact request to resolve the outcome; do not construct a replacement
+write. A saved result is an immutable receipt, not an editable draft. The project
+stage is not changed by a stock update.
+
+Inspection confirmation uses the observation captured for its preview, including
+its original timestamp. A lost confirmation response keeps the form locked for
+unchanged recovery. Quote selection similarly blocks filters, pagination and
+competing selections until the pending outcome is known.
+
+Project Refresh reads changes made by another client or agent. It first protects
+local drafts. An explicit discard followed by a successful refresh reloads the
+working view; a failed refresh retains the current records and explains that the
+view is stale. A denied workflow read clears its prior result instead of leaving
+restricted data visible. Workstream pagination uses the same draft guard.

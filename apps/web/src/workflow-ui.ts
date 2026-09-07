@@ -10,7 +10,10 @@ export function useWorkflowRead<T>(path: string | undefined, dependency = "") {
     // Retain the last confirmed snapshot during a refresh, never across another scope.
     setState((current) => ({ identity, loading: true, ...(current.identity === identity && current.data !== undefined ? { data: current.data } : {}) }));
     void workflowRequest<T>(path).then((data) => { if (active) setState({ identity, data, loading: false }); }).catch((failure: unknown) => {
-      if (active) setState((current) => ({ ...current, identity, loading: false, error: failure instanceof Error ? failure.message : "This workspace could not be loaded." }));
+      if (active) setState((current) => {
+        const denied = failure instanceof ApiError && (failure.status === 401 || failure.status === 403);
+        return { ...(denied ? {} : current), identity, loading: false, error: failure instanceof Error ? failure.message : "This workspace could not be loaded." };
+      });
     });
     return () => { active = false; };
   }, [path, identity, nonce]);

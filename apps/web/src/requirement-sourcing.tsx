@@ -1,5 +1,5 @@
 import { useUnsavedWork } from "./unsaved-work";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { requirementOfferSchema, offerChoiceSchema } from "@benchledger/api-contract";
 import type { BomLine, RequirementOffer, OfferChoice, RequirementOfferEstimate } from "@benchledger/api-contract";
 import type { Project } from "./domain";
@@ -14,14 +14,21 @@ export function RequirementSourcing({ project, readOnly = false, onPlan }: { pro
   const parameters = new URLSearchParams({ limit: "20", filter, ...(query.trim() ? { query: query.trim() } : {}), ...(cursor ? { cursor } : {}) });
   const source = useWorkflowRead<SourcingPage>(root ? `${root}/sourcing?${parameters}` : undefined, JSON.stringify(project.bom.map((line) => [line.id, line.version])));
   const [saved, setSaved] = useState(false);
+  const [pendingSelections, setPendingSelections] = useState<Set<string>>(() => new Set());
+  const selectionState = useCallback((id: string, pending: boolean) => setPendingSelections((current) => {
+    if (current.has(id) === pending) return current;
+    const next = new Set(current); if (pending) next.add(id); else next.delete(id); return next;
+  }), []);
+  const selectionBlocked = pendingSelections.size > 0;
+
   if (!root) return <p>Supplier quotes require a connected project revision.</p>;
   const visibleRows = source.data?.data ?? [];
-  const refreshBlocked = draftFor !== undefined || source.loading;
+  const refreshBlocked = draftFor !== undefined || source.loading || selectionBlocked;
   const canWrite = !readOnly && project.status !== "archived" && !source.loading && !source.error;
   return <section className="surface requirement-sourcing" aria-label="Requirement sourcing">
     <div className="workflow-section-heading"><div><span className="eyebrow">Shopping list</span><h2>Supplier quotes for this project</h2></div>{onPlan && <button type="button" className="button button-quiet" onClick={onPlan}>Back to plan</button>}</div>
     <p>Record quotes for missing stock. Check each quote before selection. No purchase is made.</p>
-    <div className="sourcing-view-controls"><div role="group" aria-label="Sourcing view">{([["source", "Needs sourcing"], ["review", "Needs review"], ["optional", "Optional"], ["all", "All requirements"]] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={filter === value} disabled={draftFor !== undefined} onClick={() => { setFilter(value); setCursor(undefined); setPrevious([]); }}>{label}</button>)}</div><label className="field-search"><input aria-label="Search quote requirements" placeholder="Find a requirement or supplier" value={query} disabled={draftFor !== undefined} onChange={(event) => { setQuery(event.target.value.slice(0, 200)); setCursor(undefined); setPrevious([]); }} /></label></div>
+    <div className="sourcing-view-controls"><div role="group" aria-label="Sourcing view">{([["source", "Needs sourcing"], ["review", "Needs review"], ["optional", "Optional"], ["all", "All requirements"]] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={filter === value} disabled={draftFor !== undefined || selectionBlocked} onClick={() => { setFilter(value); setCursor(undefined); setPrevious([]); }}>{label}</button>)}</div><label className="field-search"><input aria-label="Search quote requirements" placeholder="Find a requirement or supplier" value={query} disabled={draftFor !== undefined || selectionBlocked} onChange={(event) => { setQuery(event.target.value.slice(0, 200)); setCursor(undefined); setPrevious([]); }} /></label></div>
     <p className="form-hint">Search covers all requirements in this revision. Cost totals do not change with the filter.</p>
     {saved && <p role="status" className="form-success">Quote saved.{source.error ? " The list could not refresh. Retry the read, not the save." : ""}</p>}
     {source.loading && <p role="status">Loading requirement quotes…</p>}{source.error && <p role="alert">{source.error}{source.data ? " Previous records remain visible. Refresh before making another change." : ""}</p>}
@@ -30,10 +37,10 @@ export function RequirementSourcing({ project, readOnly = false, onPlan }: { pro
       {!visibleRows.length && !source.loading && !source.error && <div className="sourcing-empty"><strong>{filter === "source" ? "No source gaps match this view" : "No requirements match this view"}</strong><p>Change the filter or search to review other requirements.</p><button type="button" className="button button-secondary" onClick={() => { setFilter("all"); setQuery(""); setCursor(undefined); setPrevious([]); }}>Show all quote requirements</button></div>}
       <div className="sourcing-register">{visibleRows.map((row) => <article className={`sourcing-requirement ${row.offers.length ? "has-quotes" : "no-quotes"}`} aria-label={`Quotes for ${row.line.name}`} key={row.line.id}>
         <div className="sourcing-row-summary"><div><h3>{row.line.name}</h3><p>{row.line.requiredQuantity} {row.line.unit} required · {row.missingQuantity} unfilled · {row.offers.length} {row.offers.length === 1 ? "quote" : "quotes"}</p></div><span className={`status-pill tone-${row.line.optional ? "neutral" : row.decision === "ready" ? "good" : row.decision === "source" ? "bad" : row.decision === "check" ? "warn" : "info"}`}>{row.line.optional ? "Optional" : row.decision === "source" ? "Source" : row.decision === "check" ? "Check" : row.decision === "ready" ? "Ready" : "Decide"}</span>
-          {!readOnly && project.status !== "archived" && draftFor !== row.line.id && <button type="button" className="button button-secondary" disabled={!canWrite || draftFor !== undefined} onClick={() => { setSaved(false); setDraftFor(row.line.id); }} aria-label={`Record quote for ${row.line.name}`}>Record quote</button>}
+          {!readOnly && project.status !== "archived" && draftFor !== row.line.id && <button type="button" className="button button-secondary" disabled={!canWrite || draftFor !== undefined || selectionBlocked} onClick={() => { setSaved(false); setDraftFor(row.line.id); }} aria-label={`Record quote for ${row.line.name}`}>Record quote</button>}
         </div>
         {row.estimate.status === "estimated" ? <p className="estimate-summary">{row.estimate.packages} packs supply {row.estimate.partsSupplied} {row.line.unit} · {quotedMoney(row.estimate.totalMinor!, row.estimate.currency!)} known cost</p> : row.offers.length > 0 && <p className="form-hint">{row.estimate.reason}</p>}
-        {row.offers.map((offer) => <QuoteCard key={offer.id} offer={offer} row={row} root={root} readOnly={!canWrite || draftFor !== undefined} onSaved={source.reload} />)}
+        {row.offers.map((offer) => <QuoteCard key={offer.id} offer={offer} row={row} root={root} readOnly={!canWrite || draftFor !== undefined || selectionBlocked && !pendingSelections.has(offer.id)} onPending={selectionState} onSaved={source.reload} />)}
         {draftFor === row.line.id && <QuoteForm line={row.line} root={root} onSaved={() => { setDraftFor(undefined); setSaved(true); source.reload(); }} onCancel={() => setDraftFor(undefined)} />}
       </article>)}</div>
       <div className="workflow-pagination"><button type="button" className="button button-quiet" disabled={!previous.length || refreshBlocked} onClick={() => { setCursor(previous.at(-1)); setPrevious((all) => all.slice(0, -1)); }}>Previous requirements</button><span>{visibleRows.length} shown · {source.data.total} matches</span><button type="button" className="button button-quiet" disabled={!source.data.nextCursor || refreshBlocked} onClick={() => { setPrevious((all) => [...all, cursor]); setCursor(source.data!.nextCursor); }}>Next requirements</button></div>
@@ -41,9 +48,10 @@ export function RequirementSourcing({ project, readOnly = false, onPlan }: { pro
     <button type="button" className="text-button" disabled={refreshBlocked} onClick={source.reload}>Refresh supplier quotes</button>
   </section>;
 }
-function QuoteCard({ offer, row, root, readOnly, onSaved }: { offer: RequirementOffer; row: SourcingRow; root: string; readOnly: boolean; onSaved(): void }) {
+function QuoteCard({ offer, row, root, readOnly, onSaved, onPending }: { offer: RequirementOffer; row: SourcingRow; root: string; readOnly: boolean; onSaved(): void; onPending(id: string, pending: boolean): void }) {
   const [confirmed, setConfirmed] = useState(false); const command = useWorkflowCommand();
   useUnsavedWork(command.uncertain, "quote selection", command.busy || command.uncertain);
+  useEffect(() => { onPending(offer.id, command.busy || command.uncertain); return () => onPending(offer.id, false); }, [offer.id, command.busy, command.uncertain, onPending]);
   const selected = row.choice?.offerId === offer.id, current = selected && row.choice?.bomLineVersion === row.line.version;
   const choose = async () => { try { await command.execute(`${root}/offer-choice`, "PUT", { bomLineId: row.line.id, offerId: selected && current ? null : offer.id, expectedVersion: row.choice?.version ?? 0, expectedBomLineVersion: row.line.version, confirmedFit: confirmed }, (value) => offerChoiceSchema.parse(mutationValue(value, ["id", "version"]))); onSaved(); } catch { /* state retained for explicit retry */ } };
   return <div className={`quote-card ${selected ? "is-selected" : ""}`}><strong>{offer.supplier}: {offer.title}</strong><p>{quotedMoney(offer.priceMinor, offer.currency)} per pack of {offer.packageQuantity} {offer.packageUnit} · shipping {offer.shippingMinor === undefined ? "not recorded" : quotedMoney(offer.shippingMinor, offer.currency)} · tax {offer.taxIncluded}</p><p>Observed {offer.observedAt.slice(0,10)} · review after {offer.validForDays} days</p>{offer.notes && <p>{offer.notes}</p>}<a href={offer.url} target="_blank" rel="noreferrer noopener">Open recorded supplier source</a>

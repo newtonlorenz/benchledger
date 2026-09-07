@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { UnsavedWorkContext, useNavigationGuard, useUnsavedWork } from "./unsaved-work";
 import { useWorkflowRead } from "./workflow-ui";
-import { workflowRequest } from "./api";
+import { ApiError, workflowRequest } from "./api";
 vi.mock("./api", async (original) => ({ ...await original<typeof import("./api")>(), workflowRequest: vi.fn() }));
 afterEach(() => { cleanup(); vi.resetAllMocks(); });
 function Editor({ unresolved }: { unresolved: boolean }) { const [text, setText] = useState(""); useUnsavedWork(Boolean(text), "test draft", unresolved); return <input aria-label="Draft" value={text} onChange={(event) => setText(event.target.value)} />; }
@@ -38,4 +38,12 @@ it("ignores a late response for a scope that has already been closed", async () 
   vi.mocked(workflowRequest).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; })).mockResolvedValueOnce({ name: "Current scope" });
   const view = render(<Read path="/old" />); view.rerender(<Read path="/current" />); await screen.findByText("Current scope");
   await act(async () => finish({ name: "Stale scope" })); expect(screen.queryByText("Stale scope")).toBeNull(); expect(screen.getByText("Current scope")).toBeTruthy();
+});
+
+for (const status of [401, 403]) it(`clears retained workflow records when access is denied (${status})`, async () => {
+  vi.mocked(workflowRequest).mockResolvedValueOnce({ name: "Private record" }).mockRejectedValueOnce(new ApiError("Access no longer allowed", { kind: status === 401 ? "unauthenticated" : "forbidden", status })).mockResolvedValueOnce({ name: "Access restored" });
+  render(<Read path="/private" />); await screen.findByText("Private record");
+  fireEvent.click(screen.getByText("Refresh")); await screen.findByRole("alert");
+  expect(screen.queryByText("Private record")).toBeNull();
+  fireEvent.click(screen.getByText("Refresh")); await screen.findByText("Access restored");
 });

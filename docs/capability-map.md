@@ -418,3 +418,12 @@ supplier/title before pagination. `total` counts matches, `revisionTotal` counts
 all active requirements, and currency totals retain the full revision scope.
 Use the returned cursor only with the same search/filter. HTTP exposes the same
 contract. Invalid filters are rejected; no new permissions or writes are implied.
+
+## Acceptance parity and recovery
+
+Browser acceptance tests use separate durable workspaces for stock close-out;
+the simplified demo server does not advertise that capability. Official MCP
+client tests exercise the same saved preview, explicit approval and idempotent
+replay, and compare the resulting stock quantity. UI changes do not grant new
+agent scopes or change the existing 84-tool contract. The in-project Refresh
+control reads externally saved agent work without silently replacing local drafts.

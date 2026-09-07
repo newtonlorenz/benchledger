@@ -124,3 +124,39 @@
 .project-task-strip button:not(:disabled):hover { color: var(--accent); border-color: var(--accent-line); }
 @media (max-width: 800px) { .project-task-strip { gap: 4px; }.project-task-strip > span, .project-task-strip > button { min-height: 44px; padding-inline: 9px; }.project-task-strip > button:last-child:not(:nth-child(4)) { flex-basis: 100%; justify-content: center; } }
 .detail-drawer .eyebrow, .drawer-facts > div > span, .count-form label, .count-form > div > span { color: var(--ink-soft); }
+
+/* Close-out is a project task, not a second top-level application page. */
+.reconciliation-shell.is-embedded { padding: 0; max-width: none; }
+.is-embedded .reconciliation-header { padding: 18px; margin: 0 0 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-strong); }
+.is-embedded .reconciliation-header h2 { margin: 4px 0 6px; font-size: 1.15rem; }
+.is-embedded .reconciliation-header p { font-size: .8rem; }
+.is-embedded .reconciliation-progress, .is-embedded .reconciliation-empty, .is-embedded .reconciliation-line, .is-embedded .reconciliation-preview, .is-embedded .reconciliation-footer { border-radius: var(--radius); }
+.reconciliation-edit-fields { padding: 0; margin: 0; border: 0; min-width: 0; }
+.reconciliation-edit-fields:disabled input, .reconciliation-edit-fields:disabled select, .reconciliation-edit-fields:disabled textarea { opacity: 1; color: var(--ink-soft); background: var(--surface-soft); cursor: default; }
+.reconciliation-confirm { max-height: calc(100dvh - 32px); overflow-y: auto; width: min(520px, calc(100vw - 32px)); }
+.reconciliation-confirm .reconciliation-error { margin-block: 12px; padding: 10px; border: 1px solid var(--danger-line); border-radius: 4px; color: var(--red); background: var(--red-soft); }
+.reconciliation-confirm .dialog-actions { position: sticky; bottom: 0; padding-block: 10px; background: var(--surface-strong); }
+.inspection-dialog:focus, .reconciliation-confirm:focus { outline: none; }
+@media (max-width: 800px) {
+  .is-embedded .reconciliation-header { padding: 14px; }
+  .is-embedded .reconciliation-header h2 { font-size: 1.05rem; }
+  .reconciliation-confirm { padding: 18px; }
+  .reconciliation-confirm .dialog-actions { flex-wrap: wrap; }
+  .reconciliation-confirm .dialog-actions .button { white-space: normal; }
+}
+
+.reconciliation-saved-result { margin: 0 18px 16px; padding: 16px; border: 1px solid var(--success-line); border-radius: var(--radius); background: var(--surface-soft); }
+.reconciliation-saved-result > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 14px; align-items: center; }
+.reconciliation-saved-result .eyebrow { grid-column: 1 / -1; }
+.reconciliation-saved-result h3 { font-size: .92rem; }
+.reconciliation-saved-result > div > strong { font: 500 .9rem var(--font-data); }
+.reconciliation-saved-result p { margin-top: 8px; color: var(--ink-soft); font-size: .78rem; overflow-wrap: anywhere; }
+.project-refresh-status { flex-basis: 100%; font-size: .75rem; color: var(--moss-dark); }
+.reconciliation-committed:focus { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 480px) {
+  .reconciliation-saved-result { margin-inline: 12px; padding: 12px; }
+  .reconciliation-quantity-strip { grid-template-columns: minmax(0, 1fr); }
+  .reconciliation-quantity-strip > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; padding: 12px 14px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .reconciliation-quantity-strip > div:last-child { border-bottom: 0; }
+  .reconciliation-quantity-strip small { grid-column: 1 / -1; white-space: normal; overflow: visible; text-overflow: clip; }
+}

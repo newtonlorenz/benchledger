@@ -36,6 +36,12 @@ first public release; all current work is under **Unreleased**.
 
 ### Changed
 
+- Freeze stock-review and inspection inputs while requests are pending or unconfirmed; recover with the exact reviewed payload
+- Render saved stock outcomes as immutable receipts and use one keyboard/inert boundary for inline approval dialogs
+- Protect quote selections and workstream paging from losing pending edits
+- Clear workflow results after denied access; retain records only for transient read failures
+- Add guarded project refresh for agent-to-browser handoffs and compact close-out task layouts
+
 - Sourcing search and filters run across the full revision before pagination in HTTP and MCP
 - Compact quote lists, task-first phone layouts and actionable project review shortcuts
 - Confirmed workflow records remain visible after a failed refresh; new workstreams refresh file scope
