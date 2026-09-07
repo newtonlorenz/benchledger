@@ -1,4 +1,7 @@
-import { useId, useState } from "react";
+import { useModalBoundary } from "./modal-boundary";
+import { useUnsavedWork } from "./unsaved-work";
+import { ApiError } from "./api";
+import { useId, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type {
   InspectionAction as CanonicalInspectionAction,
@@ -110,6 +113,12 @@ export function InspectionResultDialog({ action, expert, onClose, onPreviewInspe
   const [preview, setPreview] = useState<InspectionCompletionPreview>();
   const [pending, setPending] = useState<"preview" | "confirm">();
   const [error, setError] = useState<string>();
+  const [confirmUncertain, setConfirmUncertain] = useState(false);
+  const dialogRef = useRef<HTMLFormElement>(null);
+  const reviewedInput = useRef<InspectionCompletionInput | undefined>(undefined);
+  useModalBoundary(dialogRef, () => { if (!pending && !confirmUncertain) onClose(); });
+  useUnsavedWork(Boolean(result || quantity || source || sourceId || observedAt || note || conversionQuantity || conversionBasis), "inspection result", Boolean(pending) || confirmUncertain);
+
   const input = (): InspectionCompletionInput => {
     const timestamp = observedAt ? new Date(observedAt).toISOString() : new Date().toISOString();
     const conversion = action.kind === "unit_conversion" && conversionQuantity.trim() && conversionBasis
@@ -137,7 +146,7 @@ export function InspectionResultDialog({ action, expert, onClose, onPreviewInspe
 
   const requestPreview = async (event: FormEvent) => {
     event.preventDefault();
-    if (!result.trim() || !source.trim() || pending) return;
+    if (!result.trim() || !source.trim() || pending || confirmUncertain) return;
     if (action.kind === "physical_quantity" && result === "confirmed" && !quantity.trim()) {
       setError(`Enter the observed quantity in ${action.itemUnit}.`);
       return;
@@ -158,7 +167,9 @@ export function InspectionResultDialog({ action, expert, onClose, onPreviewInspe
     setError(undefined);
     try {
       if (!onPreviewInspection) throw new Error("The inspection preview service is not available.");
-      setPreview(await onPreviewInspection(action, input()));
+      const observed = input();
+      setPreview(await onPreviewInspection(action, observed));
+      reviewedInput.current = observed;
     } catch (caught: unknown) {
       setError(caught instanceof Error ? caught.message : "The server preview could not be generated.");
     } finally {
@@ -167,33 +178,35 @@ export function InspectionResultDialog({ action, expert, onClose, onPreviewInspe
   };
 
   const confirm = async () => {
-    if (!preview || !onConfirmInspection || pending) return;
+    if (!preview || !onConfirmInspection || pending || !reviewedInput.current) return;
     setPending("confirm");
     setError(undefined);
     try {
-      await onConfirmInspection(action, input(), preview);
-      onClose();
+      await onConfirmInspection(action, reviewedInput.current!, preview);
+      setConfirmUncertain(false); onClose();
     } catch (caught: unknown) {
-      setError(caught instanceof Error ? caught.message : "The inspection result could not be applied.");
+      const uncertain = !(caught instanceof ApiError) || caught.kind === "server" || caught.kind === "offline";
+      setConfirmUncertain(uncertain);
+      setError(uncertain ? "The result was not confirmed. Retry the unchanged result before editing or leaving." : caught.message);
     } finally {
       setPending(undefined);
     }
   };
 
-  return ( <div className="inspection-dialog-scrim" role="presentation"><form className="inspection-dialog" role="dialog" aria-modal="true" aria-labelledby={headingId} onSubmit={(event) => { void requestPreview(event); }}>
+  return ( <div className="inspection-dialog-scrim" role="presentation"><form ref={dialogRef} tabIndex={-1} className="inspection-dialog" role="dialog" aria-modal="true" aria-labelledby={headingId} onSubmit={(event) => { void requestPreview(event); }}>
     <div className="inspection-dialog-icon"><Icon name="tool" size={20} /></div>
     <span className="eyebrow">Project check</span>
     <h2 id={headingId}>Record the result</h2>
     <p className="inspection-dialog-question">{action.question}</p>
     <p className="inspection-dialog-candidate"><span>Candidate</span><strong>{action.candidate.name}</strong><small>Item {action.candidate.id} · version {action.candidate.version}</small></p>
-    <div className="inspection-dialog-fields"><label className="form-field" htmlFor={`${headingId}-result`}><span>Inspection result</span><select id={`${headingId}-result`} autoFocus required value={result} onChange={(event) => { setResult(event.target.value); setPreview(undefined); }} disabled={Boolean(pending)}><option value="">Choose one</option>{action.possibleResults.map((possible) => ( <option key={possible} value={possible}>{possible === "confirmed" ? "Confirmed" : "Inconclusive"}</option>))}</select></label>{action.kind === "physical_quantity" && ( <label className="form-field" htmlFor={`${headingId}-quantity`}><span>Observed quantity ({action.itemUnit})</span><input id={`${headingId}-quantity`} type="number" min="0" step="any" required={result === "confirmed"} value={quantity} onChange={(event) => { setQuantity(event.target.value); setPreview(undefined); }} placeholder={String(action.expected.quantity)} disabled={Boolean(pending)} /></label> )}</div>
-    {action.kind === "unit_conversion" && ( <div className="inspection-dialog-fields"><label className="form-field" htmlFor={`${headingId}-conversion-quantity`}><span>Pieces per set <small>(positive whole number)</small></span><input id={`${headingId}-conversion-quantity`} type="number" min="1" step="1" value={conversionQuantity} onChange={(event) => { setConversionQuantity(event.target.value); setPreview(undefined); }} placeholder="For example, 10" disabled={Boolean(pending)} /></label><label className="form-field" htmlFor={`${headingId}-conversion-basis`}><span>Conversion evidence basis</span><select id={`${headingId}-conversion-basis`} value={conversionBasis} onChange={(event) => { setConversionBasis(event.target.value); setPreview(undefined); }} disabled={Boolean(pending)}><option value="">Choose one</option><option value="package_label">Package label</option><option value="manufacturer_spec">Manufacturer specification</option><option value="physical_count">Physical count</option><option value="user_assertion">User assertion</option></select></label></div> )}
-    <div className="inspection-dialog-fields"><label className="form-field" htmlFor={`${headingId}-source`}><span>How did you check?</span><select id={`${headingId}-source`} required value={source} onChange={(event) => { setSource(event.target.value); setPreview(undefined); }} disabled={Boolean(pending)}><option value="">Choose one</option><option value="Physical check">Physical check</option><option value="Read the label">Read the label</option><option value="Measured it">Measured it</option><option value="Checked a document">Checked a document</option></select></label>{expert && ( <label className="form-field" htmlFor={`${headingId}-source-id`}><span>Source ID <small>(optional)</small></span><input id={`${headingId}-source-id`} value={sourceId} onChange={(event) => { setSourceId(event.target.value); setPreview(undefined); }} placeholder="Label, record, or document ID" disabled={Boolean(pending)} /></label> )}</div>
-    <div className="inspection-dialog-fields"><label className="form-field" htmlFor={`${headingId}-observed-at`}><span>Observed <small>(optional; defaults to now)</small></span><input id={`${headingId}-observed-at`} type="datetime-local" value={observedAt} onChange={(event) => { setObservedAt(event.target.value); setPreview(undefined); }} disabled={Boolean(pending)} /></label><label className="form-field" htmlFor={`${headingId}-note`}><span>Note <small>(optional)</small></span><input id={`${headingId}-note`} value={note} onChange={(event) => { setNote(event.target.value); setPreview(undefined); }} placeholder="What did you check?" disabled={Boolean(pending)} /></label></div>
+    <div className="inspection-dialog-fields"><label className="form-field" htmlFor={`${headingId}-result`}><span>Inspection result</span><select id={`${headingId}-result`} data-autofocus autoFocus required value={result} onChange={(event) => { setResult(event.target.value); setPreview(undefined); }} disabled={Boolean(pending) || confirmUncertain}><option value="">Choose one</option>{action.possibleResults.map((possible) => ( <option key={possible} value={possible}>{possible === "confirmed" ? "Confirmed" : "Inconclusive"}</option>))}</select></label>{action.kind === "physical_quantity" && ( <label className="form-field" htmlFor={`${headingId}-quantity`}><span>Observed quantity ({action.itemUnit})</span><input id={`${headingId}-quantity`} type="number" min="0" step="any" required={result === "confirmed"} value={quantity} onChange={(event) => { setQuantity(event.target.value); setPreview(undefined); }} placeholder="Enter counted quantity" disabled={Boolean(pending) || confirmUncertain} /></label> )}</div>
+    {action.kind === "unit_conversion" && ( <div className="inspection-dialog-fields"><label className="form-field" htmlFor={`${headingId}-conversion-quantity`}><span>Pieces per set <small>(positive whole number)</small></span><input id={`${headingId}-conversion-quantity`} type="number" min="1" step="1" value={conversionQuantity} onChange={(event) => { setConversionQuantity(event.target.value); setPreview(undefined); }} placeholder="For example, 10" disabled={Boolean(pending) || confirmUncertain} /></label><label className="form-field" htmlFor={`${headingId}-conversion-basis`}><span>Conversion evidence basis</span><select id={`${headingId}-conversion-basis`} value={conversionBasis} onChange={(event) => { setConversionBasis(event.target.value); setPreview(undefined); }} disabled={Boolean(pending) || confirmUncertain}><option value="">Choose one</option><option value="package_label">Package label</option><option value="manufacturer_spec">Manufacturer specification</option><option value="physical_count">Physical count</option><option value="user_assertion">User assertion</option></select></label></div> )}
+    <div className="inspection-dialog-fields"><label className="form-field" htmlFor={`${headingId}-source`}><span>How did you check?</span><select id={`${headingId}-source`} required value={source} onChange={(event) => { setSource(event.target.value); setPreview(undefined); }} disabled={Boolean(pending) || confirmUncertain}><option value="">Choose one</option><option value="Physical check">Physical check</option><option value="Read the label">Read the label</option><option value="Measured it">Measured it</option><option value="Checked a document">Checked a document</option></select></label>{expert && ( <label className="form-field" htmlFor={`${headingId}-source-id`}><span>Source ID <small>(optional)</small></span><input id={`${headingId}-source-id`} value={sourceId} onChange={(event) => { setSourceId(event.target.value); setPreview(undefined); }} placeholder="Label, record, or document ID" disabled={Boolean(pending) || confirmUncertain} /></label> )}</div>
+    <div className="inspection-dialog-fields"><label className="form-field" htmlFor={`${headingId}-observed-at`}><span>Observed <small>(optional; defaults to now)</small></span><input id={`${headingId}-observed-at`} type="datetime-local" value={observedAt} onChange={(event) => { setObservedAt(event.target.value); setPreview(undefined); }} disabled={Boolean(pending) || confirmUncertain} /></label><label className="form-field" htmlFor={`${headingId}-note`}><span>Note <small>(optional)</small></span><input id={`${headingId}-note`} value={note} onChange={(event) => { setNote(event.target.value); setPreview(undefined); }} placeholder="What did you check?" disabled={Boolean(pending) || confirmUncertain} /></label></div>
     {expert && ( <details className="inspection-dialog-expert" open><summary>Technical traceability</summary><div className="inspection-expert-grid"><span>Action ID</span><code>{action.id}</code><span>Revision</span><code>{action.projectRevisionId}</code><span>Affected lines</span><code>{lineReferences(action)}</code><span>Item</span><code>{action.itemId} · v{action.itemVersion}</code><span>Evidence</span><code>{[action.candidate.evidence.state, action.candidate.evidence.source].filter(Boolean).join(" · ") || "Not recorded"}</code><span>Predicate</span><code>{action.normalizedPredicate}</code><span>Unit</span><code>{action.expectedUnit}</code><span>Effects</span><code>{effectsLabel(action.effects)}</code></div></details> )}
     {error && ( <p className="inspection-dialog-error" role="alert"><Icon name="warning" size={15} />{error}</p> )}
     {preview && ( <section className="inspection-server-preview" aria-label="Server preview"><div className="inspection-preview-heading"><div><span className="eyebrow">Server preview</span><h3>Review proposed changes</h3></div><span className="inspection-preview-status">Preview only</span></div><p>{previewDescription(preview)}</p>{preview.affectedLines.length > 0 && ( <ul>{preview.affectedLines.map((line) => { const before = preview.before.gaps.find((gap) => gap.lineId === line.lineId); const after = preview.after.gaps.find((gap) => gap.lineId === line.lineId); const changes = alternativeChanges(preview.before.lines ?? [], preview.after.lines ?? []).filter((change) => change.startsWith(`${line.lineId} · `)); return ( <li key={line.lineId}><strong>{line.lineId}</strong><span>v{line.version} · {" "} {line.beforeDecision ?? before?.decision ?? "not evaluated"}{" "} → {" "} {line.afterDecision ?? after?.decision ?? "not evaluated"}</span><small>Before: {gapQuantities(before)}<br />After: {gapQuantities(after)}</small>{changes.length > 0 ? ( <ul className="inspection-preview-alternatives">{changes.map((change) => ( <li key={change}><small>{change}</small></li>))}</ul> ) : ( <small className="inspection-preview-no-alternatives">No alternative compatibility or conversion changes.</small> )}</li> ); })}</ul> )}{preview.affectedLines.length === 0 && ( <p className="inspection-preview-empty">No BOM line changes are proposed by the server.</p> )}<div className="inspection-preview-fact"><span>Requires human confirmation</span><strong>Yes — nothing has changed yet</strong></div>{expert && ( <div className="inspection-preview-expert"><span>Preview ID</span><code>{preview.id}</code><span>Preview version</span><code>{preview.version}</code><span>Content hash</span><code>{preview.contentSha256}</code><span>Expires</span><code>{formatObservedAt(preview.expiresAt) ?? preview.expiresAt}</code></div> )}</section> )}
-    <div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose} disabled={Boolean(pending)}>Cancel</button>{preview ? ( <button type="button" className="button button-primary" onClick={() => { void confirm(); }} disabled={Boolean(pending) || !onConfirmInspection}>{pending === "confirm" ? "Confirming…" : "Confirm result"}<Icon name="check" size={16} /></button> ) : ( <button type="submit" className="button button-primary" disabled={Boolean(pending) || !result.trim() || !source.trim()}>{pending === "preview" ? "Loading preview…" : "Preview changes"}<Icon name="arrow-right" size={16} /></button> )}</div>
+    <div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose} disabled={Boolean(pending) || confirmUncertain}>Cancel</button>{preview ? ( <button type="button" className="button button-primary" onClick={() => { void confirm(); }} disabled={Boolean(pending) || !onConfirmInspection}>{pending === "confirm" ? "Confirming…" : confirmUncertain ? "Retry unchanged result" : "Confirm result"}<Icon name="check" size={16} /></button> ) : ( <button type="submit" className="button button-primary" disabled={Boolean(pending) || !result.trim() || !source.trim()}>{pending === "preview" ? "Loading preview…" : "Preview changes"}<Icon name="arrow-right" size={16} /></button> )}</div>
   </form></div> );
 }
 
