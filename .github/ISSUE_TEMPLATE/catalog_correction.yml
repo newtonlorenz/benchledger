@@ -1,0 +1,54 @@
+name: Starter catalog correction
+description: Report an outdated or missing printer / filament fact with an official source
+title: "[Catalog]: "
+labels: [documentation, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The starter catalog stores reviewed product identity facts only. It never means a product is owned or in stock. Please use manufacturer or other first-party sources where possible and do not include private order or inventory data.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Product type
+      options:
+        - Printer
+        - Filament
+    validations:
+      required: true
+  - type: input
+    id: product
+    attributes:
+      label: Manufacturer and exact product / variant
+      placeholder: Example: Prusa Research MK4S
+    validations:
+      required: true
+  - type: textarea
+    id: correction
+    attributes:
+      label: What is missing or incorrect?
+      description: State the current fact if known and the corrected or missing fact you want reviewed.
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: Official source URL
+      description: Link directly to the manufacturer product or specification page when possible.
+      placeholder: https://manufacturer.example/product
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Source notes
+      description: Note model-year, regional, package, colour, or variant details that matter to the exact identity.
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Data boundaries
+      options:
+        - label: This report only concerns public product identity facts and does not claim that anyone owns this product.
+          required: true
+        - label: I have not included private order, inventory, account, or credential information.
+          required: true
