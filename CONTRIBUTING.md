@@ -6,6 +6,19 @@ CAD, electronics, and mixed maker projects.
 The project is pre-release. Small, outcome-focused changes are easiest to review;
 discuss a large schema, protocol, or architecture change in an issue first.
 
+## Pick a first contribution
+
+You do not need to understand the whole architecture to contribute. Start with a
+[`good first issue`](https://github.com/newtonlorenz/benchledger/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22),
+or share a real maker-workflow friction point through the issue forms. Questions,
+setup help, and broader ideas are better suited to
+[GitHub Discussions](https://github.com/newtonlorenz/benchledger/discussions).
+
+Useful contributions include documentation, accessibility, synthetic maker
+examples, repeatable screenshots, tests, and focused workflow improvements.
+If an issue is unassigned, comment before doing substantial work so effort is not
+duplicated.
+
 ## Before you start
 
 - Use synthetic data only. Never attach a real inventory database, order record,
@@ -24,6 +37,7 @@ Requirements: Node.js 24 LTS and npm 11 or later.
 
 ```bash
 npm ci
+npm run build
 npm run dev
 ```
 
