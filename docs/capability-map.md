@@ -409,3 +409,12 @@ MCP filesystem or shell tool. Server-side project allow-lists remain authoritati
 Browser-only project pages identify the project, not an arbitrary first workstream.
 Document, drawing, firmware and photo roles are displayed separately from
 explicit validation artefacts; unknown roles display as File.
+
+## Complete-revision sourcing search
+
+`read_requirement_sourcing` accepts optional `query` and `filter` (`all`,
+`source`, `review`, `optional`). Search covers requirement name/notes and quote
+supplier/title before pagination. `total` counts matches, `revisionTotal` counts
+all active requirements, and currency totals retain the full revision scope.
+Use the returned cursor only with the same search/filter. HTTP exposes the same
+contract. Invalid filters are rejected; no new permissions or writes are implied.

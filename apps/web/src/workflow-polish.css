@@ -87,3 +87,40 @@
 @media(min-width:1181px) and (max-width:1320px) { .home-work-grid { grid-template-columns:minmax(0,1fr); }.home-right-column { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media(min-width:801px) and (max-width:1100px) { .home-project-row { grid-template-columns:28px minmax(0,1fr) 120px; }.home-pin { grid-row:1/3; }.home-project-name { grid-column:2; }.home-project-row .register-stage { grid-column:3;justify-self:end; }.home-stock-state { grid-column:2;grid-row:2; }.home-project-next { grid-column:3;grid-row:2; } }
 .settings-layout { grid-template-columns:minmax(0,1fr);max-width:1100px; }.settings-layout .settings-section { grid-column:1; }
+
+/* Workflow smoke review: task-first layout and compact quote register. */
+.tab-list button:not(.is-active) span, .drawer-header .eyebrow { color: var(--ink-soft); }
+.sourcing-register { border-top: 1px solid var(--line); }
+.sourcing-register .sourcing-requirement { margin: 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 14px 0; }
+.sourcing-row-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; }
+.sourcing-row-summary h3 { font-size: .84rem; font-weight: 550; overflow-wrap: anywhere; }
+.sourcing-row-summary p { margin: 5px 0 0; font-size: .73rem; color: var(--ink-muted); }
+.sourcing-row-summary .status-pill { white-space: nowrap; }
+.sourcing-row-summary .button { min-height: 40px; }
+.sourcing-results-count { font: .72rem var(--font-data); color: var(--ink-soft); margin: 12px 0; }
+.sourcing-requirement .workflow-form { margin-top: 14px; }
+.sourcing-requirement .quote-card { margin-top: 12px; }
+.workstream-row { margin-top: 9px; }
+.workstream-planning > .button { margin-top: 12px; }
+.workstream-row > summary { min-height: 44px; }
+.project-plan .bom-section { scroll-margin-top: 130px; }
+.workflow-unavailable { padding: 24px; }
+.workflow-unavailable p { max-width: 650px; margin: 12px 0 20px; color: var(--ink-soft); }
+@media (max-width: 800px) {
+  .dossier-workspace { grid-column: 1; grid-row: 1; }
+  .dossier-column { grid-column: 1; grid-row: 2; }
+  .sourcing-row-summary { grid-template-columns: minmax(0, 1fr) auto; gap: 9px; }
+  .sourcing-row-summary > div { grid-column: 1 / -1; }
+  .sourcing-row-summary > .button { justify-self: end; min-height: 44px; }
+  .sourcing-row-summary > .status-pill { justify-self: start; }
+  .workflow-unavailable .button { margin: 4px 0; white-space: normal; }
+}
+
+.project-task-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 14px; }
+.project-task-strip > span, .project-task-strip > button { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-strong); color: var(--ink-soft); font-size: .75rem; }
+.project-task-strip strong { font: 500 .75rem var(--font-data); color: var(--ink); }
+.project-task-strip button { cursor: pointer; }
+.project-task-strip button:disabled { cursor: default; background: var(--surface-soft); }
+.project-task-strip button:not(:disabled):hover { color: var(--accent); border-color: var(--accent-line); }
+@media (max-width: 800px) { .project-task-strip { gap: 4px; }.project-task-strip > span, .project-task-strip > button { min-height: 44px; padding-inline: 9px; }.project-task-strip > button:last-child:not(:nth-child(4)) { flex-basis: 100%; justify-content: center; } }
+.detail-drawer .eyebrow, .drawer-facts > div > span, .count-form label, .count-form > div > span { color: var(--ink-soft); }

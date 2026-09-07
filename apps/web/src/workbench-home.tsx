@@ -4,7 +4,7 @@ import type { InventoryItem, Project } from "./domain";
 import { deriveHomeProjects, filterHomeProjects, readHomePreferences, writeHomePreferences } from "./workbench-state";
 import type { HomeFilter, HomePreferences, HomeProject, HomeTask } from "./workbench-state";
 export interface WorkbenchHomeProps {
-  projects: Project[]; items: InventoryItem[]; printers: InventoryItem[]; sampleMode: boolean;
+  projects: Project[]; items: InventoryItem[]; printers: InventoryItem[]; sampleMode: boolean; isPrinterUsable?: ((item: InventoryItem) => boolean) | undefined;
   onOpen(id: string, tab?: "plan" | "files" | "offers" | "reconciliation"): void;
   onTask(task: HomeTask): void; onNewProject(event: React.MouseEvent<HTMLButtonElement>): void;
   onAddItem(): void; onImport?: (() => void) | undefined; onInventory(): void; onItem(id: string): void;
@@ -54,7 +54,7 @@ export function WorkbenchHome(props: WorkbenchHomeProps) {
         {queue.length > queueLimit && <div className="home-queue-footnote"><button type="button" className="text-button" onClick={() => setQueueLimit((value) => value + 8)}>Show more tasks</button></div>}
       </section>
       <section className="surface home-equipment" aria-label="Workshop equipment"><div className="home-section-title"><h2>Workshop equipment</h2><Icon name="tool" size={18} /></div>
-        {props.printers.length ? props.printers.slice(0, 3).map((item) => <button type="button" className="workshop-printer-card" key={item.id} onClick={() => props.onItem(item.id)}><span><strong>{item.name}</strong><small>{item.catalogProduct?.buildVolumeMm ? `${item.catalogProduct.buildVolumeMm.x} × ${item.catalogProduct.buildVolumeMm.y} × ${item.catalogProduct.buildVolumeMm.z} mm build volume` : "Open recorded equipment details"}</small></span><Icon name="arrow-up-right" size={15} /></button>) : <p>No owned printers recorded. Electronics and ready-made builds do not need a printer.</p>}
+        {props.printers.length ? props.printers.slice(0, 3).map((item) => <button type="button" className="workshop-printer-card" key={item.id} onClick={() => props.onItem(item.id)}><span><strong>{item.name}</strong><small>{props.isPrinterUsable?.(item) === false ? "Needs stock or product setup check" : item.catalogProduct?.buildVolumeMm ? `${item.catalogProduct.buildVolumeMm.x} × ${item.catalogProduct.buildVolumeMm.y} × ${item.catalogProduct.buildVolumeMm.z} mm build volume` : "Open recorded equipment details"}</small></span><Icon name="arrow-up-right" size={15} /></button>) : <p>No owned printers recorded. Electronics and ready-made builds do not need a printer.</p>}
         <button type="button" className="text-button" onClick={props.onInventory}>Manage inventory<Icon name="arrow-right" size={15} /></button>
       </section>
     </aside></div>

@@ -54,7 +54,7 @@ it("keeps guided drafts editable and validates the mapped proposal before previe
 });
 it("updates workstream status, notes and due date through an observed version", async () => {
   const row = { item: { id: "work", name: "Assembly", kind: "assembly", currentRevisionId: "rev" }, revision: { number: 1, name: "Initial" }, assignment: { version: 1, status: "todo" } };
-  vi.mocked(workflowRequest).mockImplementation(async (path, method) => method === "PUT" ? { data: { id: "work", version: 2, status: "in_progress" } } : path === "/team/directory" ? { members: [] } : { data: [row], total: 1 });
-  render(<WorkstreamPlanning project={project} />); await screen.findByText("Assembly · todo"); change("Status for Assembly", "in_progress"); change("Due date", "2027-01-02"); change("Workstream notes", "Fit check first"); click("Save workstream progress");
+  vi.mocked(workflowRequest).mockImplementation(async (path, method) => method === "PUT" ? { data: { id: "work", workItemId: "work", version: 2, status: "in_progress", notes: "Fit check first", dueDate: "2027-01-02" } } : path === "/team/directory" ? { members: [] } : { data: [row], total: 1 });
+  render(<WorkstreamPlanning project={project} />); await screen.findByText("Assembly · To do"); change("Status for Assembly", "in_progress"); change("Due date", "2027-01-02"); change("Workstream notes", "Fit check first"); click("Save workstream progress");
   await waitFor(() => expect(vi.mocked(workflowRequest).mock.calls.some((call) => call[1] === "PUT")).toBe(true)); expect(vi.mocked(workflowRequest).mock.calls.find((call) => call[1] === "PUT")![2]).toMatchObject({ expectedVersion: 1, status: "in_progress", notes: "Fit check first", dueDate: "2027-01-02" });
 });

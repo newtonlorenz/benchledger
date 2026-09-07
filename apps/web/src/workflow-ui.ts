@@ -1,9 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, workflowRequest, workflowCommandKey } from "./api";
 export function useWorkflowRead<T>(path: string | undefined, dependency = "") {
-  const [data, setData] = useState<T>(), [loading, setLoading] = useState(false), [error, setError] = useState<string>(), [nonce, setNonce] = useState(0);
-  useEffect(() => { let active = true; setData(undefined); setError(undefined); if (!path) return; setLoading(true); void workflowRequest<T>(path).then((value) => { if (active) setData(value); }).catch((failure: unknown) => { if (active) setError(failure instanceof Error ? failure.message : "This workspace could not be loaded."); }).finally(() => { if (active) setLoading(false); }); return () => { active = false; }; }, [path, dependency, nonce]);
-  return { data, loading, error, reload: () => setNonce((value) => value + 1) };
+  const identity = JSON.stringify([path, dependency]);
+  const [state, setState] = useState<{ identity: string; data?: T; loading: boolean; error?: string }>({ identity, loading: Boolean(path) });
+  const [nonce, setNonce] = useState(0);
+  useEffect(() => {
+    let active = true;
+    if (!path) { setState({ identity, loading: false }); return; }
+    // Retain the last confirmed snapshot during a refresh, never across another scope.
+    setState((current) => ({ identity, loading: true, ...(current.identity === identity && current.data !== undefined ? { data: current.data } : {}) }));
+    void workflowRequest<T>(path).then((data) => { if (active) setState({ identity, data, loading: false }); }).catch((failure: unknown) => {
+      if (active) setState((current) => ({ ...current, identity, loading: false, error: failure instanceof Error ? failure.message : "This workspace could not be loaded." }));
+    });
+    return () => { active = false; };
+  }, [path, identity, nonce]);
+  const current: typeof state = state.identity === identity ? state : { identity, loading: Boolean(path) };
+  return { data: current.data, loading: current.loading, error: current.error, reload: () => setNonce((value) => value + 1) };
 }
 export function useWorkflowCommand() {
   const pending = useRef<{ signature: string; key: string } | undefined>(undefined);
