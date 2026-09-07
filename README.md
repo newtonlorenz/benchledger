@@ -1,215 +1,155 @@
 <p align="center">
-  <img src="docs/assets/benchledger-lockup.svg" alt="BenchLedger" width="520">
+  <img src="docs/assets/benchledger-lockup.svg" alt="BenchLedger" width="560">
 </p>
 
-<p align="center"><strong>Know what you have. Plan what to build. Close the loop.</strong></p>
+<p align="center"><strong>Your workshop's memory, project brain and AI-ready maker workspace.</strong></p>
 
 <p align="center">
-  BenchLedger is a self-hosted workspace for 3D-printing and electronics makers, from hobbyists to expert workshops.
+  BenchLedger helps 3D-printing and electronics makers go from <em>idea → parts → build → finished project</em><br>
+  without losing track of what they own, what they need, or why a decision was made.
 </p>
 
 <p align="center">
-  Manage projects yourself in the web UI, or ask an authorized AI agent to help. Both use the same records, application rules, and approval boundaries.
+  <img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-0f766e">
+  <img alt="Node 24+" src="https://img.shields.io/badge/Node-24%2B-3c873a">
+  <img alt="Self-hosted" src="https://img.shields.io/badge/self--hosted-local--first-334155">
+  <img alt="MCP ready" src="https://img.shields.io/badge/AI-MCP--ready-c2410c">
 </p>
 
 > [!NOTE]
-> BenchLedger is an early open-source release. The private-LAN workflow is
-> working, but APIs, schemas, and MCP capabilities may change before 1.0.
+> BenchLedger is an early open-source release. The core private-LAN workflow works today, but APIs, schemas and MCP capabilities may change before 1.0.
 
-## Make a project you can trust
+![BenchLedger workbench showing active maker projects, stock checks, sourcing tasks and workshop equipment](docs/assets/benchledger-workspace.png)
 
-BenchLedger keeps the information around a maker project together. Use it to:
+## Why BenchLedger exists
 
-- Track printers, tools, accessories, spare parts, electronics, and consumables.
-- Keep exact product profiles for printers, filament, nozzles, plates, and parts.
-- Keep an append-only stock ledger with confirmed, uncertain, reserved, and unavailable states.
-- Start projects with work items, revisions, bills of materials (BOMs), and build gaps.
-- Correct project details and requirements, with reversible removal and retained history.
-- Export a read-only project brief or requirements CSV for review and handoff.
-- Use light or dark themes, compact rows and keyboard commands. See the [interface guide](docs/ui-design.md).
-- See what you can reuse, what needs a physical check, and what is missing.
-- Compare recorded supplier offers, package quantities, observed prices, and alternatives.
-- Keep versioned CAD, STEP, STL, 3MF, firmware, drawing, and validation files.
-- Bind build configurations and SHA-256 hashes to project revisions.
-- Record actual use, returns, loss, leftovers, and converted assets after a build.
+Maker projects get messy fast. The CAD file is in one folder. The printer profile is somewhere else. You *think* you still have the right filament. A part was ordered three months ago, but did it arrive? The BOM changed after revision two. An AI agent can help, but only if it has trustworthy context.
 
-It treats uncertainty honestly. An old order is evidence that something was bought,
-not proof that it is still on hand. A compatible-looking part is a candidate,
-not an exact match. Recommendations can retain their reason, source, observation
-time, and next physical check.
+BenchLedger gives the workshop one shared source of truth.
 
-## One workspace, two ways to work
+- **Know what you actually have.** Track printers, tools, filament, electronics, fasteners, spares and consumables with explicit evidence states.
+- **Plan builds properly.** Keep requirements, BOMs, revisions, fabrication routes, build setup and gaps together.
+- **Source what is missing.** Review recorded supplier offers, package quantities, prices and alternatives without pretending an order equals stock.
+- **Keep files tied to the build.** Store versioned CAD, STEP, STL, 3MF, firmware, drawings and validation artefacts against project revisions.
+- **Close the loop.** Record what was used, returned, lost, left over or converted into a new workshop asset.
+- **Let AI help safely.** Authorised agents use the same application rules and approval boundaries as the web UI through MCP.
 
-Use the web UI when you want to manage the project yourself. Add inventory,
-organize categories, create a project, review its BOM, attach files, and close
-out the build from the same workspace.
+## Built for real maker workflows
 
-Use authorized AI agents when you want help with the same bounded workflow.
-The model-neutral MCP server lets an agent inspect inventory, calculate BOM gaps,
-prepare shopping proposals, manage revisions and artifacts, and draft project
-close-out reconciliation. The agent works against the same records through the
-same application rules as the UI. It is not a separate agent-only system.
+BenchLedger is deliberately opinionated about uncertainty. **Bought** is not the same as **on hand**. **Looks compatible** is not the same as **verified**. **Recommended** is not the same as **approved**.
 
-Beginners see plain outcomes such as **Ready to use**, **Check quantity**, and
-**Need to buy**. Expert detail remains available in place: exact variants,
-dimensions, lots, compatibility evidence, build configuration, hashes, and audit history.
+That lets the interface stay simple for everyday use while preserving expert detail when you need it.
 
-BenchLedger does **not** purchase products, scrape retailers, execute uploads,
-slice models, generate G-code, or control printers.
+| Maker view | What it means |
+| --- | --- |
+| **Ready** | BenchLedger has enough evidence to use it |
+| **Check** | A physical count or compatibility check is needed |
+| **Decide** | The project needs a maker decision |
+| **Source** | The project has a confirmed gap |
 
-## A project from idea to close-out
+Technical mode exposes exact variants, dimensions, lots, provenance, revision scope, build configuration, hashes and audit history.
+## From idea to finished build
 
 ```mermaid
 flowchart LR
-  I[Inventory] --> P[Project]
-  P --> B[BOM and build setup]
-  B --> G{Gap check}
-  G -->|Reuse| R[Reserve stock]
-  G -->|Inspect| C[Physical check]
-  G -->|Missing| S[Shopping proposal]
-  R --> F[Files and validation]
-  C --> F
-  S --> F
-  F --> X[Post-project reconciliation]
-  X --> I
+  A[Idea] --> P[Project]
+  P --> R[Requirements + BOM]
+  R --> G{Gap check}
+  G -->|Ready| U[Reserve + build]
+  G -->|Check| C[Physical check]
+  G -->|Source| S[Review sourcing]
+  C --> U
+  S --> U
+  U --> F[Files + validation]
+  F --> X[Close-out]
+  X --> I[Updated inventory]
 ```
 
-![BenchLedger synthetic sample workspace showing a project build path, the next useful action, inventory status, and project summary](docs/assets/benchledger-workspace.png)
+The current release includes guided project setup, reviewed BOM imports, project corrections with retained history, inspection queues, sourcing review, revision-aware artefacts, interruption-safe saves and post-build reconciliation.
 
-### Set up inventory categories
+## AI-native, not AI-dependent
 
-Open **Settings → Manage inventory categories** before adding stock. Add a
-top-level category such as “Workshop” or “Electronics”; you can add one level of
-subcategories such as “Workshop / Measuring tools”. Rename or change the order
-when your storage changes, or archive a category that should no longer be used.
+BenchLedger works perfectly well as a normal web application. If you use ChatGPT, Codex, Claude or another MCP-capable agent, the same workspace can also become structured maker context.
 
-When you choose **Inventory → Add item**, select the item type first. Beginner
-mode derives its category; technical mode lets you choose an active managed
-category. The item type remains the semantic kind used for
-matching (for example, `tool` or `electronic`); the managed category is the
-display label and is used by the Category filter. Existing legacy items can stay
-unassigned until you edit them. If no category is available, the add form links
-back to Settings so you can create one before continuing.
+An authorised agent can inspect inventory, calculate project gaps, prepare sourcing proposals, manage revisions and artefact metadata, and draft close-out reconciliation. It cannot silently purchase products, publish files, purge history, control your printer or bypass physical verification.
 
-## Five-minute local demo
+That distinction matters: **the agent helps run the workflow; BenchLedger remains the system of record.**
 
-Requirements: Node.js 24 LTS and npm 11 or later.
+See the [10-minute agent quickstart](docs/agent-quickstart.md), [capability map](docs/capability-map.md) and bundled [`$benchledger` skill](skills/benchledger/SKILL.md).
+
+## Try it locally
+
+Requirements: **Node.js 24+** and **npm 11+**.
 
 ```bash
+git clone https://github.com/newtonlorenz/benchledger.git
+cd benchledger
 npm ci
+npm run build
 npm run dev
 ```
 
-Open [http://127.0.0.1:8792](http://127.0.0.1:8792). Development mode uses
-synthetic demo data; never copy a private inventory database into the checkout.
-The demo remains password-protected. A fresh trusted-LAN deployment with no
-bootstrap password hash starts with browser access in `lan_open` mode; use that
-mode only when every device on the network is trusted. An administrator can
-enable `password` mode in Settings.
+Open [http://127.0.0.1:8792](http://127.0.0.1:8792).
 
-For a production-like LAN installation with external persistent storage, follow
-the [deployment guide](docs/deployment.md).
+Development mode uses synthetic demo data, including a Bambu Lab H2D workshop example. The demo is password-protected and never requires private inventory data. For a production-like private-LAN installation with persistent storage, use the [deployment guide](docs/deployment.md).
 
-## Agent and MCP access
+## What you can manage
 
-BenchLedger is agent-native rather than agent-only. The model-neutral MCP server
-offers bounded resources and scoped tools over the same application service used
-by the web UI.
+- Printers, filament, tools, accessories, electronics, fasteners, wire and spare parts
+- Exact product profiles, variants and compatibility evidence
+- Physical counts, reservations, uncertainty and unavailable stock
+- Projects, requirements, revisions, BOMs and build approaches
+- Supplier offers, alternatives and sourcing decisions
+- CAD, STEP, STL, 3MF, firmware, drawings and validation files
+- Immutable build configuration snapshots and SHA-256 hashes
+- Inspection actions and physical verification
+- Project close-out, leftovers, losses, returns and newly created assets
 
-Use the bundled [`$benchledger` skill](skills/benchledger/SKILL.md) when your
-runtime supports skills. Otherwise begin with the
-[ten-minute agent quickstart](docs/agent-quickstart.md) and
-[capability map](docs/capability-map.md).
-
-Agents can inspect inventory, calculate BOM gaps, prepare shopping proposals,
-manage revisions and artifacts, and draft project close-out reconciliation. They
-cannot buy, publish, purge permanently, control a printer, or bypass physical
-verification. Browser access mode does not grant MCP access: `/api/v1/mcp`
-always requires a scoped bearer token, including when the browser is in
-`lan_open` mode.
-
-For file bytes, use browser Files or the trusted host helper
-`node scripts/artifact-transfer.mjs --help`. The helper requires separately
-authorised host filesystem access and privately configured credentials. It
-transfers one file to an explicit revision, verifies SHA-256 and byte length,
-and refuses redirects and download overwrites. MCP exposes metadata, not
-local paths, file bytes or credentials.
-
+BenchLedger does **not** slice models, generate G-code, control printers, scrape retailers or purchase products.
 ## Architecture
 
-BenchLedger is a TypeScript modular monolith:
+BenchLedger is a TypeScript modular monolith with one set of application rules behind every surface.
 
 ```text
 React + Vite web UI ─┐
 Fastify HTTP API ────┼─> application services ─> domain rules
 MCP adapter ─────────┘          │                    │
                                ├─> SQLite repositories
-                               └─> content-addressed artifact storage
+                               └─> content-addressed artefact storage
 ```
 
-The UI, HTTP API, and MCP adapter never write to SQLite or the filesystem
-directly. See the [capability map](docs/capability-map.md),
-[stock semantics](docs/stock-evidence-semantics.md), and
-[approval boundaries](docs/approval-boundaries.md) for the public contract.
+The UI, HTTP API and MCP adapter do not write directly to SQLite or the filesystem. Start with the [capability map](docs/capability-map.md), [stock evidence semantics](docs/stock-evidence-semantics.md) and [approval boundaries](docs/approval-boundaries.md) if you are extending the system.
 
-## Repository map
+## Project status
 
-| Path | Purpose |
-| --- | --- |
-| `apps/web` | Responsive beginner-to-expert interface |
-| `apps/server` | Fastify API, auth, OpenAPI, and application host |
-| `apps/mcp` | Model-neutral MCP adapter and protocol boundary |
-| `packages/domain` | Evidence-aware inventory and project rules |
-| `packages/application` | Use cases and ports shared by every surface |
-| `packages/database` | SQLite schema and repositories |
-| `packages/artifacts` | Content-addressed project file storage |
-| `skills/benchledger` | Portable workflow skill for compatible agents |
-| `docs` | Semantics, deployment, privacy, roadmap, and reference workflow |
+**Working now:** private-LAN app, authentication, guided setup, inventory and exact product profiles, project planning, reviewed sourcing, inspection workflows, revisioned artefacts, backups, scoped MCP access and post-project reconciliation.
 
-## Private data stays outside the repository
+**Pre-1.0:** APIs and schemas may still change. There are no published npm packages or hosted service guarantees yet.
 
-This source tree contains application code, documentation, deployment examples,
-and synthetic fixtures only. Do not commit real inventory, project artifacts,
-supplier history, order/message identifiers, `.env` files, credentials, SQLite
-databases, logs, backups, or private exports.
-
-Read [Privacy](docs/privacy.md) and [Security](SECURITY.md) before importing data.
-Run `npm run public:check` before sharing a branch or source archive.
+See [CHANGELOG.md](CHANGELOG.md), [reviewed maker workflows](docs/maker-workflows.md) and the [open-source readiness review](docs/open-source-readiness.md).
 
 ## Contributing
 
-Focused issues and pull requests are welcome.
-Start with [CONTRIBUTING.md](CONTRIBUTING.md), the
-[Code of Conduct](CODE_OF_CONDUCT.md), [development workflow](docs/development-workflow.md),
-and [support guide](SUPPORT.md).
+BenchLedger is being built in public for people who make physical things. Useful contributions include workflow friction you hit in a real workshop, support for additional maker domains, accessibility improvements, tests, documentation and focused code changes.
 
-During development, test the smallest affected surface. The complete release
-gate is:
+A good first contribution does not need to be large. If something feels confusing while you are setting up a printer, checking stock or planning a build, open an issue with the workflow you were trying to complete.
+
+Start with [CONTRIBUTING.md](CONTRIBUTING.md), the [Code of Conduct](CODE_OF_CONDUCT.md), [development workflow](docs/development-workflow.md) and [support guide](SUPPORT.md).
+
+Before submitting a change, run the smallest relevant tests. The complete release gate is:
 
 ```bash
 npm run check
 ```
 
-## Project status
+## Privacy by design
 
-- **Working:** private LAN app, external data boundary, authentication, scoped
-  MCP, projects/BOMs, exact product profiles, revisioned artifacts, backups, and
-  post-project reconciliation
-- **Pre-release:** APIs and schemas may still change; there are no published npm
-  packages or stable compatibility guarantees
-- **Not yet published:** npm packages or a hosted service
+Real workshop data stays outside the source tree. Do not commit private inventory, project artefacts, supplier history, order identifiers, `.env` files, credentials, SQLite databases, logs, backups or private exports.
 
-See [CHANGELOG.md](CHANGELOG.md) and the
-[open-source readiness review](docs/open-source-readiness.md).
+Read [Privacy](docs/privacy.md) and [Security](SECURITY.md), and run `npm run public:check` before sharing a branch or source archive.
 
-## License
+## Licence
 
-Licensed under the [Apache License 2.0](LICENSE).
+BenchLedger is open source under the [Apache License 2.0](LICENSE).
 
-## Reviewed setup, sourcing and build planning
-
-Use maker templates or a mapped CSV to preview and create a project. Existing
-projects support reviewed requirement imports, supplier quotes without invented
-owned stock, repeated-part/plate plans and workstream progress. See
-[reviewed maker workflows](docs/maker-workflows.md) for entry points, limits,
-HTTP/MCP contracts and the separate named-account rollout boundary.
+<p align="center"><strong>Build things. Keep the context. Make the next project easier.</strong></p>
