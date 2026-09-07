@@ -117,3 +117,14 @@ Push the reviewed branch only when authorized, then open a pull request into
 GitHub's required `test` and `dependency-review` checks must pass. Merge and
 deployment are separate decisions; merging a contribution does not authorize a
 remote deployment or package release.
+
+## Dependency updates
+
+Keep Vite and its React plugin in one update, and Vitest and its coverage provider
+in another coordinated update. Node type definitions stay on major 24 to match
+the supported runtime. Dependabot groups these toolchains and ignores Node type
+major updates until the runtime is deliberately upgraded.
+
+The Zod 4 package is installed, but existing contracts deliberately import
+`zod/v3`. This compatibility entry point preserves validation and generated MCP
+schemas. A future switch to Zod 4 schema semantics needs its own contract review.

@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/v3";
 import { idSchema, isoDateSchema, quantityUnitSchema, createBomLineSchema, workItemKindSchema } from "./schemas.js";
 
 const money = z.number().int().nonnegative().max(1_000_000_000_000);

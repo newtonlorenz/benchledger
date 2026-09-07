@@ -1,4 +1,4 @@
-import type { z } from "zod";
+import type { z } from "zod/v3";
 import type {
   artifactSchema, auditEventSchema, beginUploadSchema, bomGapCandidateSchema, bomGapSchema, bomLineSchema, createBomLineSchema,
   commissionInventoryItemSchema, createInventoryItemSchema, createOfferSchema, createProjectRevisionSchema,

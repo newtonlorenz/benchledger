@@ -5,7 +5,14 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
     groups:
+      vite-toolchain:
+        patterns: [vite, "@vitejs/plugin-react"]
+      vitest-toolchain:
+        patterns: [vitest, "@vitest/*"]
       development-tooling:
         dependency-type: development
         update-types: [minor, patch]

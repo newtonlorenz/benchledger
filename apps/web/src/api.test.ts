@@ -400,7 +400,7 @@ describe("authenticated BenchLedger API adapter", () => {
     expect(snapshot.projects[0]?.bom[0]).toMatchObject({ label: "ESP32 board", itemId: "board-esp32", required: 1, constraints: { specification: { status: "insufficient", missingDecisions: ["voltage", "connector"] } }, alternatives: [{ itemId: "board-esp32", compatible: "conditional", reason: "Check logic level" }] });
     expect(snapshot.projects[0]?.artifacts[0]).toMatchObject({ name: "enclosure.step", role: "STEP", revision: "r02", size: "2 KB" });
 
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("network down"));
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockClear().mockRejectedValue(new TypeError("network down"));
     await expect(adapter.createProject({ name: "No local fallback", description: "must fail" })).rejects.toMatchObject({ kind: "offline" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

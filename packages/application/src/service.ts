@@ -43,7 +43,7 @@ import type {
   ReservationDetails, StockMutation, UpdateInventoryInput, UploadSessionDetails, UsageInput,
   CatalogProductListOptions, BuildConfigurationListOptions, InventoryCategoryListOptions, InventoryCategoryPort, InspectionPort
 } from "./ports.js";
-import { z } from "zod";
+import { z } from "zod/v3";
 import { buildReconciliationDocument, reconciliationCommitId, reconciliationDraftId, type ReconciliationSourceSnapshot } from "./reconciliation.js";
 import { canonicalInventoryBulkUpdate, inventoryBulkUpdateFingerprint, normalizeInventoryBulkChanges } from "./inventory-bulk.js";
 import { deriveInspectionActions, hashInspectionBasis, pageInspectionActions } from "./inspection.js";

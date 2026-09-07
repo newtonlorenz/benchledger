@@ -1,6 +1,6 @@
 import { matchesInventorySearch } from "@benchledger/domain/inventory-search";
 import { createHash, randomUUID } from "node:crypto";
-import { z } from "zod";
+import { z } from "zod/v3";
 import { idSchema, workflowPageSchema, sourcingPageSchema, createRequirementOfferSchema, requirementOfferSchema, chooseRequirementOfferSchema, offerChoiceSchema, buildPlanInputSchema, createWorkstreamSchema, workAssignmentInputSchema, bomImportInputSchema, bomImportCommitSchema, createBomLineSchema } from "@benchledger/api-contract";
 import type { WorkflowKind, WorkflowRecord, RequirementOffer, OfferChoice, RequirementOfferEstimate, BuildPlan, BuildPlanInput, WorkAssignment, BomImportPreview, BomLine, ProjectRevision } from "@benchledger/api-contract";
 import { ApplicationError } from "./errors.js";

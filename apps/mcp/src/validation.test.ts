@@ -15,7 +15,6 @@ import {
   buildConfigurationCreate,
   boundedJsonObject,
   contextRefresh,
-  bomLineList,
   dimensions,
   evidence,
   finalizeArtifactUpload,
