@@ -20,7 +20,7 @@ body:
     id: product
     attributes:
       label: Manufacturer and exact product / variant
-      placeholder: Example: Prusa Research MK4S
+      placeholder: "Example: Prusa Research MK4S"
     validations:
       required: true
   - type: textarea
