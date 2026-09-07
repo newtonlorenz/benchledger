@@ -259,7 +259,7 @@ class MemoryInventory implements InventoryPort {
 
   getItem(itemId: string): Promise<InventoryItem | null> {
     const item = this.items.get(itemId);
-    return Promise.resolve(item ? clone(item) : null);
+    return Promise.resolve(item && item.retiredAt === undefined ? clone(item) : null);
   }
 
   createItem(input: CreateInventoryItem): Promise<InventoryItem> {
@@ -307,10 +307,21 @@ class MemoryInventory implements InventoryPort {
     return Promise.resolve();
   }
 
+  retireItem(itemId: string, expectedVersion: number): Promise<InventoryItem> {
+    const current = this.items.get(itemId);
+    if (!current || current.retiredAt !== undefined) throw new ApplicationError("not_found", `Inventory item '${itemId}' was not found`);
+    ensureVersion(current.version, expectedVersion, "Inventory item");
+    if ((current.allocatedQuantity ?? (canCount(current.evidence.state) ? current.quantity - current.availableQuantity : 0)) > 0) throw new ApplicationError("conflict", "Release stock set aside for projects before deleting this item. Archive the project or release its reservation, then try again.");
+    const retiredAt = iso();
+    const next = { ...current, retiredAt, updatedAt: retiredAt, version: current.version + 1 };
+    this.items.set(itemId, next);
+    return Promise.resolve(clone(next));
+  }
+
   updateItem(itemId: string, input: UpdateInventoryInput, expectedVersion: number | undefined): Promise<InventoryItem> {
     ensureDescriptiveUpdate(input);
     const current = this.items.get(itemId);
-    if (!current) throw new ApplicationError("not_found", `Inventory item '${itemId}' was not found`);
+    if (!current || current.retiredAt !== undefined) throw new ApplicationError("not_found", `Inventory item '${itemId}' was not found`);
     ensureVersion(current.version, expectedVersion, "Inventory item");
     const nextCategoryNodeId = input.categoryNodeId === null ? undefined : input.categoryNodeId ?? current.categoryNodeId;
     const next = {
@@ -395,7 +406,7 @@ class MemoryInventory implements InventoryPort {
     observedEvidence?: InventoryItem["evidence"]
   ): Promise<StockMutation> {
     const current = this.items.get(itemId);
-    if (!current) throw new ApplicationError("not_found", `Inventory item '${itemId}' was not found`);
+    if (!current || current.retiredAt !== undefined) throw new ApplicationError("not_found", `Inventory item '${itemId}' was not found`);
     if (!Number.isFinite(quantity) || quantity < 0) throw new ApplicationError("validation", "Physical count must be zero or greater");
     if (evidenceState === "commissioned" && canCount(current.evidence.state)) {
       throw new ApplicationError("conflict", "Inventory item is already confirmed; record a physical count if the quantity changed");
@@ -441,7 +452,7 @@ class MemoryInventory implements InventoryPort {
 
   recordStockEvent(input: StockEventInput, ctx: RequestContext): Promise<StockMutation> {
     const current = this.items.get(input.itemId);
-    if (!current) throw new ApplicationError("not_found", `Inventory item '${input.itemId}' was not found`);
+    if (!current || current.retiredAt !== undefined) throw new ApplicationError("not_found", `Inventory item '${input.itemId}' was not found`);
     ensureItemUnit(current, input.unit);
     if (input.type === "count") return this.recordCount(input.itemId, input.quantity, ctx, undefined, "physically_counted");
     ensurePositive(input.quantity, "Event quantity");
@@ -970,7 +981,7 @@ class MemoryProjects implements ProjectPort {
     const line = this.bomLines.get(input.lineId); if (!line || line.revisionId !== revisionId) throw new ApplicationError("not_found", `BOM line '${input.lineId}' was not found in this revision`);
     if (line.role === null || line.role === undefined) throw new ApplicationError("validation", "Review the BOM line requirement role before reservation");
     if (line.role !== "consumed") throw new ApplicationError("validation", "Reusable requirements do not reserve consumable stock");
-    const item = this.inventory.items.get(input.itemId); if (!item) throw new ApplicationError("not_found", `Inventory item '${input.itemId}' was not found`);
+    const item = this.inventory.items.get(input.itemId); if (!item || item.retiredAt !== undefined) throw new ApplicationError("not_found", `Inventory item '${input.itemId}' was not found`);
     const conversion = bomQuantityConversion(line, item);
     if (item.unit !== line.unit && conversion === undefined) throw new ApplicationError("validation", `Unit mismatch: BOM uses ${line.unit}, item uses ${item.unit}; no valid quantity conversion is recorded`);
     if (conversion !== undefined && !Number.isSafeInteger(input.quantity)) throw new ApplicationError("validation", "Converted reservations must use a whole number of sets");

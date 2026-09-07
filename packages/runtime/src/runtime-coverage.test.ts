@@ -282,6 +282,25 @@ describe("runtime utility and port behavior", () => {
 });
 
 describe("production inventory and procurement adapters", () => {
+  it("deletes inventory with version protection, retained history, retry safety and allocation checks", async () => {
+    const runtime = await makeRuntime();
+    const service = new ApplicationService(runtime.ports);
+    const item = (await service.createInventoryItem({ id: "delete-item", name: "Delete item", kind: "printer", quantity: 1, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context())).data;
+    await expect(service.deleteInventoryItem(item.id, undefined, context())).rejects.toMatchObject({ code: "validation" });
+    await expect(service.deleteInventoryItem(item.id, 2, context())).rejects.toMatchObject({ code: "conflict" });
+    const command = context({ idempotencyKey: "delete-item-command" });
+    const deleted = await service.deleteInventoryItem(item.id, item.version, command);
+    expect(deleted.data).toMatchObject({ retiredAt: expect.any(String), version: 2 });
+    expect((await service.deleteInventoryItem(item.id, item.version, command)).replayed).toBe(true);
+    await expect(service.getInventoryItem(item.id)).rejects.toMatchObject({ code: "not_found" });
+    expect((await runtime.ports.inventory.listStockEvents(item.id, 50)).data).toHaveLength(1);
+    expect((await runtime.ports.inventory.listItems({ limit: 200 })).data.some((candidate) => candidate.id === item.id)).toBe(false);
+    await expect(service.deleteInventoryItem(item.id, 2, context())).rejects.toMatchObject({ code: "not_found" });
+    const allocated = (await service.createInventoryItem({ id: "allocated-delete-item", name: "Allocated item", kind: "electronic", quantity: 2, availableQuantity: 1, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context())).data;
+    await expect(service.deleteInventoryItem(allocated.id, allocated.version, context())).rejects.toMatchObject({ code: "conflict" });
+    expect((await service.getInventoryItem(allocated.id)).version).toBe(1);
+  });
+
   it("filters inventory, updates versions, records physical counts, and retires items", async () => {
     const runtime = await makeRuntime();
     const confirmed = await runtime.ports.inventory.createItem({

@@ -1792,3 +1792,28 @@ describe("API boundaries and mutation guards", () => {
     await expect(adapter.loadWorkspace()).resolves.toMatchObject({ projects: expect.not.arrayContaining([expect.objectContaining({ id: createdProject.id })]) });
   });
 });
+
+describe("inventory deletion", () => {
+  it("uses versioned DELETE and the same retry key after an ambiguous response", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=delete-csrf" });
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(new TypeError("network lost"))
+      .mockResolvedValueOnce(jsonResponse({ data: { id: "item-1", retiredAt: "2026-09-07T00:00:00.000Z" } }));
+    const adapter = createWorkspaceAdapter();
+    await expect(adapter.deleteInventoryItem("item-1", 3)).rejects.toThrow();
+    await adapter.deleteInventoryItem("item-1", 3);
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/v1/inventory/item-1");
+    expect(fetchMock.mock.calls[1]?.[1]?.method).toBe("DELETE");
+    const first = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+    const retry = new Headers(fetchMock.mock.calls[1]?.[1]?.headers);
+    expect(retry.get("if-match")).toBe("3");
+    expect(retry.get("idempotency-key")).toBe(first.get("idempotency-key"));
+  });
+  it("deletes unallocated sample items and rejects stale versions", async () => {
+    const adapter = createSampleWorkspaceAdapter();
+    const item = await adapter.createInventoryItem({ name: "Delete sample", category: "Electronics", kind: "electronic", quantity: 1, unit: "each" });
+    await expect(adapter.deleteInventoryItem(item.id, 99)).rejects.toThrow();
+    await adapter.deleteInventoryItem(item.id, item.version!);
+    expect((await adapter.loadWorkspace()).inventory.some((entry) => entry.id === item.id)).toBe(false);
+  });
+});

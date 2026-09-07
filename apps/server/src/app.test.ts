@@ -25,6 +25,25 @@ async function loggedIn() {
 }
 
 describe("BenchLedger HTTP API", () => {
+  it("deletes inventory only with authentication, CSRF and a current version", async () => {
+    const { app, cookie, csrf } = await loggedIn();
+    try {
+      const headers = { cookie, "x-csrf-token": csrf };
+      const created = await app.inject({ method: "POST", url: "/api/v1/inventory", headers, payload: { id: "http-delete-item", name: "Delete item", kind: "printer", quantity: 1, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } } });
+      expect(created.statusCode).toBe(201);
+      const url = "/api/v1/inventory/http-delete-item";
+      expect((await app.inject({ method: "DELETE", url })).statusCode).toBe(401);
+      expect((await app.inject({ method: "DELETE", url, headers: { cookie } })).statusCode).toBe(403);
+      expect((await app.inject({ method: "DELETE", url, headers })).statusCode).toBe(400);
+      expect((await app.inject({ method: "DELETE", url, headers: { ...headers, "if-match": "99" } })).statusCode).toBe(409);
+      const command = { ...headers, "if-match": "1", "idempotency-key": "http-delete-command" };
+      expect((await app.inject({ method: "DELETE", url, headers: command })).statusCode).toBe(200);
+      expect((await app.inject({ method: "DELETE", url, headers: command })).json()).toMatchObject({ replayed: true });
+      expect((await app.inject({ method: "GET", url, headers: { cookie } })).statusCode).toBe(404);
+      expect((await app.inject({ method: "PATCH", url, headers, payload: { name: "Cannot revive" } })).statusCode).toBe(404);
+    } finally { await app.close(); }
+  });
+
   it("exposes project setup preview and commit through the same application service", async () => {
     const { app, cookie, csrf } = await loggedIn();
     const proposal = {

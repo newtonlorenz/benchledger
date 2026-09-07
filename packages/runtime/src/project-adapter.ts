@@ -619,7 +619,7 @@ export class ProductionProjectAdapter implements ProjectPort {
       const unsupported = unsupportedBomConstraintKeys(apiLine.constraints);
       if (unsupported.length > 0) throw new DomainError("invalid_bom_constraint", `unsupported BOM constraint key(s): ${unsupported.join(", ")}`);
       const nativeItem = this.inventory.native(input.itemId);
-      if (nativeItem === undefined) throw new DomainError("inventory_not_found", `inventory item ${input.itemId} does not exist`);
+      if (nativeItem === undefined || nativeItem.retiredAt !== undefined) throw new DomainError("inventory_not_found", `inventory item ${input.itemId} does not exist`);
       const item = this.inventory.toApi(nativeItem);
       if (apiLine.role !== "consumed") {
         throw new DomainError(apiLine.role === "reusable" ? "reusable_requirement_not_reservable" : "bom_line_role_required", apiLine.role === "reusable" ? "Reusable requirements do not reserve consumable stock" : "Review the BOM line requirement role before reservation");
@@ -694,7 +694,7 @@ export class ProductionProjectAdapter implements ProjectPort {
       if (project === undefined) throw new DomainError("project_not_found", `project ${input.projectId} does not exist`);
       if (project.status === "archived") throw new DomainError("project_archived", `project ${input.projectId} is archived`);
       const nativeItem = this.inventory.native(input.itemId);
-      if (nativeItem === undefined) throw new DomainError("inventory_not_found", `inventory item ${input.itemId} does not exist`);
+      if (nativeItem === undefined || nativeItem.retiredAt !== undefined) throw new DomainError("inventory_not_found", `inventory item ${input.itemId} does not exist`);
       if (nativeItem.unit !== mapApiUnitToDomain(input.unit)) throw new DomainError("invalid_unit", `unit mismatch: item uses ${nativeItem.unit}, usage uses ${input.unit}`);
       if (!Number.isFinite(input.quantity) || input.quantity <= 0) throw new DomainError("invalid_usage_quantity", "usage quantity must be greater than zero");
       if (input.reservationId === undefined) throw new DomainError("reservation_required", "Usage requires a reservation for a consumed BOM requirement");

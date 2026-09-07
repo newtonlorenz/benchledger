@@ -5,6 +5,24 @@ by the web UI. It does not contain a model, and it does not make multi-step
 judgments on an agent's behalf. An agent composes small, typed operations into
 an end-to-end project decision.
 
+## Deleting records
+
+The project header exposes **Delete project** for active and archived projects.
+One confirmation shows the consequences; users do not need to type the name.
+The browser still sends the selected name and version to the existing removal
+API. Archive remains available in Project settings when restoration is wanted.
+
+Inventory details expose **Delete item** (or **Delete printer**) beside Edit item.
+After one confirmation, `DELETE /inventory/{id}` with `If-Match` and a stable
+`Idempotency-Key` retires the record from active inventory and printer choices.
+Stock events and project references remain retained; deletion does not consume
+stock or rewrite evidence. Items with allocated stock must have that stock
+released first. Existing plans can require replacement items after deletion.
+This action is available in the browser and authenticated HTTP API; inventory
+removal has no MCP tool, so agents must not claim an inventory delete capability.
+Project-scoped tokens cannot delete shared inventory. Deleted inventory cannot
+be restored from the UI. Categories retain their existing archive control.
+
 ## Correcting a project and handing it off
 
 Larger browser plans expose requirement search and Ready/Check/Decide/Source or

@@ -264,6 +264,7 @@ export interface WorkspaceAdapter {
   bulkUpdateInventory(input: InventoryBulkUpdateInput): Promise<InventoryBulkUpdateResult>;
   recordCount(itemId: string, quantity: number): Promise<InventoryItem>;
   commissionInventoryItem(itemId: string, input: InventoryCommissionInput, expectedVersion: number): Promise<InventoryItem>;
+  deleteInventoryItem(itemId: string, expectedVersion: number): Promise<void>;
   updateInventoryItem(itemId: string, input: Partial<InventoryUpdateInput>, expectedVersion?: number): Promise<InventoryItem>;
   createInventoryItem(input: InventoryCreateInput): Promise<InventoryItem>;
   listInventoryCategories(options?: { includeArchived?: boolean; limit?: number; cursor?: string }): Promise<InventoryCategoryPage>;
@@ -2402,6 +2403,13 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
       state.inventory = state.inventory.map((candidate) => candidate.id === itemId ? updated : candidate);
       return updated;
     },
+    async deleteInventoryItem(itemId, expectedVersion) {
+      const item = state.inventory.find((candidate) => candidate.id === itemId);
+      if (!item) throw new ApiError("Inventory item not found", { kind: "validation", status: 404 });
+      if (item.version !== expectedVersion) throw new ApiError("Reload this item before deleting it", { kind: "validation", status: 409 });
+      if (item.reserved > 0) throw new ApiError("Release stock set aside for projects before deleting this item.", { kind: "validation", status: 409 });
+      state.inventory = state.inventory.filter((candidate) => candidate.id !== itemId);
+    },
     async updateInventoryItem(itemId, input) {
       const item = state.inventory.find((candidate) => candidate.id === itemId);
       if (!item) throw new ApiError("Inventory item not found", { kind: "validation", status: 404 });
@@ -3041,6 +3049,16 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       const mapped = mapInventoryItem(item);
       inventoryCache.set(mapped.id, mapped);
       return mapped;
+    },
+    async deleteInventoryItem(itemId, expectedVersion) {
+      const token = csrfToken ?? cookieValue("forge_csrf");
+      if (!token) throw new ApiError("Sign in again before deleting inventory", { kind: "csrf", status: 403 });
+      await request(`/inventory/${encodeURIComponent(itemId)}`, {
+        method: "DELETE",
+        headers: { "If-Match": String(expectedVersion), "Idempotency-Key": `delete-inventory-${itemId}-${expectedVersion}` }
+      }, token);
+      inventoryCache.delete(itemId);
+      serverUnits.delete(itemId);
     },
     async updateInventoryItem(itemId, input, expectedVersion) {
       const token = csrfToken ?? cookieValue("forge_csrf");

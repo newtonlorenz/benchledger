@@ -167,6 +167,17 @@ export class ProductionInventoryAdapter implements InventoryPort {
     }));
   }
 
+  async retireItem(id: string, expectedVersion: number): Promise<ApiInventoryItem> {
+    return this.unitOfWork.exclusive(() => attempt(() => this.database.transaction(() => {
+      const current = this.repository.get(id);
+      if (current === undefined || current.retiredAt !== undefined) throw new DomainError("inventory_not_found", `inventory item ${id} does not exist`);
+      this.state.ensureVersion(ENTITY, id, expectedVersion);
+      if (this.repository.balance(id).allocated > 0) throw new ApplicationError("conflict", "Release stock set aside for projects before deleting this item. Archive the project or release its reservation, then try again.");
+      const retired = this.repository.retire(id, nowIso());
+      return this.toApi(retired, this.state.bumpVersion(ENTITY, id));
+    })));
+  }
+
   async updateItem(id: string, input: UpdateInventoryInput, expectedVersion: number | undefined): Promise<ApiInventoryItem> {
     return this.unitOfWork.exclusive(() => attempt(() => {
       ensureDescriptiveUpdate(input);

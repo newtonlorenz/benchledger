@@ -26,6 +26,7 @@ function fakePorts(seed = item(), inspections?: InspectionPort): ApplicationPort
       listItems: async () => ({ data: [inventory], limit: 200 }),
       getItem: async (id) => id === inventory.id ? inventory : null,
       createItem: async (input) => ({ ...item(), ...input, id: input.id ?? "new-item", tags: [...input.tags], links: [...input.links], availableQuantity: input.evidence.state === "physically_counted" ? input.quantity : 0, createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1 }),
+      retireItem: async () => ({ ...inventory, retiredAt: "2026-09-07T00:00:00.000Z", version: inventory.version + 1 }),
       updateItem: async (_id, input: UpdateInventoryInput) => { inventory = { ...inventory, ...input, ...(input.tags ? { tags: [...input.tags] } : {}), ...(input.links ? { links: [...input.links] } : {}), ...(input.dimensions ? { dimensions: input.dimensions } : {}), updatedAt: "2026-08-30T00:00:00.000Z", version: inventory.version + 1 } as InventoryItem; return inventory; },
       bulkUpdateItems: async (input) => {
         const updated = { ...inventory, ...(input.changes.location === undefined ? {} : { location: input.changes.location }), ...(input.changes.condition === undefined ? {} : { condition: input.changes.condition }), updatedAt: "2026-08-30T00:00:00.000Z", version: inventory.version + 1 };

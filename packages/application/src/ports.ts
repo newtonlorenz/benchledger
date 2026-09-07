@@ -267,6 +267,7 @@ export interface InventoryPort {
    * Implementations must make this safe for only a just-created item.
    */
   rollbackCreatedItem?(itemId: string): Promise<void>;
+  retireItem(id: string, expectedVersion: number, ctx: RequestContext): Promise<InventoryItem>;
   updateItem(id: string, input: UpdateInventoryInput, expectedVersion: number | undefined, ctx: RequestContext): Promise<InventoryItem>;
   /** Preflight and apply one bounded metadata batch atomically. */
   bulkUpdateItems(input: InventoryBulkUpdate, ctx: RequestContext): Promise<InventoryBulkUpdateResult>;

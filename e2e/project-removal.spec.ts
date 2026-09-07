@@ -117,25 +117,21 @@ test.describe("restore confirmation", () => {
   });
 });
 
-test("removes an archived project only after exact-name confirmation and hides it from Archived", async ({ page }) => {
+test("deletes an archived project after a single confirmation and hides it from Archived", async ({ page }) => {
   const harness = await mockRemovalWorkspace(page);
   await page.goto("/");
   await page.getByRole("button", { name: /^Projects(?: \d+)?$/u }).click();
   await expect(page.getByRole("heading", { name: "Retained Archive E2E", exact: true })).toBeVisible();
 
-  await expect(page.locator(".page-header").getByRole("button", { name: "Delete from workspace", exact: true })).toHaveCount(0);
-  await page.getByText("Project settings", { exact: true }).click();
-  await expect(page.locator("#main-content")).not.toContainText(/reservation|tombstone|audit/iu);
-  await page.getByRole("button", { name: "Remove from workspace", exact: true }).click();
-  const dialog = page.getByRole("alertdialog", { name: "Remove Retained Archive E2E from the workspace?" });
+  await page.locator(".page-header").getByRole("button", { name: "Delete project", exact: true }).click();
+  let dialog = page.getByRole("alertdialog", { name: "Delete Retained Archive E2E?" });
   await expect(dialog).toContainText("This action is irreversible.");
-  await expect(dialog).toContainText("archived project");
   await expect(dialog).not.toContainText(/reservation|tombstone|audit/iu);
-  const removeButton = dialog.getByRole("button", { name: "Remove from workspace", exact: true });
-  await expect(removeButton).toBeDisabled();
-  await dialog.getByLabel("Type Retained Archive E2E to confirm").fill("retained archive e2e");
-  await expect(removeButton).toBeDisabled();
-  await dialog.getByLabel("Type Retained Archive E2E to confirm").fill("Retained Archive E2E");
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  expect(harness.deleteRequest()).toBeUndefined();
+  await page.locator(".page-header").getByRole("button", { name: "Delete project", exact: true }).click();
+  dialog = page.getByRole("alertdialog", { name: "Delete Retained Archive E2E?" });
+  const removeButton = dialog.getByRole("button", { name: "Delete project", exact: true });
   await expect(removeButton).toBeEnabled();
   await removeButton.click();
 
