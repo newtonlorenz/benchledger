@@ -477,3 +477,12 @@ methods. Origin headers, when present, must match the configured application
 origin. Bearer authentication and project ancestry checks apply independently
 of browser access. See the host setup in the BenchLedger skill's
 `references/client-setup.md` and `node scripts/mcp-http-client.mjs --help`.
+
+## Complete-revision sourcing search
+
+`read_requirement_sourcing` accepts optional `query` and `filter` (`all`,
+`source`, `review`, `optional`). Search covers requirement name/notes and quote
+supplier/title before pagination. `total` counts matches, `revisionTotal` counts
+all active requirements, and currency totals retain the full revision scope.
+Use the returned cursor only with the same search/filter. HTTP exposes the same
+contract. Invalid filters are rejected; no new permissions or writes are implied.

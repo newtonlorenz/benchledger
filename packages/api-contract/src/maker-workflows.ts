@@ -6,6 +6,11 @@ const positive = z.number().finite().positive().max(1_000_000_000);
 const expectedVersion = z.number().int().nonnegative();
 const safeUrl = z.string().max(2000).url().refine((value) => { try { const url = new URL(value); return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password; } catch { return false; } }, "Use an HTTP(S) source URL without embedded credentials");
 export const workflowPageSchema = z.object({ limit: z.number().int().min(1).max(100).default(25), cursor: z.string().regex(/^(0|[1-9][0-9]*)$/u).max(12).optional() }).strict();
+/** Search and filter the complete revision before paging; monetary totals retain full-revision scope. */
+export const sourcingPageSchema = workflowPageSchema.extend({
+  query: z.string().trim().max(200).optional(),
+  filter: z.enum(["all", "source", "review", "optional"]).default("all")
+}).strict();
 export const createRequirementOfferSchema = z.object({
   bomLineId: idSchema, expectedBomLineVersion: z.number().int().positive(),
   supplier: z.string().trim().min(1).max(240), title: z.string().trim().min(1).max(240), url: safeUrl,

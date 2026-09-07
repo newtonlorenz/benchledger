@@ -1,6 +1,7 @@
+import { matchesInventorySearch } from "@benchledger/domain/inventory-search";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
-import { idSchema, workflowPageSchema, createRequirementOfferSchema, requirementOfferSchema, chooseRequirementOfferSchema, offerChoiceSchema, buildPlanInputSchema, createWorkstreamSchema, workAssignmentInputSchema, bomImportInputSchema, bomImportCommitSchema, createBomLineSchema } from "@benchledger/api-contract";
+import { idSchema, workflowPageSchema, sourcingPageSchema, createRequirementOfferSchema, requirementOfferSchema, chooseRequirementOfferSchema, offerChoiceSchema, buildPlanInputSchema, createWorkstreamSchema, workAssignmentInputSchema, bomImportInputSchema, bomImportCommitSchema, createBomLineSchema } from "@benchledger/api-contract";
 import type { WorkflowKind, WorkflowRecord, RequirementOffer, OfferChoice, RequirementOfferEstimate, BuildPlan, BuildPlanInput, WorkAssignment, BomImportPreview, BomLine, ProjectRevision } from "@benchledger/api-contract";
 import { ApplicationError } from "./errors.js";
 import type { ApplicationPorts, RequestContext, Mutation, AuditEvent } from "./ports.js";
@@ -61,7 +62,7 @@ export class MakerWorkflowService {
     });
   }
   async sourcing(projectId: string, revisionId: string, options: unknown = {}) {
-    const page = parse(workflowPageSchema, options);
+    const page = parse(sourcingPageSchema, options);
     return this.ports.unitOfWork.exclusive(async () => {
       await this.revision(projectId, revisionId);
       const lines = await this.app.listBomLines(revisionId), gaps = await this.app.evaluateBomGaps(revisionId);
@@ -75,7 +76,8 @@ export class MakerWorkflowService {
       });
       const totals: Record<string, { knownMinor: number; shippingComplete: boolean; taxesComplete: boolean }> = {};
       for (const row of rows) if (row.estimate.status === "estimated" && row.estimate.currency) { const value = totals[row.estimate.currency] ?? { knownMinor: 0, shippingComplete: true, taxesComplete: true }; value.knownMinor += row.estimate.totalMinor ?? 0; value.shippingComplete &&= row.estimate.shippingKnown; value.taxesComplete &&= row.estimate.taxIncluded === "yes"; if (!Number.isSafeInteger(value.knownMinor)) throw new ApplicationError("validation", "The estimate exceeds safe integer limits."); totals[row.estimate.currency] = value; }
-      const offset = Number(page.cursor ?? 0); return { data: rows.slice(offset, offset + page.limit), limit: page.limit, total: rows.length, ...(offset + page.limit < rows.length ? { nextCursor: String(offset + page.limit) } : {}), totals, notice: "Recorded supplier observations, not live prices or purchase authority. Shipping is estimated separately per quote; currencies are never combined." };
+      const filtered = rows.filter((row) => matchesInventorySearch([row.line.name, row.line.notes, ...row.offers.flatMap((offer) => [offer.supplier, offer.title])], page.query) && (page.filter === "all" || page.filter === "optional" && row.line.optional || !row.line.optional && (page.filter === "source" && row.decision === "source" || page.filter === "review" && ["check", "decide"].includes(row.decision))));
+      const offset = Number(page.cursor ?? 0); return { data: filtered.slice(offset, offset + page.limit), limit: page.limit, total: filtered.length, revisionTotal: rows.length, ...(offset + page.limit < filtered.length ? { nextCursor: String(offset + page.limit) } : {}), totals, notice: "Recorded supplier observations, not live prices or purchase authority. Shipping is estimated separately per quote; currencies are never combined." };
     });
   }
   async saveBuildPlan(projectId: string, revisionId: string, input: unknown, ctx: RequestContext) {

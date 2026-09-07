@@ -26,6 +26,7 @@
     "check": "npm run public:check && npm run build && npm run typecheck && npm test && playwright test"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@playwright/test": "^1.62.1",
     "@types/node": "^24.0.0",

@@ -94,3 +94,20 @@ with the chosen revision. Keep archive and removal controls in project settings.
 See the dated [workflow review](reviews/2026-09-07-workflow-polish.md) for scope,
 competitor references and the latest test results. Earlier counts above describe
 the original technical-design commit, not this later workflow revision.
+
+## Task-first working views
+
+On phones, project tabs and the working area precede secondary setup context.
+The compact project status controls open the relevant review rather than leaving
+an instruction without an action. Quote lists use compact requirement rows, with
+detail shown when a quote exists or a user starts recording one. Search always
+states its scope. An unavailable project link never opens another project.
+
+Draft protection covers inline build plans, supplier quotes, workstream edits
+and staged files. Keep editing preserves the current draft. Discard is explicit;
+unconfirmed mutations remain protected. Before-unload protection is used only
+while a protected draft or operation exists. Appearance settings remain local.
+
+Accessibility checks now test rendered pages and dialogs with axe in addition
+to token contrast checks. Passing an automated scan does not establish full
+WCAG conformance or replace assistive-technology and user testing.

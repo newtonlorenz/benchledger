@@ -7,6 +7,8 @@ first public release; all current work is under **Unreleased**.
 
 ### Added
 
+- Inline draft protection, explicit unavailable-project recovery and rendered accessibility smoke checks
+
 - Task-oriented home with project search, local pins, recent-project resume and direct attention actions
 - A direct Build planning tab, scoped file search and explicit drag-and-drop file staging
 
@@ -33,6 +35,11 @@ first public release; all current work is under **Unreleased**.
 - LAN deployment, backup/restore, privacy scanning, and public-project community files
 
 ### Changed
+
+- Sourcing search and filters run across the full revision before pagination in HTTP and MCP
+- Compact quote lists, task-first phone layouts and actionable project review shortcuts
+- Confirmed workflow records remain visible after a failed refresh; new workstreams refresh file scope
+- Recorded printers remain visible with explicit setup-check status
 
 - Corrected atomic-setup MCP discovery, explicit evidence/unit enums and object-root tool unions
 - Added official-client discovery and transport regression checks, including authenticated no-SSE responses

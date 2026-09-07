@@ -63,7 +63,7 @@ test("a maker saves repeated plate plans and workstream progress without consumi
   await page.locator(".workstream-row > summary").filter({ hasText: "Fit validation" }).click();
   await page.getByLabel("Status for Fit validation", { exact: true }).selectOption("in_progress");
   await page.locator(".workstream-row").filter({ hasText: "Fit validation" }).getByRole("button", { name: "Save workstream progress", exact: true }).click();
-  await expect(page.locator(".workstream-row > summary").filter({ hasText: "Fit validation" })).toContainText("in progress");
+  await expect(page.locator(".workstream-row > summary").filter({ hasText: "Fit validation" })).toContainText("In progress");
   await page.reload(); await page.getByRole("tab", { name: "Build planning", exact: true }).click();
   await expect(page.locator(".build-planning")).toContainText("2 planned runs");
   await page.getByText("Project revision history", { exact: true }).click();

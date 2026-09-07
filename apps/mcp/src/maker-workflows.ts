@@ -1,12 +1,12 @@
 import { z } from "zod";
-import { idSchema, workflowPageSchema, createRequirementOfferSchema, chooseRequirementOfferSchema, buildPlanInputSchema, workAssignmentInputSchema, createWorkstreamSchema, bomImportInputSchema, bomImportCommitSchema, commandJsonSchema } from "@benchledger/api-contract";
+import { idSchema, workflowPageSchema, sourcingPageSchema, createRequirementOfferSchema, chooseRequirementOfferSchema, buildPlanInputSchema, workAssignmentInputSchema, createWorkstreamSchema, bomImportInputSchema, bomImportCommitSchema, commandJsonSchema } from "@benchledger/api-contract";
 import type { McpToolDefinition, JsonObject, McpRequestContext } from "./types.js";
 import { McpAdapterError } from "./errors.js";
 import type { ApplicationService } from "@benchledger/application";
 import { ApplicationError } from "@benchledger/application";
 const project = z.object({ projectId: idSchema }).strict(), revision = project.extend({ projectRevisionId: idSchema }).strict();
 export const MAKER_TOOL_SCHEMAS = {
-  read_requirement_sourcing: revision.merge(workflowPageSchema),
+  read_requirement_sourcing: revision.merge(sourcingPageSchema),
   record_requirement_offer: revision.extend({ offer: createRequirementOfferSchema }).strict(),
   choose_requirement_offer: revision.extend({ choice: chooseRequirementOfferSchema }).strict(),
   read_build_plan: revision,
@@ -24,7 +24,7 @@ export const MAKER_TOOL_SCHEMAS = {
 };
 export type MakerToolName = keyof typeof MAKER_TOOL_SCHEMAS;
 const descriptions: Record<MakerToolName, string> = {
-  read_requirement_sourcing: "Read requirement-bound quotes, explicit selections and package-aware estimates. Only required Source gaps count; currencies stay separate and unknown shipping/tax remain explicit.",
+  read_requirement_sourcing: "Read requirement-bound quotes, explicit selections and package-aware estimates. Search and filter the complete revision before paging. total counts matches; revisionTotal and currency totals cover the full revision. Only required Source gaps count; currencies stay separate and unknown shipping/tax remain explicit.",
   record_requirement_offer: "Record an immutable supplier observation against a requirement without creating owned stock. Canonical units are each, gram, metre, millimetre, millilitre or set. No URL is fetched, purchase made or compatibility inferred.",
   choose_requirement_offer: "Explicitly review a quote against the current requirement before selecting it for estimates. Selection is optimistic-versioned and never authorises purchase.",
   read_build_plan: "Read current multi-plate planning quantities, spool estimates, file hashes and unresolved checks. A plan is not manufacturing evidence.",
@@ -52,7 +52,7 @@ export async function invokeMakerTool(service: ApplicationService, name: MakerTo
   const page = { ...(input.limit === undefined ? {} : { limit: input.limit }), ...(input.cursor === undefined ? {} : { cursor: input.cursor }) };
   try {
     switch (name) {
-      case "read_requirement_sourcing": return await service.makerWorkflows.sourcing(projectId, revisionId, page);
+      case "read_requirement_sourcing": return await service.makerWorkflows.sourcing(projectId, revisionId, { ...page, ...(input.query === undefined ? {} : { query: input.query }), ...(input.filter === undefined ? {} : { filter: input.filter }) });
       case "record_requirement_offer": return await service.makerWorkflows.recordOffer(projectId, revisionId, input.offer, ctx);
       case "choose_requirement_offer": return await service.makerWorkflows.chooseOffer(projectId, revisionId, input.choice, ctx);
       case "read_build_plan": return { plan: await service.makerWorkflows.buildPlan(projectId, revisionId) };

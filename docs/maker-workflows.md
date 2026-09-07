@@ -27,8 +27,10 @@ is performed. Workstreams retain independent progress/notes/due dates and
 provide read-only access to project revision history.
 
 The Shopping list opens **Supplier quotes for this project** first, with views
-for Needs sourcing, Needs review and All requirements. Filtering applies to the
-loaded page and does not change the full quote totals. These quotes can
+for Needs sourcing, Needs review, Optional and All requirements. Search and
+filters run across the complete revision before pagination, including requirement
+notes and recorded supplier/title text. `total` counts matched rows; `revisionTotal`
+and currency estimates retain the full revision scope. These quotes can
 be recorded before owning the item, unlike inventory-linked supplier offers.
 An observation includes its source URL, date, pack quantity/unit, price/currency,
 shipping and tax information. The application does not fetch the URL or place
@@ -90,3 +92,20 @@ immutable history and rollback on a later transaction failure. The application
 source is resolved directly by Vitest integration tests so stale compiled
 workspace output cannot stand in for source coverage. All 80% coverage thresholds
 remain enforced. Compiler errors no longer emit partial build output.
+
+## Read recovery and draft protection
+
+The browser keeps confirmed same-scope data during refreshes and labels read
+failures. It never substitutes old records from another project or revision.
+A committed save is not described as failed when its following read fails.
+Inline build, quote and workstream drafts and staged file selections block
+accidental navigation. Users can keep editing or explicitly discard a draft;
+an unconfirmed save must be resolved first. No draft content is stored locally.
+Workstream creation refreshes the shared project context so its file scope is
+available without reloading the browser. The physical-stock rules are unchanged.
+
+`read_requirement_sourcing` and HTTP `GET .../sourcing` accept `query` (up to
+200 characters) and `filter` (`all`, `source`, `review`, `optional`) alongside
+bounded `limit` and `cursor`. Omitted filters preserve the previous all-row
+behaviour. Only required Source lines enter estimates. A narrowed view never
+changes quote selection, purchase authority or full-revision cost totals.
