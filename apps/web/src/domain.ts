@@ -388,7 +388,7 @@ export interface ProjectGapEvaluation {
 export interface Artifact {
   id: string;
   name: string;
-  role: "Editable CAD" | "STEP" | "STL" | "Build plate" | "Validation" | "Notes";
+  role: "Editable CAD" | "STEP" | "STL" | "Build plate" | "Validation" | "Notes" | "Document" | "Drawing" | "Firmware" | "Photo" | "File";
   revision: string;
   size: string;
   hash: string;

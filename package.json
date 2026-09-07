@@ -26,9 +26,12 @@
     "check": "npm run public:check && npm run build && npm run typecheck && npm test && playwright test"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@playwright/test": "^1.62.1",
     "@types/node": "^24.0.0",
     "@vitest/coverage-v8": "^3.2.4",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
     "typescript": "^5.9.0",
     "vitest": "^3.2.4"
   }

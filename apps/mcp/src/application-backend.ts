@@ -1541,7 +1541,7 @@ function toMcpBomMatch(line: BomGap, itemId: string): BomMatch {
   const inspectQuantity = { value: candidate.inspectQuantity, unit: fromApiUnit(line.unit) };
   const conversion = line.alternatives.find((alternative) => alternative.itemId === itemId)?.quantityConversion;
   const unresolvedUnitMismatch = /No valid one-set conversion/iu.test(candidate.reason);
-  const availability: Availability = unresolvedUnitMismatch
+  const availability: Availability = unresolvedUnitMismatch || candidate.inspectQuantity > 0
     ? "inspect_first"
     : candidate.compatibility === "confirmed"
     ? candidate.availableQuantity > 0 ? "confirmed" : "depleted"

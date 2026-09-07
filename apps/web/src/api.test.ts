@@ -396,7 +396,7 @@ describe("authenticated BenchLedger API adapter", () => {
     const snapshot = await adapter.loadWorkspace();
     expect(snapshot.source).toBe("api");
     expect(snapshot.inventory[0]).toMatchObject({ id: "printer-h2d", category: "Printers", unit: "each", state: "available" });
-    expect(snapshot.projects[0]).toMatchObject({ id: "project-1", name: "Desk light", status: "planned", workItem: "Enclosure", currentRevision: "r02", serverRevisionId: "revision-1" });
+    expect(snapshot.projects[0]).toMatchObject({ id: "project-1", name: "Desk light", status: "planned", workItem: "Project setup", currentRevision: "r02", serverRevisionId: "revision-1" });
     expect(snapshot.projects[0]?.bom[0]).toMatchObject({ label: "ESP32 board", itemId: "board-esp32", required: 1, constraints: { specification: { status: "insufficient", missingDecisions: ["voltage", "connector"] } }, alternatives: [{ itemId: "board-esp32", compatible: "conditional", reason: "Check logic level" }] });
     expect(snapshot.projects[0]?.artifacts[0]).toMatchObject({ name: "enclosure.step", role: "STEP", revision: "r02", size: "2 KB" });
 
@@ -1228,7 +1228,8 @@ describe("web data mappers", () => {
         serverArtifact({ id: "artifact-cad", role: "cad_source", filename: "model.scad", machineBinding: { printer: "Ender" }, retired: true }),
         serverArtifact({ id: "artifact-text", role: "text", filename: "notes.md", byteSize: 0 }),
         serverArtifact({ id: "artifact-brief", role: "brief", filename: "brief.md" }),
-        serverArtifact({ id: "artifact-other", role: "other", filename: "validation.json" })
+        serverArtifact({ id: "artifact-other", role: "other", filename: "validation.json" }),
+        ...["document", "validation", "drawing", "firmware", "photo"].map((role) => serverArtifact({ id: `artifact-${role}`, role, filename: `${role}.txt` }))
       ] }) } : {})
     }));
     projects.push(serverProject({ id: "project-idea", name: "Idea", status: "idea", currentRevision: serverRevision({ id: "revision-idea", projectId: "project-idea", number: 3, status: "unknown" }) }));
@@ -1247,7 +1248,7 @@ describe("web data mappers", () => {
     const snapshot = await createWorkspaceAdapter().loadWorkspace();
     expect(snapshot.fetchedAt).toMatch(/2026|T/);
     expect(snapshot.projects[0]?.railStep).toBe(0);
-    expect(snapshot.projects.find((project) => project.id === "project-1")).toMatchObject({ subtitle: "Body work item", workItem: "Body", currentRevision: "r02" });
+    expect(snapshot.projects.find((project) => project.id === "project-1")).toMatchObject({ subtitle: "Description 1", workItem: "Project setup", currentRevision: "r02" });
     expect(snapshot.projects.find((project) => project.id === "project-8")).toMatchObject({ currentRevision: "r09", workItem: "Project setup", description: "Add a project goal to define the next task." });
     expect(snapshot.projects.find((project) => project.id === "project-no-revision")).toMatchObject({ currentRevision: "No revision", railStep: 0, workItem: "Project setup" });
     expect(snapshot.projects.find((project) => project.id === "project-idea")).toMatchObject({ status: "idea", railStep: 0, accent: "orange" });
@@ -1255,7 +1256,7 @@ describe("web data mappers", () => {
 
     const first = snapshot.projects[0]!;
     expect(first.bom[0]).toMatchObject({ label: "Insert", required: 1, note: "M3" });
-    expect(first.artifacts.map((artifact) => artifact.role)).toEqual(["STEP", "STL", "Build plate", "Build plate", "Build plate", "Editable CAD", "Notes", "Notes", "Validation"]);
+    expect(first.artifacts.map((artifact) => artifact.role)).toEqual(["STEP", "STL", "Build plate", "Build plate", "Build plate", "Editable CAD", "Notes", "Notes", "File", "Document", "Validation", "Drawing", "Firmware", "Photo"]);
     expect(first.artifacts).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "artifact-step", size: "2 KB", revision: "r01" }),
       expect.objectContaining({ id: "artifact-stl", size: "1023 B" }),

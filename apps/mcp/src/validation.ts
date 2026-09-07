@@ -1,3 +1,4 @@
+import { MCP_QUANTITY_UNITS, MCP_EVIDENCE_STATES } from "./types.js";
 import { McpAdapterError } from "./errors.js";
 import {
   createBuildConfigurationSnapshotSchema,
@@ -316,7 +317,7 @@ function inspectionObservation(value: unknown, label: string): InspectionObserva
   keys(input, ["result", "quantity", "unit", "source", "sourceId", "observedAt", "note", "conversion"], label);
   const result = enumValue(input.result, `${label}.result`, ["confirmed", "inconclusive"] as const);
   const quantity = input.quantity === undefined ? undefined : finiteNumber(input.quantity, `${label}.quantity`);
-  const unit = input.unit === undefined ? undefined : enumValue(input.unit, `${label}.unit`, ["piece", "gram", "millimetre", "millilitre", "metre", "roll", "set"] as const);
+  const unit = input.unit === undefined ? undefined : enumValue(input.unit, `${label}.unit`, MCP_QUANTITY_UNITS);
   const source = stringValue(input.source, `${label}.source`, { max: 500 });
   const sourceId = optionalString(input.sourceId, `${label}.sourceId`, 500);
   const observedAt = stringValue(input.observedAt, `${label}.observedAt`, { max: 80 });
@@ -464,7 +465,7 @@ export function quantity(value: unknown, label: string): Quantity {
   keys(input, ["value", "unit"], label);
   const result: Quantity = {
     value: finiteNumber(input.value, `${label}.value`, 0.000001),
-    unit: enumValue(input.unit, `${label}.unit`, ["piece", "gram", "millimetre", "millilitre", "metre", "roll", "set"] as const),
+    unit: enumValue(input.unit, `${label}.unit`, MCP_QUANTITY_UNITS),
   };
   return result;
 }
@@ -497,7 +498,7 @@ export function evidence(value: unknown, label: string): EvidenceSummary {
   const input = record(value, label);
   keys(input, ["state", "source", "sourceId", "recordedAt", "note"], label);
   const result: EvidenceSummary = {
-    state: enumValue(input.state, `${label}.state`, ["physical_count", "commissioned", "measured", "manufacturer", "order", "delivery", "user_reported", "inferred", "unknown"] as const),
+    state: enumValue(input.state, `${label}.state`, MCP_EVIDENCE_STATES),
     source: stringValue(input.source, `${label}.source`, { max: 256 }),
     ...(input.sourceId === undefined ? {} : { sourceId: optionalString(input.sourceId, `${label}.sourceId`, 500) }),
     recordedAt: stringValue(input.recordedAt, `${label}.recordedAt`, { max: 64 }),
@@ -926,7 +927,7 @@ export function bomLineCreate(value: unknown): BomLineCreateInput {
     projectRevisionId: id(input.projectRevisionId, "arguments.projectRevisionId"),
     description: stringValue(input.description, "arguments.description", { max: 512 }),
     quantity: finiteNumber(input.quantity, "arguments.quantity", 0.000001),
-    unit: enumValue(input.unit, "arguments.unit", ["piece", "gram", "millimetre", "millilitre", "metre", "roll", "set"] as const),
+    unit: enumValue(input.unit, "arguments.unit", MCP_QUANTITY_UNITS),
     requirement: optionalEnum(input.requirement, "arguments.requirement", ["required", "optional"] as const),
     role: optionalNullableEnum(input.role, "arguments.role", ["consumed", "reusable"] as const),
   };
@@ -944,7 +945,7 @@ export function bomLineUpdate(value: unknown): BomLineUpdateInput {
   result.expectedVersion = optionalInteger(input.expectedVersion, "arguments.expectedVersion");
   result.description = optionalString(input.description, "arguments.description", 512);
   result.quantity = input.quantity === undefined ? undefined : finiteNumber(input.quantity, "arguments.quantity", 0.000001);
-  result.unit = optionalEnum(input.unit, "arguments.unit", ["piece", "gram", "millimetre", "millilitre", "metre", "roll", "set"] as const);
+  result.unit = optionalEnum(input.unit, "arguments.unit", MCP_QUANTITY_UNITS);
   result.requirement = optionalEnum(input.requirement, "arguments.requirement", ["required", "optional"] as const);
   result.role = optionalNullableEnum(input.role, "arguments.role", ["consumed", "reusable"] as const);
   result.itemId = input.itemId === null ? null : optionalId(input.itemId, "arguments.itemId");

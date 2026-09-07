@@ -1601,10 +1601,13 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     return { ...access, authenticated: true, actor: "workspace-admin", csrfToken: session.csrf, expiresAt: new Date(session.expiresAt).toISOString(), credentialRevision: session.credentialRevision, correlationId: _request.correlationId };
   });
 
-  app.post(route("/mcp"), async (request, reply) => {
+  app.route({ method: ["POST", "GET", "DELETE"], url: route("/mcp"), handler: async (request, reply) => {
     const principal = requireScope(request, "read", auth);
     if (principal.via !== "bearer") {
       return reply.code(401).send({ error: { code: "unauthenticated", message: "A scoped bearer token is required for MCP", correlationId: request.correlationId } });
+    }
+    if (request.headers.origin !== undefined && request.headers.origin !== new URL(publicBaseUrl).origin) {
+      return reply.code(403).send({ error: { code: "forbidden", message: "MCP origin is not allowed" } });
     }
     const context = mcpContext(principal, request);
     // Generic MCP has no model-excluded channel for live transfer URLs or
@@ -1618,7 +1621,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     reply.code(result.status);
     for (const [name, value] of Object.entries(result.headers)) reply.header(name, value);
     return reply.send(result.body);
-  });
+  } });
 
   app.post(route("/auth/login"), async (request, reply) => {
     const clientKey = request.ip;
