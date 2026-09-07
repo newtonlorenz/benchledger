@@ -8,6 +8,12 @@ updates:
     ignore:
       - dependency-name: "@types/node"
         update-types: [version-update:semver-major]
+      - dependency-name: "vitest"
+        update-types: [version-update:semver-major]
+      - dependency-name: "@vitest/coverage-v8"
+        update-types: [version-update:semver-major]
+      - dependency-name: "jsdom"
+        update-types: [version-update:semver-major]
     groups:
       vite-toolchain:
         patterns: [vite, "@vitejs/plugin-react"]
