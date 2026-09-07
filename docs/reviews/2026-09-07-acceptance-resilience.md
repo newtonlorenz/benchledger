@@ -56,3 +56,7 @@ themes. These results are not a full accessibility or physical-build certificati
 No database migration, credential change or permission widening is required.
 Deployment must use the exact merged image, with a verified backup and the
 previous image retained. Live browser/MCP acceptance must remain read-only.
+
+The final rendered receipt review also removed residual pending-action wording:
+committed receipts show changes recorded and saved stock movements, rather than
+changes to apply. The browser regression explicitly checks this distinction.

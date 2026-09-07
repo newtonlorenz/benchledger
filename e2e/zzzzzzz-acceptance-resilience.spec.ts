@@ -64,6 +64,9 @@ test("a committed stock update is read-only and the original preview is not edit
   await expect(page.getByLabel("Saved result 1", { exact: true })).toContainText("4 each");
   await expect(page.getByLabel("Saved result 1", { exact: true })).toContainText("Stock item: Synthetic acceptance fasteners");
   await expect(page.getByRole("heading", { name: "Recorded stock changes", exact: true })).toBeVisible();
+  await expect(page.locator(".reconciliation-preview-details")).toContainText("changes recorded");
+  await expect(page.locator(".reconciliation-preview-details")).not.toContainText("changes to apply");
+  await expect(page.getByRole("heading", { name: "Saved stock movements", exact: true })).toBeVisible();
   const stock = await (await page.request.get(`${base}/api/v1/inventory/${itemId}`)).json(); expect(stock.quantity).toBe(6);
 });
 test("a lost review response freezes its inputs and resolves by an unchanged retry", async ({ page }) => {
