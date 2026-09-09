@@ -31,13 +31,18 @@ Keep catalog product, owned physical item, profile/link and immutable build
 configuration separate. Orders/deliveries, names, photos and reported/suggested
 links do not establish current usable quantity, exact identity or compatibility.
 Use confirmed quantity, unit, condition, constraints, provenance and current
-project state. A counted item can still require compatibility inspection.
+project state. Commission physically checked orders/deliveries through
+`commission_inventory_item`; metadata edits cannot establish counted stock.
+A counted item can still require compatibility inspection.
 
 Explain required BOM lines as Ready, Check, Decide or Source. Resolve exact
 missing decisions before sourcing; keep plausible unconfirmed candidates Check,
 not reserved or consumed. Only required Source lines enter a shopping proposal.
-Keep optional lines separate. Include offer source/time, currency, package
-rounding and remaining quantity; price observations can be stale. A proposal
+Only `consumed` BOM requirements may reserve stock, record usage or enter
+close-out; `reusable` and unspecified roles do not authorize those operations.
+Keep printers in build configurations, outside BOM stock. Keep optional lines
+separate. Include offer source/time, currency, package rounding and remaining
+quantity; price observations can be stale. A proposal
 is not an instruction to buy. Ask only for missing facts that materially affect
 safety, specification, compatibility or availability.
 
@@ -53,8 +58,8 @@ confirmation before commit. A reservation is not consumption; planned amounts
 are not actual usage. Preserve evidence and accepted artefacts. Generic MCP
 transfer failures remain fail-closed: never insert file bytes as base64 or
 invent a host transfer. With separately authorised host filesystem access, use
-`node scripts/artifact-transfer.mjs --help`; see the host-transfer section in
-[the MCP quickstart](../../apps/mcp/QUICKSTART.md#6-store-cad-and-build-files).
+the repository helper described in
+[client setup](references/client-setup.md#host-file-transfer).
 Report a committed write as committed even if a later
 refresh fails; do not duplicate it.
 

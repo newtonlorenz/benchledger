@@ -73,6 +73,26 @@ project token can update that project but cannot create a new workspace-global
 project or change shared inventory. Project setup that creates new identities
 requires a separately authorised creator, not a silently widened project token.
 Keep the installed skill folder in sync with its versioned repository copy.
+An installed skill does not include the repository's `apps/`, `docs/` or
+`scripts/` directories. Resolve those paths from an available BenchLedger
+checkout root, not relative to this installed folder. Without a checkout, use
+the [MCP quickstart](https://github.com/newtonlorenz/benchledger/blob/main/apps/mcp/QUICKSTART.md)
+and [maker workflow contract](https://github.com/newtonlorenz/benchledger/blob/main/docs/maker-workflows.md)
+as references, verifying availability against the connected server.
+
+## Host file transfer
+
+Generic MCP cannot transfer file bytes. With separately authorized host
+filesystem/execution access and a BenchLedger checkout, run
+`node scripts/artifact-transfer.mjs --help` from that checkout root.
+Use the current helper's arguments and environment credentials, never credentials
+in arguments or MCP messages. Choose one explicit file, project and role, and
+one exact project revision or work-item/revision pair. Upload requires media
+type; download requires artifact identity. The helper verifies SHA-256/length,
+refuses redirects and download overwrites, and returns metadata only. It does
+not provide generic MCP filesystem access. After interrupted finalization,
+inspect the revision before repeating an upload; there are no automatic retries.
+Without host access, use the authenticated browser Files surface.
 
 ## Schema dialects
 
