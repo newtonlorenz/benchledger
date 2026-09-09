@@ -1761,17 +1761,37 @@ export async function sha256Hex(file: Blob): Promise<string> {
   return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export async function fetchArtifactDownload(id: string, expectedHash: string): Promise<Blob> {
+export async function fetchArtifactDownload(id: string, expectedHash: string, options: { signal?: AbortSignal; maxBytes?: number } = {}): Promise<Blob> {
   let response: Response;
   try {
     response = await fetch(`${apiRoot()}/artifacts/${encodeURIComponent(id)}/download`, {
-      credentials: "include", redirect: "error", signal: AbortSignal.timeout(120_000)
+      credentials: "include", redirect: "error", signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000)
     });
   } catch {
     throw new ApiError("Check the connection and retry the download.", { kind: "offline" });
   }
   if (!response.ok) throw new ApiError(response.status === 401 ? "Sign in again to download this file." : "This file could not be downloaded. Refresh the project and try again.", { kind: errorKind(response.status), status: response.status });
-  const blob = await response.blob();
+  let blob: Blob;
+  if (options.maxBytes !== undefined) {
+    const tooLarge = () => new ApiError("This file is too large to preview. Download it to view it locally.", { kind: "validation" });
+    if (Number(response.headers.get("content-length")) > options.maxBytes) {
+      await response.body?.cancel();
+      throw tooLarge();
+    }
+    const reader = response.body?.getReader();
+    const chunks: ArrayBuffer[] = [];
+    let size = 0;
+    try {
+      if (reader) while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > options.maxBytes) { await reader.cancel(); throw tooLarge(); }
+        chunks.push(new Uint8Array(value).buffer);
+      }
+    } finally { reader?.releaseLock(); }
+    blob = new Blob(chunks);
+  } else blob = await response.blob();
   if (!/^[a-f0-9]{64}$/iu.test(expectedHash) || await sha256Hex(blob) !== expectedHash.toLowerCase()) {
     throw new ApiError("The file failed its integrity check. It was not saved; retry the download.", { kind: "validation" });
   }

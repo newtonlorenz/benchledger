@@ -242,6 +242,23 @@ browser-computed byte length and SHA-256. Keep source, STEP, STL, 3MF, slicer,
 drawing, and validation revisions separate; do not overwrite an accepted
 artifact.
 
+In a project's Files tab, Preview opens supported images (PNG, JPEG, GIF,
+WebP, AVIF, BMP, SVG), Markdown, text (TXT, CSV, TSV, JSON, YAML, LOG, GCODE,
+SCAD), and STL meshes. Markdown is formatted; code and data stay plain text.
+The STL viewer supports rotate, zoom, and reset. It does not certify dimensions,
+printability, or physical fit. Text/Markdown previews are limited to 1 MiB;
+images/STL to 20 MiB, with STL limited to 250,000 triangles. Larger files and
+unsupported formats, including STEP, 3MF, native CAD, PDF, and HTML, remain
+available to download when already stored. Existing upload format restrictions
+still apply; preview support does not broaden the upload allowlist. Sample records have no downloadable preview bytes.
+
+Previews use the existing authenticated `GET /api/v1/artifacts/{id}/download`
+route and verify SHA-256 before rendering. SVG is displayed only as an image;
+Markdown does not run HTML or load embedded images. No files are sent to a
+third-party viewer. Closing a preview cancels its fetch and releases browser
+resources. This is a browser-only presentation feature; API and MCP contracts
+are unchanged.
+
 Generic MCP does not advertise transfer actions or expose upload sessions or
 transfer capabilities. Cached clients calling its former raw
 `begin_artifact_upload`, `finalize_artifact_upload`, and download tools fail
