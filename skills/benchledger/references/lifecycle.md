@@ -14,8 +14,9 @@ before calling them.
   printed part, electronics assembly, firmware unit, drawing, or validation
   document.
 - Current planning is revision/work-item/BOM based. Do not invent milestone,
-  dependency, calendar, or task-scheduler records that BenchLedger does not
-  expose.
+  dependency or task-scheduler records that BenchLedger does not expose.
+  Supported workstreams can carry progress, notes and due dates; these are
+  planning records, not a scheduler.
 
 Output: the active project/revision, material unknowns, safety/fit blockers, and
 the next decision. Do not fabricate dimensions or electrical requirements.
@@ -46,6 +47,15 @@ A confirmed count proves quantity, not suitability: for example, a counted
 power supply remains inspect-first for a BOM line until voltage, current,
 polarity, connector, dimensions, and condition meet that line's constraints.
 
+For physically checked ordered/delivered items, use `commission_inventory_item`
+with observed quantity, commissioned provenance, current `expectedVersion`, and
+a distinct command key. Do not promote evidence through metadata updates.
+Commissioning preserves prior evidence in an append-only count event and needs
+an unscoped `inventory:write` token. Compatibility still needs its own evidence.
+Items with `unitStatus: "needs_correction"` remain visible but cannot support
+confident matching, reservations, usage, setup or reconciliation. Resolve the
+reported kind/unit mismatch through the supported correction workflow first.
+
 ## 3. Project and revision structure
 
 - Read and write project lifecycle only as `idea`, `planned`, `ready`,
@@ -54,7 +64,11 @@ polarity, connector, dimensions, and condition meet that line's constraints.
 - A lifecycle change is an intent/progress update, not manufacturing evidence.
   Never infer or reset CAD, DFAM, mesh, slicer, test-print, fit/function, or
   production approval state from it.
-- Use the current planning revision as the BOM basis.
+- Use the current planning revision as the BOM basis. `update_project_revision`
+  can change planning-only `fabricationRoute` (`printed`, `ready_made`, `none`,
+  `undecided`) and `intendedPrinterItemId` with the current expected version.
+  A non-null intended printer is valid only for `printed`; it is neither a BOM
+  requirement nor a build-configuration snapshot.
 - For a new project, retain the project and initial revision returned by the
   atomic create operation. For an existing project, read its current revision
   before deciding whether a later planning baseline is needed.
@@ -80,14 +94,28 @@ a fresh preview. Identical same-actor retries replay safely.
 Output: the active project, planning revision, independently versioned work
 items, and explicit planning unknowns.
 
+For removal or archival requests, resolve the exact target and authorized action
+first. `archive_project` releases active reservations across all revisions and
+retains history; `restore_project` returns it to `idea` without recreating them.
+`remove_project` is irreversible: it requires exact case-sensitive `projectName`,
+current `expectedVersion`, and a stable command key. It releases reservations and
+hides the project/descendants while retaining tombstone/history access; it is not
+a purge or restorable archive. Use `list_removed_projects` (workspace-global) and
+`read_removed_project_history` for bounded history reads, not ordinary lists.
+
 ## 4. BOM evaluation, reuse, and reservations
 
 - Add one `create_bom_line` per real requirement. Use an exact `itemId` only for
   a known compatible physical item; otherwise express constraints and
-  evidence-bearing alternatives.
+  evidence-bearing alternatives. Set `role` deliberately: only `consumed`
+  lines may reserve, record usage or reconcile. `reusable` lines remain owned;
+  legacy null/omitted roles need review before those operations. Printers belong
+  in build configurations, not BOM stock. Kind/category constraints alone do
+  not discover candidates; select an exact item or explicit alternative.
 - Run `calculate_bom_gaps` after meaningful BOM or inventory changes.
-- Classify each line as supplied, inspect first, partial, missing, optional, or
-  substitute. Explain the evidence and compatibility reason.
+- Explain required lines as Ready, Check, Decide or Source, preserving partial
+  quantities and compatibility reasons. Keep optional lines separate; resolve
+  exact `missingDecisions` before treating a line as Source.
 - Reserve only confirmed compatible stock with `create_reservation`. Re-read
   gaps afterward so other allocations are reflected.
 
@@ -109,13 +137,33 @@ the returned preview ID/version/content hash and `confirmed: true`. The MCP
 list/read/preview/commit tools expose the same result with nested REST `each`
 quantities and conversions mapped to MCP `piece`, including before/after
 items/gaps, affected and reevaluated gaps, refreshed inspections, and evidence.
-Authorization remains project-scoped and fail-closed; there is no quick-complete
-operation.
+Preview needs `bom:write`; completion commit also needs `inventory:write`.
+A project-scoped token cannot perform that inventory mutation. Use a separately
+authorized inventory writer for commit; do not silently widen scope. There is
+no quick-complete operation.
+
+For requirement corrections, refresh the line/version. Omit `itemId` to retain
+its link or use explicit `null` to clear it. Preserve constraints and alternatives
+unless changing them is intended. Reserved planning fields require reservation
+release/reconciliation first; supported legacy consumed-role repair remains
+available. `retire_bom_line` and `restore_bom_line` retain history; read it with
+`includeRetired: true`. Removing a requirement never authorizes deleting evidence.
 
 ## 5. Shopping proposal
 
-Use `list_offers` for existing observations and `record_offer_snapshot` only
-when the user supplied or authorized recording a source observation. BenchLedger
+Prefer `read_requirement_sourcing` for project shopping. Its `query`/`filter`
+operate across the full revision before pagination: `total` counts matches,
+while `revisionTotal` and estimates retain the full revision scope.
+`record_requirement_offer` records a requirement-bound quote before item
+ownership exists; `choose_requirement_offer` records its reviewed fit/selection
+against the observed requirement version. Use live schemas and canonical units.
+A stale quote or changed requirement needs renewed review. Record source URL,
+observation date, pack quantity/unit, price/currency, shipping and tax; keep
+currencies separate and unknown shipping/tax explicit. Only required Source
+lines contribute to estimates. Selection is not purchasing or stock evidence.
+
+Use `list_offers` for existing inventory-linked observations and
+`record_offer_snapshot` only when the user supplied or authorized recording a source observation. BenchLedger
 does not fetch arbitrary URLs or purchase.
 
 For every proposed purchase show supplier, source URL, package quantity, package
@@ -133,6 +181,12 @@ Before treating a revision as a reproducible build, create an immutable
 filament selections. Record active hotend/nozzle and side, plate, accessories,
 firmware, slicer/version/profile, calibration, and explicit unknowns. A
 correction creates a superseding snapshot; it never edits history.
+Printers require exact identity. Filament can be exact (`itemId` plus
+`catalogProductId`, optionally `profileId`) or physical-only (`itemId` plus
+`catalogIdentityState: "unknown"`, optionally `role`/`quantity`). Do not mix
+these shapes or pass item-only/profile-only inputs. Physical-only snapshots
+copy label/evidence from the server and retain explicit unknowns; they prove
+neither compatibility nor availability and keep production approval blocked.
 
 Upload source, CAD, STEP/STL/3MF, slicer project, drawing, firmware, validation,
 or document artifacts through the authenticated browser/HTTP Files surface:
@@ -147,10 +201,11 @@ or document artifacts through the authenticated browser/HTTP Files surface:
 Generic MCP does not expose upload sessions or transfer capabilities: its raw
 `begin_artifact_upload`, `finalize_artifact_upload`, and download tools fail
 closed. Never send binary files as base64 MCP payloads, reveal transfer tokens,
-use host paths, execute an upload, or replace evidence from an older revision.
+pass host paths through MCP, or replace evidence from an older revision.
 Atomic multi-file transfer remains deferred. The authorised host helper supports
-single-file upload and verified download; see references/client-setup.md and
-apps/mcp/QUICKSTART.md. No filesystem capability is added to generic MCP.
+single-file upload and verified download; see
+[host file transfer](client-setup.md#host-file-transfer). No filesystem
+capability is added to generic MCP.
 
 Output: revision binding, role, filename, byte length, SHA-256, and build-
 configuration hash/unknowns.
@@ -221,6 +276,29 @@ is intentionally the same. Always present the server preview as authoritative.
 Output: consumed, returned/released, lost/damaged, reusable leftovers/assets,
 unresolved physical checks, stock event IDs, reconciliation basis/audit evidence,
 and the exact next action.
+
+## 9. Templates, imports and repeated builds
+
+Use these only when the request calls for them; continue an existing revision.
+Browser template/CSV setup previews an editable project graph before atomic
+creation without reservations. For appending requirements, use
+`preview_bom_import` / `commit_bom_import` with the returned review identity and
+live schemas. Imports support 1–24 rows and a 256 KiB source. Review column and
+decimal mapping; never auto-map owned inventory IDs. Duplicate names require
+explicit approval. Stale revision/requirement/stock basis requires a fresh
+preview. An append does not replace requirements or stock.
+
+Use `read_build_plan`, `save_build_plan` and `read_build_plan_history` for
+versioned repeated parts, plates, runs, material roles, nozzle side and optional
+time estimates. Runs multiply quantities and time; snapshots retain versions
+and file hashes. Missing printer/files/material estimates or physical evidence
+stay explicit warnings. A plan neither slices nor prints nor consumes stock.
+
+Use `list_workstreams`, `create_workstream` and `update_work_assignment` for
+independently tracked deliverables and their progress, notes or due dates.
+`list_project_revisions`, `list_workstream_revisions` and
+`read_project_revision_snapshot` read retained history without switching the
+active revision. Apply advertised versions and a distinct key per write.
 
 ## Handoff checklist
 
