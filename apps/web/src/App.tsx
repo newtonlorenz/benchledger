@@ -1,3 +1,4 @@
+import { ArtifactPreview, artifactPreviewKind } from "./artifact-preview";
 import { UnsavedWorkContext, useNavigationGuard, useUnsavedWork } from "./unsaved-work";
 import { WorkbenchHome } from "./workbench-home";
 import { recordOpenedProject } from "./workbench-state";
@@ -1800,6 +1801,7 @@ export function ProjectFiles({ project, expert, sampleMode, onUpload, archived =
   const [scopeKey, setScopeKey] = useState(() => artifactScopeKey(defaultArtifactScope(project)));
   const [uploadRun, setUploadRun] = useState<UploadRun>();
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]); const selectedChoice = choices.find((choice) => choice.key === scopeKey) ?? choices[0];
+  const [previewFile, setPreviewFile] = useState<Project["artifacts"][number]>();
   const [downloadingId, setDownloadingId] = useState<string>();
   const [downloadError, setDownloadError] = useState<string>();
   const downloadFile = async (file: Project["artifacts"][number]) => {
@@ -1833,7 +1835,7 @@ export function ProjectFiles({ project, expert, sampleMode, onUpload, archived =
 
   useEffect(() => {
     setScopeKey(artifactScopeKey(defaultArtifactScope(project)));
-    setFileQuery(""); setDropActive(false);
+    setFileQuery(""); setDropActive(false); setPreviewFile(undefined);
     setUploadRun(undefined); setSelectedFiles([]); }, [project.id, project.serverRevisionId]);
 
   const processFiles = async (selected: File[]) => {
@@ -1894,19 +1896,20 @@ export function ProjectFiles({ project, expert, sampleMode, onUpload, archived =
     </div>}
     {scopeArtifacts.length > 0 && <div className="files-list-toolbar"><label className="field-search"><Icon name="search" size={16} /><input aria-label="Search project files" placeholder="Find a file or type" value={fileQuery} onChange={(event) => setFileQuery(event.target.value.slice(0, 200))} /></label><span>{visibleArtifacts.length} of {scopeArtifacts.length} files in this view</span></div>}
     {uploadRun && ( <div className={`upload-status ${errorCount ? "has-errors" : ""}`} role="status" aria-live="polite"><div className="upload-status-heading"><strong>{uploadRun.active ? `Uploading ${Math.min((uploadRun.currentIndex ?? uploadRun.completed) + 1, uploadRun.total)} of ${uploadRun.total}` : `${successCount} of ${uploadRun.total} file${uploadRun.total === 1 ? "" : "s"} uploaded`}</strong><span>{currentEntry?.name ?? (errorCount ? `${errorCount} failed` : `Target: ${uploadRun.targetLabel}`)}</span></div><progress max={uploadRun.total} value={uploadRun.completed} aria-label="Artifact upload progress" /><ul>{uploadRun.entries.map((entry) => ( <li key={`${entry.name}-${entry.role}`}><span><strong>{entry.name}</strong><small>{entry.role}</small></span><span className={`upload-entry-state upload-${entry.status}`}>{entry.status === "pending" ? "Waiting" : entry.status === "uploading" ? "Uploading…" : entry.status === "success" ? "Uploaded" : "Not uploaded"}</span>{entry.status === "error" && entry.message && ( <p role="alert">{entry.message}</p> )}</li>))}</ul></div> )}{" "}
-    {downloadError && <p className="form-error" role="alert">{downloadError}</p>}{sampleMode && visibleArtifacts.length > 0 && <p className="form-hint">Sample files are practice records; downloads are available in your private workspace.</p>}{visibleArtifacts.length ? (
+    {downloadError && <p className="form-error" role="alert">{downloadError}</p>}{sampleMode && visibleArtifacts.length > 0 && <p className="form-hint">Sample files are practice records; previews and downloads are available in your private workspace.</p>}{visibleArtifacts.length ? (
       <div className="table-scroll"><table className={`data-table files-table ${expert ? "" : "files-table-simple"}`}>
         <caption className="sr-only">Artifacts in {artifactScopeIdentity(scope, expert)}</caption>
-        <thead><tr><th scope="col">File</th><th scope="col">Download</th>{expert && <><th scope="col">Role</th><th scope="col">Scope</th><th scope="col">Revision</th><th scope="col">Updated</th><th scope="col">State</th><th scope="col">SHA-256</th></>}</tr></thead>
+        <thead><tr><th scope="col">File</th><th scope="col">Actions</th>{expert && <><th scope="col">Role</th><th scope="col">Scope</th><th scope="col">Revision</th><th scope="col">Updated</th><th scope="col">State</th><th scope="col">SHA-256</th></>}</tr></thead>
         <tbody>{visibleArtifacts.map((file) => (
           <tr key={file.id}>
             <td><span className="file-name"><Icon name="file" size={18} /><span><strong>{file.name}</strong><small>{file.size}{!expert && <> · <span>{file.role}</span> · <span>{artifactRevisionLabel(file, false)}</span></>}</small></span></span></td>
-            <td><button type="button" className="button button-quiet" aria-label={`Download ${file.name}`} disabled={sampleMode || downloadingId !== undefined} onClick={() => { void downloadFile(file); }}>{downloadingId === file.id ? "Downloading…" : "Download"}</button></td>
+            <td><div className="file-preview-actions">{artifactPreviewKind(file.name) && <button type="button" className="button button-quiet" aria-label={`Preview ${file.name}`} disabled={sampleMode} onClick={() => setPreviewFile(file)}>Preview</button>}<button type="button" className="button button-quiet" aria-label={`Download ${file.name}`} disabled={sampleMode || downloadingId !== undefined} onClick={() => { void downloadFile(file); }}>{downloadingId === file.id ? "Downloading…" : "Download"}</button></div></td>
             {expert && <><td>{file.role}</td><td className="file-scope-cell">{artifactIdentityLabel(file, true)}</td><td>{artifactRevisionLabel(file, true)}</td><td>{file.updated}</td><td>{file.status}</td><td><code className="hash-cell">{file.hash}</code></td></>}
           </tr>
         ))}</tbody>
       </table></div>
     ) : fileQuery.trim() ? <div className="files-empty"><strong>No matching files</strong><button type="button" className="text-button" onClick={() => setFileQuery("")}>Clear file search</button></div> : ( <div className="files-empty"><Icon name="folder" size={20} /><strong>{scope.kind === "all" ? "No files in this workspace yet." : "No files in this revision yet."}</strong><span>{scope.kind === "all" ? expert ? "Legacy and unbound files will appear here when they are retained by the service." : "Files not assigned to a current revision will appear here." : "Add the editable source or first export when you have one."}</span></div> )}{" "}
+    {previewFile && <ArtifactPreview key={previewFile.id} file={previewFile} onClose={() => setPreviewFile(undefined)} />}
     {expert && ( <details className="expert-detail file-manifest-detail"><summary>Show manifest details</summary><div className="manifest-grid"><span>Binding</span><strong>{bindingLabel}</strong><span>Scope</span><strong>{artifactScopeIdentity(scope, true)}</strong><span>Retention</span><strong> {" "}Older revision files remain auditable when the service records them.{" "} </strong><span>Download</span><strong>Files are checked against their SHA-256 before saving. Downloads never execute files.</strong></div></details> )}
   </section> );
 }

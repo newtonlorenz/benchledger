@@ -33,3 +33,22 @@ describe("artifact bytes in LAN browsers", () => {
     await expect(fetchArtifactDownload("file", "a".repeat(64))).rejects.toThrow("connection");
   });
 });
+
+describe("bounded preview downloads", () => {
+  it("bounds streamed bytes even when content length is absent", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("too large")));
+    await expect(fetchArtifactDownload("file", "a".repeat(64), { maxBytes: 3 })).rejects.toThrow("too large to preview");
+  });
+  it("rejects advertised oversized files before consuming bytes", async () => {
+    const response = new Response("abc", { headers: { "content-length": "100" } });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+    await expect(fetchArtifactDownload("file", "a".repeat(64), { maxBytes: 3 })).rejects.toThrow("too large to preview");
+    expect(response.bodyUsed).toBe(true);
+  });
+  it("still checks integrity for bounded downloads", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(new Response("abc")).mockResolvedValueOnce(new Response("bad")));
+    const hash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    expect(await (await fetchArtifactDownload("file", hash, { maxBytes: 3, signal: new AbortController().signal })).text()).toBe("abc");
+    await expect(fetchArtifactDownload("file", hash, { maxBytes: 3 })).rejects.toThrow("integrity");
+  });
+});
