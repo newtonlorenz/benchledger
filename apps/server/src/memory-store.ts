@@ -1,3 +1,4 @@
+import { MemoryInventoryImages } from "@benchledger/runtime";
 import { MemoryTeam } from "./memory-team.js";
 import { MemoryMakerWorkflows } from "./memory-maker-workflows.js";
 import { changesReservedRequirement } from "@benchledger/api-contract";
@@ -1560,17 +1561,19 @@ export function createMemoryRuntime(seed: readonly InventoryItem[] = []): Memory
   const unitOfWork = new MemoryUnitOfWork();
   const audit = new MemoryAudit();
   const idempotency = new MemoryIdempotency();
+  const inventoryImages = new MemoryInventoryImages();
   const makerWorkflows = new MemoryMakerWorkflows();
   const teamSecurity = new MemoryTeam();
   unitOfWork.registerRollback(() => teamSecurity.snapshot());
   unitOfWork.registerRollback(() => makerWorkflows.snapshot());
+  unitOfWork.registerRollback(() => inventoryImages.snapshot());
   unitOfWork.registerRollback(() => { const snapshot = projects.snapshotState(); return () => projects.restoreState(snapshot); });
   unitOfWork.registerRollback(() => { const snapshot = inventory.snapshotState(); return () => inventory.restoreState(snapshot); });
   unitOfWork.registerRollback(() => { const snapshot = audit.snapshotState(); return () => audit.restoreState(snapshot); });
   unitOfWork.registerRollback(() => { const snapshot = idempotency.snapshotState(); return () => idempotency.restoreState(snapshot); });
   const projectSetups = new MemoryProjectSetup(projects, inventory, catalog, audit, idempotency);
   const inspections = new MemoryInspections(inventory, projects);
-  const ports: ApplicationPorts = { inventory, inventoryCategories, projects, projectSetups, inspections, makerWorkflows, teamSecurity, offers: new MemoryOffers(), artifacts: new MemoryArtifacts(), catalog, buildConfigurations, audit, events: new MemoryEvents(), idempotency, unitOfWork, health: new MemoryHealth() };
+  const ports: ApplicationPorts = { inventory, inventoryImages, inventoryCategories, projects, projectSetups, inspections, makerWorkflows, teamSecurity, offers: new MemoryOffers(), artifacts: new MemoryArtifacts(), catalog, buildConfigurations, audit, events: new MemoryEvents(), idempotency, unitOfWork, health: new MemoryHealth() };
   return { ports, inventory, inventoryCategories, projects, catalog, buildConfigurations, inspections, unitOfWork };
 }
 

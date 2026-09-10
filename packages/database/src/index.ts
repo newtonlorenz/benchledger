@@ -1,3 +1,4 @@
+export * from "./inventory-image-repository.js";
 export * from "./schema.js";
 export * from "./sqlite.js";
 export * from "./inventory-repository.js";

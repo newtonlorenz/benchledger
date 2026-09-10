@@ -1,3 +1,4 @@
+import { INVENTORY_IMAGE_TOOLS } from "./inventory-images.js";
 import { MAKER_TOOL_DEFINITIONS } from "./maker-workflows.js";
 import type { JsonObject, JsonValue, McpResource, McpResourceTemplate, McpToolDefinition } from "./types.js";
 import { BOM_CONSTRAINT_KEYS, MCP_QUANTITY_UNITS, MCP_EVIDENCE_STATES } from "./types.js";
@@ -323,6 +324,7 @@ export const LEGACY_TRANSFER_DEFINITIONS: readonly McpToolDefinition[] = [
 
 export const TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
   ...MAKER_TOOL_DEFINITIONS,
+  ...INVENTORY_IMAGE_TOOLS,
   tool("read_inventory_summary", "Read a bounded inventory summary and category counts.", "inventory:read", false, pageProperties),
   tool("list_inventory", "List equipment, tools, consumables, and electronics with evidence-aware availability.", "inventory:read", false, { ...filteredPageProperties, query: string(), category: string("Semantic item kind."), categoryNodeId: categoryIdProperty("Exact user-managed category or subcategory."), unassigned: boolean("Only inventory without a managed category assignment; cannot be combined with categoryNodeId."), availability: string(), location: string() }),
   tool("read_inventory_item", "Read one inventory item, including dimensions, links, evidence, and current quantity.", "inventory:read", false, { itemId: idProperty("Inventory item identifier.") }, ["itemId"]),

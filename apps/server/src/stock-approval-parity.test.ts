@@ -20,7 +20,7 @@ it("official MCP review and replayed approval match the browser stock result wit
     const reservation = await seed(`/project-revisions/${revisionId}/reservations`, { lineId: line.id, itemId: item.id, quantity: 4 });
     const transport = new StreamableHTTPClientTransport(new URL(base + "/api/v1/mcp"), { requestInit: { headers: { authorization: `Bearer ${token}` } }, fetch: (url, init) => { const headers = new Headers(init?.headers); headers.set("idempotency-key", key); return fetch(url, { ...init, headers, redirect: "error" }); } });
     await client.connect(transport as Parameters<Client["connect"]>[0]);
-    expect((await client.listTools()).tools).toHaveLength(84);
+    expect((await client.listTools()).tools).toHaveLength(86);
     key = randomUUID();
     const preview = await client.callTool({ name: "save_reconciliation_draft", arguments: { projectRevisionId: revisionId, lines: [{ bomLineId: line.id, outcomes: [{ reservationId: reservation.id, itemId: item.id, kind: "consumed", quantity: 4, unit: "each", evidence: { state: "physically_counted", source: "Synthetic software test only" } }] }] } });
     expect(preview.isError, JSON.stringify(preview.structuredContent)).toBe(false);

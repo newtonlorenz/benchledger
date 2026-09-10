@@ -1,0 +1,45 @@
+import { expect, test } from "@playwright/test";
+const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAIAAABxZ0isAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEUlEQVQImWMw6piAFTEMpAQAEKQ94TX+ea8AAAAASUVORK5CYII=", "base64");
+test("inventory image gallery uploads, renders and survives reload on a narrow screen", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("Workspace password").fill("demo-password-please-change");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: /^Inventory(?: \d+)?$/u }).click();
+  await page.getByRole("button", { name: /Bambu Lab H2D/u }).first().click();
+  const gallery = page.getByRole("region", { name: "Item images" });
+  await gallery.getByText("Add image", { exact: true }).click();
+  await gallery.getByLabel("Image file").setInputFiles({ name: "synthetic-printer.png", mimeType: "image/png", buffer: png });
+  await gallery.getByLabel("Image source").selectOption("reference");
+  await gallery.getByLabel("Caption (optional)").fill("Synthetic printer reference");
+  await gallery.getByRole("button", { name: "Save image", exact: true }).click();
+  const photo = gallery.getByRole("img", { name: "Synthetic printer reference", exact: true });
+  await expect(photo).toBeVisible();
+  await expect.poll(() => photo.evaluate(img => (img as HTMLImageElement).naturalWidth)).toBe(8);
+  await expect(gallery.locator("figcaption")).toContainText("Reference image");
+  await page.reload();
+  await page.getByRole("button", { name: /Bambu Lab H2D/u }).first().click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(photo).toBeVisible();
+  const bounds = await photo.boundingBox(); expect(bounds!.width).toBeLessThanOrEqual(390);
+});
+
+test("closing an image draft keeps focus in the discard confirmation and preserves the draft on cancel", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("Workspace password").fill("demo-password-please-change");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: /^Inventory(?: \d+)?$/u }).click();
+  await page.getByRole("button", { name: /Bambu Lab H2D/u }).first().click();
+  const gallery = page.getByRole("region", { name: "Item images" });
+  await gallery.getByText("Add image", { exact: true }).click();
+  await gallery.getByLabel("Image file").setInputFiles({ name: "draft.png", mimeType: "image/png", buffer: png });
+  await page.getByRole("button", { name: "Close item details" }).click();
+  const confirmation = page.getByRole("alertdialog", { name: "Leave without saving?" });
+  await expect(confirmation).toBeVisible();
+  await page.keyboard.press("Tab");
+  await expect(confirmation.getByRole("button", { name: "Discard changes and leave" })).toBeFocused();
+  await confirmation.getByRole("button", { name: "Keep editing" }).click();
+  await expect(gallery.getByRole("button", { name: "Save image" })).toBeEnabled();
+  await page.getByRole("button", { name: "Close item details" }).click();
+  await confirmation.getByRole("button", { name: "Discard changes and leave" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+});

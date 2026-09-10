@@ -1,3 +1,4 @@
+export { normalizeInventoryImage } from "./inventory-image.js";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import type { Stats } from "node:fs";

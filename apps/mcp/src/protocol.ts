@@ -1,3 +1,4 @@
+import { isInventoryImageEnvelope } from "./inventory-images.js";
 import { McpAdapter } from "./adapter.js";
 import { publicToolDefinitions } from "./capabilities.js";
 import { McpAdapterError, mapBackendError } from "./errors.js";
@@ -50,6 +51,8 @@ export interface McpHttpHandlerOptions {
   context?: McpRequestContext;
   resolveContext?: (headers: Readonly<Record<string, string | undefined>>) => Promise<McpRequestContext>;
   maxBodyBytes?: number;
+  /** Opt-in envelope for the bounded raster upload tool only. */
+  maxInventoryImageBodyBytes?: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -202,6 +205,7 @@ function headerValue(headers: Readonly<Record<string, string | undefined>> | und
  */
 export function createMcpHttpHandler(protocol: McpProtocol, options: McpHttpHandlerOptions): (request: McpHttpRequest) => Promise<McpHttpResponse> {
   const maxBodyBytes = options.maxBodyBytes ?? 1_000_000;
+  const imageBodyLimit = options.maxInventoryImageBodyBytes ?? maxBodyBytes;
   return async (request): Promise<McpHttpResponse> => {
     const headers = request.headers ?? {};
     if (request.method.toUpperCase() !== "POST") {
@@ -216,14 +220,18 @@ export function createMcpHttpHandler(protocol: McpProtocol, options: McpHttpHand
       return { status: 400, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" }, body: JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "A JSON-RPC body is required." } }) };
     }
     const raw = encoded;
-    if (raw.length > maxBodyBytes) {
+    if (new TextEncoder().encode(raw).length > Math.max(maxBodyBytes, imageBodyLimit)) {
       return { status: 413, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" }, body: JSON.stringify({ error: "Request body exceeds the MCP limit." }) };
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
     } catch {
+      if (new TextEncoder().encode(raw).length > maxBodyBytes) return { status: 413, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" }, body: JSON.stringify({ error: "Request body exceeds the MCP limit." }) };
       return { status: 400, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" }, body: JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error." } }) };
+    }
+    if (new TextEncoder().encode(raw).length > maxBodyBytes && (new TextEncoder().encode(raw).length > imageBodyLimit || !isInventoryImageEnvelope(parsed))) {
+      return { status: 413, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" }, body: JSON.stringify({ error: "Request body exceeds the MCP limit." }) };
     }
     const context = options.resolveContext === undefined ? options.context : await options.resolveContext(headers);
     if (context === undefined) {

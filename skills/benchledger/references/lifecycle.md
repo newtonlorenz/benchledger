@@ -56,6 +56,14 @@ Items with `unitStatus: "needs_correction"` remain visible but cannot support
 confident matching, reservations, usage, setup or reconciliation. Resolve the
 reported kind/unit mismatch through the supported correction workflow first.
 
+For an explicitly requested inventory/printer image, read `list_inventory_images`
+and use its gallery version with `add_inventory_image`. Use only exact approved
+PNG/JPEG/WebP bytes encoded by the trusted host (at most 2 MiB), never invented
+base64, paths or remote URLs. Label `item_photo`, `reference`, `generated` or
+`unknown` honestly. This requires workspace-wide inventory access and does not
+confirm quantity, condition or fit. If the host cannot encode the file, use
+Images → Add image in the browser. See the MCP quickstart for the full contract.
+
 ## 3. Project and revision structure
 
 - Read and write project lifecycle only as `idea`, `planned`, `ready`,

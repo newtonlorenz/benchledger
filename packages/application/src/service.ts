@@ -1,3 +1,4 @@
+import { InventoryImageService } from "./inventory-images.js";
 import { TeamService } from "./team-service.js";
 import { MakerWorkflowService } from "./maker-workflows.js";
 import { changesReservedRequirement } from "@benchledger/api-contract";
@@ -1146,9 +1147,10 @@ async function linkedProfile(
 }
 
 export class ApplicationService {
+  readonly inventoryImages: InventoryImageService;
   readonly makerWorkflows: MakerWorkflowService;
   readonly team: TeamService;
-  constructor(private readonly ports: ApplicationPorts, private readonly version = "0.1.0") { this.makerWorkflows = new MakerWorkflowService(ports, this, (ctx, action, entityType, id, operation) => this.mutate(ctx, action, entityType, id, operation)); this.team = new TeamService(ports, this, (ctx, action, entityType, id, operation) => this.mutate(ctx, action, entityType, id, operation)); }
+  constructor(private readonly ports: ApplicationPorts, private readonly version = "0.1.0") { this.inventoryImages = new InventoryImageService(ports, this, (ctx, action, entityType, id, operation) => this.mutate(ctx, action, entityType, id, operation)); this.makerWorkflows = new MakerWorkflowService(ports, this, (ctx, action, entityType, id, operation) => this.mutate(ctx, action, entityType, id, operation)); this.team = new TeamService(ports, this, (ctx, action, entityType, id, operation) => this.mutate(ctx, action, entityType, id, operation)); }
 
   getVersion(): string {
     return this.version;

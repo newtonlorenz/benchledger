@@ -5,6 +5,16 @@ by the web UI. It does not contain a model, and it does not make multi-step
 judgments on an agent's behalf. An agent composes small, typed operations into
 an end-to-end project decision.
 
+## Inventory images
+
+All inventory kinds, including printers, have a browser image gallery and the
+MCP tools `list_inventory_images` / `add_inventory_image`. The tools require
+workspace-wide inventory read/write scopes respectively, strict bounded raster
+input, source labels, a gallery version and replay-safe writes. They return
+metadata, never image bytes, and do not change stock or verification evidence.
+See [the image workflow](agent-quickstart.md#inventory-and-printer-images) for
+limits, HTTP routes, host encoding, retention and backup semantics.
+
 ## Deleting records
 
 The project header exposes **Delete project** for active and archived projects.
@@ -444,5 +454,5 @@ Browser acceptance tests use separate durable workspaces for stock close-out;
 the simplified demo server does not advertise that capability. Official MCP
 client tests exercise the same saved preview, explicit approval and idempotent
 replay, and compare the resulting stock quantity. UI changes do not grant new
-agent scopes or change the existing 84-tool contract. The in-project Refresh
+agent scopes or change the existing MCP tool contracts. The in-project Refresh
 control reads externally saved agent work without silently replacing local drafts.

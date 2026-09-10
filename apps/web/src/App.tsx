@@ -1,3 +1,4 @@
+import { InventoryImages } from "./inventory-images";
 import { ArtifactPreview, artifactPreviewKind } from "./artifact-preview";
 import { UnsavedWorkContext, useNavigationGuard, useUnsavedWork } from "./unsaved-work";
 import { WorkbenchHome } from "./workbench-home";
@@ -911,7 +912,7 @@ export function formatSourceReadyMessage(count: number): string {
 
       {navigationGuard.pending && <Dialog title={navigationGuard.pending.unresolved ? "Finish the pending save" : "Leave without saving?"} role="alertdialog" onClose={navigationGuard.cancel}><p className="dialog-intro">{navigationGuard.pending.unresolved ? "A save or upload is still running or has not been confirmed. Stay on this page and resolve it before leaving." : `Your ${navigationGuard.pending.labels.join(", ")} has unsaved changes. Keep editing, or discard this draft.`}</p><div className="dialog-actions"><button data-autofocus type="button" className="button button-primary" onClick={navigationGuard.cancel}>Keep editing</button>{!navigationGuard.pending.unresolved && <button type="button" className="button button-danger" onClick={navigationGuard.discard}>Discard changes and leave</button>}</div></Dialog>}
       {commandsOpen && <Dialog title="Workspace commands" onClose={() => setCommandsOpen(false)}><WorkspaceCommands commands={commandItems} onRun={(command) => { setCommandsOpen(false); command.run(); }} onSearchInventory={() => { setCommandsOpen(false); launchInventorySearch(); }} /></Dialog>}
-      {selectedItem && ( <InventoryDrawer item={selectedItem} items={items} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} expert={expert} onClose={() => setSelectedItemId(undefined)} onCount={recordCount} onCommission={commissionInventoryItem} onUpdate={updateInventoryItem} onDelete={async (item) => {
+      {selectedItem && ( <InventoryDrawer suspended={Boolean(navigationGuard.pending)} sampleMode={sampleMode} item={selectedItem} items={items} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} expert={expert} onClose={() => navigationGuard.registry.request(() => setSelectedItemId(undefined))} onCount={recordCount} onCommission={commissionInventoryItem} onUpdate={updateInventoryItem} onDelete={async (item) => {
         if (item.version === undefined) throw new Error("Reload this item before deleting it.");
         await adapter.deleteInventoryItem(item.id, item.version);
         setItems((current) => current.filter((candidate) => candidate.id !== item.id));
@@ -921,7 +922,7 @@ export function formatSourceReadyMessage(count: number): string {
         setInventoryRefreshNonce((value) => value + 1);
         await refreshWorkspace();
         setToast(`${item.name} deleted. Its history is retained.`);
-      }} onLinkProduct={(record) => { setSelectedItemId(undefined); setReplacementFor(record); setShowNewItem(true); }} onCreateReplacement={(record) => { setSelectedItemId(undefined); setReplacementFor(record); setShowNewItem(true); }} /> )}{" "}
+      }} onLinkProduct={(record) => navigationGuard.registry.request(() => { setSelectedItemId(undefined); setReplacementFor(record); setShowNewItem(true); })} onCreateReplacement={(record) => navigationGuard.registry.request(() => { setSelectedItemId(undefined); setReplacementFor(record); setShowNewItem(true); })} /> )}{" "}
       {showBomImport && selectedProject && <Dialog title="Import requirements from CSV" onClose={() => { if (!importBusy) setShowBomImport(false); }}><ExistingBomImport project={selectedProject} onRefresh={refreshWorkspace} onBusy={setImportBusy} /></Dialog>}
       {showGuidedSetup && <Dialog title="Guided project setup" onClose={() => { if (!guidedBusy) setShowGuidedSetup(false); }}><GuidedSetup adapter={adapter} items={items} onBusy={setGuidedBusy} onDone={async (projectId) => { if (!await refreshWorkspace()) throw new Error("The project is saved, but the workspace could not refresh. Open it again when the connection recovers."); setShowGuidedSetup(false); openProject(projectId); }} /></Dialog>}
       {showNewProject && ( <NewProjectDialog onGuided={sampleMode ? undefined : () => { setShowNewProject(false); setShowGuidedSetup(true); }} items={items} suspended={showNewItem} onClose={closeNewProject} onAddPrinter={openNewPrinter} onCreate={createProject} /> )}{" "}
@@ -2061,7 +2062,7 @@ function useOverlayBehavior(containerRef: React.RefObject<HTMLElement | null>, o
   }, [containerRef]);
 }
 
-export function InventoryDrawer({ item, items = [item], categories, categoriesLoading, categoriesError, expert, onClose, onCount, onCommission, onUpdate, onDelete, onLinkProduct, onCreateReplacement }: { item: InventoryItem; items?: readonly InventoryItem[]; categories: readonly ManagedInventoryCategory[]; categoriesLoading: boolean; categoriesError?: string | undefined; expert: boolean; onClose: () => void; onCount: (id: string, quantity: number) => Promise<InventoryItem>; onCommission: (id: string, input: InventoryCommissionInput, expectedVersion: number) => Promise<InventoryItem>; onUpdate: (id: string, input: Partial<InventoryUpdateInput>, expectedVersion?: number) => Promise<InventoryItem>; onDelete?: (item: InventoryItem) => Promise<void>; onLinkProduct?: (item: InventoryItem) => void; onCreateReplacement?: (item: InventoryItem) => void; }) {
+export function InventoryDrawer({ item, suspended = false, sampleMode = false, items = [item], categories, categoriesLoading, categoriesError, expert, onClose, onCount, onCommission, onUpdate, onDelete, onLinkProduct, onCreateReplacement }: { item: InventoryItem; sampleMode?: boolean; suspended?: boolean; items?: readonly InventoryItem[]; categories: readonly ManagedInventoryCategory[]; categoriesLoading: boolean; categoriesError?: string | undefined; expert: boolean; onClose: () => void; onCount: (id: string, quantity: number) => Promise<InventoryItem>; onCommission: (id: string, input: InventoryCommissionInput, expectedVersion: number) => Promise<InventoryItem>; onUpdate: (id: string, input: Partial<InventoryUpdateInput>, expectedVersion?: number) => Promise<InventoryItem>; onDelete?: (item: InventoryItem) => Promise<void>; onLinkProduct?: (item: InventoryItem) => void; onCreateReplacement?: (item: InventoryItem) => void; }) {
   const unverifiedQuantity = item.evidence === "delivered" || item.evidence === "ordered";
   const [quantity, setQuantity] = useState(unverifiedQuantity ? "" : String(item.quantity));
   const [countSaving, setCountSaving] = useState(false);
@@ -2102,7 +2103,7 @@ export function InventoryDrawer({ item, items = [item], categories, categoriesLo
   const drawerTitleId = useId();
   const availableForReuse = item.availableQuantity ?? Math.max(item.quantity - item.reserved, 0);
   const itemIdentity = inventoryCandidateText(item, items, expert);
-  useOverlayBehavior(drawerRef, onClose, !mutationReview && !deleteOpen);
+  useOverlayBehavior(drawerRef, onClose, !mutationReview && !deleteOpen && !suspended);
   const reviewCount = (event: FormEvent) => {
     event.preventDefault();
     const parsed = Number(quantity);
@@ -2222,9 +2223,11 @@ export function InventoryDrawer({ item, items = [item], categories, categoriesLo
 
   return ( <>
     <div className="drawer-scrim" aria-hidden="true" onClick={onClose} />
-    <aside ref={drawerRef} className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby={drawerTitleId} aria-hidden={mutationReview || deleteOpen ? true : undefined} inert={mutationReview || deleteOpen ? true : undefined} tabIndex={-1}>
+    <aside ref={drawerRef} className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby={drawerTitleId} aria-hidden={mutationReview || deleteOpen || suspended ? true : undefined} inert={mutationReview || deleteOpen || suspended ? true : undefined} tabIndex={-1}>
       <div className="drawer-header"><span className={`item-glyph accent-${item.accent}`} aria-hidden="true"><Icon name={categoryIcons[item.category]} size={18} /></span><div><span className="eyebrow">{managedInventoryLabel(categories, item)}</span><h2 id={drawerTitleId}>{itemIdentity}</h2></div><button type="button" className="icon-button" data-autofocus aria-label="Close item details" onClick={onClose}><Icon name="close" size={20} /></button></div>
       <div className="drawer-body">
+        <InventoryImages key={item.id} itemId={item.id} sampleMode={sampleMode} />
+
         <div className="drawer-title-actions"><StatusPill state={displayedInventoryState(item)} {...(item.unitStatus === "needs_correction" ? { label: "Fix unit" } : {})} />{!editing && ( <button type="button" className="button button-secondary" onClick={() => setEditing(true)}> {" "}Edit item{" "} </button> )}{onDelete && <button type="button" className="button button-danger" disabled={editing || countSaving || commissionSaving} onClick={() => { setDeleteError(undefined); setDeleteOpen(true); }}><Icon name="trash" size={16} />{item.kind === "printer" ? "Delete printer" : "Delete item"}</button>}</div>
         {item.unitStatus === "needs_correction" && ( <section className="unit-correction-callout" role="alert"><strong>This record cannot be used yet</strong><span>{" "}
                 This unit does not match this item type. Create a corrected

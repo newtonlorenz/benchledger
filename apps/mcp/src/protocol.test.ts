@@ -166,3 +166,23 @@ describe("McpProtocol", () => {
     expect(JSON.parse(chunks[2]!)).toMatchObject({ id: null, error: { code: -32600 } });
   });
 });
+
+it("limits the larger envelope to the inventory image tool on HTTP and stdio", async () => {
+  const backendValue = backend();
+  backendValue.inventoryImages = async () => ({ accepted: true });
+  const imageContext: McpRequestContext = { actorId: "fixture", scopes: ["inventory:write"] };
+  const protocol = new McpProtocol(new McpAdapter(backendValue), { context: imageContext });
+  const image = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "add_inventory_image", arguments: { itemId: "fixture", image: { expectedVersion: 0, filename: "fixture.png", mediaType: "image/png", imageBase64: "AAAA".repeat(270_000), sourceKind: "unknown" } } } };
+  const handler = createMcpHttpHandler(protocol, { context: imageContext, maxInventoryImageBodyBytes: 3 * 1024 * 1024 });
+  const accepted = await handler({ method: "POST", body: image });
+  expect(accepted.status).toBe(200); expect(JSON.parse(accepted.body).result.isError).toBe(false);
+  expect((await createMcpHttpHandler(protocol, { context: imageContext, maxBodyBytes: 100 })({ method: "POST", body: image })).status).toBe(413);
+  const other = { ...image, params: { ...image.params, name: "create_inventory_item" } };
+  expect((await handler({ method: "POST", body: other })).status).toBe(413);
+  expect((await handler({ method: "POST", body: [image] })).status).toBe(413);
+  let outputText = "";
+  const output = new Writable({ write(chunk, _encoding, done) { outputText += String(chunk); done(); } });
+  await runStdio(backendValue, { context: imageContext, input: Readable.from([`${JSON.stringify(image)}\n${JSON.stringify(other)}\n`]), output });
+  const results = outputText.trim().split("\n").map(line => JSON.parse(line));
+  expect(results[0].result.isError).toBe(false); expect(results[1].error.message).toContain("size limit");
+});

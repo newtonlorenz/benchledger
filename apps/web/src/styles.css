@@ -1621,3 +1621,17 @@ kbd { display: inline-block; padding: 1px 5px; border: 1px solid var(--line); bo
 .identifier-value { overflow-wrap: anywhere; font-family: monospace; font-size: 0.72rem; }
 .maker-tool-group .dialog-actions { position: static; margin: 16px 0 0; padding: 12px 0 0; }
 @media (max-width: 480px) { .maker-tool-group { padding: 12px; } .maker-tool-group .form-row { grid-template-columns: minmax(0, 1fr); } }
+
+.inventory-images { padding-block: 16px; border-bottom: 1px solid var(--line); }
+.inventory-images h3 { margin: 0 0 12px; }
+.inventory-images figure { margin: 0 0 12px; }
+.inventory-image-main { display: block; width: 100%; max-height: 340px; object-fit: contain; border-radius: 8px; background: var(--surface-soft); }
+.inventory-images figcaption { padding-top: 8px; font-size: 13px; overflow-wrap: anywhere; }
+.inventory-image-thumbnails { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 12px; }
+.inventory-image-thumbnails button { flex: 0 0 64px; padding: 3px; border: 2px solid var(--line); border-radius: 6px; background: var(--surface); }
+.inventory-image-thumbnails button[aria-pressed="true"] { border-color: var(--ink); }
+.inventory-image-thumbnails img { display: block; width: 54px; height: 54px; object-fit: contain; }
+.inventory-images summary { cursor: pointer; padding-block: 8px; }
+.inventory-images fieldset { border: 0; padding: 8px 0; margin: 0; display: grid; gap: 12px; min-width: 0; }
+.inventory-images input[type="file"] { max-width: 100%; }
+.inventory-image-help { font-size: 12px; line-height: 1.5; }

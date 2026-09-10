@@ -1,3 +1,6 @@
+export { MemoryInventoryImages } from "./memory-inventory-images.js";
+import { InventoryImageRepository, migrateInventoryImageSchema } from "@benchledger/database";
+import { ProductionInventoryImageAdapter } from "./inventory-image-adapter.js";
 import { TeamRepository, migrateTeamSchema } from "@benchledger/database";
 import { ProductionTeamAdapter } from "./team-adapter.js";
 import { MakerWorkflowRepository, migrateMakerWorkflowSchema } from "@benchledger/database";
@@ -105,6 +108,7 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
   try {
     migrateRuntimeSchema(database);
     migrateMakerWorkflowSchema(database);
+    migrateInventoryImageSchema(database);
     migrateTeamSchema(database);
     migrateCatalogSchema(database);
     migrateProjectSchema(database);
@@ -149,6 +153,7 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
       reconciliations: new ProductionReconciliationAdapter(database, reconciliationRepository, projectRepository, bomRepository, reservationRepository, inventoryRepository, inventory, projectAdapter, state, unitOfWork),
       inspections: new ProductionInspectionAdapter(database, inspectionRepository, inventoryRepository, bomRepository, state, unitOfWork),
       workspaceSecurity,
+      inventoryImages: new ProductionInventoryImageAdapter(new InventoryImageRepository(database)),
       makerWorkflows: new ProductionMakerWorkflowAdapter(new MakerWorkflowRepository(database)),
       teamSecurity: new ProductionTeamAdapter(new TeamRepository(database)),
       audit: new ProductionAuditAdapter(auditRepository, database, state, unitOfWork),

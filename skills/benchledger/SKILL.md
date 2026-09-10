@@ -56,8 +56,11 @@ distinct commands, including draft and commit, need distinct keys.
 Inspection completion and close-out require the server preview and explicit
 confirmation before commit. A reservation is not consumption; planned amounts
 are not actual usage. Preserve evidence and accepted artefacts. Generic MCP
-transfer failures remain fail-closed: never insert file bytes as base64 or
-invent a host transfer. With separately authorised host filesystem access, use
+transfer failures remain fail-closed: never embed general project files as
+base64 or invent a host transfer. The explicit `add_inventory_image` tool is a
+bounded PNG/JPEG/WebP exception: use exact approved host-encoded bytes and
+honest source labels, as described in the inventory section of the lifecycle
+reference. With separately authorised host filesystem access, use
 the repository helper described in
 [client setup](references/client-setup.md#host-file-transfer).
 Report a committed write as committed even if a later
