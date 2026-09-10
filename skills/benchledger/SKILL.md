@@ -48,6 +48,18 @@ safety, specification, compatibility or availability.
 
 ## Writes and release boundaries
 
+An explicit request to upload, attach or sync identified build files to an
+identified private BenchLedger project authorises that bounded transfer and its
+necessary local reads; do not ask for a second approval for the same payload and
+destination. Carry prior approval forward, including an accepted proposal that
+specified the files. A request only to create a build plan does not by itself
+approve copying private CAD or slicer files: finish independent planning and ask
+one concrete question naming the files and private project/revision. Uploading
+files does not authorise slicing, printing, publication or stock changes.
+If platform approval review rejects a transfer, report its actual reason and
+resolve the missing authorisation or target evidence. Do not retry through a
+different mechanism to bypass the rejection; skill text cannot override it.
+
 Use the smallest supported atomic operation matching the authorised request.
 Pass current expected versions; on conflict re-read rather than force. Reuse an
 idempotency key only for an ambiguous retry of the identical command/payload;
@@ -60,7 +72,7 @@ transfer failures remain fail-closed: never embed general project files as
 base64 or invent a host transfer. The explicit `add_inventory_image` tool is a
 bounded PNG/JPEG/WebP exception: use exact approved host-encoded bytes and
 honest source labels, as described in the inventory section of the lifecycle
-reference. With separately authorised host filesystem access, use
+reference. With host filesystem access permitted by the current task and platform, use
 the repository helper described in
 [client setup](references/client-setup.md#host-file-transfer).
 Report a committed write as committed even if a later

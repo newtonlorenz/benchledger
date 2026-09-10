@@ -80,10 +80,33 @@ the [MCP quickstart](https://github.com/newtonlorenz/benchledger/blob/main/apps/
 and [maker workflow contract](https://github.com/newtonlorenz/benchledger/blob/main/docs/maker-workflows.md)
 as references, verifying availability against the connected server.
 
+### Build-plan writes and retry keys
+
+`save_build_plan` requires an 8–200 character idempotency key in the transport
+context. Use the shipped `scripts/mcp-http-client.mjs` bridge (or its exported
+`createForwarder` / `runStdioBridge`) for host clients; it supplies the required
+HTTP header and retains the same key for unchanged unconfirmed retries. A raw
+stdio-to-HTTP proxy that only forwards JSON can omit this context and cause an
+opaque `INVALID_ARGUMENT` even when the plan satisfies its schema. Do not add
+an unsupported key field to the tool arguments or invent a different payload.
+Check the host transport and read the current plan before any retry; do not
+recreate a plan that already committed.
+
+Unsliced plans can omit plate material rows and times, leaving estimates
+unknown. Structured material rows require positive grams and filament inventory
+recorded in grams. A spool count does not prove remaining mass; record unknown
+filament choices in notes until supported measurements or slicer estimates are
+available. Do not convert spool counts into invented gram balances.
+
 ## Host file transfer
 
-Generic MCP cannot transfer file bytes. With separately authorized host
-filesystem/execution access and a BenchLedger checkout, run
+Generic MCP cannot transfer general project file bytes. An explicit user request
+to upload, attach or sync named CAD, STEP, Bambu/3MF or supporting build files to
+an identified private BenchLedger project supplies transfer authorisation once.
+Use the exact accepted payload and revision; do not widen this to other files,
+projects or services. Creating a build plan alone does not imply file transfer.
+Host filesystem/execution access must also be available under platform rules.
+With that access and a BenchLedger checkout, run
 `node scripts/artifact-transfer.mjs --help` from that checkout root.
 Use the current helper's arguments and environment credentials, never credentials
 in arguments or MCP messages. Choose one explicit file, project and role, and
