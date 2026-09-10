@@ -495,6 +495,7 @@ export interface HealthPort {
 }
 
 export interface ApplicationPorts {
+  readonly inventoryImages?: import("./inventory-images.js").InventoryImagePort;
   readonly inventory: InventoryPort;
   /** Shared user-managed taxonomy for inventory; absent on legacy hosts. */
   readonly inventoryCategories?: InventoryCategoryPort;

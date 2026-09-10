@@ -39,10 +39,19 @@ it("connects an official stdio client to authenticated HTTP without passing cred
     const transport = new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL("../../../scripts/mcp-http-client.mjs", import.meta.url)), "--config", configPath], stderr: "pipe" });
     let stderr = ""; transport.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
     await client.connect(transport);
-    expect((await client.listTools()).tools).toHaveLength(84);
+    expect((await client.listTools()).tools).toHaveLength(86);
     const allowed = await client.callTool({ name: "read_project", arguments: { projectId: "synthetic-project-lamp" } }); expect(allowed.isError).toBe(false);
     const denied = await client.callTool({ name: "read_project", arguments: { projectId: "other-project" } }); expect(denied.isError).toBe(true);
     const globalWrite = await client.callTool({ name: "create_project", arguments: { name: "Not permitted" } }); expect(globalWrite.isError).toBe(true);
     expect(stderr).not.toContain(token);
   } finally { await client.close(); await app.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+it("forwards a bounded large image while retaining the ordinary request limit", async () => {
+  const request = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }), { headers: { "content-type": "application/json" } }));
+  const forward = createForwarder({ endpoint: "https://service.example/mcp", token }, request);
+  const params = { name: "add_inventory_image", arguments: { image: { imageBase64: "A".repeat(1_100_000) } } };
+  const message = { jsonrpc: "2.0", id: 1, method: "tools/call", params };
+  expect((await forward(message)).error).toBeUndefined(); expect(request).toHaveBeenCalledTimes(1);
+  expect((await forward({ ...message, params: { ...params, name: "create_inventory_item" } })).error).toBeDefined(); expect(request).toHaveBeenCalledTimes(1);
 });

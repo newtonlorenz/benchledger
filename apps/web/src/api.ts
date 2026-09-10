@@ -3649,3 +3649,5 @@ export async function workflowRequest<T>(path: string, method: "GET" | "POST" | 
   return request<T>(path, { method, redirect: "error", signal: AbortSignal.timeout(120_000), ...(body === undefined ? {} : { body: JSON.stringify(body) }), ...(commandKey ? { headers: { "Idempotency-Key": commandKey } } : {}) }, csrf);
 }
 export function workflowCommandKey(prefix: string): string { return idempotencyKey(prefix); }
+
+export function inventoryImageUrl(itemId: string, imageId: string): string { return `${apiRoot()}/inventory/${encodeURIComponent(itemId)}/images/${encodeURIComponent(imageId)}/content`; }

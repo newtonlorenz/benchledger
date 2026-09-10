@@ -1,3 +1,4 @@
+import { registerInventoryImageRoutes, inventoryImageOpenApi } from "./inventory-image-routes.js";
 import { memberLoginSchema } from "@benchledger/api-contract";
 import type { TeamMember } from "@benchledger/api-contract";
 import { registerMakerWorkflowRoutes, makerWorkflowOpenApi } from "./maker-workflow-routes.js";
@@ -976,6 +977,7 @@ function jsonOpenApi(version: string): Record<string, unknown> {
     },
     paths: {
       ...makerWorkflowOpenApi(),
+      ...inventoryImageOpenApi(),
       "/health": { get: { security: [], responses: { "200": { description: "Service health" } } } },
       "/ready": { get: { security: [], responses: { "200": { description: "Readiness checks" }, "503": { description: "Not ready" } } } },
       "/auth/login": { post: { security: [], responses: { "200": { description: "Session created" }, "401": { description: "Invalid credentials" }, "429": { description: "Too many attempts" } } } },
@@ -1329,7 +1331,7 @@ async function workspaceSnapshot(service: ApplicationService, projectIds?: Reado
     offers: offers.data,
     source: "api",
     fetchedAt: new Date().toISOString(),
-    capabilities: [...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : []), ...(service.makerWorkflows.supports() ? ["maker_workflows.read", "maker_workflows.write"] : [])],
+    capabilities: [...(service.inventoryImages.supports() ? ["inventory.images.read", "inventory.images.write"] : []), ...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : []), ...(service.makerWorkflows.supports() ? ["maker_workflows.read", "maker_workflows.write"] : [])],
     pagination: {
       inventory: { limit: inventory.limit, ...(inventory.total === undefined ? {} : { total: inventory.total }), ...(inventory.nextCursor === undefined ? {} : { nextCursor: inventory.nextCursor }) },
       projects: { limit: projects.limit, ...(projects.total === undefined ? {} : { total: projects.total }), ...(projects.nextCursor === undefined ? {} : { nextCursor: projects.nextCursor }) },
@@ -1572,6 +1574,10 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   });
 
   const route = (path: string) => `/api/v1${path}`;
+  registerInventoryImageRoutes(app, service, {
+    check: (request, write) => { requireScope(request, write ? "write" : "read", auth); rejectScopedGlobalAccess(request); },
+    context: requestContext
+  });
   registerMakerWorkflowRoutes(app, service, {
     check: (request, write) => { requireScope(request, write ? "write" : "read", auth); requireProjectScope(request, (request.params as { projectId: string }).projectId); },
     context: requestContext
@@ -1591,7 +1597,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     name: "BenchLedger", version: service.getVersion(), protocol: "rest-v1", demo,
     authentication: { accessModes: ["lan_open", "password"], access: "/api/v1/auth/access", explicitLanSession: "/api/v1/auth/lan-session", bearerRequiredForMcp: true },
     vocabulary: { confirmed: "physically counted or commissioned stock", inspect_first: "recorded stock requiring a physical count", missing: "no confirmed or inspect-first candidate" },
-    actions: ["inventory.read", "inventory.write", "inventory.categories.read", "inventory.categories.write", "catalog.read", "catalog.write", "inventory.product_profile.read", "inventory.product_profile.write", "projects.read", "projects.write", "projects.remove", "projects.removed_history", "build_configurations.read", "build_configurations.create", "bom.evaluate", "artifacts.version", "offers.compare", "events.subscribe", ...(service.makerWorkflows.supports() ? ["project_setup.guided", "requirement_offers.read", "requirement_offers.write", "build_plan.read", "build_plan.write", "workstreams.read", "workstreams.write", "bom.import"] : []), ...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : [])],
+    actions: [...(service.inventoryImages.supports() ? ["inventory.images.read", "inventory.images.write"] : []), "inventory.read", "inventory.write", "inventory.categories.read", "inventory.categories.write", "catalog.read", "catalog.write", "inventory.product_profile.read", "inventory.product_profile.write", "projects.read", "projects.write", "projects.remove", "projects.removed_history", "build_configurations.read", "build_configurations.create", "bom.evaluate", "artifacts.version", "offers.compare", "events.subscribe", ...(service.makerWorkflows.supports() ? ["project_setup.guided", "requirement_offers.read", "requirement_offers.write", "build_plan.read", "build_plan.write", "workstreams.read", "workstreams.write", "bom.import"] : []), ...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : [])],
     approvalBoundaries: ["purchasing", "external publication", "permanent deletion", "credential changes", "printer control"]
   }));
   app.get(route("/openapi.json"), async () => jsonOpenApi(service.getVersion()));
@@ -1620,7 +1626,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     // private; MCP artifact transfer remains fail-closed until a transactional
     // trusted-host bridge is implemented.
     const protocol = createApplicationMcpProtocol(service, { context, serverInfo: { name: "benchledger", version: service.getVersion() } });
-    const handler = createMcpHttpHandler(protocol, { context, maxBodyBytes: 1_000_000 });
+    const handler = createMcpHttpHandler(protocol, { context, maxBodyBytes: 1_000_000, maxInventoryImageBodyBytes: 3 * 1024 * 1024 });
     const headers = Object.fromEntries(Object.entries(request.headers).map(([key, value]) => [key, Array.isArray(value) ? value[0] : value]));
     const result = await handler({ method: request.method, headers, body: request.body });
     reply.code(result.status);

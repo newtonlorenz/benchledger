@@ -1,3 +1,4 @@
+import { invokeInventoryImageTool } from "./inventory-images.js";
 import { invokeMakerTool } from "./maker-workflows.js";
 import { createHash, randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
@@ -241,6 +242,7 @@ export function createApplicationBackend(service: ApplicationService, options: P
   const listRemovedProjectsPageCommand = (service as unknown as { listRemovedProjectPage?: ApplicationService["listRemovedProjectPage"] }).listRemovedProjectPage;
   const readRemovedProjectHistoryCommand = (service as unknown as { readRemovedProjectHistory?: ApplicationService["readRemovedProjectHistory"] }).readRemovedProjectHistory;
   return {
+    inventoryImages: (name, input, context) => invokeInventoryImageTool(service, name, input, context),
     makerWorkflows: (name, input, context) => invokeMakerTool(service, name, input, context),
     catalog: {
       search: async (input: CatalogProductSearchInput) => {

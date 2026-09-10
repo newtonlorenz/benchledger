@@ -299,6 +299,23 @@ Use `record_usage` directly only for a deliberate narrow event outside normal
 project close-out. Do not replace the atomic reconciliation command with a loose
 series of usage and reservation-release writes.
 
+## Add an inventory or printer image
+
+Use `list_inventory_images({ itemId })` to read the gallery and its version.
+Use `add_inventory_image({ itemId, image: { expectedVersion, filename,
+mediaType, imageBase64, caption, sourceKind } })` to attach a host-encoded image.
+Supported input is still PNG/JPEG/WebP, at most 2 MiB and 16 megapixels; output
+is a metadata-stripped, resized WebP. Use `item_photo`, `reference`, `generated`
+or `unknown` to distinguish provenance. This command never updates physical
+stock or evidence. Both tools reject project-scoped credentials.
+
+This is the sole bounded raster-inline exception to generic artifact transfer
+restrictions. The host must encode real approved bytes, not fabricate base64;
+no absolute path or remote URL is accepted. Metadata-only responses and stable
+actor/command retry keys prevent byte leakage and duplicate uncertain retries.
+Read [image limits and routes](../../docs/agent-quickstart.md#inventory-and-printer-images)
+for gallery caps, retention and the browser alternative.
+
 ## 6. Store CAD and build files (minute 8–9)
 
 Files are versioned project artifacts. Use the authenticated browser/HTTP Files

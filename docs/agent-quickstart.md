@@ -226,6 +226,46 @@ blocked. Never infer material, colour, diameter, compatibility, or availability
 from the item name. Exact filament selections and all printer selections retain
 their existing exact catalog requirements.
 
+## Inventory and printer images
+
+Open an inventory item (including a printer) and use **Images → Add image**.
+Choose a still PNG, JPEG or WebP, label its source and optionally add a caption.
+Saved images display in the item gallery. This also works for electronics,
+filament, tools and other inventory kinds. Sample records cannot store images.
+
+MCP exposes `list_inventory_images` (`inventory:read`) and
+`add_inventory_image` (`inventory:write`). Both require workspace-wide access;
+project-scoped tokens cannot read or change shared item photos. First list the
+gallery to obtain its `version` (zero when empty). Then call `add_inventory_image`
+with `itemId` and `image: { expectedVersion, filename, mediaType, imageBase64,
+caption, sourceKind }`. `expectedVersion` is the **gallery** version, not the
+inventory item version. Source kinds are `item_photo`, `reference`, `generated`
+and `unknown`. Label generated illustrations and reference/product images
+honestly; an attachment never confirms ownership, stock, condition or fit.
+
+The trusted agent host must encode the exact approved file bytes. Never invent
+base64 or send a local path, a data URL, credentials, or a remote URL to this
+tool. A host without access to the image bytes should use the browser upload.
+The server does not fetch external images. Tool results contain metadata only.
+This is a narrow bounded raster-upload capability; generic project-artifact
+transfer restrictions still apply.
+
+Inputs are limited to 2 MiB and 16 megapixels. The server orients and resizes to
+at most 1280 pixels per side, converts to WebP, strips embedded metadata, and
+limits each stored image to 512 KiB. A gallery holds up to 12 images; total
+stored image bytes are limited to 256 MiB. Images are append-only in this
+version; there is no image removal tool. SQLite backups include image bytes.
+
+HTTP uses `GET`/`POST /api/v1/inventory/{id}/images` and authenticated
+`GET /api/v1/inventory/{id}/images/{imageId}/content`. POST requires a stable
+`Idempotency-Key`; reuse the same key and payload after an uncertain result.
+Headerless MCP derives an actor/command key for identical retries. A stale
+version requires reloading the gallery. HTTP/MCP upload envelopes are bounded
+to 3 MiB; other MCP commands retain their existing envelope limit. Stored image
+content is served privately without browser caching. No stock events or
+verification evidence are changed. Item deletion retains the image rows with
+other history; retired items' images are not available through active endpoints.
+
 ## Minute 8–9: files and revisions
 
 Choose one explicit file scope before listing or uploading: the exact current

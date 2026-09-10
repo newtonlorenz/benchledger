@@ -1,3 +1,5 @@
+import { INVENTORY_IMAGE_TOOLS, parseInventoryImageTool } from "./inventory-images.js";
+import type { InventoryImageToolName } from "./inventory-images.js";
 import { MAKER_TOOL_DEFINITIONS, parseMakerTool } from "./maker-workflows.js";
 import type { MakerToolName } from "./maker-workflows.js";
 import { CAPABILITY_DOCUMENT, LEGACY_TRANSFER_DEFINITIONS, RESOURCE_TEMPLATES, RESOURCES, TOOL_DEFINITIONS } from "./capabilities.js";
@@ -324,6 +326,8 @@ async function assertAnyRevisionAccess(adapter: McpAdapter, context: McpRequestC
  */
 async function authorizeProjectScope(adapter: McpAdapter, name: string, input: unknown, context: McpRequestContext): Promise<void> {
   if (!isProjectScoped(context)) return;
+  if (INVENTORY_IMAGE_TOOLS.some(tool => tool.name === name)) rejectScopedGlobalAccess(context, "Inventory images require workspace-wide access.");
+
   if (name === "finalize_artifact_upload") return;
 
   if (name === "list_removed_projects") {
@@ -430,6 +434,7 @@ export class McpAdapter {
     this.maxResourceBytes = options.maxResourceBytes ?? DEFAULT_RESOURCE_BYTES;
     this.definitions = new Map([...TOOL_DEFINITIONS, ...LEGACY_TRANSFER_DEFINITIONS].map((definition) => [definition.name, definition]));
     this.handlers = new Map<string, ToolHandler>([
+      ...INVENTORY_IMAGE_TOOLS.map((definition): [string, ToolHandler] => [definition.name, (input, context) => { if (!this.backend.inventoryImages) throw new McpAdapterError("BACKEND_ERROR", "This runtime does not support inventory images."); const name = definition.name as InventoryImageToolName; return this.backend.inventoryImages(name, parseInventoryImageTool(name, input), context); }]),
       ...MAKER_TOOL_DEFINITIONS.map((definition): [string, ToolHandler] => [definition.name, (input, context) => { if (!this.backend.makerWorkflows) throw new McpAdapterError("BACKEND_ERROR", "This runtime does not support maker workflows."); const name = definition.name as MakerToolName; return this.backend.makerWorkflows(name, parseMakerTool(name, input), context); }]),
       ["read_inventory_summary", (input, context) => this.backend.inventory.summary(parsePageInput(input), context)],
       ["list_inventory", (input, context) => this.backend.inventory.list(inventoryList(input), context)],

@@ -6,7 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
-const MAX_REQUEST = 1024 * 1024, MAX_RESPONSE = 8 * MAX_REQUEST;
+const MAX_REQUEST = 1024 * 1024, MAX_IMAGE_REQUEST = 3 * 1024 * 1024, MAX_RESPONSE = 8 * MAX_REQUEST;
 const fail = () => { throw new Error("Private MCP configuration is missing, unsafe or invalid."); };
 export async function readClientConfig(path) {
   let handle;
@@ -30,7 +30,7 @@ export function createForwarder(config, request = fetch) {
   return async message => {
     const id = message && (typeof message.id === "string" || Number.isSafeInteger(message.id)) ? message.id : null;
     const error = (code, text) => id === null ? null : { jsonrpc: "2.0", id, error: { code, message: text } };
-    if (!message || Array.isArray(message) || message.jsonrpc !== "2.0" || typeof message.method !== "string" || Buffer.byteLength(JSON.stringify(message)) > MAX_REQUEST) return error(-32600, "Invalid or oversized MCP request.");
+    if (!message || Array.isArray(message) || message.jsonrpc !== "2.0" || typeof message.method !== "string" || Buffer.byteLength(JSON.stringify(message)) > (message.method === "tools/call" && message.params?.name === "add_inventory_image" ? MAX_IMAGE_REQUEST : MAX_REQUEST)) return error(-32600, "Invalid or oversized MCP request.");
     const operation = message.method === "tools/call" ? createHash("sha256").update(canonical({ name: message.params?.name, arguments: message.params?.arguments ?? {} })).digest("hex") : undefined;
     const key = operation ? unconfirmed.get(operation) ?? `host-${randomUUID()}` : undefined;
     if (operation && !unconfirmed.has(operation) && unconfirmed.size >= 64) return error(-32098, "Too many unconfirmed commands. Resolve unchanged requests before sending new commands.");
@@ -61,7 +61,7 @@ export async function runStdioBridge(config, input = process.stdin, output = pro
     let newline;
     while ((newline = pending.indexOf(10)) >= 0) {
       const line = pending.subarray(0, newline); pending = pending.subarray(newline + 1);
-      if (line.byteLength > MAX_REQUEST) throw new Error("MCP request exceeds the local limit.");
+      if (line.byteLength > MAX_IMAGE_REQUEST) throw new Error("MCP request exceeds the local limit.");
       if (!line.toString("utf8").trim()) continue;
       let message;
       try { message = JSON.parse(line.toString("utf8")); }
@@ -69,7 +69,7 @@ export async function runStdioBridge(config, input = process.stdin, output = pro
       const response = await forward(message);
       if (response) output.write(JSON.stringify(response) + "\n");
     }
-    if (pending.byteLength > MAX_REQUEST) throw new Error("MCP request exceeds the local limit.");
+    if (pending.byteLength > MAX_IMAGE_REQUEST) throw new Error("MCP request exceeds the local limit.");
   }
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

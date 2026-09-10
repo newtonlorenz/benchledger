@@ -1,3 +1,4 @@
+import { isInventoryImageEnvelope } from "./inventory-images.js";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { McpAdapter } from "./adapter.js";
@@ -21,7 +22,7 @@ export async function runStdio(backend: BenchLedgerBackend, options: StdioServer
   const lines = createInterface({ input, crlfDelay: Infinity });
 
   for await (const line of lines) {
-    if (line.length > 1_000_000) {
+    if (Buffer.byteLength(line) > 3 * 1024 * 1024) {
       output.write(`${JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "Request exceeds the MCP size limit." } })}\n`);
       continue;
     }
@@ -29,7 +30,11 @@ export async function runStdio(backend: BenchLedgerBackend, options: StdioServer
     try {
       request = JSON.parse(line);
     } catch {
-      output.write(`${JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error." } })}\n`);
+      output.write(`${JSON.stringify({ jsonrpc: "2.0", id: null, error: Buffer.byteLength(line) > 1_000_000 ? { code: -32600, message: "Request exceeds the MCP size limit." } : { code: -32700, message: "Parse error." } })}\n`);
+      continue;
+    }
+    if (Buffer.byteLength(line) > 1_000_000 && !isInventoryImageEnvelope(request)) {
+      output.write(`${JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "Request exceeds the MCP size limit." } })}\n`);
       continue;
     }
     const response = await protocol.handle(request);

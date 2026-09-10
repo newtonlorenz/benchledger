@@ -1118,6 +1118,7 @@ export interface InspectionsBackend {
 }
 
 export interface BenchLedgerBackend {
+  inventoryImages?: (name: import("./inventory-images.js").InventoryImageToolName, input: Record<string, unknown>, context: McpRequestContext) => Promise<unknown>;
   makerWorkflows?: (name: import("./maker-workflows.js").MakerToolName, input: Record<string, unknown>, context: McpRequestContext) => Promise<unknown>;
   inventory: InventoryBackend;
   inventoryCategories?: InventoryCategoriesBackend;
