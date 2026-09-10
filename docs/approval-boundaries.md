@@ -20,6 +20,24 @@ Subject to the token's scopes and project allow-list, an agent may:
 The application still validates inputs, versions, project scope, paths, hashes,
 quotas, and authorization. The agent must report the IDs and resulting state.
 
+## Private build-file transfers
+
+When the user explicitly asks to upload, attach or sync identified build files
+to an identified private project, that request authorises the bounded transfer;
+do not request the same permission again. An accepted proposal that named the
+payload and destination also counts. A request to create a build plan alone
+covers planning metadata, not an unstated private CAD/slicer-file transfer.
+If transfer scope is missing, prepare the file list and exact revision, continue
+independent planning, and ask one concrete approval question. Preserve approval
+across retries of the same authorised operation, but inspect remote state after
+an uncertain finalization before retrying to avoid duplicates.
+
+Use the documented host helper and existing scoped credentials. Private storage
+is not public publication or permission to operate a printer. Platform review,
+filesystem permissions, project allow-lists and authentication still apply. An
+actual platform rejection must be resolved explicitly, never bypassed with an
+alternative tool or a blanket permission instruction.
+
 ## Always human-approved outside this adapter
 
 The following are intentionally not MCP tools:
