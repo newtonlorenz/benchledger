@@ -495,6 +495,7 @@ export interface HealthPort {
 }
 
 export interface ApplicationPorts {
+  readonly assemblyImporter?: (bytes: Uint8Array, filename: string, unit: import("@benchledger/api-contract").AssemblySource["unit"], upAxis: "y" | "z") => Promise<{ meshes: import("@benchledger/api-contract").AssemblyMesh[]; warnings: string[] }>;
   readonly inventoryImages?: import("./inventory-images.js").InventoryImagePort;
   readonly inventory: InventoryPort;
   /** Shared user-managed taxonomy for inventory; absent on legacy hosts. */

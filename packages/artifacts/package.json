@@ -20,6 +20,12 @@
     "test": "vitest run --coverage --config vitest.config.ts"
   },
   "dependencies": {
-    "sharp": "0.35.4"
+    "occt-import-js": "0.0.23",
+    "sharp": "0.35.4",
+    "three": "0.186.0",
+    "@benchledger/api-contract": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/three": "0.185.4"
   }
 }

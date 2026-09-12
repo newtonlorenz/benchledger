@@ -1,7 +1,13 @@
+import { execFileSync } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
 
 const root = new URL("../", import.meta.url);
+// This generated cache is excluded from both Git and container context. Never
+// exempt a tracked copy: an accidentally staged cache must still fail the scan.
+const generatedCache = ".impeccable/hook.cache.json";
+let omitUntrackedCache = false;
+try { omitUntrackedCache = execFileSync("git", ["ls-files", "--", generatedCache], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() === ""; } catch { /* Without Git, scan everything as before. */ }
 const textExtensions = new Set([
   ".css",
   ".html",
@@ -60,6 +66,7 @@ async function collect(directory) {
   for (const entry of entries) {
     if (entry.isDirectory() && ignoredDirectories.has(entry.name)) continue;
     const path = join(directory, entry.name);
+    if (omitUntrackedCache && relative(root.pathname, path) === generatedCache) continue;
     if (entry.isDirectory()) files.push(...(await collect(path)));
     else if (textExtensions.has(extname(entry.name)) || extensionlessTextFiles.has(entry.name)) files.push(path);
   }

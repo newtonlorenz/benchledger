@@ -387,3 +387,7 @@ retained, but these actions cannot be undone. Archive a project from Project
 settings if you may need to restore it. Release allocated stock before deleting
 an inventory item; do not change its physical count to bypass this safeguard.
 Inventory deletion is a browser/HTTP action, not an advertised MCP tool.
+
+## Assembly explorer
+
+Use `inspect_assembly_sources` on exact, already uploaded STEP/GLB/STL files, paging through all parts. Read the current version with `read_project_assembly`, then use `save_project_assembly` with the full snapshot, observed expectedVersion and a stable host command key. Units/up axis, positions, separation, names, BOM links and steps are shared with the browser. See [Assembly explorer](assembly-explorer.md) for the full contract and import limits.

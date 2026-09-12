@@ -39,7 +39,7 @@ it("connects an official stdio client to authenticated HTTP without passing cred
     const transport = new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL("../../../scripts/mcp-http-client.mjs", import.meta.url)), "--config", configPath], stderr: "pipe" });
     let stderr = ""; transport.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
     await client.connect(transport);
-    expect((await client.listTools()).tools).toHaveLength(86);
+    expect((await client.listTools()).tools).toHaveLength(90);
     const allowed = await client.callTool({ name: "read_project", arguments: { projectId: "synthetic-project-lamp" } }); expect(allowed.isError).toBe(false);
     const denied = await client.callTool({ name: "read_project", arguments: { projectId: "other-project" } }); expect(denied.isError).toBe(true);
     const globalWrite = await client.callTool({ name: "create_project", arguments: { name: "Not permitted" } }); expect(globalWrite.isError).toBe(true);

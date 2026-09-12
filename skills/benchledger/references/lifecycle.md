@@ -320,3 +320,7 @@ Before finishing, make the achieved state unambiguous:
 - whether reconciliation is absent, draft-previewed, or committed;
 - what was written, what remains only proposed, and what still needs human or
   physical verification.
+
+## Assembly viewing and guidance
+
+For any fabrication route, use `inspect_assembly_sources` with exact uploaded STEP/GLB/STL source hashes and explicit coordinate units/up axis. Page all parts, read `read_project_assembly`, then save the full assembly with `save_project_assembly`, observed expectedVersion and a stable command key. Names, grouping, BOM links, position/rotation, separation offsets and build steps are data shared with the human Assembly tab. A single STL is one part. Treat source retirement, changed identities and stale saves as review points. Exploded positions do not prove removal order or physical fit; no stock or printer state changes. Read `read_assembly_history` for retained version summaries.

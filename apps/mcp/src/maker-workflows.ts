@@ -1,5 +1,5 @@
 import { z } from "zod/v3";
-import { idSchema, workflowPageSchema, sourcingPageSchema, createRequirementOfferSchema, chooseRequirementOfferSchema, buildPlanInputSchema, workAssignmentInputSchema, createWorkstreamSchema, bomImportInputSchema, bomImportCommitSchema, commandJsonSchema } from "@benchledger/api-contract";
+import { assemblyInputSchema, inspectAssemblySchema, idSchema, workflowPageSchema, sourcingPageSchema, createRequirementOfferSchema, chooseRequirementOfferSchema, buildPlanInputSchema, workAssignmentInputSchema, createWorkstreamSchema, bomImportInputSchema, bomImportCommitSchema, commandJsonSchema } from "@benchledger/api-contract";
 import type { McpToolDefinition, JsonObject, McpRequestContext } from "./types.js";
 import { McpAdapterError } from "./errors.js";
 import type { ApplicationService } from "@benchledger/application";
@@ -9,6 +9,10 @@ export const MAKER_TOOL_SCHEMAS = {
   read_requirement_sourcing: revision.merge(sourcingPageSchema),
   record_requirement_offer: revision.extend({ offer: createRequirementOfferSchema }).strict(),
   choose_requirement_offer: revision.extend({ choice: chooseRequirementOfferSchema }).strict(),
+  inspect_assembly_sources: revision.extend({ proposal: inspectAssemblySchema }).merge(workflowPageSchema).strict(),
+  read_project_assembly: revision,
+  save_project_assembly: revision.extend({ assembly: assemblyInputSchema }).strict(),
+  read_assembly_history: revision.merge(workflowPageSchema),
   read_build_plan: revision,
   save_build_plan: revision.extend({ plan: buildPlanInputSchema }).strict(),
   read_build_plan_history: revision.merge(workflowPageSchema),
@@ -27,6 +31,10 @@ const descriptions: Record<MakerToolName, string> = {
   read_requirement_sourcing: "Read requirement-bound quotes, explicit selections and package-aware estimates. Search and filter the complete revision before paging. total counts matches; revisionTotal and currency totals cover the full revision. Only required Source gaps count; currencies stay separate and unknown shipping/tax remain explicit.",
   record_requirement_offer: "Record an immutable supplier observation against a requirement without creating owned stock. Canonical units are each, gram, metre, millimetre, millilitre or set. No URL is fetched, purchase made or compatibility inferred.",
   choose_requirement_offer: "Explicitly review a quote against the current requirement before selecting it for estimates. Selection is optimistic-versioned and never authorises purchase.",
+  inspect_assembly_sources: "Read static STEP, GLB or STL parts from existing, hash-bound files in this project. Returns node identities, names, groups and suggested explosion offsets in millimetres, without triangle buffers. Iterate limit/cursor pages for all parts; total is the full source part count. STEP uses declared units; GLB/STL use the supplied coordinate unit. No uploads or saves are implicit.",
+  read_project_assembly: "Read the saved assembly, source hashes, placements, groups, BOM links, separation offsets and build steps for an exact revision, with stale-source warnings.",
+  save_project_assembly: "Save one generic assembly for any fabrication route. Supply the full assembly and observed expectedVersion (0 initially), plus a stable command key. Source/node/BOM ancestry is checked. position/explode are millimetres, rotation XYZ degrees. This changes viewing and guidance only, never CAD, stock or physical validation.",
+  read_assembly_history: "Read bounded retained assembly version summaries. No geometry buffers or private file contents are returned.",
   read_build_plan: "Read current multi-plate planning quantities, spool estimates, file hashes and unresolved checks. A plan is not manufacturing evidence.",
   save_build_plan: "Save an optimistic-versioned multi-plate plan. Repeated plate copies multiply parts, material grams and time. Exact project/file/printer ancestry is checked. No inventory, printer or physical status changes.",
   read_build_plan_history: "Read retained build-plan snapshots in bounded version order.",
@@ -40,7 +48,7 @@ const descriptions: Record<MakerToolName, string> = {
   commit_bom_import: "Commit the exact actor-owned, unexpired BOM preview atomically with a stable command key. A stale revision, requirement or selected-stock basis requires re-preview. No stock is created or reserved.",
   read_project_team: "Read the safe name/ID/role directory for enabled members with access to the selected project. Never returns credentials."
 };
-const writes = new Set<MakerToolName>(["record_requirement_offer", "choose_requirement_offer", "save_build_plan", "create_workstream", "update_work_assignment", "preview_bom_import", "commit_bom_import"]);
+const writes = new Set<MakerToolName>(["save_project_assembly", "record_requirement_offer", "choose_requirement_offer", "save_build_plan", "create_workstream", "update_work_assignment", "preview_bom_import", "commit_bom_import"]);
 export const MAKER_TOOL_DEFINITIONS: readonly McpToolDefinition[] = Object.entries(MAKER_TOOL_SCHEMAS).map(([key, schema]) => {
   const name = key as MakerToolName, mutating = writes.has(name), family = name.includes("offer") || name.includes("sourcing") ? "offers" : name.includes("bom_import") ? "bom" : "projects";
   return { name, description: descriptions[name], requiredScope: `${family}:${mutating ? "write" : "read"}` as McpToolDefinition["requiredScope"], mutating, inputSchema: commandJsonSchema(schema) as JsonObject };
@@ -55,6 +63,10 @@ export async function invokeMakerTool(service: ApplicationService, name: MakerTo
       case "read_requirement_sourcing": return await service.makerWorkflows.sourcing(projectId, revisionId, { ...page, ...(input.query === undefined ? {} : { query: input.query }), ...(input.filter === undefined ? {} : { filter: input.filter }) });
       case "record_requirement_offer": return await service.makerWorkflows.recordOffer(projectId, revisionId, input.offer, ctx);
       case "choose_requirement_offer": return await service.makerWorkflows.chooseOffer(projectId, revisionId, input.choice, ctx);
+      case "inspect_assembly_sources": { const { geometry: _geometry, ...result } = await service.assemblies.inspect(projectId, revisionId, input.proposal); const offset = Number(input.cursor ?? 0), limit = Number(input.limit ?? 25); return { ...result, parts: result.parts.slice(offset, offset + limit), total: result.parts.length, limit, ...(offset + limit < result.parts.length ? { nextCursor: String(offset + limit) } : {}) }; }
+      case "read_project_assembly": return await service.assemblies.read(projectId, revisionId);
+      case "save_project_assembly": return await service.assemblies.save(projectId, revisionId, input.assembly, ctx);
+      case "read_assembly_history": return await service.assemblies.history(projectId, revisionId, page);
       case "read_build_plan": return { plan: await service.makerWorkflows.buildPlan(projectId, revisionId) };
       case "save_build_plan": return await service.makerWorkflows.saveBuildPlan(projectId, revisionId, input.plan, ctx);
       case "read_build_plan_history": return await service.makerWorkflows.buildPlanHistory(projectId, revisionId, page);
