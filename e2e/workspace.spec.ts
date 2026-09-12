@@ -632,9 +632,11 @@ test("keeps agent access contextual in Beginner and restores the nav in Expert",
 
   await page.getByRole("button", { name: /^Projects/u }).click(); const plan = page.getByRole("tab", { name: /^Plan\b/u }); await expect(plan).toHaveAttribute("aria-selected", "true");
   await expect .poll(() => new URL(page.url()).hash) .toMatch(/^#\/projects\/[^/]+\/plan$/u); await plan.press("ArrowRight"); const files = page.getByRole("tab", { name: /^Files\b/u }); await expect(files).toBeFocused(); await expect(files).toHaveAttribute("aria-selected", "true"); await expect.poll(() => new URL(page.url()).hash).toMatch(/\/files$/u);
-  await files.press("ArrowRight"); const shopping = page.getByRole("tab", { name: /^Shopping list\b/u }); await expect(shopping).toBeFocused(); await expect(shopping).toHaveAttribute("aria-selected", "true"); await expect.poll(() => new URL(page.url()).hash).toMatch(/\/offers$/u);
+  await files.press("ArrowRight"); const assembly = page.getByRole("tab", { name: "Assembly", exact: true }); await expect(assembly).toBeFocused(); await expect(assembly).toHaveAttribute("aria-selected", "true"); await expect.poll(() => new URL(page.url()).hash).toMatch(/\/assembly$/u);
+  await assembly.press("ArrowRight"); const shopping = page.getByRole("tab", { name: /^Shopping list\b/u }); await expect(shopping).toBeFocused(); await expect(shopping).toHaveAttribute("aria-selected", "true"); await expect.poll(() => new URL(page.url()).hash).toMatch(/\/offers$/u);
   await page.goBack();
-
+  await expect(assembly).toHaveAttribute("aria-selected", "true");
+  await page.goBack();
   await expect(files).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("main")).toBeFocused();
   await page.reload(); await expect(files).toHaveAttribute("aria-selected", "true"); await shopping.press("Home"); await expect(plan).toBeFocused(); await expect(plan).toHaveAttribute("aria-selected", "true"); await plan.press("End"); const lastTab = page.getByRole("tablist", { name: "Project workspace" }).getByRole("tab").last(); await expect(lastTab).toBeFocused(); await expect(lastTab).toHaveAttribute("aria-selected", "true");

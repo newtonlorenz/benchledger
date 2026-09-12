@@ -503,3 +503,7 @@ supplier/title before pagination. `total` counts matches, `revisionTotal` counts
 all active requirements, and currency totals retain the full revision scope.
 Use the returned cursor only with the same search/filter. HTTP exposes the same
 contract. Invalid filters are rejected; no new permissions or writes are implied.
+
+## Assembly explorer
+
+The tools `inspect_assembly_sources`, `read_project_assembly`, `save_project_assembly` and `read_assembly_history` work on any project fabrication route. Inspect existing hash-bound source files, read all part pages, and save the complete assembly with expectedVersion and a stable host command key. Inspection omits triangle buffers. No implicit file upload, physical validation or printer control occurs. See [the assembly contract](../../docs/assembly-explorer.md).

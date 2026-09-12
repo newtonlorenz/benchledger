@@ -1,4 +1,4 @@
-import { commandJsonSchema, createRequirementOfferSchema, chooseRequirementOfferSchema, buildPlanInputSchema, workAssignmentInputSchema, createWorkstreamSchema, bomImportInputSchema, bomImportCommitSchema } from "@benchledger/api-contract";
+import { assemblyInputSchema, inspectAssemblySchema, commandJsonSchema, createRequirementOfferSchema, chooseRequirementOfferSchema, buildPlanInputSchema, workAssignmentInputSchema, createWorkstreamSchema, bomImportInputSchema, bomImportCommitSchema } from "@benchledger/api-contract";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { ApplicationService, RequestContext } from "@benchledger/application";
 import { ApplicationError } from "@benchledger/application";
@@ -22,6 +22,10 @@ export function registerMakerWorkflowRoutes(app: FastifyInstance, service: Appli
   app.get(`${revision}/sourcing`, guarded(false, (request, p) => service.makerWorkflows.sourcing(p.projectId, p.revisionId, { ...query(request), ...((request.query as Record<string, unknown>).query === undefined ? {} : { query: (request.query as Record<string, unknown>).query }), ...((request.query as Record<string, unknown>).filter === undefined ? {} : { filter: (request.query as Record<string, unknown>).filter }) })));
   app.post(`${revision}/requirement-offers`, guarded(true, (request, p) => service.makerWorkflows.recordOffer(p.projectId, p.revisionId, request.body, access.context(request))));
   app.put(`${revision}/offer-choice`, guarded(true, (request, p) => service.makerWorkflows.chooseOffer(p.projectId, p.revisionId, request.body, access.context(request))));
+  app.post(`${revision}/assembly/inspect`, guarded(false, (request, p) => service.assemblies.inspect(p.projectId, p.revisionId, request.body)));
+  app.get(`${revision}/assembly`, guarded(false, (_request, p) => service.assemblies.read(p.projectId, p.revisionId)));
+  app.put(`${revision}/assembly`, guarded(true, (request, p) => service.assemblies.save(p.projectId, p.revisionId, request.body, access.context(request))));
+  app.get(`${revision}/assembly/history`, guarded(false, (request, p) => service.assemblies.history(p.projectId, p.revisionId, query(request))));
   app.get(`${revision}/build-plan`, guarded(false, (_request, p) => service.makerWorkflows.buildPlan(p.projectId, p.revisionId)));
   app.put(`${revision}/build-plan`, guarded(true, (request, p) => service.makerWorkflows.saveBuildPlan(p.projectId, p.revisionId, request.body, access.context(request))));
   app.get(`${revision}/build-plan/history`, guarded(false, (request, p) => service.makerWorkflows.buildPlanHistory(p.projectId, p.revisionId, query(request))));
@@ -40,6 +44,9 @@ export function makerWorkflowOpenApi(): Record<string, unknown> {
     [`${revision}/sourcing`]: { get: { ...method("Search requirement quotes across the complete revision before pagination", false), parameters: [...params(false, true), { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 25 } }, { name: "cursor", in: "query", schema: { type: "string", maxLength: 12 } }, { name: "query", in: "query", schema: { type: "string", maxLength: 200 } }, { name: "filter", in: "query", schema: { type: "string", enum: ["all", "source", "review", "optional"], default: "all" } }] } },
     [`${revision}/requirement-offers`]: { post: { ...method("Record an immutable supplier quote without creating inventory", true), ...body(createRequirementOfferSchema) } },
     [`${revision}/offer-choice`]: { put: { ...method("Select a quote only after explicit fit review", true), ...body(chooseRequirementOfferSchema) } },
+    [`${revision}/assembly`]: { get: method("Read the revision assembly and source warnings", false), put: { ...method("Save an assembly viewing and guidance snapshot", true), ...body(assemblyInputSchema) } },
+    [`${revision}/assembly/inspect`]: { post: { ...method("Inspect hash-bound static CAD sources; no persistent mutation", false), ...body(inspectAssemblySchema) } },
+    [`${revision}/assembly/history`]: { get: method("Read retained assembly version summaries", false) },
     [`${revision}/build-plan`]: { get: method("Read the current versioned multi-plate plan", false), put: { ...method("Save a reviewed multi-plate planning snapshot", true), ...body(buildPlanInputSchema) } },
     [`${revision}/build-plan/history`]: { get: method("Read retained build-plan versions", false) },
     [`${scope}/workstreams`]: { get: method("Read workstreams and assignments", false, false), post: { ...method("Create a workstream and its initial revision atomically", true, false), ...body(createWorkstreamSchema) } },

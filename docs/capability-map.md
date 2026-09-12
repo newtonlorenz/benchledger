@@ -456,3 +456,7 @@ client tests exercise the same saved preview, explicit approval and idempotent
 replay, and compare the resulting stock quantity. UI changes do not grant new
 agent scopes or change the existing MCP tool contracts. The in-project Refresh
 control reads externally saved agent work without silently replacing local drafts.
+
+## Assembly explorer
+
+The shared Assembly tab supports all fabrication routes. `inspect_assembly_sources`, `read_project_assembly`, `save_project_assembly` and `read_assembly_history` expose the same hash-bound placements, part groups, BOM links and build steps to agents. Read tools require project read scope; saving requires project write scope, an observed version and a stable command key. No physical effects. See [Assembly explorer](assembly-explorer.md) for limits and HTTP parity.

@@ -1,3 +1,4 @@
+import { importAssemblyFile } from "@benchledger/runtime";
 import { MemoryInventoryImages } from "@benchledger/runtime";
 import { MemoryTeam } from "./memory-team.js";
 import { MemoryMakerWorkflows } from "./memory-maker-workflows.js";
@@ -1573,7 +1574,7 @@ export function createMemoryRuntime(seed: readonly InventoryItem[] = []): Memory
   unitOfWork.registerRollback(() => { const snapshot = idempotency.snapshotState(); return () => idempotency.restoreState(snapshot); });
   const projectSetups = new MemoryProjectSetup(projects, inventory, catalog, audit, idempotency);
   const inspections = new MemoryInspections(inventory, projects);
-  const ports: ApplicationPorts = { inventory, inventoryImages, inventoryCategories, projects, projectSetups, inspections, makerWorkflows, teamSecurity, offers: new MemoryOffers(), artifacts: new MemoryArtifacts(), catalog, buildConfigurations, audit, events: new MemoryEvents(), idempotency, unitOfWork, health: new MemoryHealth() };
+  const ports: ApplicationPorts = { assemblyImporter: importAssemblyFile, inventory, inventoryImages, inventoryCategories, projects, projectSetups, inspections, makerWorkflows, teamSecurity, offers: new MemoryOffers(), artifacts: new MemoryArtifacts(), catalog, buildConfigurations, audit, events: new MemoryEvents(), idempotency, unitOfWork, health: new MemoryHealth() };
   return { ports, inventory, inventoryCategories, projects, catalog, buildConfigurations, inspections, unitOfWork };
 }
 

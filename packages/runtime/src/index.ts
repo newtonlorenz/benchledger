@@ -8,7 +8,7 @@ import { ProductionMakerWorkflowAdapter } from "./maker-workflow-adapter.js";
 import { mkdirSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ApplicationPorts } from "@benchledger/application";
-import { ArtifactStore } from "@benchledger/artifacts";
+import { ArtifactStore, importAssemblyFile } from "@benchledger/artifacts";
 import {
   AuditRepository, BomRepository, BenchDatabase, InventoryRepository, ProcurementRepository,
   ProjectRepository, ReservationRepository, CanonicalCatalogRepository,
@@ -143,6 +143,7 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
     const projectSetup = new ProductionProjectSetupAdapter(projectSetupRepository, projectAdapter, inventory, catalog);
     const ports: ApplicationPorts = {
       inventory,
+      assemblyImporter: importAssemblyFile,
       inventoryCategories,
       projects: projectAdapter,
       projectSetups: projectSetup,
@@ -202,3 +203,5 @@ export * from "./starter-catalog.js";
 export * from "./workspace-security-adapter.js";
 export * from "./project-setup-adapter.js";
 export { computeBuildConfigurationContentSha256 } from "@benchledger/database";
+
+export { importAssemblyFile } from "@benchledger/artifacts";

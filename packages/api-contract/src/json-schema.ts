@@ -12,6 +12,11 @@ export function commandJsonSchema(schema: z.ZodTypeAny): Record<string, unknown>
     return result;
   }
   if (schema instanceof z.ZodNumber) { const result: Record<string, unknown> = { type: "number" }; for (const check of schema._def.checks) { if (check.kind === "int") result.type = "integer"; if (check.kind === "min") result[check.inclusive ? "minimum" : "exclusiveMinimum"] = check.value; if (check.kind === "max") result[check.inclusive ? "maximum" : "exclusiveMaximum"] = check.value; } return result; }
+  if (schema instanceof z.ZodTuple) {
+    const items = schema.items.map((item: z.ZodTypeAny) => commandJsonSchema(item));
+    if (!items.length || schema._def.rest || items.some((item: unknown) => JSON.stringify(item) !== JSON.stringify(items[0]))) throw new Error("Only fixed homogeneous tuples are supported in command schemas");
+    return { type: "array", items: items[0], minItems: items.length, maxItems: items.length };
+  }
   if (schema instanceof z.ZodArray) return { type: "array", items: commandJsonSchema(schema.element), ...(schema._def.minLength ? { minItems: schema._def.minLength.value } : {}), ...(schema._def.maxLength ? { maxItems: schema._def.maxLength.value } : {}) };
   if (schema instanceof z.ZodEnum) return { type: "string", enum: schema.options };
   if (schema instanceof z.ZodLiteral) return { const: schema.value, type: typeof schema.value };

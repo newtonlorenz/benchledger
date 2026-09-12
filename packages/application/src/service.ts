@@ -1,3 +1,4 @@
+import { AssemblyService } from "./assembly.js";
 import { InventoryImageService } from "./inventory-images.js";
 import { TeamService } from "./team-service.js";
 import { MakerWorkflowService } from "./maker-workflows.js";
@@ -1149,8 +1150,9 @@ async function linkedProfile(
 export class ApplicationService {
   readonly inventoryImages: InventoryImageService;
   readonly makerWorkflows: MakerWorkflowService;
+  readonly assemblies: AssemblyService;
   readonly team: TeamService;
-  constructor(private readonly ports: ApplicationPorts, private readonly version = "0.1.0") { this.inventoryImages = new InventoryImageService(ports, this, (ctx, action, entityType, id, operation) => this.mutate(ctx, action, entityType, id, operation)); this.makerWorkflows = new MakerWorkflowService(ports, this, (ctx, action, entityType, id, operation) => this.mutate(ctx, action, entityType, id, operation)); this.team = new TeamService(ports, this, (ctx, action, entityType, id, operation) => this.mutate(ctx, action, entityType, id, operation)); }
+  constructor(private readonly ports: ApplicationPorts, private readonly version = "0.1.0") { this.assemblies = new AssemblyService(ports, this, (ctx, action, entityType, id, operation) => this.mutate(ctx, action, entityType, id, operation)); this.inventoryImages = new InventoryImageService(ports, this, (ctx, action, entityType, id, operation) => this.mutate(ctx, action, entityType, id, operation)); this.makerWorkflows = new MakerWorkflowService(ports, this, (ctx, action, entityType, id, operation) => this.mutate(ctx, action, entityType, id, operation)); this.team = new TeamService(ports, this, (ctx, action, entityType, id, operation) => this.mutate(ctx, action, entityType, id, operation)); }
 
   getVersion(): string {
     return this.version;

@@ -18,7 +18,7 @@ it("a real MCP SDK connects, validates discovery and uses atomic setup without a
     const transport = new StreamableHTTPClientTransport(new URL(base + "/api/v1/mcp"), { requestInit: { headers: { Authorization: `Bearer ${token}` } }, fetch: (url, init) => { const headers = new Headers(init?.headers); headers.set("Idempotency-Key", `sdk-command-${++serial}`); return fetch(url, { ...init, headers, redirect: "error" }); } });
     // SDK 1.x exposes an undefined sessionId in no-session HTTP mode.
     await client.connect(transport as Parameters<Client["connect"]>[0]);
-    const discovery = await client.listTools(); expect(discovery.tools).toHaveLength(86);
+    const discovery = await client.listTools(); expect(discovery.tools).toHaveLength(90);
     const capabilities = await client.readResource({ uri: "benchledger://capabilities" }); expect(capabilities.contents).toHaveLength(1);
     const preview = await client.callTool({ name: "preview_project_setup", arguments: { project: { id: "sdk-project", name: "SDK integration project", status: "planned" }, revision: { id: "sdk-revision", name: "Initial", status: "concept", fabricationRoute: "none" }, bomLines: [{ localRef: "part", name: "Synthetic bracket", requiredQuantity: 2, unit: "each", role: "consumed", optional: false, alternatives: [] }], workItems: [], reservations: [] } });
     expect(preview.isError).toBe(false); const review = preview.structuredContent as { id: string; version: number; contentSha256: string; fieldErrors: unknown[] };

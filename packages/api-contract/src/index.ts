@@ -6,3 +6,4 @@ export * from "./bom-edit.js";
 export * from "./maker-workflows.js";
 export * from "./team.js";
 export * from "./json-schema.js";
+export * from "./assembly.js";

@@ -21,3 +21,6 @@ backups
 .DS_Store
 playwright-report
 test-results
+
+# Local design-tool cache; never source or container input.
+.impeccable/hook.cache.json

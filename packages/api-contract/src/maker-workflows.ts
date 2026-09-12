@@ -56,5 +56,5 @@ export const bomImportInputSchema = z.object({ rows: z.array(createBomLineSchema
 export type BomImportInput = z.infer<typeof bomImportInputSchema>;
 export interface BomImportPreview { id: string; projectId: string; projectRevisionId: string; version: number; actor: string; expiresAt: string; contentSha256: string; basis: string; rows: (BomImportInput["rows"][number] & { id: string })[]; warnings: string[]; status: "active" | "committed" }
 export const bomImportCommitSchema = z.object({ previewId: idSchema, expectedPreviewVersion: z.number().int().positive(), contentSha256: z.string().regex(/^[a-f0-9]{64}$/u), confirmed: z.literal(true) }).strict();
-export type WorkflowKind = "requirement_offer" | "offer_choice" | "build_plan" | "work_assignment" | "bom_import_preview";
+export type WorkflowKind = "assembly" | "requirement_offer" | "offer_choice" | "build_plan" | "work_assignment" | "bom_import_preview";
 export interface WorkflowRecord { kind: WorkflowKind; id: string; projectId: string; revisionId?: string; version: number; payload: Record<string, unknown>; createdAt: string; updatedAt: string }
