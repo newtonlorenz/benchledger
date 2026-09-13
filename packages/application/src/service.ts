@@ -57,7 +57,7 @@ const COMMISSIONABLE_EVIDENCE = new Set(["delivered_uncounted", "ordered_unverif
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const ALLOWED_BINARY_MEDIA = new Set([
   "application/pdf", "image/jpeg", "image/png", "image/webp", "application/octet-stream",
-  "model/step", "model/stl", "application/vnd.ms-package.3dmanufacturing-3mf"
+  "model/step", "model/stl", "model/gltf-binary", "application/vnd.ms-package.3dmanufacturing-3mf"
 ]);
 const DISALLOWED_EXTENSIONS = new Set([".html", ".htm", ".svg", ".js", ".mjs", ".cjs", ".exe", ".sh", ".zip", ".tar", ".gz"]);
 const INVENTORY_SCAN_PAGE_SIZE = 200;
