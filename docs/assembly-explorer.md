@@ -39,6 +39,9 @@ Archived projects retain their saved view but cannot save changes.
 | GLB | Static glTF 2.0 triangle meshes, nested transforms and repeated mesh placements. Materials supply an illustrative base colour. |
 | STL | One part per file, with user-supplied units and placement. Disconnected shells are not guessed into an assembly. |
 
+GLB uploads accept the standard `model/gltf-binary` media type through the
+browser, HTTP and MCP upload flows.
+
 GLB normally declares metre coordinates and uses Y up; CAD commonly uses
 millimetres and Z up. Both choices are explicit in the import form and source
 record. STEP's declared units take precedence over the coordinate unit choice.

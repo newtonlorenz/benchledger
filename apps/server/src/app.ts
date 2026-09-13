@@ -1446,7 +1446,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   if (runtime?.close !== undefined) app.addHook("onClose", async () => runtime.close?.());
   await app.register(cookie);
   await app.register(swagger, { openapi: jsonOpenApi(service.getVersion()) });
-  for (const contentType of ["application/octet-stream", "application/pdf", "image/jpeg", "image/png", "image/webp", "model/step", "model/stl", "application/vnd.ms-package.3dmanufacturing-3mf", "text/plain"]) {
+  for (const contentType of ["application/octet-stream", "application/pdf", "image/jpeg", "image/png", "image/webp", "model/step", "model/stl", "model/gltf-binary", "application/vnd.ms-package.3dmanufacturing-3mf", "text/plain"]) {
     app.addContentTypeParser(contentType, { parseAs: "buffer" }, (_request, body, done) => done(null, body));
   }
   app.decorateRequest("principal", undefined as unknown as Principal);

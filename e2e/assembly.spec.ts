@@ -74,3 +74,19 @@ test("a large assembly keeps selection controls reachable in light, dark and nar
   await page.getByLabel("Assembly separation", { exact: true }).focus(); await page.keyboard.press("ArrowRight"); await expect(page.getByLabel("Assembly separation", { exact: true })).toHaveValue("1");
   await page.screenshot({ path: "test-results/assembly-large-mobile.png", fullPage: true });
 });
+
+
+test("the downloadable GLB showcase uploads with its standard browser media type", async ({ page }) => {
+  await page.goto("/"); await page.getByLabel("Workspace password").fill("demo-password-please-change");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: /^Projects/u }).click(); await page.getByRole("tab", { name: /^Files/u }).click();
+  const bytes = await readFile("docs/assets/showcase/synthetic-enclosure.glb");
+  await page.getByLabel("Choose files to upload").setInputFiles({ name: "synthetic-enclosure.glb", mimeType: "model/gltf-binary", buffer: bytes });
+  await page.getByRole("button", { name: "Add 1 file", exact: true }).click();
+  const download = page.getByRole("button", { name: "Download synthetic-enclosure.glb", exact: true });
+  await expect(download).toBeVisible();
+  const pending = page.waitForEvent("download"); await download.click();
+  const stream = await (await pending).createReadStream(); const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+  expect(Buffer.concat(chunks)).toEqual(bytes);
+});
