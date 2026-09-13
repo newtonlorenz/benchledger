@@ -16,6 +16,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "zod": "^4.5.4"
+    "zod": "^4.6.1"
   }
 }
