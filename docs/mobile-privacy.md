@@ -45,6 +45,9 @@ TestFlight feedback or contact support, the information you send is used to
 investigate and respond to that request. Do not include private inventory,
 tokens or server credentials in public reports.
 
-For privacy or security questions, use the repository's
-[security reporting instructions](../SECURITY.md). For general help, see
-[Support](../SUPPORT.md). Changes to this policy will be dated on this page.
+For privacy questions, or to request access to or deletion of support
+correspondence, email [the app developer](mailto:daniel@newtonlorenz.com).
+This is a private contact; do not include API tokens or server credentials.
+For vulnerabilities, follow the [security reporting instructions](../SECURITY.md).
+For general help, see [Support](../SUPPORT.md). Changes to this policy will be
+dated on this page.
