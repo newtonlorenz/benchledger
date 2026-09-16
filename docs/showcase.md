@@ -1,36 +1,84 @@
-# Showcase images and sample model
+# Showcase images and example files
 
-The README images are direct captures of BenchLedger's web interface, using only
-synthetic data. They are not mock-ups, private workshop screenshots or evidence
-of a validated physical build. Captured on 2026-09-13 from the application accompanying this showcase update.
+Captured on **2026-09-16** from BenchLedger revision `c7442a4`, which includes the
+project PCB viewer. Every image is a direct browser capture of the actual app.
+The Fitzroy Café screenshots show the project owner's design, published at their
+request. The PCB, workbench and plan screenshots use synthetic data.
+
+Captures use disposable, in-memory workspaces. No private inventory, host address,
+credential or browser chrome is included. No UI elements or model geometry were
+painted into the screenshots. The café's source CAD and capture helpers remain
+outside the public repository.
 
 | Asset | What it shows |
 | --- | --- |
-| [Workbench](assets/showcase/workbench.png) | The default synthetic demo's project register, attention queue and equipment. |
-| [Exploded assembly](assets/showcase/assembly-exploded.png) | A seven-part synthetic electronics enclosure with saved viewing offsets. |
-| [Dark assembly](assets/showcase/assembly-dark.png) | The same guide, with the controller board selected. |
-| [Sample GLB](assets/showcase/synthetic-enclosure.glb) | Static geometry generated entirely from boxes and cylinders. |
+| [Exploded assembly](assets/showcase/assembly-exploded.png) | The complete Fitzroy Café model: 22 placements, with the r15 hood and r14 interior, roof and facade. |
+| [Assembled café](assets/showcase/assembly-assembled.png) | The same 22-part design in its assembled placement. |
+| [Dark assembly](assets/showcase/assembly-dark.png) | The Fitzroy guide with its timber window selected, showing material and fitting notes in dark mode. |
+| [Native PCB](assets/showcase/pcb-top.png) | Top view of a native KiCad file, with copper, drill openings and selectable footprint outlines. |
+| [Workbench](assets/showcase/workbench.png) | Synthetic project attention and workshop equipment. |
+| [Project plan](assets/showcase/project-plan.png) | The synthetic demo's revision-scoped requirements and readiness. |
+| [Enclosure GLB](assets/showcase/synthetic-enclosure.glb) | Seven static model parts generated from boxes and cylinders. |
+| [Controller KiCad board](assets/showcase/synthetic-controller.kicad_pcb) | A 64 × 44 mm viewing example with 12 component footprints, four mounting holes, six connector drills and illustrative tracks. |
 
-All four assets are suitable for sharing with a link to the repository. They use
-the repository's Apache-2.0 licence. The model is illustrative; it has not been
-checked for printing, mechanical fit, electrical safety or functionality.
+The enclosure and native board are independent illustrative examples. Matching
+outer board dimensions do not establish that their geometry, hole positions or
+connections form a compatible assembly. Neither is a validated electrical circuit,
+printable part, manufacturing file or physical build instruction. The native
+viewer shows footprint drawings, not invented component bodies.
 
-## Recreate the model and views
+## Fitzroy Café captures
 
-1. Follow the README's local quickstart and sign into the in-memory demo.
-2. Run `node scripts/create-showcase-model.mjs` from the repository root to
-   regenerate the GLB. The generator reads no private CAD or project files.
-3. Upload `docs/assets/showcase/synthetic-enclosure.glb` through the demo
-   project's **Files** tab.
-4. In **Assembly**, select that file, open **Coordinates**, set **metre** and
-   **Z up**, then choose **Open assembly**.
-5. Use **Edit assembly** to name the guide `Synthetic sensor enclosure`, add
-   illustrative notes, and set the viewing offsets below. These are display
-   offsets, not manufacturing or disassembly instructions.
-6. Save the guide in the disposable demo, choose **Exploded**, and adjust the
-   zoom with the mouse wheel. Select the controller board for the detail view.
-7. Switch appearance through **View** for the dark capture. Capture the assembly
-   workspace element; do not change labels, state or rendering to simulate UI.
+The actual café GLB was imported through BenchLedger's application service into an
+isolated workspace with **millimetre / Z up** coordinates. Its 22 placements retain
+the source geometry and assembled transforms. The saved guide uses the colours,
+exploded offsets and nine build steps from the project's original assembly viewer.
+The screenshots show BenchLedger's generic **Assembly** interface, not that bespoke
+viewer. Assembled bounds are **315 × 157.5 × 182.4 mm**.
+
+The model includes the shell, window, lettering, diffuser, base, floor, back wall,
+counter, roof tray, rear cover, USB adapter, three tables, three shades, three bulb
+diffusers and two electronics carriers. Screw, insert and cord reference geometry
+from the bespoke viewer is not included in these captures. Actual electronics,
+wiring and a separate miniature coffee machine are not modelled. Colours and
+exploded offsets are illustrative; they do not establish physical fit or a safe
+removal path.
+
+Light-mode captures show all 22 placements in assembled and exploded states.
+The dark-mode capture selects the timber window. Camera framing uses the app's
+orbit and zoom controls; all viewing limits remain available in the interface.
+The private café CAD is not a downloadable sample. Use the synthetic examples
+below to try the same viewer with files supplied in this repository.
+
+## Recreate the downloadable examples
+
+From the repository root, after `npm ci`:
+
+```bash
+node scripts/create-showcase-model.mjs
+node scripts/create-showcase-board.mjs
+npm run build
+npm run dev
+```
+
+These generators read no private project files and create only the two named
+synthetic assets above. The demo uses the public password documented in the
+[README](../README.md#try-it-locally).
+
+1. Sign in to the demo and open the synthetic lamp project.
+2. Upload both example files through **Files**, in the current project revision.
+3. Open **Assembly**, select the GLB, and set **metre / Z up** in **Coordinates**.
+4. Choose **Open assembly**, then **Edit assembly**. Name the guide
+   `Sensor enclosure · assembly guide`, add illustrative notes, and use the
+   viewing offsets below. Save only in the disposable demo.
+5. Choose **Exploded**. Adjust the camera with the viewer's orbit/zoom controls;
+   capture the assembly workspace. Select **Controller board** and use
+   **View → Dark** to explore the dark appearance.
+6. Open **PCB**, choose `synthetic-controller.kicad_pcb`, then **Open PCB → Top**.
+   Select the `U1` footprint outline. Capture the PCB workspace with project
+   navigation visible; leave source warnings and provenance intact.
+7. Capture **Workbench** and the project's **Plan** using their normal UI. All
+   names, counts, requirements and states come from the synthetic demo.
 
 | Part | Separation X / Y / Z (mm) |
 | --- | --- |
@@ -42,10 +90,25 @@ checked for printing, mechanical fit, electrical safety or functionality.
 | Vented cover | 0 / 0 / 65 |
 | Cover fasteners | 0 / 0 / 82 |
 
-The first README workbench image is captured before renaming the demo project.
-The enclosure views use a renamed synthetic demo project. No real inventory,
-project files, service addresses, credentials or browser chrome are included.
+The saved guide groups parts into three steps: **Base and board supports**,
+**Controller and connections**, and **Cover and fasteners**. These are illustrative
+viewing instructions, not a tested assembly sequence.
 
-The full model and capture sizes are intentionally small enough to view directly
-on GitHub. Keep future showcase assets factual and regenerate them from the
-synthetic demo when the relevant interface changes.
+Screenshots use the app's own light/dark appearance controls and camera controls.
+Their crops exclude browser chrome and unrelated navigation while retaining the
+real interface. No CSS overrides or fake overlays are used. Only the owner-approved
+café visuals are published from the private build. Refresh these captures when the
+represented interface changes.
+
+## Share an example
+
+These assets use the repository's Apache-2.0 licence and can accompany a link to
+[BenchLedger](https://github.com/newtonlorenz/benchledger). A useful caption is:
+
+> BenchLedger keeps inventory, BOMs, exploded CAD, native PCB inspection and build
+> planning in one self-hosted project workspace, with shared tools for people and
+> MCP agents. The café is a real project design; the other examples use synthetic
+> demonstration data.
+
+Prefer a specific workflow or a build story over claims about popularity. Remove
+private project details before sharing your own screenshots.
