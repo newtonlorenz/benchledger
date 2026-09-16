@@ -16,9 +16,9 @@
 
 <p align="center"><a href="#try-it-locally">Quickstart</a> · <a href="#see-it-in-action">Showcase</a> · <a href="docs/assembly-explorer.md">CAD</a> · <a href="docs/pcb-viewer.md">PCBs</a> · <a href="docs/agent-quickstart.md">Connect an agent</a> · <a href="CONTRIBUTING.md">Contribute</a></p>
 
-![BenchLedger assembly explorer separating the cover, circuit board, fasteners and base of a synthetic electronics enclosure](docs/assets/showcase/assembly-exploded.png)
+![The complete Fitzroy Café design in BenchLedger: exploded shell, window lettering, interior furniture, pendant lights, roof and base](docs/assets/showcase/assembly-exploded.png)
 
-*Actual app screenshots using synthetic demo data. The sample enclosure is illustrative, not a validated design.*
+*Fitzroy Café in BenchLedger: all 22 modelled placements, with the r15 shell and r14 interior, roof and facade. Captured directly in the app.*
 
 > [!NOTE]
 > **Early open-source release.** The app works locally and on a private LAN. APIs and schemas may change before 1.0; there is no managed hosted service.
@@ -46,16 +46,20 @@ BenchLedger keeps that context together, from the first requirement to the stock
 
 ### Pull the assembly apart. Keep the build together.
 
+The café above is a real build project: a removable shell, timber-coloured window frame, three tables, a counter and three pendant lights. Here is the same design assembled:
+
+![The Fitzroy Café model assembled in BenchLedger, with its window, lettering and miniature interior visible](docs/assets/showcase/assembly-assembled.png)
+
 Select a part, isolate it, search by name, or move between assembled and exploded views. Save an assembly guide with materials, fixing notes, linked requirements and a build order. The source CAD stays intact.
 
 <details>
 <summary>See the same assembly in dark mode</summary>
 
-![Fresh BenchLedger dark-mode capture showing a selected controller board within a saved synthetic assembly guide](docs/assets/showcase/assembly-dark.png)
+![Fitzroy Café exploded in BenchLedger dark mode, with the timber window selected and its material and fitting notes visible](docs/assets/showcase/assembly-dark.png)
 
 </details>
 
-[Explore the assembly viewer](docs/assembly-explorer.md) · [Download the sample enclosure](docs/assets/showcase/synthetic-enclosure.glb)
+[Explore the assembly viewer](docs/assembly-explorer.md) · [Try a separate synthetic enclosure](docs/assets/showcase/synthetic-enclosure.glb)
 
 ### The PCB is part of the project
 
@@ -101,7 +105,7 @@ Agents can inspect source parts, calculate gaps, record supplier observations an
 
 Exploded positions illustrate relationships, not a verified removal path. PCB and CAD views do not establish mechanical fit, electrical safety or manufacturing readiness.
 
-All showcase images are fresh captures of the shipped app using synthetic data. [Capture details and reproducible sample files](docs/showcase.md).
+All images are fresh captures of the shipped app. The Fitzroy Café screenshots show the owner-approved project design; the PCB, workbench and project-plan examples use synthetic data. [Capture details and reproducible sample files](docs/showcase.md).
 
 ## Try it locally
 
@@ -163,7 +167,7 @@ Before contributing, read the [Code of Conduct](CODE_OF_CONDUCT.md), [developmen
 
 ## Privacy and licence
 
-Public examples use synthetic data. Keep real inventory, private project files, supplier history, credentials, databases and backups outside the source tree. Read [Privacy](docs/privacy.md) and [Security](SECURITY.md); run `npm run public:check` before sharing source.
+Downloadable examples use synthetic data; the Fitzroy Café screenshots are published with the project owner's permission. The café CAD files are not included. Keep real inventory, private project files, supplier history, credentials, databases and backups outside the source tree. Read [Privacy](docs/privacy.md) and [Security](SECURITY.md); run `npm run public:check` before sharing source.
 
 BenchLedger's own code is licensed under [Apache 2.0](LICENSE). Dependencies retain their respective licences.
 
