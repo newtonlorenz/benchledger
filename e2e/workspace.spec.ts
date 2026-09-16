@@ -633,7 +633,11 @@ test("keeps agent access contextual in Beginner and restores the nav in Expert",
   await page.getByRole("button", { name: /^Projects/u }).click(); const plan = page.getByRole("tab", { name: /^Plan\b/u }); await expect(plan).toHaveAttribute("aria-selected", "true");
   await expect .poll(() => new URL(page.url()).hash) .toMatch(/^#\/projects\/[^/]+\/plan$/u); await plan.press("ArrowRight"); const files = page.getByRole("tab", { name: /^Files\b/u }); await expect(files).toBeFocused(); await expect(files).toHaveAttribute("aria-selected", "true"); await expect.poll(() => new URL(page.url()).hash).toMatch(/\/files$/u);
   await files.press("ArrowRight"); const assembly = page.getByRole("tab", { name: "Assembly", exact: true }); await expect(assembly).toBeFocused(); await expect(assembly).toHaveAttribute("aria-selected", "true"); await expect.poll(() => new URL(page.url()).hash).toMatch(/\/assembly$/u);
-  await assembly.press("ArrowRight"); const shopping = page.getByRole("tab", { name: /^Shopping list\b/u }); await expect(shopping).toBeFocused(); await expect(shopping).toHaveAttribute("aria-selected", "true"); await expect.poll(() => new URL(page.url()).hash).toMatch(/\/offers$/u);
+  await assembly.press("ArrowRight"); const pcb = page.getByRole("tab", { name: "PCB", exact: true }); await expect(pcb).toBeFocused(); await expect(pcb).toHaveAttribute("aria-selected", "true"); await expect.poll(() => new URL(page.url()).hash).toMatch(/\/pcb$/u);
+  await page.reload(); await expect(pcb).toHaveAttribute("aria-selected", "true"); await expect(page.getByRole("heading", { name: "PCB viewer", exact: true })).toBeVisible();
+  await pcb.press("ArrowRight"); const shopping = page.getByRole("tab", { name: /^Shopping list\b/u }); await expect(shopping).toBeFocused(); await expect(shopping).toHaveAttribute("aria-selected", "true"); await expect.poll(() => new URL(page.url()).hash).toMatch(/\/offers$/u);
+  await page.goBack();
+  await expect(pcb).toHaveAttribute("aria-selected", "true");
   await page.goBack();
   await expect(assembly).toHaveAttribute("aria-selected", "true");
   await page.goBack();

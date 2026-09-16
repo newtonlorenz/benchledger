@@ -97,3 +97,5 @@ Expose exact IDs, versions, quantities/units, source age, compatibility evidence
 hashes and audit results when requested or decision-relevant. State the actual
 changed records, verified result and unresolved constraint; do not claim an
 entire project completed from a single successful tool call.
+
+PCB inspection uses the existing `inspect_assembly_sources` workflow on exact uploaded files. Native KiCad `.kicad_pcb` sources require millimetres and Z up; source pads/outlines are not exact component bodies. Read all returned warnings. External models, paths and scripts are never resolved. The project PCB view is read-only; see [PCB viewer](../../docs/pcb-viewer.md).

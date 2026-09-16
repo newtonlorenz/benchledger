@@ -30,7 +30,7 @@ describe("bounded static assembly import", () => {
       (j: any) => { j.accessors[0].sparse = {}; }, (j: any) => { j.scenes = []; },
     ]) await expect(parseAssemblyFile(fixture(change), "bad.glb", "millimetre")).rejects.toThrow();
     await expect(parseAssemblyFile(fixture().subarray(0, 24), "bad.glb", "millimetre")).rejects.toThrow();
-    await expect(parseAssemblyFile(stl, "model.py", "millimetre")).rejects.toThrow(/Use STEP/);
+    await expect(parseAssemblyFile(stl, "model.py", "millimetre")).rejects.toThrow(/Use KiCad/);
     await expect(parseAssemblyFile(new Uint8Array(21 * 1024 * 1024), "large.stl", "millimetre")).rejects.toThrow(/20 MB/);
   });
   it("reads STL as a single part and normalises units", async () => {
@@ -43,7 +43,7 @@ describe("bounded static assembly import", () => {
     const result = await importAssemblyFile(bytes, "synthetic-assembly.step", "metre");
     expect(result.meshes).toHaveLength(2); const coordinates = result.meshes.flatMap(m => m.positions.filter((_, i) => i % 3 === 2));
     expect(Math.min(...coordinates)).toBeCloseTo(-2); expect(Math.max(...coordinates)).toBeCloseTo(15);
-    await expect(importAssemblyFile(stl, "unsupported.txt", "millimetre")).rejects.toThrow(/Use STEP/);
+    await expect(importAssemblyFile(stl, "unsupported.txt", "millimetre")).rejects.toThrow(/Use KiCad/);
   });
 });
 
@@ -56,4 +56,30 @@ it("replaces STEP exporter placeholders with readable filenames while preserving
   expect(result.meshes.map(mesh => mesh.name)).toEqual(["Cover (1)", "Cover (2)"]);
   expect(result.meshes.map(mesh => mesh.group)).toEqual(["Cover", "Cover"]);
   expect(result.meshes.map(mesh => mesh.positions)).toEqual(original.meshes.map(mesh => mesh.positions));
+});
+
+it("combines excessive CAD surface fragments per node/material while preserving small-import identities", async () => {
+  const create = (count: number) => fixture(j => { j.materials = [{ pbrMetallicRoughness: { baseColorFactor: [1,0,0,1] } }, { pbrMetallicRoughness: { baseColorFactor: [0,1,0,1] } }]; j.meshes[0].primitives = Array.from({length: count}, (_, i) => ({ attributes: { POSITION: 0 }, indices: 1, material: i % 2 })); });
+  const small = await parseAssemblyFile(create(2), "accepted.glb", "millimetre");
+  expect(small.meshes.map(m => m.nodeId)).toEqual(["node-1-0", "node-1-1", "node-2-0", "node-2-1"]);
+  const fragmented = await parseAssemblyFile(create(200), "fragmented.glb", "millimetre");
+  expect(fragmented.meshes).toHaveLength(4); expect(fragmented.meshes.map(m => m.nodeId)).toEqual(["node-1-group-0", "node-1-group-1", "node-2-group-0", "node-2-group-1"]);
+  expect(fragmented.meshes.map(m => m.color)).toEqual(["#ff0000", "#00ff00", "#ff0000", "#00ff00"]);
+  expect(fragmented.meshes.reduce((n,m) => n+m.indices.length/3,0)).toBe(400);
+  expect(fragmented.meshes[0]!.positions.slice(0,9)).toEqual(small.meshes[0]!.positions);
+  expect(fragmented.meshes[2]!.positions.slice(0,9)).toEqual(small.meshes[2]!.positions);
+  expect(fragmented.meshes[2]!.indices.slice(0,6)).toEqual([0,2,1,3,5,4]);
+  expect(fragmented.warnings.join()).toMatch(/fragments sharing a node and material/);
+});
+it("keeps part and geometry validation on fragmented GLB fallback", async () => {
+  await expect(parseAssemblyFile(fixture(j => { j.nodes[0].children = Array.from({length:301},(_,i)=>i+1); j.nodes = [j.nodes[0], ...Array.from({length:301},()=>({mesh:0}))]; }), "many-nodes.glb", "millimetre")).rejects.toThrow(/300 parts/);
+  await expect(parseAssemblyFile(fixture(j => { j.meshes[0].primitives = Array.from({length:301},(_,i)=>({attributes:{POSITION:0}, indices:1, material:i})); }), "many-materials.glb", "millimetre")).rejects.toThrow(/300 parts/);
+  await expect(parseAssemblyFile(fixture(j => { j.meshes[0].primitives[0].material = -1; }), "invalid-material.glb", "millimetre")).rejects.toThrow(/material index/);
+});
+
+it("rejects out-of-range primitive indices before fragment concatenation", async () => {
+  const bytes = fixture(j => { j.meshes[0].primitives = Array.from({length:200},()=>({attributes:{POSITION:0},indices:1})); });
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), binaryStart = 28 + view.getUint32(12,true);
+  view.setUint16(binaryStart+40, 3, true);
+  await expect(parseAssemblyFile(bytes,"bad-fragments.glb","millimetre")).rejects.toThrow(/primitive.*indices/);
 });

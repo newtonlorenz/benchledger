@@ -390,4 +390,6 @@ Inventory deletion is a browser/HTTP action, not an advertised MCP tool.
 
 ## Assembly explorer
 
-Use `inspect_assembly_sources` on exact, already uploaded STEP/GLB/STL files, paging through all parts. Read the current version with `read_project_assembly`, then use `save_project_assembly` with the full snapshot, observed expectedVersion and a stable host command key. Units/up axis, positions, separation, names, BOM links and steps are shared with the browser. See [Assembly explorer](assembly-explorer.md) for the full contract and import limits.
+Use `inspect_assembly_sources` on exact, already uploaded KiCad PCB/STEP/GLB/STL files, paging through all parts. Read the current version with `read_project_assembly`, then use `save_project_assembly` with the full snapshot, observed expectedVersion and a stable host command key. Units/up axis, positions, separation, names, BOM links and steps are shared with the browser. See [Assembly explorer](assembly-explorer.md) for the full contract and import limits.
+
+Native PCB inspection uses fixed millimetres and Z up. References, values and footprint notes describe source pads/outlines, not verified component bodies. External model paths are never loaded. Read returned omissions before using a view as evidence. See [PCB viewer](pcb-viewer.md).

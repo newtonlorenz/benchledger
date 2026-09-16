@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ACESFilmicToneMapping, SRGBColorSpace, AmbientLight, Box3, Box3Helper, BufferGeometry, Color, DirectionalLight, Euler, Float32BufferAttribute, Mesh, MeshStandardMaterial, PerspectiveCamera, Raycaster, Scene, Vector2, Vector3, WebGLRenderer } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { AssemblyGeometry, AssemblyPart } from "@benchledger/api-contract";
-export interface AssemblyCanvasProps { geometry: AssemblyGeometry[]; parts: AssemblyPart[]; hidden: Set<string>; selected: string | undefined; explosion: number; view: "front" | "rear" | "iso"; fit: number; onSelect(id: string): void }
+export interface AssemblyCanvasProps { geometry: AssemblyGeometry[]; parts: AssemblyPart[]; hidden: Set<string>; selected: string | undefined; explosion: number; view: "front" | "rear" | "iso" | "top" | "bottom"; fit: number; onSelect(id: string): void }
 export default function AssemblyCanvas(props: AssemblyCanvasProps) {
   const host = useRef<HTMLDivElement>(null), latest = useRef(props), update = useRef<() => void>(() => {}), fitView = useRef<() => void>(() => {});
   latest.current = props;
@@ -39,9 +39,10 @@ export default function AssemblyCanvas(props: AssemblyCanvasProps) {
       fitView.current = () => {
         const box = bounds(); if (box.isEmpty()) return;
         const centre = box.getCenter(new Vector3()), radius = Math.max(box.getSize(new Vector3()).length() / 2, 1);
-        const direction = new Vector3(...(latest.current.view === "rear" ? [1, 2, 0.8] as const : latest.current.view === "front" ? [0, -2, 0.25] as const : [1, -1.8, 1] as const)).normalize();
+        const direction = new Vector3(...(latest.current.view === "top" ? [0, 0, 1] as const : latest.current.view === "bottom" ? [0, 0, -1] as const : latest.current.view === "rear" ? [1, 2, 0.8] as const : latest.current.view === "front" ? [0, -2, 0.25] as const : [1, -1.8, 1] as const)).normalize();
         const fov = Math.min(camera.fov * Math.PI / 180, 2 * Math.atan(Math.tan(camera.fov * Math.PI / 360) * camera.aspect));
         const distance = radius / Math.sin(fov / 2) * 1.15;
+        camera.up.set(0, latest.current.view === "top" || latest.current.view === "bottom" ? 1 : 0, latest.current.view === "top" || latest.current.view === "bottom" ? 0 : 1);
         camera.position.copy(centre).addScaledVector(direction, distance); camera.near = Math.max(0.01, distance / 10000); camera.far = Math.max(1000, distance * 10); camera.updateProjectionMatrix(); controls!.target.copy(centre); controls!.update(); render();
       };
       update.current = () => {

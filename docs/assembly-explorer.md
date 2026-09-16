@@ -35,6 +35,7 @@ Archived projects retain their saved view but cannot save changes.
 
 | Format | Import behaviour |
 | --- | --- |
+| KiCad PCB | Native board substrate, holes, outer copper and source footprint outlines. No external component models. See [PCB viewer](pcb-viewer.md) for support and omissions. |
 | STEP / STP | Separate tessellated parts and hierarchy where the export preserves them. Declared file units are converted to millimetres. |
 | GLB | Static glTF 2.0 triangle meshes, nested transforms and repeated mesh placements. Materials supply an illustrative base colour. |
 | STL | One part per file, with user-supplied units and placement. Disconnected shells are not guessed into an assembly. |
@@ -48,7 +49,7 @@ record. STEP's declared units take precedence over the coordinate unit choice.
 STEP exporter placeholder names are replaced with readable source filenames;
 meaningful CAD names and source geometry are preserved. Separate files retain
 their exported positions and can need placement adjustments.
-Imports normalise viewing geometry to millimetres and Z up. Other native CAD
+Imports normalise viewing geometry to millimetres and Z up. KiCad PCB sources use fixed millimetres and Z up. Other native CAD
 formats need a STEP or GLB export. Compressed GLB extensions, skinning, animations,
 non-triangle primitives and sparse accessors are rejected with actionable errors.
 External buffers are rejected; textures are not loaded. No external URL is fetched.
