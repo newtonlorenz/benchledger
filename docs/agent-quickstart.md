@@ -381,8 +381,8 @@ physical execution authority. Named-account activation remains gated off.
 
 ## Removing records from the workspace
 
-Use **Delete project** in the project header, or open an inventory item or printer
-and choose **Delete item** or **Delete printer**. Confirm once. History remains
+Use **Project details → Project settings → Delete project** from the Plan tab,
+or open an inventory item or printer and choose **Delete item** or **Delete printer**. Confirm once. History remains
 retained, but these actions cannot be undone. Archive a project from Project
 settings if you may need to restore it. Release allocated stock before deleting
 an inventory item; do not change its physical count to bypass this safeguard.

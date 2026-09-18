@@ -187,8 +187,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.reload();
   await expect(page.getByRole("heading", { name: projectName, exact: true })).toBeVisible();
-  const projectPicker = page.getByRole("combobox", { name: "Choose project" });
-  await projectPicker.selectOption({ label: projectName });
+  await page.getByRole("button", { name: `Switch to project ${projectName}`, exact: true }).click();
   await expect(page.getByRole("heading", { name: projectName, exact: true })).toBeVisible();
 
   const buildApproach = page.getByRole("region", { name: "Build approach" });
@@ -197,7 +196,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect( page.getByRole("button", { name: "Hide technical details", exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: /^Projects/u }).click(); await projectPicker.selectOption({ label: projectName }); const expertSummary = page.getByRole("region", { name: "Build setup summary" }); await expect(expertSummary).toContainText( "Use Bambu Lab · H2D with Bambu Lab · PETG · PETG HF." );
+  await page.getByRole("button", { name: /^Projects/u }).click(); await page.getByRole("button", { name: `Switch to project ${projectName}`, exact: true }).click(); const expertSummary = page.getByRole("region", { name: "Build setup summary" }); await expect(expertSummary).toContainText( "Use Bambu Lab · H2D with Bambu Lab · PETG · PETG HF." );
   await expect(expertSummary).toContainText( "Print setup: 0.4 mm nozzle · hardened steel · Textured PEI." ); await expect(expertSummary).toContainText( "Software: Bambu Studio 1.10.0 0.20 mm Standard." ); await expect(expertSummary).toContainText("Calibration: flow checked."); await expect( expertSummary.getByText("Show IDs, versions, evidence & unknowns", { exact: true })).toBeVisible();
   await expertSummary .getByText("Show IDs, versions, evidence & unknowns", { exact: true }).click();
   await expect(expertSummary).toContainText("Revision ID");

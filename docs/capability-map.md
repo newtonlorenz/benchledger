@@ -5,6 +5,17 @@ by the web UI. It does not contain a model, and it does not make multi-step
 judgments on an agent's behalf. An agent composes small, typed operations into
 an end-to-end project decision.
 
+## Browser workspace
+
+The desktop browser has a persistent project navigator, a fixed workspace
+toolbar and a separately scrolling working area. Inventory and Projects remain
+equal navigation destinations. The navigator filters loaded project names and
+switches between active and archived records. Project details can be hidden to
+give requirements and files more space. Assembly and PCB viewers use the full
+working width. On narrow screens, open the
+navigation drawer to switch projects or archive views. These changes do not
+add API or MCP operations or change stock evidence.
+
 ## Inventory images
 
 All inventory kinds, including printers, have a browser image gallery and the
@@ -17,7 +28,8 @@ limits, HTTP routes, host encoding, retention and backup semantics.
 
 ## Deleting records
 
-The project header exposes **Delete project** for active and archived projects.
+Open **Project details → Project settings → Delete project** for active and
+archived projects.
 One confirmation shows the consequences; users do not need to type the name.
 The browser still sends the selected name and version to the existing removal
 API. Archive remains available in Project settings when restoration is wanted.
