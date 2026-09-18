@@ -28,6 +28,18 @@ test("desktop keeps navigation stable, opens a document and gives its work area 
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
   await details.click();
   await expect(page.getByRole("complementary", { name: "Project details" })).toBeVisible();
+  // Viewer tabs must release the inspector width even if their module fails.
+  await page.route(/\/assembly-ui-[^/]+\.js(?:\?.*)?$/, route => route.abort("failed"));
+  await page.route(/\/pcb-ui-[^/]+\.js(?:\?.*)?$/, route => route.abort("failed"));
+  for (const name of ["Assembly", "PCB"]) {
+    await page.getByRole("tab", { name, exact: true }).click();
+    await expect(page.getByRole("complementary", { name: "Project details" })).toBeHidden();
+    await expect(page.getByRole("button", { name: "Project details", exact: true })).toHaveCount(0);
+    expect(await workArea.evaluate((element) => element.clientWidth)).toBeGreaterThan(before + 200);
+  }
+  await page.getByRole("tab", { name: /^Plan/u }).click();
+  await expect(page.getByRole("complementary", { name: "Project details" })).toBeVisible();
+  await expect(details).toHaveAttribute("aria-expanded", "true");
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Inventory", exact: true })).toBeVisible();
   expect(await page.locator("main").evaluate((element) => element.scrollTop)).toBe(0);

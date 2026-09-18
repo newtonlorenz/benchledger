@@ -39,7 +39,9 @@ keyboard focus, browser history and interrupted-save recovery. The design
 scanner reported no findings. No remote integration or deployment was run.
 New regressions cover project-name filtering, active/archive empty states,
 independent desktop scrolling, inspector width, staged-file navigation protection
-and mobile project selection. Existing tests follow the new project navigator
+and mobile project selection. Viewer tabs also hide the inspector while their
+optional code loads or fails, then restore the prior inspector choice on return.
+Existing tests follow the new project navigator
 and deletion location without weakening their business assertions.
 
 ## Delivery and rollback
