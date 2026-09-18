@@ -1,6 +1,5 @@
 import { ProjectNavigator } from "./project-navigator";
-import { PcbWorkspace } from "./pcb-ui";
-import { AssemblyWorkspace } from "./assembly-ui";
+import { DeferredPcbWorkspace as PcbWorkspace, DeferredAssemblyWorkspace as AssemblyWorkspace } from "./deferred-views";
 import { InventoryImages } from "./inventory-images";
 import { ArtifactPreview, artifactPreviewKind } from "./artifact-preview";
 import { UnsavedWorkContext, useNavigationGuard, useUnsavedWork } from "./unsaved-work";

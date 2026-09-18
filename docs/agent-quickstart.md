@@ -299,6 +299,12 @@ third-party viewer. Closing a preview cancels its fetch and releases browser
 resources. This is a browser-only presentation feature; API and MCP contracts
 are unchanged.
 
+Optional viewing code loads when opened. If a graphics connection is lost,
+**Retry STL preview** or **Retry 3D viewer** restores the renderer locally and
+preserves assembly edits. If the viewing code itself cannot download, the
+dialog and other project tabs remain usable; save open work before refreshing
+the browser. No automatic page reload or record write is part of this recovery.
+
 Generic MCP does not advertise transfer actions or expose upload sessions or
 transfer capabilities. Cached clients calling its former raw
 `begin_artifact_upload`, `finalize_artifact_upload`, and download tools fail

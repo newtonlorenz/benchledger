@@ -7,6 +7,7 @@ export default function AssemblyCanvas(props: AssemblyCanvasProps) {
   const host = useRef<HTMLDivElement>(null), latest = useRef(props), update = useRef<() => void>(() => {}), fitView = useRef<() => void>(() => {});
   latest.current = props;
   const [error, setError] = useState<string>(), [dimensions, setDimensions] = useState("");
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     const container = host.current; if (!container) return;
     let renderer: WebGLRenderer | undefined, controls: OrbitControls | undefined, observer: ResizeObserver | undefined, themeObserver: MutationObserver | undefined;
@@ -67,12 +68,19 @@ export default function AssemblyCanvas(props: AssemblyCanvasProps) {
         const rect = renderer!.domElement.getBoundingClientRect(), ray = new Raycaster(); ray.setFromCamera(new Vector2((e.clientX - rect.left) / rect.width * 2 - 1, -(e.clientY - rect.top) / rect.height * 2 + 1), camera);
         const hit = ray.intersectObjects([...objects.values()].map(v => v.mesh).filter(m => m.visible))[0]; if (hit) latest.current.onSelect(hit.object.userData.partId as string);
       });
-      renderer.domElement.addEventListener("webglcontextlost", e => { e.preventDefault(); if (!disposed) setError("The graphics context was lost. Reopen Assembly to restore the view."); });
+      renderer.domElement.addEventListener("webglcontextlost", e => {
+        e.preventDefault();
+        if (!disposed) {
+          update.current = () => {}; fitView.current = () => {};
+          dispose();
+          setError("The graphics connection was lost.");
+        }
+      });
       setError(undefined); update.current(); resize();
     } catch (cause) { dispose(); setError(cause instanceof Error ? cause.message : "3D viewing is unavailable in this browser."); }
     return () => { update.current = () => {}; fitView.current = () => {}; dispose(); };
-  }, [props.geometry, props.parts.map(p => `${p.id}:${p.artifactId}:${p.nodeId}`).join("|")]);
+  }, [props.geometry, props.parts.map(p => `${p.id}:${p.artifactId}:${p.nodeId}`).join("|"), attempt]);
   useEffect(() => update.current(), [props.parts, props.hidden, props.selected, props.explosion]);
   useEffect(() => fitView.current(), [props.fit, props.view]);
-  return <><div className="assembly-dimensions">{dimensions}<small>assembled model bounds</small></div>{error && <p role="alert" className="assembly-render-error">{error} The parts list and assembly notes remain available.</p>}<div className="assembly-canvas" ref={host} /></>;
+  return <><div className="assembly-dimensions">{dimensions}<small>assembled model bounds</small></div>{error && <div className="assembly-render-error"><p role="alert">{error} The parts list, notes and edits remain available.</p><button type="button" className="button button-secondary" onClick={() => setAttempt(value => value + 1)}>Retry 3D viewer</button></div>}<div className="assembly-canvas" ref={host} hidden={Boolean(error)} /></>;
 }

@@ -32,9 +32,11 @@ export default function StlPreview({ bytes }: { bytes: ArrayBuffer }) {
   const host = useRef<HTMLDivElement>(null);
   const reset = useRef<() => void>(() => undefined);
   const [error, setError] = useState<string>();
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     const container = host.current;
     if (!container) return;
+    setError(undefined);
     let renderer: WebGLRenderer | undefined;
     let controls: OrbitControls | undefined;
     let observer: ResizeObserver | undefined;
@@ -48,6 +50,10 @@ export default function StlPreview({ bytes }: { bytes: ArrayBuffer }) {
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.domElement.setAttribute("aria-label", "STL model preview");
       renderer.domElement.setAttribute("role", "img");
+      renderer.domElement.addEventListener("webglcontextlost", event => {
+        event.preventDefault();
+        if (!disposed) { reset.current = () => undefined; dispose(); setError("The graphics connection was lost. Retry to restore the preview."); }
+      });
       container.append(renderer.domElement);
       const scene = new Scene();
       scene.background = new Color("#edf2f3");
@@ -59,7 +65,7 @@ export default function StlPreview({ bytes }: { bytes: ArrayBuffer }) {
       controls = new OrbitControls(camera, renderer.domElement);
       controls.minDistance = 0.2; controls.maxDistance = 20;
       controls.saveState();
-      const render = () => renderer!.render(scene, camera);
+      const render = () => { if (!disposed) renderer!.render(scene, camera); };
       reset.current = () => { controls!.reset(); render(); };
       controls.addEventListener("change", render);
       const resize = () => {
@@ -68,7 +74,7 @@ export default function StlPreview({ bytes }: { bytes: ArrayBuffer }) {
       };
       observer = new ResizeObserver(resize); observer.observe(container); resize();
     } catch (cause) { dispose(); setError(cause instanceof Error ? cause.message : "The 3D viewer is unavailable. Download the STL to view it locally."); }
-    return dispose;
-  }, [bytes]);
-  return error ? <p role="alert">{error}</p> : <div><p>Drag to rotate. Scroll or pinch to zoom. This preview does not verify printability or physical fit.</p><button type="button" className="button button-quiet" onClick={() => reset.current()}>Reset view</button><div ref={host} className="artifact-preview-stl" /></div>;
+    return () => { reset.current = () => undefined; dispose(); };
+  }, [bytes, attempt]);
+  return <div>{error ? <div><p role="alert">{error}</p><button type="button" className="button button-secondary" onClick={() => setAttempt(value => value + 1)}>Retry STL preview</button></div> : <><p>Drag to rotate. Scroll or pinch to zoom. This preview does not verify printability or physical fit.</p><button type="button" className="button button-quiet" onClick={() => reset.current()}>Reset view</button></>}<div ref={host} className="artifact-preview-stl" hidden={Boolean(error)} /></div>;
 }

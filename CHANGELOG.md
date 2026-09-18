@@ -36,6 +36,10 @@ first public release; all current work is under **Unreleased**.
 
 ### Changed
 
+- Load Assembly, PCB and Markdown views only when opened. Viewer failures stay
+  inside their panel, with safe recovery guidance and local graphics retries
+  that preserve assembly edits.
+
 - Freeze stock-review and inspection inputs while requests are pending or unconfirmed; recover with the exact reviewed payload
 - Render saved stock outcomes as immutable receipts and use one keyboard/inert boundary for inline approval dialogs
 - Protect quote selections and workstream paging from losing pending edits

@@ -2,7 +2,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ArtifactPreview, artifactPreviewKind, MarkdownPreview } from "./artifact-preview";
+import { ArtifactPreview, artifactPreviewKind } from "./artifact-preview";
+import MarkdownPreview from "./markdown-preview";
 import { fetchArtifactDownload } from "./api";
 import type { Artifact } from "./domain";
 vi.mock("./api", () => ({ fetchArtifactDownload: vi.fn() }));
