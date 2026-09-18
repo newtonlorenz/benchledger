@@ -15,6 +15,14 @@ test("assembly explorer imports CAD, edits a guide, saves and reopens on desktop
   await page.getByRole("button", { name: "Edit assembly", exact: true }).click();
   await page.getByLabel("Material", { exact: true }).fill("Synthetic cream PLA");
   await page.getByLabel("Fixing notes").fill("Seat the lid after checking the connector clearance.");
+  // Losing GPU resources must not require navigation or discard this draft.
+  await page.locator(".assembly-canvas canvas").evaluate(canvas => canvas.dispatchEvent(new Event("webglcontextlost", { cancelable: true })));
+  await expect(page.getByRole("alert")).toContainText("graphics connection was lost");
+  await expect(page.getByLabel("Fixing notes")).toHaveValue("Seat the lid after checking the connector clearance.");
+  await page.getByRole("button", { name: "Retry 3D viewer", exact: true }).click();
+  await expect(page.locator(".assembly-canvas canvas")).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByLabel("Fixing notes")).toHaveValue("Seat the lid after checking the connector clearance.");
   await page.getByLabel("Separation (mm) Z", { exact: true }).fill("45");
   await page.getByRole("button", { name: "Isolate part", exact: true }).click(); await expect(page.getByLabel("Show Base", { exact: true })).not.toBeChecked();
   await page.getByRole("button", { name: "Show all parts", exact: true }).click();

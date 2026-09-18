@@ -125,3 +125,20 @@ Embed stock close-out beneath the existing project heading. Do not repeat the
 project's large top-level title. After confirmation, show a read-only result
 receipt and focus the saved acknowledgement. Do not leave a disabled edit form
 or a conflicting review-incomplete prompt as the primary saved state.
+
+## Optional viewers and recovery
+
+Load Assembly, PCB and Markdown code when the user opens those views. Image and
+plain-text previews do not need the Markdown parser; inventory and project
+planning do not need viewer code. Keep loading messages and errors local to the
+affected panel. A preview dialog must retain its close action and focus boundary.
+
+A rendering failure can be retried inside its panel. A lost graphics connection
+can recreate the STL or assembly renderer without leaving the view or losing
+assembly edits. The parts list and notes remain usable when 3D is unavailable.
+Dispose the old graphics resources before creating a replacement.
+
+Browsers can cache failed module downloads. In that case, explain that the user
+must check their connection, save open work and then refresh the page. Do not
+offer a retry that cannot clear that cache, or automatically reload the workspace.
+These presentation changes do not change HTTP/MCP contracts or stock evidence.

@@ -299,6 +299,12 @@ third-party viewer. Closing a preview cancels its fetch and releases browser
 resources. This is a browser-only presentation feature; API and MCP contracts
 are unchanged.
 
+Optional viewing code loads when opened. If a graphics connection is lost,
+**Retry STL preview** or **Retry 3D viewer** restores the renderer locally and
+preserves assembly edits. If the viewing code itself cannot download, the
+dialog and other project tabs remain usable; save open work before refreshing
+the browser. No automatic page reload or record write is part of this recovery.
+
 Generic MCP does not advertise transfer actions or expose upload sessions or
 transfer capabilities. Cached clients calling its former raw
 `begin_artifact_upload`, `finalize_artifact_upload`, and download tools fail
@@ -381,8 +387,8 @@ physical execution authority. Named-account activation remains gated off.
 
 ## Removing records from the workspace
 
-Use **Delete project** in the project header, or open an inventory item or printer
-and choose **Delete item** or **Delete printer**. Confirm once. History remains
+Use **Project details → Project settings → Delete project** from the Plan tab,
+or open an inventory item or printer and choose **Delete item** or **Delete printer**. Confirm once. History remains
 retained, but these actions cannot be undone. Archive a project from Project
 settings if you may need to restore it. Release allocated stock before deleting
 an inventory item; do not change its physical count to bypass this safeguard.

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { assemblyInputSchema } from "@benchledger/api-contract";
 import type { AssemblyGeometry, AssemblyInput, AssemblyInspection, AssemblyPart, AssemblyRead, AssemblySource, AssemblyVector, ProjectAssembly } from "@benchledger/api-contract";
 import type { Project } from "./domain";
@@ -6,7 +6,7 @@ import { workflowCommandKey, workflowRequest } from "./api";
 import { mutationValue, revisionWorkflowPath, useWorkflowCommand, useWorkflowRead } from "./workflow-ui";
 import { useUnsavedWork } from "./unsaved-work";
 import "./assembly.css";
-const Canvas = lazy(() => import("./assembly-canvas"));
+import { DeferredAssemblyCanvas as Canvas } from "./deferred-views";
 const toDraft = (saved: ProjectAssembly): AssemblyInput => ({ expectedVersion: saved.version, name: saved.name, sources: saved.sources, parts: saved.parts, steps: saved.steps, notes: saved.notes });
 export function AssemblyWorkspace({ project, onFiles }: { project: Project; onFiles(): void }) {
   const root = project.serverRevisionId ? `${revisionWorkflowPath(project.id, project.serverRevisionId)}/assembly` : undefined;
@@ -75,7 +75,7 @@ export function AssemblyWorkspace({ project, onFiles }: { project: Project; onFi
       {draft.sources.length > 1 && <p className="assembly-placement-note">Parts keep their exported positions. Use Edit assembly to adjust placement if separate files overlap.</p>}
       <div className="assembly-layout"><div className="assembly-stage">
         <div className="assembly-toolbar" role="group" aria-label="Assembly views"><button type="button" aria-pressed={explosion === 0} onClick={() => preset(0)}>Assembled</button><button type="button" aria-pressed={explosion === 100} onClick={() => preset(100)}>Exploded</button><button type="button" onClick={() => preset(explosion, "rear")}>Rear</button><button type="button" onClick={() => { setHidden(new Set()); setFit(v => v + 1); }}>Show all</button><button type="button" onClick={() => setFit(v => v + 1)}>Fit view</button></div>
-        {geometry.length > 0 ? <Suspense fallback={<p role="status">Opening 3D viewer…</p>}><Canvas geometry={geometry} parts={draft.parts} hidden={hidden} selected={selected} explosion={explosion} view={view} fit={fit} onSelect={setSelected} /></Suspense> : <div className="assembly-canvas"><p>The parts guide is available while the model loads.</p></div>}
+        {geometry.length > 0 ? <Canvas geometry={geometry} parts={draft.parts} hidden={hidden} selected={selected} explosion={explosion} view={view} fit={fit} onSelect={setSelected} /> : <div className="assembly-canvas"><p>The parts guide is available while the model loads.</p></div>}
         <p className="assembly-gestures">Drag to rotate · scroll or pinch to zoom · click a part to inspect</p>
         <div className="assembly-slider"><label htmlFor="assembly-explosion">Pull the assembly apart <output>{explosion}%</output></label><input id="assembly-explosion" aria-label="Assembly separation" type="range" min="0" max="100" value={explosion} onChange={e => setExplosion(Number(e.target.value))} onPointerUp={() => setFit(v => v + 1)} onKeyUp={() => setFit(v => v + 1)} /><p>Separation shows relationships, not a verified removal path.</p></div>
       </div><aside className="assembly-guide" aria-label="Parts and build guide">

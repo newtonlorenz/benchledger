@@ -1,11 +1,10 @@
-import { Component, lazy, Suspense, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import Markdown from "react-markdown";
+import { Component, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { DeferredMarkdownPreview, DeferredStlPreview } from "./deferred-views";
 import { fetchArtifactDownload } from "./api";
 import type { Artifact } from "./domain";
 import { useModalBoundary } from "./modal-boundary";
 import "./artifact-preview.css";
 
-const StlPreview = lazy(() => import("./stl-preview"));
 class PreviewBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   override state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
@@ -19,16 +18,6 @@ export function artifactPreviewKind(name: string): "image" | "markdown" | "text"
   if (["txt", "csv", "tsv", "json", "yaml", "yml", "log", "gcode", "scad"].includes(extension)) return "text";
   if (extension === "stl") return "stl";
   return undefined;
-}
-
-export function MarkdownPreview({ text }: { text: string }) {
-  // No raw HTML, embedded remote images, or automatically loaded resources.
-  return <Markdown skipHtml components={{
-    img: ({ alt }) => <span>{alt ? `[Image: ${alt}]` : "[Image]"}</span>,
-    a: ({ href, children }) => href && /^https?:\/\//iu.test(href)
-      ? <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
-      : <span>{children}</span>,
-  }}>{text}</Markdown>;
 }
 
 type PreviewData = { text: string } | { url: string } | { bytes: ArrayBuffer };
@@ -73,8 +62,8 @@ export function ArtifactPreview({ file, onClose }: { file: Artifact; onClose: ()
         <PreviewBoundary key={attempt}>
         {error ? <div><p role="alert">{error}</p><button type="button" className="button button-quiet" onClick={() => setAttempt(attempt + 1)}>Retry preview</button></div> : !data ? <p role="status">Loading preview…</p> :
           "url" in data ? <img className="artifact-preview-image" src={data.url} alt={file.name} onError={() => setError("This image could not be displayed. Download it to view it locally.")} /> :
-          "bytes" in data ? <Suspense fallback={<p role="status">Loading 3D viewer…</p>}><StlPreview bytes={data.bytes} /></Suspense> :
-          kind === "markdown" ? <article className="artifact-preview-markdown"><MarkdownPreview text={data.text} /></article> : <pre className="artifact-preview-text">{data.text}</pre>}
+          "bytes" in data ? <DeferredStlPreview bytes={data.bytes} /> :
+          kind === "markdown" ? <article className="artifact-preview-markdown"><DeferredMarkdownPreview text={data.text} /></article> : <pre className="artifact-preview-text">{data.text}</pre>}
         </PreviewBoundary>
       </div>
     </div>

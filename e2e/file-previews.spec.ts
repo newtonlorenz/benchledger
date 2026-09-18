@@ -34,6 +34,10 @@ test("project files preview Markdown, images and STL and preserve download-only 
   await page.getByRole("button", { name: "Preview preview-part.stl", exact: true }).click();
   dialog = page.getByRole("dialog", { name: "preview-part.stl", exact: true });
   await expect(dialog.getByRole("img", { name: "STL model preview" })).toBeVisible();
+  await dialog.locator("canvas").evaluate(canvas => canvas.dispatchEvent(new Event("webglcontextlost", { cancelable: true })));
+  await expect(dialog.getByRole("alert")).toContainText("graphics connection was lost");
+  await dialog.getByRole("button", { name: "Retry STL preview", exact: true }).click();
+  await expect(dialog.getByRole("img", { name: "STL model preview" })).toBeVisible();
   await dialog.getByRole("button", { name: "Reset view" }).click();
   await dialog.getByRole("button", { name: "Close preview" }).click();
   await expect(page.getByRole("button", { name: "Preview preview-source.step", exact: true })).toHaveCount(0);

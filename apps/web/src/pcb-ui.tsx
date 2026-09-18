@@ -1,11 +1,11 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AssemblyInspection, AssemblySource } from "@benchledger/api-contract";
 import type { Project } from "./domain";
 import { workflowRequest } from "./api";
 import { revisionWorkflowPath } from "./workflow-ui";
 import "./assembly.css";
 import "./pcb.css";
-const Canvas = lazy(() => import("./assembly-canvas"));
+import { DeferredAssemblyCanvas as Canvas } from "./deferred-views";
 
 export function PcbWorkspace({ project, onFiles, onAssembly }: { project: Project; onFiles(): void; onAssembly(): void }) {
   const files = (project.allArtifacts ?? project.artifacts).filter(f => f.status !== "superseded" && /\.(kicad_pcb|step|stp|glb)$/iu.test(f.name) && (f.projectRevisionId === project.serverRevisionId || f.workItemId && f.workItemRevisionId));
@@ -48,7 +48,7 @@ export function PcbWorkspace({ project, onFiles, onAssembly }: { project: Projec
       {current && <>
         <div className="assembly-layout"><div className="assembly-stage">
           <div role="group" aria-label="PCB views" className="assembly-toolbar">{(["iso", "top", "bottom"] as const).map(v => <button key={v} type="button" aria-pressed={view === v} onClick={() => { setView(v); setFit(n => n + 1); }}>{v === "iso" ? "3D" : v === "top" ? "Top" : "Bottom"}</button>)}<button type="button" onClick={() => setFit(n => n + 1)}>Fit board</button><button type="button" onClick={() => { setHidden(new Set()); setFit(n => n + 1); }}>Show all</button></div>
-          <Suspense fallback={<p role="status">Opening 3D viewer…</p>}><Canvas geometry={current.geometry} parts={current.parts} hidden={hidden} selected={selected} explosion={0} view={view} fit={fit} onSelect={setSelected} /></Suspense>
+          <Canvas geometry={current.geometry} parts={current.parts} hidden={hidden} selected={selected} explosion={0} view={view} fit={fit} onSelect={setSelected} />
           <p className="assembly-gestures">Drag to orbit · scroll or pinch to zoom · select a part to inspect</p>
           {boardInfo && <p className="pcb-board-facts">{boardInfo.thicknessMm} mm substrate · {boardInfo.holeCount} drill openings · footprint outlines only</p>}
         </div><aside className="assembly-guide" aria-label="PCB layers and components">

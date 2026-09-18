@@ -7,6 +7,9 @@ first public release; all current work is under **Unreleased**.
 
 ### Added
 
+- Desktop workspace with persistent project navigation, compact document tools,
+  independently scrolling content and a collapsible project inspector.
+
 - Inline draft protection, explicit unavailable-project recovery and rendered accessibility smoke checks
 
 - Task-oriented home with project search, local pins, recent-project resume and direct attention actions
@@ -35,6 +38,10 @@ first public release; all current work is under **Unreleased**.
 - LAN deployment, backup/restore, privacy scanning, and public-project community files
 
 ### Changed
+
+- Load Assembly, PCB and Markdown views only when opened. Viewer failures stay
+  inside their panel, with safe recovery guidance and local graphics retries
+  that preserve assembly edits.
 
 - Freeze stock-review and inspection inputs while requests are pending or unconfirmed; recover with the exact reviewed payload
 - Render saved stock outcomes as immutable receipts and use one keyboard/inert boundary for inline approval dialogs
