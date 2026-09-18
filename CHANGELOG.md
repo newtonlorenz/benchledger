@@ -7,6 +7,9 @@ first public release; all current work is under **Unreleased**.
 
 ### Added
 
+- Desktop workspace with persistent project navigation, compact document tools,
+  independently scrolling content and a collapsible project inspector.
+
 - Inline draft protection, explicit unavailable-project recovery and rendered accessibility smoke checks
 
 - Task-oriented home with project search, local pins, recent-project resume and direct attention actions
