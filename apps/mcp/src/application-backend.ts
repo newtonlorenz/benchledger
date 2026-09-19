@@ -1,3 +1,4 @@
+import { inventoryStockViews, matchesInventoryStockView } from "@benchledger/domain/inventory-workspace";
 import { invokeInventoryImageTool } from "./inventory-images.js";
 import { invokeMakerTool } from "./maker-workflows.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -362,6 +363,8 @@ export function createApplicationBackend(service: ApplicationService, options: P
               ...(input.category === undefined ? {} : { kind: toApiKind(input.category) }),
               ...(input.categoryNodeId === undefined ? {} : { categoryNodeId: input.categoryNodeId }),
               ...(input.unassigned === undefined ? {} : { unassigned: input.unassigned }),
+              ...(input.stockView === undefined ? {} : { stockView: input.stockView }),
+              ...(input.sort === undefined ? {} : { sort: input.sort }),
             }),
             matches: (item) => {
               const mapped = toMcpInventoryItem(item);
@@ -380,6 +383,8 @@ export function createApplicationBackend(service: ApplicationService, options: P
           ...(input.category === undefined ? {} : { kind: toApiKind(input.category) }),
           ...(input.categoryNodeId === undefined ? {} : { categoryNodeId: input.categoryNodeId }),
           ...(input.unassigned === undefined ? {} : { unassigned: input.unassigned }),
+          ...(input.stockView === undefined ? {} : { stockView: input.stockView }),
+          ...(input.sort === undefined ? {} : { sort: input.sort }),
           ...(input.availability === undefined ? {} : { evidence: toApiEvidence(input.availability) }),
         });
         return appPage(page.data.map(toMcpInventoryItem), page);
@@ -1239,6 +1244,8 @@ function toMcpInventoryItem(item: ApiInventoryItem): InventoryItem {
     unitStatus: correctionReason === undefined ? "compatible" : "needs_correction",
     ...(correctionReason === undefined ? {} : { unitCorrectionReason: correctionReason }),
     availability: toMcpAvailability(item),
+    stockViews: inventoryStockViews.filter((view) => matchesInventoryStockView({ ...item, unitStatus: correctionReason ? "needs_correction" : "compatible" }, view)),
+    ...(item.condition === undefined ? {} : { stockCondition: item.condition }),
     evidence: toMcpEvidence(item),
     ...(item.categoryNodeId === undefined ? {} : { categoryNodeId: item.categoryNodeId }),
     ...(item.description === undefined ? {} : { description: item.description }),

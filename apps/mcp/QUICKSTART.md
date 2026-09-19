@@ -63,6 +63,28 @@ Then read `benchledger://inventory/summary` and use `list_inventory` with a
 small page (normally `limit: 25`). Use the exact item resource when a candidate
 needs dimensions, compatibility, provenance, or stock history.
 
+For stock planning, `list_inventory` accepts `stockView: "available" | "check" |
+"reserved" | "depleted"` and `sort: "name" | "name_desc" | "location"`. These are
+shared with the UI and applied before pagination. For example:
+
+```json
+{"stockView":"available","category":"electronic","sort":"name","limit":25}
+```
+
+`available` requires counted/commissioned stock, a positive unallocated balance,
+valid units and no known repair need. It does not establish project compatibility.
+`check` covers unverified evidence, missing available balances, unit corrections
+and repair needs. `reserved` includes partial allocations and may overlap
+`available`; `depleted` requires confirmed/consumed zero stock. Retired records are
+excluded from all four queues. Combine these with existing query/category/location
+filters and follow the returned cursor with the same filters and sort.
+
+Each row includes `stockViews` and `stockCondition`, which retains the canonical
+condition such as `needs_repair` instead of only the legacy `opened` alias. A UI
+AI brief is a dated snapshot of explicitly selected records, not the whole ledger.
+Re-read current quantities/versions before a write and evaluate project BOM
+compatibility before treating stock as a suitable substitute.
+
 Inventory rows expose on-hand, available, and allocated quantities separately.
 A fully reserved counted item is `allocated`, not `depleted`; a partial
 reservation remains visible with both available and allocated quantities.

@@ -63,7 +63,7 @@ for (const dark of [false, true]) test(`rendered pages and dialogs pass accessib
   await page.emulateMedia({ colorScheme: dark ? "dark" : "light", reducedMotion: "reduce" }); await login(page); const { id } = await seed(page, `Smoke accessibility ${dark ? "dark" : "light"}`, 3);
   const audit = async () => { const result = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze(); expect(result.violations.map((issue) => ({ id: issue.id, nodes: issue.nodes.map((node) => node.target) }))).toEqual([]); };
   for (const hash of ["", "inventory", `projects/${id}/plan`, `projects/${id}/files`, `projects/${id}/offers`, `projects/${id}/build`, "settings", "capabilities"]) { await page.goto(`/#/${hash}`); await expect(page.locator("main")).toBeVisible(); await audit(); }
-  await page.goto("/#/inventory"); await page.locator(".table-item").first().click(); await audit(); await page.keyboard.press("Escape");
+  await page.goto("/#/inventory"); await page.locator(".inventory-table .row-open").first().click(); await audit(); await page.keyboard.press("Escape");
   await page.getByLabel("Open workspace commands").click(); await audit(); await page.keyboard.press("Escape");
   await page.goto(`/#/projects/${id}/plan`); await page.getByRole("button", { name: "Edit project", exact: true }).click(); await audit(); await page.keyboard.press("Escape");
   await page.setViewportSize({ width: 320, height: 800 }); await audit();

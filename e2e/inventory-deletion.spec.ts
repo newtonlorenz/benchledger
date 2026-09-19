@@ -14,7 +14,7 @@ for (const kind of ["printer", "electronic"] as const) test(`delete ${kind} with
   expect(result.status).toBe(201);
   await page.reload();
   await page.getByRole("button", { name: /^Inventory(?: \d+)?$/u }).click();
-  await page.getByRole("button", { name: new RegExp(name) }).first().click();
+  await page.getByRole("button", { name: new RegExp(`^Open ${name}`) }).click();
   const label = kind === "printer" ? "Delete printer" : "Delete item";
   await page.getByRole("button", { name: label, exact: true }).click();
   const dialog = page.getByRole("alertdialog", { name: `Delete ${name}?` });

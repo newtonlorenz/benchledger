@@ -583,12 +583,14 @@ function textFields(input: UnknownRecord, label: string, output: Record<string, 
 
 export function inventoryList(value: unknown): InventoryListInput {
   const input = record(value ?? {}, "arguments");
-  keys(input, ["limit", "cursor", "query", "category", "categoryNodeId", "unassigned", "availability", "location"], "arguments");
+  keys(input, ["limit", "cursor", "query", "category", "categoryNodeId", "unassigned", "availability", "location", "stockView", "sort"], "arguments");
   // Location filtering is applied after bounded application pages and uses a
   // compact opaque cursor that can contain a near-maximum source cursor.
   const page = parsePageInput({ limit: input.limit, cursor: input.cursor }, "arguments", input.location === undefined ? 200 : 512);
   const result: InventoryListInput = {
     ...page,
+    stockView: optionalEnum(input.stockView, "arguments.stockView", ["available", "check", "reserved", "depleted"] as const),
+    sort: optionalEnum(input.sort, "arguments.sort", ["name", "name_desc", "location"] as const),
     query: optionalString(input.query, "arguments.query", 200),
     category: optionalString(input.category, "arguments.category", 128),
     categoryNodeId: input.categoryNodeId === undefined ? undefined : categoryId(input.categoryNodeId, "arguments.categoryNodeId"),

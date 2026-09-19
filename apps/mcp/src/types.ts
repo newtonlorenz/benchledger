@@ -147,6 +147,10 @@ export interface InventoryItem {
   unitStatus?: "compatible" | "needs_correction";
   unitCorrectionReason?: string;
   availability: Availability;
+  /** Shared stock queues; available stock still needs project compatibility checks. */
+  stockViews?: readonly import("@benchledger/domain/inventory-workspace").InventoryStockView[];
+  /** Canonical condition, preserving repair needs hidden by legacy condition aliases. */
+  stockCondition?: "new" | "good" | "worn" | "needs_repair" | "unknown";
   evidence: EvidenceSummary;
   description?: string;
   manufacturer?: string;
@@ -186,6 +190,8 @@ export interface InventorySummary {
 }
 
 export interface InventoryListInput extends PageInput {
+  stockView?: import("@benchledger/domain/inventory-workspace").InventoryStockView;
+  sort?: import("@benchledger/domain/inventory-workspace").InventorySortOrder;
   query?: string;
   category?: string;
   /** Exact managed taxonomy node filter; distinct from semantic `category`. */

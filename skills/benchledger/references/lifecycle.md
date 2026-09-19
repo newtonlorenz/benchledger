@@ -27,6 +27,15 @@ Call `refresh_context`, then read the bounded inventory summary and pages. Read
 individual items when dimensions, condition, location, stock history, or links
 affect the decision.
 
+Use `list_inventory` with `stockView: "available"` to find counted/commissioned
+stock with an available balance, valid units and no known repair need. Use
+`check`, `reserved` or `depleted` for the corresponding stock queues. These
+filters and `sort: "name" | "name_desc" | "location"` apply before pagination.
+Read `stockCondition` for canonical repair needs and `stockViews` for shared
+queue membership. A positive balance does not establish project compatibility.
+A copied UI brief covers selected records only; refresh quantities and versions
+before any authorised write. Follow the same filters/sort with each next cursor.
+
 For printers and filament:
 
 1. `search_catalog_products` / `read_catalog_product` identifies an exact
