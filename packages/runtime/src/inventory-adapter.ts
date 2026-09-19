@@ -1,3 +1,4 @@
+import { matchesInventoryStockView, compareInventoryRecords } from "@benchledger/domain/inventory-workspace";
 import { matchesInventorySearch } from "@benchledger/domain/inventory-search";
 import { createId, createStockEvent, DomainError } from "@benchledger/domain";
 import type { CommissionInventoryItem, InventoryItem as ApiInventoryItem, CreateInventoryItem, StockEvent as ApiStockEvent, StockEventInput } from "@benchledger/api-contract";
@@ -23,12 +24,6 @@ function ensureDescriptiveUpdate(input: UpdateInventoryInput): void {
 function isSearchMatch(item: ApiInventoryItem, query: string | undefined): boolean {
   if (query === undefined || query.trim().length === 0) return true;
   return matchesInventorySearch([item.name, item.description, item.manufacturer, item.model, item.sku, item.location, ...item.tags], query);
-}
-
-function compareInventoryItems(left: Pick<ApiInventoryItem, "name" | "id">, right: Pick<ApiInventoryItem, "name" | "id">): number {
-  return left.name.trim().toLocaleLowerCase().localeCompare(right.name.trim().toLocaleLowerCase())
-    || left.name.localeCompare(right.name)
-    || left.id.localeCompare(right.id);
 }
 
 function mergeInventoryInput(current: ApiInventoryItem, input: UpdateInventoryInput): CreateInventoryItem {
@@ -98,6 +93,8 @@ export class ProductionInventoryAdapter implements InventoryPort {
       const offset = parseInventoryCursor(options.cursor);
       const records = this.repository.list({ includeRetired: true });
       const items = records.map((item) => this.toApi(item)).filter((item) => {
+        if (!matchesInventoryStockView(item, options.stockView)) return false;
+        if (options.location !== undefined && (item.location ?? "") !== options.location) return false;
         if (!options.includeRetired && item.retiredAt !== undefined) return false;
         if (options.kind !== undefined && item.kind !== options.kind) return false;
         if (options.evidence !== undefined && item.evidence.state !== options.evidence) return false;
@@ -105,7 +102,7 @@ export class ProductionInventoryAdapter implements InventoryPort {
         if (options.categoryNodeId !== undefined && item.categoryNodeId !== options.categoryNodeId) return false;
         if (options.unassigned === true && item.categoryNodeId !== undefined) return false;
         return isSearchMatch(item, options.q);
-      }).sort(compareInventoryItems);
+      }).sort((a, b) => compareInventoryRecords(a, b, options.sort));
       const data = items.slice(offset, offset + options.limit);
       const nextOffset = offset + data.length < items.length ? offset + data.length : undefined;
       return {

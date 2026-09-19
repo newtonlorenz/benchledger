@@ -5,7 +5,7 @@ test("inventory image gallery uploads, renders and survives reload on a narrow s
   await page.getByLabel("Workspace password").fill("demo-password-please-change");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.getByRole("button", { name: /^Inventory(?: \d+)?$/u }).click();
-  await page.getByRole("button", { name: /Bambu Lab H2D/u }).first().click();
+  await page.getByRole("button", { name: /^Open Bambu Lab H2D/u }).first().click();
   const gallery = page.getByRole("region", { name: "Item images" });
   await gallery.getByText("Add image", { exact: true }).click();
   await gallery.getByLabel("Image file").setInputFiles({ name: "synthetic-printer.png", mimeType: "image/png", buffer: png });
@@ -17,7 +17,7 @@ test("inventory image gallery uploads, renders and survives reload on a narrow s
   await expect.poll(() => photo.evaluate(img => (img as HTMLImageElement).naturalWidth)).toBe(8);
   await expect(gallery.locator("figcaption")).toContainText("Reference image");
   await page.reload();
-  await page.getByRole("button", { name: /Bambu Lab H2D/u }).first().click();
+  await page.getByRole("button", { name: /^Open Bambu Lab H2D/u }).first().click();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(photo).toBeVisible();
   const bounds = await photo.boundingBox(); expect(bounds!.width).toBeLessThanOrEqual(390);
@@ -28,7 +28,7 @@ test("closing an image draft keeps focus in the discard confirmation and preserv
   await page.getByLabel("Workspace password").fill("demo-password-please-change");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.getByRole("button", { name: /^Inventory(?: \d+)?$/u }).click();
-  await page.getByRole("button", { name: /Bambu Lab H2D/u }).first().click();
+  await page.getByRole("button", { name: /^Open Bambu Lab H2D/u }).first().click();
   const gallery = page.getByRole("region", { name: "Item images" });
   await gallery.getByText("Add image", { exact: true }).click();
   await gallery.getByLabel("Image file").setInputFiles({ name: "draft.png", mimeType: "image/png", buffer: png });

@@ -200,6 +200,9 @@ export interface Page<T> {
 }
 
 export interface InventoryListOptions {
+  readonly stockView?: InventoryListQuery["stockView"];
+  readonly sort?: InventoryListQuery["sort"];
+  readonly location?: string;
   readonly q?: string;
   readonly kind?: InventoryListQuery["kind"];
   readonly evidence?: InventoryListQuery["evidence"];

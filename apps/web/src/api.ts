@@ -1,3 +1,4 @@
+import { matchesInventoryStockView, compareInventoryRecords } from "@benchledger/domain/inventory-workspace";
 import { matchesInventorySearch } from "@benchledger/domain/inventory-search";
 import { catalogProducts as fallbackCatalogProducts, inventory as fallbackInventory, offers as fallbackOffers, projects as fallbackProjects } from "./mock-data";
 import type {
@@ -202,6 +203,9 @@ export interface WorkspaceSnapshot { inventory: InventoryItem[]; projects: Proje
 export interface InventoryCategoryPage { data: readonly ManagedInventoryCategory[]; nextCursor?: string; limit: number; total?: number }
 export type InventoryKindQuery = "printer" | "tool" | "accessory" | "consumable" | "electronic" | "fastener" | "filament" | "wire" | "adhesive" | "other";
 export interface InventoryListQuery {
+  stockView?: import("@benchledger/domain/inventory-workspace").InventoryStockView;
+  sort?: import("@benchledger/domain/inventory-workspace").InventorySortOrder;
+  location?: string;
   q?: string;
   kind?: InventoryKindQuery;
   evidence?: InventoryEvidenceState;
@@ -2215,12 +2219,6 @@ function syntheticSnapshot(): WorkspaceSnapshot {
   return { inventory, projects: structuredClone(fallbackProjects), offers: structuredClone(fallbackOffers), source: "synthetic", fetchedAt: new Date().toISOString(), capabilities: [] };
 }
 
-function compareInventoryItems(left: Pick<InventoryItem, "name" | "id">, right: Pick<InventoryItem, "name" | "id">): number {
-  return left.name.trim().toLocaleLowerCase().localeCompare(right.name.trim().toLocaleLowerCase())
-    || left.name.localeCompare(right.name)
-    || left.id.localeCompare(right.id);
-}
-
 function canonicalSampleEvidence(item: InventoryItem): InventoryEvidenceState {
   if (item.serverEvidence !== undefined) return item.serverEvidence;
   if (item.evidence === "counted") return "physically_counted";
@@ -2249,6 +2247,8 @@ function sampleInventoryPage(items: readonly InventoryItem[], query: InventoryLi
   const offset = cursor === undefined ? 0 : Number(cursor);
   const normalized = query.q?.trim().toLocaleLowerCase();
   const filtered = items.filter((item) => {
+    if (!matchesInventoryStockView({ ...item, allocatedQuantity: item.reserved, evidence: { state: canonicalSampleEvidence(item) } }, query.stockView)) return false;
+    if (query.location !== undefined && (item.location === "Unassigned" ? "" : item.location) !== query.location) return false;
     if (query.kind !== undefined && item.kind !== query.kind) return false;
     if (query.evidence !== undefined && canonicalSampleEvidence(item) !== query.evidence) return false;
     if (query.available !== undefined && ((item.availableQuantity ?? 0) > 0) !== query.available) return false;
@@ -2256,7 +2256,7 @@ function sampleInventoryPage(items: readonly InventoryItem[], query: InventoryLi
     if (query.unassigned === true && item.categoryNodeId !== undefined) return false;
     if (!normalized) return true;
     return matchesInventorySearch([item.name, item.variant, item.description, item.location, item.manufacturer, item.model, item.sku, ...item.tags], normalized);
-  }).sort(compareInventoryItems);
+  }).sort((a, b) => compareInventoryRecords(a, b, query.sort));
   const selected = filtered.slice(offset, offset + query.limit);
   const nextOffset = offset + selected.length < filtered.length ? offset + selected.length : undefined;
   return { items: selected.map((item) => structuredClone(item)), limit: query.limit, total: filtered.length, ...(nextOffset === undefined ? {} : { nextCursor: String(nextOffset) }) };
@@ -2982,6 +2982,9 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       const params = new URLSearchParams();
       const normalizedQuery = query.q?.trim().slice(0, MAX_INVENTORY_SEARCH_LENGTH);
       if (normalizedQuery) params.set("q", normalizedQuery);
+      if (query.stockView) params.set("stockView", query.stockView);
+      if (query.sort) params.set("sort", query.sort);
+      if (query.location !== undefined) params.set("location", query.location);
       if (query.kind) params.set("kind", query.kind);
       if (query.evidence) params.set("evidence", query.evidence);
       if (query.available !== undefined) params.set("available", String(query.available));

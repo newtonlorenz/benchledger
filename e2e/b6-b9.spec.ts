@@ -147,6 +147,7 @@ test("keeps inventory and shopping actions usable at 390px without horizontal ov
   await openInventory(page);
 
   await expect(page.locator(".global-search")).toHaveCount(0);
+  await page.getByRole("button", { name: "Filters", exact: true }).click();
   const inventoryControls = page.locator(".inventory-toolbar .field-search, .inventory-toolbar .category-control");
   for (const control of await inventoryControls.all()) {
     const box = await control.boundingBox();
@@ -154,7 +155,7 @@ test("keeps inventory and shopping actions usable at 390px without horizontal ov
     expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
   }
   await page.getByLabel("Select all loaded inventory items").check();
-  const selectionButton = page.locator(".inventory-selection-bar .button");
+  const selectionButton = page.getByRole("button", { name: "Bulk edit", exact: true });
   await expect(selectionButton).toBeVisible();
   const selectionBox = await selectionButton.boundingBox();
   expect(selectionBox?.width ?? 0).toBeGreaterThanOrEqual(44);

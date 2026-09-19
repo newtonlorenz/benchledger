@@ -8,6 +8,7 @@ import "./styles.css";
 import "./workspace-design.css";
 import "./workflow-polish.css";
 import "./desktop-workspace.css";
+import "./inventory-workspace.css";
 import { applyAppearance, readAppearance } from "./appearance";
 
 applyAppearance(readAppearance());

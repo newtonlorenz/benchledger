@@ -89,9 +89,28 @@ to use `kind`. If the add form has no active categories, choose **Open Settings*
 from that form, create one, and return to Inventory. Existing legacy items may
 be unassigned until edited.
 
+Inventory's sidebar browses these categories directly. Each entry filters its
+own assigned items; selecting a parent does not include its subcategories.
+Click a record to inspect it, then double-click, press Enter/F2 or choose
+**Open item** to edit. **Columns** controls optional fields and resets the layout;
+inspector visibility and width are also remembered locally. These display
+preferences do not change agent queries or stock evidence.
+
 For paged inventory reads, pass `categoryNodeId` to filter by an exact managed
 node or `unassigned: true` to select legacy items without an assignment. These
 filters are applied before pagination and cannot be combined.
+
+Use `stockView: "available"` for counted/commissioned stock with a usable unit,
+positive available balance and no known repair need; check compatibility against
+the project's requirements separately. The other shared queues are `check`,
+`reserved` (including partial allocations) and `depleted` (confirmed zero stock).
+`sort` accepts `name`, `name_desc` and `location` before pagination. MCP rows retain
+canonical repair information in `stockCondition` and membership in `stockViews`.
+See [the inventory workstation contract](capability-map.md#inventory-workstation).
+
+The UI inspector provides **Copy for AI** for explicitly selected records only.
+Its dated snapshot includes evidence and versions, sends nothing automatically,
+and must not be treated as a full stocktake or authority to mutate stock.
 
 All list responses are bounded pages. Follow `nextCursor`; never request an
 unbounded database dump. Inventory cursors are opaque read-committed continuation

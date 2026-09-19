@@ -16,6 +16,46 @@ working width. On narrow screens, open the
 navigation drawer to switch projects or archive views. These changes do not
 add API or MCP operations or change stock evidence.
 
+## Inventory workstation
+
+Inventory has a sortable register, a persistent inspector, explicit recorded and
+available balances, stock queues, and up to 12 browser-local saved views. The
+inspector exposes identity, storage, condition, reservations and stock provenance.
+The sidebar provides searchable managed categories and exact subcategory filters.
+A single click selects; double-click, Enter, F2 or **Open item** opens the editor.
+Arrow keys move the inspected row. Bulk checkboxes remain
+separate from inspection and apply only to loaded records with observed versions.
+The desktop register and inspector scroll independently; narrow screens disclose
+filters and place the inspector below the horizontally scrollable register.
+**Columns** controls optional category, location, reserved and SKU columns and
+provides **Reset layout**. Inspector visibility, width and column choices are
+remembered in this browser, separately for sample and private workspaces. The
+divider supports pointer dragging and keyboard resizing. Item and Location
+headers provide the existing server-side sorting options.
+
+**Copy for AI** copies only the inspected or explicitly selected loaded records,
+with canonical units, evidence, versions, scope and compatibility caveats. It does
+not send data, reserve stock or authorise a purchase. Clipboard denial exposes a
+selectable text fallback. Saved views are local preferences, separate for sample
+and private workspaces, and are not shared with agents or other browsers.
+
+`GET /api/v1/inventory` and MCP `list_inventory` accept `stockView`:
+
+| Value | Meaning |
+| --- | --- |
+| `available` | Counted/commissioned stock with a positive available balance, valid units and no known repair need. Compatibility still requires project evaluation. |
+| `check` | Unverified evidence, missing available balances, invalid units or repair needs. |
+| `reserved` | Positive allocated quantity, including partial reservations. May overlap `available`. |
+| `depleted` | Zero on hand with confirmed or consumed evidence; never merely fully reserved or uncounted. |
+
+Both transports accept `sort: name` (default), `name_desc` or `location`, with
+name/ID tie-breaks, before pagination. HTTP `location` is an exact optional filter
+(an empty value selects no recorded location); MCP retains its existing exact
+location filter. Existing evidence/availability parameters retain their semantics.
+MCP records also expose `stockViews` and `stockCondition` (canonical condition),
+preserving `needs_repair` alongside the legacy condition alias. These are read-only
+additions; write scopes, append-only stock events and expected versions are unchanged.
+
 ## Inventory images
 
 All inventory kinds, including printers, have a browser image gallery and the
@@ -309,8 +349,8 @@ identity search.
 
 The Inventory destination uses the authenticated `GET /api/v1/inventory` page
 directly, with server-side search, canonical kind/evidence/availability filters,
-normalized-name-plus-id ordering, and a default page size of 25 with **Load
-more**. Each response is read-committed: `nextCursor` is opaque and should be
+stock-view and exact-location filters, stable name/location ordering, and a
+default page size of 25 with **Load more**. Each response is read-committed: `nextCursor` is opaque and should be
 passed back unchanged, but concurrent writes may change later pages. Keyset
 snapshot semantics are deliberately deferred. The bounded `/workspace` preview
 continues to support the overview and project flows; it is not the inventory
@@ -319,7 +359,7 @@ profiles when present.
 
 | Human workflow | UI surface | MCP composition |
 | --- | --- | --- |
-| See what I have | Inventory dashboard and item detail | `read_inventory_summary` → `list_inventory` → item resource |
+| See what I have | Inventory register, stock queues and persistent inspector | `read_inventory_summary` → `list_inventory` → item resource |
 | Organize inventory | Settings category manager; inventory table, category filter, and item drawer show managed assignments | `list_inventory_categories` → `create_inventory_category` / `update_inventory_category` / `archive_inventory_category`; pass `categoryNodeId` when creating or updating an item; `kind` remains the separate semantic filter |
 | Correct metadata across loaded items | Explicit inventory selection and confirmation dialog | `bulk_update_inventory_items` with 1–100 `{itemId, expectedVersion}` targets; location, canonical condition, or normalized tag add/remove only; atomic preflight, deterministic updated/unchanged results, and no-op rows emit no audit/event |
 | Count uncertain stock | Item count form and stock timeline | `read_inventory_item` → `record_stock_event(kind=count_correction)` |

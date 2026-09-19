@@ -1,8 +1,9 @@
+import { matchesInventoryStockView, compareInventoryRecords } from "@benchledger/domain/inventory-workspace";
 import { importAssemblyFile } from "@benchledger/runtime";
 import { MemoryInventoryImages } from "@benchledger/runtime";
 import { MemoryTeam } from "./memory-team.js";
 import { MemoryMakerWorkflows } from "./memory-maker-workflows.js";
-import { changesReservedRequirement } from "@benchledger/api-contract";
+import { changesReservedRequirement, unitCorrectionReason } from "@benchledger/api-contract";
 import type { UpdateBomLine } from "@benchledger/api-contract";
 import { matchesInventorySearch } from "@benchledger/domain/inventory-search";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -244,6 +245,8 @@ class MemoryInventory implements InventoryPort {
     const normalizedOptions = normalizeInventoryListOptions(options);
     const normalized = normalizedOptions.q?.toLocaleLowerCase();
     const items = [...this.items.values()].filter((item) => {
+      if (!matchesInventoryStockView({ ...item, unitStatus: unitCorrectionReason(item.kind, item.unit) ? "needs_correction" : "compatible" }, normalizedOptions.stockView)) return false;
+      if (normalizedOptions.location !== undefined && (item.location ?? "") !== normalizedOptions.location) return false;
       if (!normalizedOptions.includeRetired && item.retiredAt !== undefined) return false;
       if (normalizedOptions.kind && item.kind !== normalizedOptions.kind) return false;
       if (normalizedOptions.evidence && item.evidence.state !== normalizedOptions.evidence) return false;
@@ -252,7 +255,7 @@ class MemoryInventory implements InventoryPort {
       if (normalizedOptions.unassigned === true && item.categoryNodeId !== undefined) return false;
       if (!normalized) return true;
       return matchesInventorySearch([item.name, item.description, item.manufacturer, item.model, item.sku, item.location, ...item.tags], normalized);
-    }).sort((a, b) => a.name.trim().toLocaleLowerCase().localeCompare(b.name.trim().toLocaleLowerCase()) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+    }).sort((a, b) => compareInventoryRecords(a, b, normalizedOptions.sort));
     const offset = parseInventoryCursor(normalizedOptions.cursor);
     const selected = items.slice(offset, offset + normalizedOptions.limit);
     const nextOffset = offset + selected.length < items.length ? offset + selected.length : undefined;
