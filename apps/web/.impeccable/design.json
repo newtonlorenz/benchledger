@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 2,
+  "title": "BenchLedger shadcn workspace",
+  "extensions": {
+    "shadows": [
+      {
+        "name": "popover",
+        "value": "0 12px 32px rgb(24 24 27 / 12%)",
+        "purpose": "Elevated transient controls."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "drawer-navigation",
+        "value": "800px"
+      },
+      {
+        "name": "stacked-home",
+        "value": "1250px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Main action within the current task.",
+      "html": "<button class=\"primary\">New project</button>",
+      "css": ".primary { background:#21634e; color:#fff; border:0; border-radius:8px; padding:8px 12px; font:500 14px sans-serif; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "A clear, consistent maker workspace",
+    "overview": "Neutral shadcn controls around real inventory and project records.",
+    "dos": [
+      "Keep stock evidence labels visible.",
+      "Use the shared components and semantic theme tokens."
+    ],
+    "donts": [
+      "Do not infer physical readiness from visual state.",
+      "Do not introduce global preflight into embedded viewers."
+    ]
+  }
+}

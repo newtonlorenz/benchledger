@@ -48,7 +48,7 @@ test("commands open pages and forms by keyboard while retaining focus boundaries
   const input = page.getByRole("combobox", { name: "Find a page, project or action", exact: true }); await expect(input).toBeFocused();
   await input.fill("settings"); await input.press("Enter"); await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible(); await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.getByLabel("Open workspace commands").click(); await input.fill("new project"); await input.press("Enter");
-  await expect(page.getByRole("dialog", { name: "Create project", exact: true })).toBeVisible(); await expect(page.locator(".app-background")).toHaveAttribute("inert", "");
+  await expect(page.getByRole("dialog", { name: "Create project", exact: true })).toBeVisible(); await expect(page.locator(".app-background")).toHaveAttribute("aria-hidden", "true");
   await page.keyboard.press("Escape"); await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.keyboard.press("Control+k"); await expect(page.getByPlaceholder("Search name, model, tag, or location")).toBeFocused();
 });

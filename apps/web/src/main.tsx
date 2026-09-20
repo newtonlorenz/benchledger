@@ -4,11 +4,8 @@ import App from "./App";
 import "@fontsource-variable/ibm-plex-sans/wght.css";
 import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-500.css";
-import "./styles.css";
-import "./workspace-design.css";
-import "./workflow-polish.css";
-import "./desktop-workspace.css";
-import "./inventory-workspace.css";
+import "./shadcn.css";
+import "./workspace-layout.css";
 import { applyAppearance, readAppearance } from "./appearance";
 
 applyAppearance(readAppearance());

@@ -1,4 +1,5 @@
-import { renderToStaticMarkup } from "react-dom/server";
+// @vitest-environment jsdom
+import { renderToStaticMarkup } from "./test-render-markup";
 import { describe, expect, it } from "vitest";
 import {
   ReconciliationUI,

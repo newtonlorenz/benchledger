@@ -1,5 +1,7 @@
-import { useRef } from "react";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import { useRef, useState, useEffect, type ReactNode } from "react";
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "./components/ui/resizable";
+import type { PanelImperativeHandle } from "react-resizable-panels";
+
 
 export const inventoryOptionalColumns = ["category", "location", "reserved", "sku"] as const;
 export type InventoryOptionalColumn = typeof inventoryOptionalColumns[number];
@@ -31,22 +33,11 @@ export function writeInventoryLayout(value: InventoryLayout, sample: boolean): b
   try { localStorage.setItem(inventoryLayoutKey(sample), JSON.stringify(value)); return true; } catch { return false; }
 }
 
-/** Pointer capture keeps a resize active until the drag ends. */
-export function InventorySplitter({ width, onChange }: { width: number; onChange(width: number, commit: boolean): void }) {
-  const drag = useRef<{ pointerId: number; x: number; width: number; latest: number } | undefined>(undefined);
-  const finish = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!drag.current || drag.current.pointerId !== event.pointerId) return;
-    const latest = drag.current.latest; drag.current = undefined;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    onChange(latest, true);
-  };
-  return <div className="inventory-splitter" role="separator" tabIndex={0} aria-label="Resize item inspector" aria-orientation="vertical" aria-controls="inventory-item-inspector" aria-valuemin={260} aria-valuemax={480} aria-valuenow={width} aria-valuetext={`${width} pixels wide`} title="Drag to resize. Arrow keys adjust width; double-click resets." onDoubleClick={() => onChange(300, true)}
-    onKeyDown={(event) => {
-      const step = event.shiftKey ? 40 : 10;
-      const next = event.key === "ArrowLeft" ? width + step : event.key === "ArrowRight" ? width - step : event.key === "Home" ? 260 : event.key === "End" ? 480 : undefined;
-      if (next !== undefined) { event.preventDefault(); onChange(clampInspectorWidth(next), true); }
-    }}
-    onPointerDown={(event) => { if (event.button !== 0) return; event.preventDefault(); event.currentTarget.focus(); event.currentTarget.setPointerCapture(event.pointerId); drag.current = { pointerId: event.pointerId, x: event.clientX, width, latest: width }; }}
-    onPointerMove={(event) => { if (!drag.current || drag.current.pointerId !== event.pointerId) return; const next = clampInspectorWidth(drag.current.width + drag.current.x - event.clientX); drag.current.latest = next; onChange(next, false); }}
-    onPointerUp={finish} onPointerCancel={finish} onLostPointerCapture={finish}><span /></div>;
+/** Pixel preference is domain state; the shared resizable primitive owns drag and keyboard behaviour. */
+export function InventoryPanels({ width, onChange, register, inspector }: { width: number; onChange(width: number): void; register: ReactNode; inspector: ReactNode }) {
+ const [wide,setWide] = useState(() => typeof window !== "undefined" && window.matchMedia("(min-width:1101px)").matches);
+ const panel = useRef<PanelImperativeHandle>(null); const current = useRef(width);
+ useEffect(() => { const media = window.matchMedia("(min-width:1101px)"); const update=()=>setWide(media.matches); media.addEventListener("change",update); return ()=>media.removeEventListener("change",update); },[]);
+ if (!wide || !inspector) return <div className="inventory-work-area">{register}{inspector}</div>;
+ return <ResizablePanelGroup className="inventory-work-area inventory-panels" orientation="horizontal" onLayoutChanged={() => { if (current.current !== width) onChange(current.current); }}><ResizablePanel id="inventory-register" minSize={300}>{register}</ResizablePanel><ResizableHandle className="inventory-splitter" aria-label="Resize item inspector" withHandle onDoubleClick={() => panel.current?.resize(300)}/><ResizablePanel id="inventory-inspector-panel" panelRef={panel} defaultSize={width} minSize={260} maxSize={480} groupResizeBehavior="preserve-pixel-size" onResize={size=>{current.current=clampInspectorWidth(size.inPixels);}}>{inspector}</ResizablePanel></ResizablePanelGroup>;
 }

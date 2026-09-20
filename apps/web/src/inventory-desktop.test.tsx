@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { InventoryNavigator } from "./inventory-navigator";
-import { InventorySplitter, parseInventoryLayout, readInventoryLayout, writeInventoryLayout } from "./inventory-layout";
+import { InventoryPanels, parseInventoryLayout, readInventoryLayout, writeInventoryLayout } from "./inventory-layout";
 import type { ManagedInventoryCategory } from "./category-ui";
 import { InventoryTable } from "./App";
 import { inventory } from "./mock-data";
@@ -48,14 +48,11 @@ it("validates and bounds layout preferences, without mixing sample and workspace
   vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("denied"); });
   expect(readInventoryLayout(true).inspectorWidth).toBe(300);
 });
-it("resizes the inspector with accessible keyboard increments and a reset", () => {
-  const onChange = vi.fn(); render(<InventorySplitter width={300} onChange={onChange} />);
-  const control = screen.getByRole("separator", { name: "Resize item inspector" });
-  fireEvent.keyDown(control, { key: "ArrowLeft" }); expect(onChange).toHaveBeenLastCalledWith(310, true);
-  fireEvent.keyDown(control, { key: "ArrowRight", shiftKey: true }); expect(onChange).toHaveBeenLastCalledWith(260, true);
-  fireEvent.keyDown(control, { key: "Home" }); expect(onChange).toHaveBeenLastCalledWith(260, true);
-  fireEvent.keyDown(control, { key: "End" }); expect(onChange).toHaveBeenLastCalledWith(480, true);
-  fireEvent.doubleClick(control); expect(onChange).toHaveBeenLastCalledWith(300, true);
+it("preserves inventory and inspector content when the workspace is narrow", () => {
+  vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
+  render(<InventoryPanels width={300} onChange={vi.fn()} register={<div>Stock register</div>} inspector={<div>Item properties</div>} />);
+  expect(screen.getByText("Stock register")).toBeTruthy(); expect(screen.getByText("Item properties")).toBeTruthy();
+  expect(screen.queryByRole("separator")).toBeNull();
 });
 it("separates row inspection from opening, and sorts from labelled column headers", () => {
   const item = inventory[0]!, onInspectItem = vi.fn(), onSelectItem = vi.fn(), onSortChange = vi.fn();

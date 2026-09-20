@@ -7,6 +7,11 @@ first public release; all current work is under **Unreleased**.
 
 ### Added
 
+- Shadcn web foundation across forms, navigation, tables, tabs, dialogs, drawers,
+  search pickers, menus, resizable inventory panels and notifications. One semantic
+  light/dark theme replaces the competing visual layers; protected drafts and
+  stock confirmation rules are retained.
+
 - Desktop workspace with persistent project navigation, compact document tools,
   independently scrolling content and a collapsible project inspector.
 

@@ -1,4 +1,5 @@
-import { renderToStaticMarkup } from "react-dom/server";
+// @vitest-environment jsdom
+import { renderToStaticMarkup } from "./test-render-markup";
 import { describe, expect, it } from "vitest";
 import {
   BuildApproachCard,
@@ -145,7 +146,7 @@ describe("build route UI", () => {
 
     const item = { ...inventory[0]!, version: 1 };
     const markup = renderToStaticMarkup(<BulkInventoryDialog selectedItems={[item]} onClose={noop} onDone={noop} onApply={async () => ({ updated: [], unchanged: [], audits: [], correlationId: "bulk-test", replayed: false })} />);
-    expect(markup).toMatch(/<button type="submit"[^>]*disabled="">\s+Review changes/u);
+    expect(markup).toMatch(/<button[^>]*type="submit"[^>]*disabled="">\s+Review changes/u);
   });
 
   it("directs agents to the live contract without advertising stale tools", () => {

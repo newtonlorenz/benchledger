@@ -189,7 +189,7 @@ test("explicit refresh discard resets the local build editor rather than claimin
 test("workstream pagination cannot drop a dirty assignment", async ({ page }) => {
   const { id, post } = await fixture(page, false);
   for (let i = 0; i < 21; i++) await post(`/projects/${id}/workstreams`, { name: `Workstream ${i.toString().padStart(2, "0")}`, kind: "assembly" });
-  await tab(page, "Build planning"); await page.locator(".workstream-row > summary").first().click();
+  await tab(page, "Build planning"); await page.locator(".workstream-row > [data-disclosure='trigger']").first().click();
   await page.locator(".workstream-row").first().getByRole("textbox", { name: "Workstream notes", exact: true }).fill("Keep this assignment");
   await page.getByRole("button", { name: "Next workstreams", exact: true }).click();
   await expect(page.getByRole("alertdialog")).toBeVisible(); await page.getByRole("button", { name: "Keep editing", exact: true }).click();

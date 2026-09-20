@@ -1,3 +1,12 @@
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from "./components/ui/dropdown-menu";
+import { Alert } from "./components/ui/alert";
+import { Disclosure, DisclosureTrigger, DisclosureContent } from "./components/ui/disclosure";
+import { Label } from "./components/ui/label";
+import { NativeSelect, NativeSelectOption } from "./components/ui/native-select";
+import { Checkbox } from "./components/ui/checkbox";
+import { Button } from "./components/ui/button";
+import { Textarea } from "./components/ui/textarea";
+import { Input } from "./components/ui/input";
 import { UnsavedWorkContext } from "./unsaved-work";
 import { Icon } from "./icons";
 import { createContext, useContext, useEffect, useState } from "react";
@@ -26,7 +35,7 @@ function correctionError(error: unknown): string {
 export function RequirementEditAction({ line }: { line: BomLine }) {
   const actions = useContext(ProjectEditingContext);
   if (!actions || actions.project.status === "archived") return null;
-  return <button type="button" className="text-button requirement-edit-action" aria-label={`Edit requirement ${line.label}`} onClick={() => actions.editRequirement(line)}>Edit requirement</button>;
+  return <Button variant="ghost" type="button" className="text-button requirement-edit-action" aria-label={`Edit requirement ${line.label}`} onClick={() => actions.editRequirement(line)}>Edit requirement</Button>;
 }
 
 export function ProjectManagementBar() {
@@ -47,10 +56,10 @@ export function ProjectManagementBar() {
   const download = (format: "json" | "csv") => { try { saveProjectHandoff(project, format); setError(undefined); } catch { setError("The export could not be created. Retry in this browser."); } };
   return <section className="project-management-bar" aria-label="Project management">
     <span className="project-stage">Stage: <strong>{project.status.charAt(0).toUpperCase() + project.status.slice(1)}</strong></span>
-    {actions.refreshProject && <button type="button" className="button button-quiet" disabled={refreshing} onClick={() => navigation ? navigation.request(() => { void refresh(); }) : void refresh()} aria-label="Refresh project"><Icon name="refresh" size={15} />{refreshing ? "Refreshing…" : "Refresh"}</button>}
-    {project.status !== "archived" && <button type="button" className="button button-quiet" onClick={actions.editProject}>Edit project</button>}
-    <details className="project-export"><summary>Export project</summary><div className="project-export-options"><p>Includes project names, notes and identifiers. Review before sharing. These are snapshots, not backups.</p><button type="button" className="button button-quiet" onClick={() => download("csv")}>Download requirements CSV</button><button type="button" className="button button-quiet" onClick={() => download("json")}>Download project brief JSON</button></div></details>
-    {error && <p role="alert" className="form-error">{error}</p>}
+    {actions.refreshProject && <Button variant="ghost" type="button" className="button button-quiet" disabled={refreshing} onClick={() => navigation ? navigation.request(() => { void refresh(); }) : void refresh()} aria-label="Refresh project"><Icon name="refresh" size={15} />{refreshing ? "Refreshing…" : "Refresh"}</Button>}
+    {project.status !== "archived" && <Button variant="ghost" type="button" className="button button-quiet" onClick={actions.editProject}>Edit project</Button>}
+    <DropdownMenu><DropdownMenuTrigger asChild><Button variant="outline">Export project</Button></DropdownMenuTrigger><DropdownMenuContent align="end" className="max-w-xs"><DropdownMenuLabel>Review before sharing</DropdownMenuLabel><p className="px-2 py-1 text-xs text-muted-foreground">Includes project names, notes and identifiers. These are snapshots, not backups.</p><DropdownMenuSeparator/><DropdownMenuItem onSelect={() => download("csv")}>Download requirements CSV</DropdownMenuItem><DropdownMenuItem onSelect={() => download("json")}>Download project brief JSON</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
+    {error && <Alert asChild><p role="alert" className="form-error">{error}</p></Alert>}
     {refreshed && !refreshing && !error && <p role="status" className="project-refresh-status">Project refreshed from the workspace.</p>}
   </section>;
 }
@@ -74,12 +83,12 @@ export function RemovedRequirements() {
     catch (failure) { setError(correctionError(failure)); }
     finally { setBusy(undefined); }
   };
-  return <details className="removed-requirements surface" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}><summary>Removed requirements</summary>
+  return <Disclosure className="removed-requirements surface" open={open} onOpenChange={(open) => setOpen(open)}><DisclosureTrigger>Removed requirements</DisclosureTrigger><DisclosureContent>
     <p>Removed requirements keep their history. Restoring one does not reserve or consume stock.</p>
-    {loading ? <p role="status">Loading removed requirements…</p> : rows.length ? rows.map((line) => <div className="removed-requirement" key={line.id}><span>{line.label}</span><button type="button" className="button button-quiet" disabled={busy !== undefined || actions.project.status === "archived"} onClick={() => { void restore(line); }} aria-label={`Restore requirement ${line.label}`}>{busy === line.id ? "Restoring…" : "Restore"}</button></div>) : !error && <p>No removed requirements in this revision.</p>}
-    {error && <p role="alert" className="form-error">{error}</p>}
-    <button type="button" className="text-button" disabled={loading || busy !== undefined} onClick={() => setRefresh((value) => value + 1)}>Refresh removed requirements</button>
-  </details>;
+    {loading ? <p role="status">Loading removed requirements…</p> : rows.length ? rows.map((line) => <div className="removed-requirement" key={line.id}><span>{line.label}</span><Button variant="ghost" type="button" className="button button-quiet" disabled={busy !== undefined || actions.project.status === "archived"} onClick={() => { void restore(line); }} aria-label={`Restore requirement ${line.label}`}>{busy === line.id ? "Restoring…" : "Restore"}</Button></div>) : !error && <p>No removed requirements in this revision.</p>}
+    {error && <Alert asChild><p role="alert" className="form-error">{error}</p></Alert>}
+    <Button variant="ghost" type="button" className="text-button" disabled={loading || busy !== undefined} onClick={() => setRefresh((value) => value + 1)}>Refresh removed requirements</Button>
+  </DisclosureContent></Disclosure>;
 }
 
 export function RequirementEditForm({ line, items, onSave, onRetire, onClose, onBusy }: { line: BomLine; items: InventoryItem[]; onSave(input: BomUpdateInput): Promise<void>; onRetire(): Promise<void>; onClose(): void; onBusy(value: boolean): void }) {
@@ -111,18 +120,18 @@ export function RequirementEditForm({ line, items, onSave, onRetire, onClose, on
   return <form onSubmit={(event) => { event.preventDefault(); save(); }} className="correction-form">
     <p className="dialog-intro">Correct this requirement without replacing its history. Reserved stock must be released before its planning details change.</p>
     <fieldset disabled={busy || uncertainOperation !== undefined} className="correction-fields">
-      <label className="form-field"><span>Requirement name</span><input autoFocus required maxLength={240} value={name} onChange={(event) => setName(event.target.value)} /></label>
-      <div className="form-row"><label className="form-field"><span>Required quantity</span><input type="number" required min="0.000001" step="any" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></label><label className="form-field"><span>Requirement unit</span><select aria-label="Requirement unit" value={unit} onChange={(event) => setUnit(event.target.value as BomLine["unit"])}>{[["each", "pieces"], ["g", "grams"], ["m", "metres"], ["millimetre", "millimetres"], ["millilitre", "millilitres"], ["set", "sets"]].map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
-      <label className="form-field"><span>How it is used</span><select aria-label="How it is used" value={role} onChange={(event) => setRole(event.target.value as typeof role)}><option value="" disabled>Review use</option><option value="consumed">Part or material, used up or built in</option><option value="reusable">Reusable tool or equipment</option></select></label>
-      <label className="form-field"><span>Find owned stock</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, maker, colour or location" /></label>
-      <label className="form-field"><span>Selected owned item</span><select aria-label="Selected owned item" value={itemId} onChange={(event) => setItemId(event.target.value)}><option value="">No selected item</option>{itemId && !eligible.some((item) => item.id === itemId) && <option value={itemId}>Previously selected item, not in the loaded inventory</option>}{eligible.map((item) => <option value={item.id} key={item.id}>{inventoryCandidateText(item, items)}</option>)}</select></label>
+      <Label className="form-field"><span>Requirement name</span><Input autoFocus required maxLength={240} value={name} onChange={(event) => setName(event.target.value)} /></Label>
+      <div className="form-row"><Label className="form-field"><span>Required quantity</span><Input type="number" required min="0.000001" step="any" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></Label><Label className="form-field"><span>Requirement unit</span><NativeSelect aria-label="Requirement unit" value={unit} onChange={(event) => setUnit(event.target.value as BomLine["unit"])}>{[["each", "pieces"], ["g", "grams"], ["m", "metres"], ["millimetre", "millimetres"], ["millilitre", "millilitres"], ["set", "sets"]].map(([value, label]) => <NativeSelectOption key={value} value={value}>{label}</NativeSelectOption>)}</NativeSelect></Label></div>
+      <Label className="form-field"><span>How it is used</span><NativeSelect aria-label="How it is used" value={role} onChange={(event) => setRole(event.target.value as typeof role)}><NativeSelectOption value="" disabled>Review use</NativeSelectOption><NativeSelectOption value="consumed">Part or material, used up or built in</NativeSelectOption><NativeSelectOption value="reusable">Reusable tool or equipment</NativeSelectOption></NativeSelect></Label>
+      <Label className="form-field"><span>Find owned stock</span><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, maker, colour or location" /></Label>
+      <Label className="form-field"><span>Selected owned item</span><NativeSelect aria-label="Selected owned item" value={itemId} onChange={(event) => setItemId(event.target.value)}><NativeSelectOption value="">No selected item</NativeSelectOption>{itemId && !eligible.some((item) => item.id === itemId) && <NativeSelectOption value={itemId}>Previously selected item, not in the loaded inventory</NativeSelectOption>}{eligible.map((item) => <NativeSelectOption value={item.id} key={item.id}>{inventoryCandidateText(item, items)}</NativeSelectOption>)}</NativeSelect></Label>
       <p className="form-hint">Selecting an item is a planning choice, not proof of compatibility or available stock. Clearing it preserves other recorded alternatives and specifications.</p>
-      <label className="form-field"><span>Requirement note</span><textarea rows={3} maxLength={2000} value={note} onChange={(event) => setNote(event.target.value)} /></label>
-      <label className="check-field"><input type="checkbox" checked={optional} onChange={(event) => setOptional(event.target.checked)} /><span>Optional requirement</span></label>
+      <Label className="form-field"><span>Requirement note</span><Textarea rows={3} maxLength={2000} value={note} onChange={(event) => setNote(event.target.value)} /></Label>
+      <Label className="check-field"><Checkbox  checked={optional} onCheckedChange={(checked) => setOptional(checked === true)} /><span>Optional requirement</span></Label>
     </fieldset>
-    {error && <p className="form-error" role="alert">{error}</p>}
-    <details className="requirement-removal"><summary>Remove requirement</summary><p>This hides the requirement from the active plan, not its history. Restore it from Removed requirements. Reserved stock is never silently released.</p><label className="check-field"><input type="checkbox" checked={confirmRemove} onChange={(event) => setConfirmRemove(event.target.checked)} disabled={busy || uncertainOperation !== undefined} /><span>I want to remove this requirement from the plan</span></label><button type="button" className="button button-danger" disabled={busy || !confirmRemove || uncertainOperation !== undefined} onClick={() => { void run("remove", onRetire); }}>Remove from plan</button></details>
-    <div className="dialog-actions"><button type="button" className="button button-quiet" disabled={busy} onClick={onClose}>Cancel</button><button type="submit" className="button button-primary" disabled={busy} aria-busy={busy}>{busy ? "Saving…" : uncertainOperation === "remove" ? "Retry unchanged removal" : uncertainOperation === "save" ? "Retry unchanged save" : "Save requirement"}</button></div>
+    {error && <Alert asChild><p className="form-error" role="alert">{error}</p></Alert>}
+    <Disclosure className="requirement-removal"><DisclosureTrigger>Remove requirement</DisclosureTrigger><DisclosureContent><p>This hides the requirement from the active plan, not its history. Restore it from Removed requirements. Reserved stock is never silently released.</p><Label className="check-field"><Checkbox  checked={confirmRemove} onCheckedChange={(checked) => setConfirmRemove(checked === true)} disabled={busy || uncertainOperation !== undefined} /><span>I want to remove this requirement from the plan</span></Label><Button variant="destructive" type="button" className="button button-danger" disabled={busy || !confirmRemove || uncertainOperation !== undefined} onClick={() => { void run("remove", onRetire); }}>Remove from plan</Button></DisclosureContent></Disclosure>
+    <div className="dialog-actions"><Button variant="ghost" type="button" className="button button-quiet" disabled={busy} onClick={onClose}>Cancel</Button><Button variant="default" type="submit" className="button button-primary" disabled={busy} aria-busy={busy}>{busy ? "Saving…" : uncertainOperation === "remove" ? "Retry unchanged removal" : uncertainOperation === "save" ? "Retry unchanged save" : "Save requirement"}</Button></div>
   </form>;
 }
 
@@ -137,10 +146,10 @@ export function ProjectEditForm({ project, onSave, onClose, onBusy }: { project:
     finally { setBusy(false); onBusy(false); }
   };
   return <form onSubmit={(event) => { event.preventDefault(); void save(); }} className="correction-form">
-    <fieldset disabled={busy || uncertain} className="correction-fields"><label className="form-field"><span>Project name</span><input autoFocus required maxLength={240} value={name} onChange={(event) => setName(event.target.value)} /></label><label className="form-field"><span>Project goal and brief</span><textarea maxLength={5000} rows={5} value={description} onChange={(event) => setDescription(event.target.value)} /></label><label className="form-field"><span>Project stage</span><select aria-label="Project stage" value={status} onChange={(event) => setStatus(event.target.value as typeof status)}>{["idea", "planned", "ready", "building", "validating", "complete"].map((value) => <option key={value} value={value}>{value.charAt(0).toUpperCase() + value.slice(1)}</option>)}</select></label></fieldset>
+    <fieldset disabled={busy || uncertain} className="correction-fields"><Label className="form-field"><span>Project name</span><Input autoFocus required maxLength={240} value={name} onChange={(event) => setName(event.target.value)} /></Label><Label className="form-field"><span>Project goal and brief</span><Textarea maxLength={5000} rows={5} value={description} onChange={(event) => setDescription(event.target.value)} /></Label><Label className="form-field"><span>Project stage</span><NativeSelect aria-label="Project stage" value={status} onChange={(event) => setStatus(event.target.value as typeof status)}>{["idea", "planned", "ready", "building", "validating", "complete"].map((value) => <NativeSelectOption key={value} value={value}>{value.charAt(0).toUpperCase() + value.slice(1)}</NativeSelectOption>)}</NativeSelect></Label></fieldset>
     <p className="form-hint">The stage records your progress. It does not certify readiness, validate a design, change stock or operate equipment. Record actual stock use separately.</p>
-    {error && <p role="alert" className="form-error">{error}</p>}
-    <div className="dialog-actions"><button type="button" className="button button-quiet" disabled={busy} onClick={onClose}>Cancel</button><button type="submit" className="button button-primary" disabled={busy || !name.trim()} aria-busy={busy}>{busy ? "Saving…" : uncertain ? "Retry unchanged save" : "Save project"}</button></div>
+    {error && <Alert asChild><p role="alert" className="form-error">{error}</p></Alert>}
+    <div className="dialog-actions"><Button variant="ghost" type="button" className="button button-quiet" disabled={busy} onClick={onClose}>Cancel</Button><Button variant="default" type="submit" className="button button-primary" disabled={busy || !name.trim()} aria-busy={busy}>{busy ? "Saving…" : uncertain ? "Retry unchanged save" : "Save project"}</Button></div>
   </form>;
 }
 

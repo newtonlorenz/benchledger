@@ -12,12 +12,13 @@ must not be presented as zero or as a successful check.
 
 ## Visual system
 
-`apps/web/src/workspace-design.css` defines the theme and presentation tokens.
-`styles.css` retains component structure and the existing responsive behaviour.
+`apps/web/src/shadcn.css` defines the sole semantic theme and presentation tokens.
+`workspace-layout.css` owns domain composition and responsive geometry.
+Use the shared `components/ui` primitives for all controls and interaction boundaries.
 Use tokens for colours. Do not add fixed light backgrounds to individual panels.
 
 The visual language uses graphite navigation, neutral work surfaces, thin
-borders and small corner radii. Orange identifies primary interface actions.
+borders and small corner radii. Green identifies primary interface actions.
 Green, amber, blue and red identify existing status meanings. Always show status
 text as well as colour. Do not use colour to imply a check that did not occur.
 

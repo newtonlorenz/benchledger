@@ -10,7 +10,7 @@ test("assembly explorer imports CAD, edits a guide, saves and reopens on desktop
   await page.getByRole("tab", { name: "Assembly", exact: true }).click();
   await page.getByLabel("synthetic-assembly.step", { exact: true }).check(); await page.getByRole("button", { name: "Open assembly", exact: true }).click();
   await expect(page.locator(".assembly-canvas canvas")).toBeVisible(); await expect(page.locator(".assembly-dimensions")).toContainText("40.0 × 30.0 × 17.0 mm");
-  await page.getByRole("button", { name: "Exploded", exact: true }).click(); await expect(page.getByLabel("Assembly separation")).toHaveValue("100");
+  await page.getByRole("button", { name: "Exploded", exact: true }).click(); await expect(page.getByRole("slider", { name: "Assembly separation" })).toHaveAttribute("aria-valuenow", "100");
   await page.getByRole("button", { name: "Lid", exact: true }).click();
   await page.getByRole("button", { name: "Edit assembly", exact: true }).click();
   await page.getByLabel("Material", { exact: true }).fill("Synthetic cream PLA");
@@ -37,7 +37,7 @@ test("assembly explorer imports CAD, edits a guide, saves and reopens on desktop
   await page.reload(); await expect(page.getByRole("tab", { name: "Assembly", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.locator(".assembly-canvas canvas")).toBeVisible(); await page.getByRole("button", { name: "Lid", exact: true }).click(); await expect(page.getByText("Synthetic cream PLA", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Build order", exact: true }).click(); await page.getByRole("button", { name: /Fit the enclosure/u }).click();
-  await expect(page.getByLabel("Assembly separation")).toHaveValue("55");
+  await expect(page.getByRole("slider", { name: "Assembly separation" })).toHaveAttribute("aria-valuenow", "55");
   await page.getByRole("button", { name: "Parts & details", exact: true }).click(); await page.getByRole("button", { name: "Show all", exact: true }).click(); await page.getByRole("button", { name: "Exploded", exact: true }).click();
   await page.screenshot({ path: "test-results/assembly-desktop.png", fullPage: true });
   const a11y = await new AxeBuilder({ page }).include(".assembly-workspace").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze(); expect(a11y.violations).toEqual([]);
@@ -79,7 +79,7 @@ test("a large assembly keeps selection controls reachable in light, dark and nar
   await page.evaluate(() => document.documentElement.dataset.theme = "light");
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-  await page.getByLabel("Assembly separation", { exact: true }).focus(); await page.keyboard.press("ArrowRight"); await expect(page.getByLabel("Assembly separation", { exact: true })).toHaveValue("1");
+  await page.getByRole("slider", { name: "Assembly separation" }).focus(); await page.keyboard.press("ArrowRight"); await expect(page.getByRole("slider", { name: "Assembly separation" })).toHaveAttribute("aria-valuenow", "1");
   await page.screenshot({ path: "test-results/assembly-large-mobile.png", fullPage: true });
 });
 

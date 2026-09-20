@@ -347,6 +347,14 @@ identity search.
 
 ## UI parity
 
+The web interface uses shadcn primitives throughout forms, navigation, tables,
+search, dialogs, menus and notifications, with one semantic light/dark theme.
+Radix provides interaction boundaries; domain guards retain final dismissal authority.
+The View popover changes browser-local appearance and row spacing only. This
+redesign adds no HTTP or MCP operations and changes no stock, authentication,
+confirmation, concurrency or evidence rules.
+
+
 The Inventory destination uses the authenticated `GET /api/v1/inventory` page
 directly, with server-side search, canonical kind/evidence/availability filters,
 stock-view and exact-location filters, stable name/location ordering, and a

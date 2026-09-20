@@ -1,14 +1,17 @@
+import { Alert } from "./components/ui/alert";
+import { Button } from "./components/ui/button";
 import { Component, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { DeferredMarkdownPreview, DeferredStlPreview } from "./deferred-views";
 import { fetchArtifactDownload } from "./api";
 import type { Artifact } from "./domain";
-import { useModalBoundary } from "./modal-boundary";
+import { WorkspaceModal } from "./components/workspace-modal";
+import { DialogTitle } from "./components/ui/dialog";
 import "./artifact-preview.css";
 
 class PreviewBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   override state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
-  override render() { return this.state.failed ? <p role="alert">This preview could not be displayed. Close it and retry, or download the file to view it locally.</p> : this.props.children; }
+  override render() { return this.state.failed ? <Alert asChild><p role="alert">This preview could not be displayed. Close it and retry, or download the file to view it locally.</p></Alert> : this.props.children; }
 }
 const imageTypes: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", avif: "image/avif", bmp: "image/bmp", svg: "image/svg+xml" };
 export function artifactPreviewKind(name: string): "image" | "markdown" | "text" | "stl" | undefined {
@@ -28,7 +31,6 @@ export function ArtifactPreview({ file, onClose }: { file: Artifact; onClose: ()
   const [error, setError] = useState<string>();
   const [attempt, setAttempt] = useState(0);
   const kind = artifactPreviewKind(file.name);
-  useModalBoundary(modal, onClose);
   useEffect(() => {
     const controller = new AbortController();
     let url: string | undefined;
@@ -55,17 +57,15 @@ export function ArtifactPreview({ file, onClose }: { file: Artifact; onClose: ()
     })();
     return () => { controller.abort(); if (url) URL.revokeObjectURL(url); };
   }, [file.id, file.hash, file.name, kind, attempt]);
-  return <div className="artifact-preview-backdrop">
-    <div ref={modal} className="artifact-preview-dialog" role="dialog" aria-modal="true" aria-labelledby={title} tabIndex={-1}>
-      <header><h2 id={title}>{file.name}</h2><button type="button" className="button button-quiet" onClick={onClose}>Close preview</button></header>
+  return <WorkspaceModal onClose={onClose}><div ref={modal} className="artifact-preview-dialog" role="dialog" aria-modal="true" aria-labelledby={title} tabIndex={-1}>
+      <header><DialogTitle id={title}>{file.name}</DialogTitle><Button variant="ghost" type="button" className="button button-quiet" onClick={onClose}>Close preview</Button></header>
       <div className="artifact-preview-content">
         <PreviewBoundary key={attempt}>
-        {error ? <div><p role="alert">{error}</p><button type="button" className="button button-quiet" onClick={() => setAttempt(attempt + 1)}>Retry preview</button></div> : !data ? <p role="status">Loading preview…</p> :
+        {error ? <div><Alert asChild><p role="alert">{error}</p></Alert><Button variant="ghost" type="button" className="button button-quiet" onClick={() => setAttempt(attempt + 1)}>Retry preview</Button></div> : !data ? <p role="status">Loading preview…</p> :
           "url" in data ? <img className="artifact-preview-image" src={data.url} alt={file.name} onError={() => setError("This image could not be displayed. Download it to view it locally.")} /> :
           "bytes" in data ? <DeferredStlPreview bytes={data.bytes} /> :
           kind === "markdown" ? <article className="artifact-preview-markdown"><DeferredMarkdownPreview text={data.text} /></article> : <pre className="artifact-preview-text">{data.text}</pre>}
         </PreviewBoundary>
       </div>
-    </div>
-  </div>;
+    </div></WorkspaceModal>;
 }

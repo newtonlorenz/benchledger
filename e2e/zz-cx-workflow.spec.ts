@@ -55,15 +55,16 @@ for (const width of [1440, 320]) test(`maker can correct, remove, restore and ha
   await expect(page.locator(".bom-row")).toHaveCount(1);
   await page.getByText("Export project", { exact: true }).click();
   const jsonEvent = page.waitForEvent("download");
-  await page.getByRole("button", { name: "Download project brief JSON", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Download project brief JSON", exact: true }).click();
   const jsonDownload = await jsonEvent;
   const chunks: Buffer[] = []; for await (const chunk of (await jsonDownload.createReadStream())!) chunks.push(Buffer.from(chunk));
   const handoff = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   expect(handoff.project).toMatchObject({ name: `${name} revised`, stage: "building" });
   expect(handoff.requirements).toHaveLength(1);
   expect(handoff.requirements[0]).toMatchObject({ name: "M3 enclosure screws", quantity: 8 });
+  await page.getByRole("button", { name: "Export project", exact: true }).click();
   const csvEvent = page.waitForEvent("download");
-  await page.getByRole("button", { name: "Download requirements CSV", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Download requirements CSV", exact: true }).click();
   const csvDownload = await csvEvent; expect(csvDownload.suggestedFilename()).toMatch(/\.csv$/u);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

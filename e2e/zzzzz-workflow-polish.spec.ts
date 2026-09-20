@@ -38,7 +38,7 @@ test("build planning is a direct route and import opens an isolated dialog", asy
   await expect(page.getByRole("heading", { name: "Parts and build plates", exact: true })).toBeVisible(); await page.reload();
   await expect(page.getByRole("tab", { name: "Build planning", exact: true })).toHaveAttribute("aria-selected", "true");
   await page.getByRole("tab", { name: /^Plan/u }).click(); await page.getByRole("button", { name: "Import requirements from CSV", exact: true }).click();
-  await expect(page.getByRole("dialog", { name: "Import requirements from CSV", exact: true })).toBeVisible(); await expect(page.locator(".app-background")).toHaveAttribute("inert", ""); await expect(page.locator(".skip-link")).toHaveAttribute("inert", ""); await expect(page.getByLabel("Requirements CSV text", { exact: true })).toBeFocused();
+  await expect(page.getByRole("dialog", { name: "Import requirements from CSV", exact: true })).toBeVisible(); await expect(page.locator(".app-background")).toHaveAttribute("aria-hidden", "true"); await expect(page.locator(".skip-link")).toHaveAttribute("inert", ""); await expect(page.getByLabel("Requirements CSV text", { exact: true })).toBeFocused();
   await page.keyboard.press("Escape"); await expect(page.getByRole("dialog")).toHaveCount(0);
   await nav(page, "Workbench"); await page.getByRole("button", { name: "Import BOM", exact: true }).click(); await expect(page.getByRole("dialog", { name: "Guided project setup", exact: true })).toBeVisible();
 });

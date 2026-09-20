@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const appSource = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
-const stylesSource = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+const stylesSource = readFileSync(new URL("./workspace-layout.css", import.meta.url), "utf8");
 const faviconSource = readFileSync(new URL("../public/favicon.svg", import.meta.url), "utf8");
 
 describe("BenchLedger brand mark", () => {

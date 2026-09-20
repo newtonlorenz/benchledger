@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { calculateProjectSummary } from "./domain";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -13,8 +15,11 @@ describe("maker correction surfaces", () => {
     expect(html).not.toContain("Edit requirement"); expect(html).not.toContain("Edit project"); expect(html).toContain("Export project");
   });
   it("offers explicit active project actions and bounded exports", () => {
-    const html = renderToStaticMarkup(<ProjectEditingContext.Provider value={actions}><RequirementEditAction line={line} /><ProjectManagementBar /></ProjectEditingContext.Provider>);
-    expect(html).toContain("Edit project"); expect(html).toContain("Download requirements CSV"); expect(html).toContain("snapshots, not backups");
+    render(<ProjectEditingContext.Provider value={actions}><RequirementEditAction line={line} /><ProjectManagementBar /></ProjectEditingContext.Provider>);
+    expect(screen.getByRole("button", { name: "Edit project" })).toBeTruthy();
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Export project" }), { button: 0, ctrlKey: false, pointerType: "mouse" });
+    expect(screen.getByRole("menuitem", { name: "Download requirements CSV" })).toBeTruthy();
+    expect(screen.getByText(/snapshots, not backups/)).toBeTruthy(); cleanup();
   });
   it("keeps editing distinct from stock evidence and permanent deletion", () => {
     const html = renderToStaticMarkup(<RequirementEditForm line={line} items={inventory} onSave={async () => undefined} onRetire={async () => undefined} onClose={() => undefined} onBusy={() => undefined} />);
