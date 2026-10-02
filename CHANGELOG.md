@@ -1,5 +1,12 @@
 # Changelog
 
+## Maker experience
+
+- Prioritise next project actions, simplify Workbench and disclose specialist viewers.
+- Simplify inventory controls and show stock balances together on phones.
+- Put physical counting first and explain empty build-plan recovery in plain language.
+
+
 Notable user-facing changes will be recorded here. BenchLedger has not made its
 first public release; all current work is under **Unreleased**.
 

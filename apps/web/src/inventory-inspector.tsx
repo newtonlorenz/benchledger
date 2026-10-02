@@ -1,3 +1,5 @@
+import "./inventory-experience.css";
+import { Disclosure, DisclosureTrigger, DisclosureContent } from "./components/ui/disclosure";
 import { Label } from "./components/ui/label";
 import { Button } from "./components/ui/button";
 import { Textarea } from "./components/ui/textarea";
@@ -43,15 +45,15 @@ export function InventoryInspector({ item, category, onOpen, onClose }: { item?:
         <div><dt>Location</dt><dd>{item.location && item.location !== "Unassigned" ? item.location : "Not recorded"}</dd></div>
         <div><dt>Condition</dt><dd>{item.condition?.replaceAll("_", " ") ?? "Unknown"}</dd></div>
         <div><dt>SKU</dt><dd>{item.sku || "Not recorded"}</dd></div>
-        <div><dt>Record ID</dt><dd className="inventory-mono">{item.id}</dd></div>
       </dl>{item.description && <p>{item.description}</p>}{item.tags.length > 0 && <div className="inventory-tags" aria-label="Item tags">{item.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}</section>
-      <section><h3>Stock evidence</h3><dl className="inventory-properties">
+      <Disclosure className="inventory-inspector-disclosure"><DisclosureTrigger>Stock evidence & record details</DisclosureTrigger><DisclosureContent><dl className="inventory-properties">
+        <div><dt>Record ID</dt><dd className="inventory-mono">{item.id}</dd></div>
         <div><dt>Evidence</dt><dd>{webInventoryEvidence(item).replaceAll("_", " ")}</dd></div>
         <div><dt>Observed</dt><dd>{item.provenance?.observedAt ?? item.lastCounted ?? "Not recorded"}</dd></div>
         <div><dt>Source</dt><dd>{item.provenance?.source ?? "Not recorded"}</dd></div>
         <div><dt>Version</dt><dd>{item.version ?? "Unavailable"}</dd></div>
-      </dl>{item.provenance?.note && <p>{item.provenance.note}</p>}</section>
-      <section><h3>Use with an AI assistant</h3><p>Copy this record with its units, evidence and limits. Connected agents can query the same stock views through BenchLedger.</p><InventoryAiCopy items={[item]} /></section>
+      </dl>{item.provenance?.note && <p>{item.provenance.note}</p>}</DisclosureContent></Disclosure>
+      <Disclosure className="inventory-inspector-disclosure"><DisclosureTrigger>Use with an AI assistant</DisclosureTrigger><DisclosureContent><p>Copy this record with its units, evidence and limits. Connected agents can query the same stock views through BenchLedger.</p><InventoryAiCopy items={[item]} /></DisclosureContent></Disclosure>
     </div> : <p className="inventory-inspector-empty">Choose an item in the register to inspect its stock, identity and evidence.</p>}
   </aside>;
 }

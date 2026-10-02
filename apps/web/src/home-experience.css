@@ -1,0 +1,37 @@
+/* Keep the next project action ahead of optional workshop tools. */
+.home-experience .home-heading { margin-bottom: 24px; }
+.home-experience .home-resume { margin-bottom: 24px; padding: 16px; }
+.home-experience .home-resume-next { display: block; color: var(--ink-soft); font-size: .8125rem; margin-top: 6px; }
+.home-experience .home-find-projects { border-bottom: 1px solid var(--line); }
+.home-experience .home-find-projects > [data-disclosure="trigger"] { min-height: 44px; width: auto; gap: 12px; font-size: .8125rem; color: var(--ink-soft); }
+.home-experience .home-project-toolbar { border: 0; padding-block: 4px 14px; }
+.home-experience .home-equipment-disclosure { border-top: 1px solid var(--line); margin-top: 28px; }
+.home-experience .home-equipment-disclosure > [data-disclosure="trigger"] { width: auto; min-height: 44px; gap: 12px; font-size: .875rem; }
+.home-experience .home-equipment { max-width: 560px; padding-top: 8px; }
+.home-experience .home-equipment > p { padding-inline: 0; font-size: .8125rem; }
+.home-experience .home-equipment .workshop-printer-card { margin: 0; border-inline: 0; border-radius: 0; padding-inline: 0; background: transparent; }
+.home-experience .home-equipment > .text-button { margin-left: 0; }
+.home-experience .home-onboarding { max-width: 820px; padding: 24px; box-shadow: none; }
+.home-experience .home-onboarding h2 { font-size: 1.125rem; }
+.home-experience .home-onboarding > p { max-width: 70ch; font-size: .875rem; }
+.home-experience .home-onboarding ol { display: grid; gap: 18px; padding: 20px 0 20px 22px; margin: 0; list-style: decimal; }
+.home-experience .home-onboarding li { padding-left: 4px; font-size: .875rem; color: var(--ink-soft); }
+.home-experience .home-onboarding li strong { margin-bottom: 4px; }
+.home-experience .home-onboarding li span { display: block; }
+.home-experience .home-onboarding > .text-button { margin-top: 12px; align-self: flex-start; }
+.home-experience .home-scope-note { margin-top: 12px; }
+@media (max-width: 1250px) {
+  .home-experience .home-right-column { display: block; }
+}
+@media (max-width: 800px) {
+  .home-experience .home-heading { margin-bottom: 20px; }
+  .home-experience .home-actions { gap: 8px; }
+  .home-experience .home-actions .button { flex: 0 1 auto; }
+  .home-experience .home-resume { padding: 12px; gap: 12px; }
+  .home-experience .home-resume > span:not(.home-resume-revision) { flex: 1; }
+  .home-experience .home-resume > .button { margin-left: 30px; }
+  .home-experience .home-project-filters { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 8px; }
+  .home-experience .home-project-filters > button { flex-shrink: 0; min-height: 44px; }
+  .home-experience .home-project-next { min-height: 44px; }
+  .home-experience .home-onboarding { padding: 18px; }
+}

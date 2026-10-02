@@ -9,7 +9,7 @@ import { Button } from "./components/ui/button";
 import { Textarea } from "./components/ui/textarea";
 import { Input } from "./components/ui/input";
 import { useUnsavedWork } from "./unsaved-work";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { buildPlanInputSchema } from "@benchledger/api-contract";
 import type { BuildPlan, BuildPlanInput } from "@benchledger/api-contract";
 import type { Project, InventoryItem } from "./domain";
@@ -41,12 +41,24 @@ export function PlanSummary({ plan, items }: { plan: BuildPlan; items: Inventory
 export function BuildEditor({ project, items, initial, root, onCancel, onSaved }: { project: Project; items: InventoryItem[]; initial: BuildPlan | null; root: string; onCancel(): void; onSaved(): void }) {
   const [draft, setDraft] = useState<BuildPlanInput>(() => initial ? { expectedVersion: initial.version, name: initial.name, parts: initial.parts, plates: initial.plates, ...(initial.notes ? { notes: initial.notes } : {}) } : { expectedVersion: 0, name: `${project.name} build plan`, parts: [], plates: [] });
   const [review, setReview] = useState<BuildPlanInput>(), [error, setError] = useState<string>();
+  const addPartButton = useRef<HTMLButtonElement>(null);
   const command = useWorkflowCommand();
   const original: BuildPlanInput = initial ? { expectedVersion: initial.version, name: initial.name, parts: initial.parts, plates: initial.plates, ...(initial.notes ? { notes: initial.notes } : {}) } : { expectedVersion: 0, name: `${project.name} build plan`, parts: [], plates: [] };
   useUnsavedWork(JSON.stringify(draft) !== JSON.stringify(original), "build plan", command.busy || command.uncertain);
   const updatePart = (index: number, patch: Partial<Part>) => setDraft((value) => ({ ...value, parts: value.parts.map((part, i) => i === index ? { ...part, ...patch } : part) }));
   const updatePlate = (index: number, patch: Partial<Plate>) => setDraft((value) => ({ ...value, plates: value.plates.map((plate, i) => i === index ? { ...plate, ...patch } : plate) }));
-  const inspect = () => { const parsed = buildPlanInputSchema.safeParse(draft); if (!parsed.success) { setError(parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("\n")); return; } setError(undefined); setReview(parsed.data); };
+  const inspect = () => {
+    const parsed = buildPlanInputSchema.safeParse(draft);
+    if (!parsed.success) {
+      setError(parsed.error.issues.map((issue) => issue.path.length === 1 && issue.path[0] === "parts" && draft.parts.length === 0
+        ? "Add at least one required part before reviewing this plan."
+        : `${issue.path.join(".")}: ${issue.message}`).join("\n"));
+      if (draft.parts.length === 0) addPartButton.current?.focus();
+      return;
+    }
+    setError(undefined);
+    setReview(parsed.data);
+  };
   const save = async () => { if (!review) return; try { await command.execute(`${root}/build-plan`, "PUT", review, (value) => { const result = mutationValue<BuildPlan>(value, ["id", "version", "contentSha256", "totals"]); if (result.projectRevisionId !== project.serverRevisionId || result.version !== review.expectedVersion + 1) throw new Error("The server did not confirm the planning snapshot."); return result; }); onSaved(); } catch { /* retain the exact reviewed draft */ } };
   if (review) return <section className="workflow-review"><h3>Review build plan</h3><p>{review.parts.length} parts · {review.plates.length} plate layouts · {review.plates.reduce((sum, plate) => sum + plate.copies, 0)} planned runs</p>{review.plates.map((plate) => <p key={plate.id}>{plate.name}: {plate.copies} runs, with {plate.parts.map((part) => `${part.quantity} × ${review.parts.find((entry) => entry.id === part.partId)?.name}`).join(", ")} per run.</p>)}<p>This records planning intent, not available stock, validated geometry or a completed print.</p>{command.error && <Alert asChild><p role="alert">{command.error}</p></Alert>}<div className="dialog-actions"><Button variant="ghost" type="button" className="button button-quiet" disabled={command.busy || command.uncertain} onClick={() => setReview(undefined)}>Back to build draft</Button><Button variant="default" type="button" className="button button-primary" disabled={command.busy} onClick={() => { void save(); }}>{command.busy ? "Saving…" : command.uncertain ? "Retry unchanged plan" : "Save planning snapshot"}</Button></div></section>;
   const files = (project.allArtifacts ?? project.artifacts).filter((file) => file.status !== "superseded" && (file.workItemRevisionId || file.projectRevisionId === project.serverRevisionId));
@@ -54,7 +66,7 @@ export function BuildEditor({ project, items, initial, root, onCancel, onSaved }
     <h3>Required parts</h3>{draft.parts.map((part, index) => <div className="intake-row" key={part.id}><Label className="form-field"><span>Part name</span><Input aria-label={`Build part ${index + 1} name`} value={part.name} maxLength={240} onChange={(event) => updatePart(index, { name: event.target.value })} /></Label><Label className="form-field"><span>Total required</span><Input aria-label={`Build part ${index + 1} quantity`} type="number" min="1" step="1" value={part.quantity} onChange={(event) => updatePart(index, { quantity: Number(event.target.value) })} /></Label>
       <Label className="form-field"><span>Exact revision file</span><NativeSelect aria-label={`Build part ${index + 1} file`} value={part.artifactId ?? ""} onChange={(event) => { const file = files.find((entry) => entry.id === event.target.value); updatePart(index, { artifactId: file?.id, workItemId: file?.workItemId, workItemRevisionId: file?.workItemRevisionId }); }}><NativeSelectOption value="">Not attached</NativeSelectOption>{part.artifactId && !files.some((file) => file.id === part.artifactId) && <NativeSelectOption value={part.artifactId}>Previously attached file (not loaded)</NativeSelectOption>}{files.map((file) => <NativeSelectOption key={file.id} value={file.id}>{file.name} · {file.revision}</NativeSelectOption>)}</NativeSelect></Label>
       <Button variant="ghost" type="button" className="text-button" onClick={() => setDraft((value) => ({ ...value, parts: value.parts.filter((entry) => entry.id !== part.id), plates: value.plates.map((plate) => ({ ...plate, parts: plate.parts.filter((entry) => entry.partId !== part.id) })) }))}>Remove draft part {index + 1}</Button></div>)}
-    <Button variant="outline" type="button" className="button button-secondary" disabled={draft.parts.length >= 100} onClick={() => setDraft((value) => ({ ...value, parts: [...value.parts, { id: workflowCommandKey("part"), name: "", quantity: 1 }] }))}>Add build part</Button>
+    <Button ref={addPartButton} variant="outline" type="button" className="button button-secondary" disabled={draft.parts.length >= 100} onClick={() => { setError(undefined); setDraft((value) => ({ ...value, parts: [...value.parts, { id: workflowCommandKey("part"), name: "", quantity: 1 }] })); }}>Add build part</Button>
     <h3>Plate layouts</h3>{project.fabricationRoute !== "printed" && <p>Use a printed build approach to add plates. Other fabrication work can be tracked as workstreams.</p>}
     {draft.plates.map((plate, index) => <PlateEditor key={plate.id} plate={plate} index={index} parts={draft.parts} project={project} items={items} onChange={(patch) => updatePlate(index, patch)} onRemove={() => setDraft((value) => ({ ...value, plates: value.plates.filter((entry) => entry.id !== plate.id) }))} />)}
     <Button variant="outline" type="button" className="button button-secondary" disabled={draft.plates.length >= 100 || !draft.parts.length || project.fabricationRoute !== "printed"} onClick={() => setDraft((value) => ({ ...value, plates: [...value.plates, { id: workflowCommandKey("plate"), name: `Plate ${value.plates.length + 1}`, copies: 1, parts: [{ partId: value.parts[0]!.id, quantity: 1 }], materials: [] }] }))}>Add plate layout</Button>

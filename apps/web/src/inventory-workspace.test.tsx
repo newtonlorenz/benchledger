@@ -39,6 +39,13 @@ it("inspects evidence without editing and opens the existing stock editor delibe
   const item = { ...inventory[0]!, serverEvidence: "delivered_uncounted" as const, availableQuantity: 0, reserved: 0 };
   const result = render(<InventoryInspector item={item} category="Electronics" onOpen={onOpen} onClose={onClose} />);
   expect(screen.getByText(/not been physically confirmed/u)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Stock evidence & record details" }).getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByRole("button", { name: "Copy for AI" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Stock evidence & record details" }));
+  expect(screen.getByText(item.id).closest("[hidden]")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Use with an AI assistant" }));
+  expect(screen.getByRole("button", { name: "Copy for AI" })).toBeTruthy();
+
   fireEvent.click(screen.getByRole("button", { name: "Edit item / record stock" })); expect(onOpen).toHaveBeenCalledWith(item.id);
   fireEvent.click(screen.getByRole("button", { name: "Hide item inspector" })); expect(onClose).toHaveBeenCalledOnce();
   result.rerender(<InventoryInspector onOpen={onOpen} onClose={onClose} />); expect(screen.getByText(/Choose an item/u)).toBeTruthy();

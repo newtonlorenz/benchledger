@@ -15,6 +15,23 @@ const project = { ...structuredClone(projects[0]!), fabricationRoute: "printed" 
 const change = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label, { exact: true }), { target: { value } });
 const click = (name: string) => fireEvent.click(screen.getByRole("button", { name }));
 
+it("explains an empty build plan and focuses the action needed to continue", () => {
+  render(<BuildEditor project={project} items={inventory} initial={null} root="/project" onCancel={() => undefined} onSaved={() => undefined} />);
+  click("Review build plan");
+  expect(screen.getByRole("alert").textContent).toBe("Add at least one required part before reviewing this plan.");
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Add build part" }));
+  expect(screen.queryByRole("button", { name: "Save planning snapshot" })).toBeNull();
+  click("Add build part");
+  expect(screen.queryByRole("alert")).toBeNull();
+  click("Review build plan");
+  expect(screen.getByRole("alert").textContent).toContain("parts.0.name");
+  expect(screen.queryByRole("button", { name: "Save planning snapshot" })).toBeNull();
+  change("Build part 1 name", "Spacer");
+  click("Review build plan");
+  expect(screen.getByRole("button", { name: "Save planning snapshot" })).toBeTruthy();
+  expect(workflowRequest).not.toHaveBeenCalled();
+});
+
 it("edits a repeated plate draft, reviews it and confirms its saved identity", async () => {
   const saved = vi.fn(); vi.mocked(workflowRequest).mockImplementation(async (_path, _method, body) => ({ data: { ...(body as object), id: "plan", version: 1, projectRevisionId: project.serverRevisionId, contentSha256: "a".repeat(64), totals: {} } }));
   render(<BuildEditor project={project} items={inventory} initial={null} root="/project" onCancel={() => undefined} onSaved={saved} />);

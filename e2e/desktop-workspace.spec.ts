@@ -31,6 +31,7 @@ test("desktop keeps navigation stable, opens a document and gives its work area 
   // Viewer tabs must release the inspector width even if their module fails.
   await page.route(/\/assembly-ui-[^/]+\.js(?:\?.*)?$/, route => route.abort("failed"));
   await page.route(/\/pcb-ui-[^/]+\.js(?:\?.*)?$/, route => route.abort("failed"));
+  await page.getByRole("button", { name: "Design tools", exact: true }).click();
   for (const name of ["Assembly", "PCB"]) {
     await page.getByRole("tab", { name, exact: true }).click();
     await expect(page.getByRole("complementary", { name: "Project details" })).toBeHidden();

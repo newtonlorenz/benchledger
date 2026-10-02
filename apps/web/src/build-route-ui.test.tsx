@@ -124,7 +124,7 @@ describe("build route UI", () => {
 
   it("shows actionable beginner workshop copy and responsive printer cards", () => {
     const markup = renderToStaticMarkup(<OverviewPage items={[]} projects={[{ ...projects[0]!, fabricationRoute: "none" }]} expert={false} sampleMode={false} onNavigate={noop} onOpenProject={noop} onSelectItem={noop} onNewProject={noop} onAddPrinter={noop} />);
-    expect(markup).toContain("Electronics and ready-made builds do not need a printer.");
+    expect(markup).toContain("No printers in the loaded records. A printer is not needed for every build.");
     expect(markup).toContain("Add inventory");
     expect(markup).toContain("Workspace attention queue");
     expect(markup).not.toContain("workshop-agent-link");

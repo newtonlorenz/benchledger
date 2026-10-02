@@ -20,6 +20,7 @@ test("optional viewers load on demand and a failed panel leaves the workspace us
   await expect(page.getByRole("heading", { name: "Inventory", exact: true })).toBeVisible();
   expect(scripts.filter(url => /\/(markdown-preview|assembly-ui|pcb-ui|assembly-canvas|stl-preview|OrbitControls)-/u.test(url))).toEqual([]);
   await page.getByRole("button", { name: /^Projects/u }).click();
+  if (await page.getByRole("button", { name: "Design tools", exact: true }).getAttribute("aria-expanded") === "false") await page.getByRole("button", { name: "Design tools", exact: true }).click();
   await page.getByRole("tab", { name: "Assembly", exact: true }).click();
   await expect(page.getByRole("alert")).toHaveText("Assembly explorer could not be opened.");
   await expect(page.getByRole("tab", { name: /^Plan/u })).toBeVisible();
@@ -30,11 +31,13 @@ test("optional viewers load on demand and a failed panel leaves the workspace us
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await page.screenshot({ path: "test-results/viewer-recovery-mobile.png" });
   await expect(page.getByRole("button", { name: "Retry assembly explorer" })).toHaveCount(0);
+  if (await page.getByRole("button", { name: "Design tools", exact: true }).getAttribute("aria-expanded") === "false") await page.getByRole("button", { name: "Design tools", exact: true }).click();
   await page.getByRole("tab", { name: "PCB", exact: true }).click();
   await expect(page.getByRole("heading", { name: "PCB viewer", exact: true })).toBeVisible();
   expect(scripts.some(url => /\/pcb-ui-/u.test(url))).toBe(true);
   expect(scripts.some(url => /\/(markdown-preview|assembly-canvas|stl-preview|OrbitControls)-/u.test(url))).toBe(false);
   unavailable = false;
+  if (await page.getByRole("button", { name: "Design tools", exact: true }).getAttribute("aria-expanded") === "false") await page.getByRole("button", { name: "Design tools", exact: true }).click();
   await page.getByRole("tab", { name: "Assembly", exact: true }).click();
   await page.reload();
   await expect(page.getByRole("heading", { name: "See how it fits together", exact: true })).toBeVisible();
@@ -73,6 +76,7 @@ test("a failed 3D module leaves assembly notes editable and protected", async ({
   await page.getByLabel("Choose files to upload").setInputFiles({ name: "synthetic-viewer-failure.glb", mimeType: "model/gltf-binary", buffer: await readFile("docs/assets/showcase/synthetic-enclosure.glb") });
   await page.getByRole("button", { name: "Add 1 file", exact: true }).click();
   await expect(page.getByRole("button", { name: "Download synthetic-viewer-failure.glb", exact: true })).toBeVisible();
+  if (await page.getByRole("button", { name: "Design tools", exact: true }).getAttribute("aria-expanded") === "false") await page.getByRole("button", { name: "Design tools", exact: true }).click();
   await page.getByRole("tab", { name: "Assembly", exact: true }).click();
   await page.getByLabel("synthetic-viewer-failure.glb", { exact: true }).check();
   await page.getByRole("button", { name: "Open assembly", exact: true }).click();

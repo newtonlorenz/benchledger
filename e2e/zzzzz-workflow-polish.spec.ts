@@ -1,17 +1,22 @@
 import { expect, test, type Page } from "@playwright/test";
 async function login(page: Page) { await page.goto("/"); await page.getByLabel("Workspace password").fill("demo-password-please-change"); await page.getByRole("button", { name: "Sign in", exact: true }).click(); await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible(); }
 async function nav(page: Page, name: string) { if ((page.viewportSize()?.width ?? 1440) < 801) await page.getByLabel("Open navigation", { exact: true }).click(); await page.getByLabel("Primary navigation", { exact: true }).getByRole("button", { name: name === "Projects" ? /^Projects/u : name, exact: name !== "Projects" }).click(); }
+async function findProject(page: Page, query: string) {
+  const disclosure = page.getByRole("button", { name: "Find and sort projects", exact: true });
+  if (await disclosure.getAttribute("aria-expanded") === "false") await disclosure.click();
+  await page.getByLabel("Find a project").fill(query);
+}
 async function create(page: Page, name: string) { await page.getByRole("button", { name: "New project", exact: true }).click(); await page.getByLabel("Project name", { exact: true }).fill(name); await page.getByLabel("Project goal", { exact: true }).fill("Synthetic workflow acceptance."); await page.getByRole("button", { name: "Create project", exact: true }).click(); await expect(page.getByRole("heading", { name, exact: true })).toBeVisible(); }
 for (const width of [1440, 1024, 320]) test(`home supports finding, pinning and resuming projects at ${width}px`, async ({ page }) => {
   await page.setViewportSize({ width, height: 900 }); await login(page);
   const name = `Polish sensor ${width}`; await create(page, name); await nav(page, "Workbench");
-  await page.getByLabel("Find a project").fill(name); await expect(page.locator(".home-project-row")).toHaveCount(1);
+  await findProject(page, name); await expect(page.locator(".home-project-row")).toHaveCount(1);
   await page.getByRole("button", { name: `Pin project ${name}`, exact: true }).click(); await page.reload();
   await page.getByRole("group", { name: "Filter projects" }).getByRole("button", { name: /^Pinned/u }).click(); await expect(page.locator(".home-project-row")).toHaveCount(1);
   await page.getByRole("button", { name: `Open project ${name}`, exact: true }).click(); await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
   await nav(page, "Workbench"); await expect(page.getByRole("region", { name: "Resume recent project" })).toContainText(name);
   await page.getByRole("button", { name: "Resume project", exact: true }).click(); await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
-  await nav(page, "Workbench"); await page.getByLabel("Find a project").fill("not-a-project"); await expect(page.getByText("No projects match this view", { exact: true })).toBeVisible();
+  await nav(page, "Workbench"); await findProject(page, "not-a-project"); await expect(page.getByText("No projects match this view", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Show all projects", exact: true }).click(); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 test("home attention opens the selected stock check and leaves archive view", async ({ page }) => {
@@ -40,7 +45,7 @@ test("build planning is a direct route and import opens an isolated dialog", asy
   await page.getByRole("tab", { name: /^Plan/u }).click(); await page.getByRole("button", { name: "Import requirements from CSV", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Import requirements from CSV", exact: true })).toBeVisible(); await expect(page.locator(".app-background")).toHaveAttribute("aria-hidden", "true"); await expect(page.locator(".skip-link")).toHaveAttribute("inert", ""); await expect(page.getByLabel("Requirements CSV text", { exact: true })).toBeFocused();
   await page.keyboard.press("Escape"); await expect(page.getByRole("dialog")).toHaveCount(0);
-  await nav(page, "Workbench"); await page.getByRole("button", { name: "Import BOM", exact: true }).click(); await expect(page.getByRole("dialog", { name: "Guided project setup", exact: true })).toBeVisible();
+  await nav(page, "Workbench"); await page.getByRole("button", { name: "Import requirements", exact: true }).click(); await expect(page.getByRole("dialog", { name: "Guided project setup", exact: true })).toBeVisible();
 });
 test("supplier quote entry is visible before legacy offers", async ({ page }) => {
   await login(page); await create(page, "Polish supplier entry");

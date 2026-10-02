@@ -142,7 +142,7 @@ test(`next action takes a new maker from build approach to requirements and shop
   await page.getByLabel("Project name", { exact: true }).fill(`Next action sensor ${width}`);
   await page.getByLabel("Project goal").fill("Build a room sensor in an existing box.");
   await page.getByRole("button", { name: "Create project", exact: true }).click();
-  const next = page.locator(".dossier-next");
+  const next = page.getByRole("region", { name: "Next project action" });
   await next.getByRole("button", { name: "Set build approach" }).click();
   await page.getByRole("radio", { name: /^Use ready-made/u }).check();
   await page.getByRole("dialog").getByRole("button", { name: /Save/u }).click();
@@ -217,6 +217,7 @@ test("filters, edits, and physically counts evidence-aware inventory", async ({ 
   await expect(headers.nth(3)).toHaveText("Available");
   await expect(headers.nth(4)).toHaveText("Status");
   await page.getByRole("button", { name: "Hide item inspector" }).click();
+  await page.getByRole("button", { name: "Filters", exact: true }).click();
   await page.getByRole("button", { name: "Columns", exact: true }).click();
   await page.getByRole("group", { name: "Additional columns" }).getByRole("checkbox", { name: "Category", exact: true }).check();
   await expect(headers).toHaveCount(8);
@@ -334,6 +335,7 @@ test("loads server-backed continuation pages, resets filters, and ignores stale 
   await expect(status).toHaveText("Showing 30 of 30 items");
   await expect(page.getByRole("button", { name: "Open Tool 29" })).toBeVisible();
 
+  await page.getByRole("button", { name: "Filters", exact: true }).click();
   await page.getByText("More filters", { exact: true }).click(); await page .getByLabel("Filter inventory by item type").selectOption("electronic");
   await expect(status).toHaveText("Showing 1 of 1 items");
   await expect(page.getByRole("button", { name: "Open Fast ESP32" })).toBeVisible();
@@ -471,12 +473,14 @@ test("keeps inventory balances and status reachable in a bounded mobile register
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
   const table = page.getByRole("table");
   await expect(table.getByLabel("Select all loaded inventory items")).toBeVisible();
-  for (const name of ["Recorded", "Available", "Status"]) await expect(table.getByRole("columnheader", { name, exact: true })).toBeVisible();
+  const stockRow = table.locator("tbody tr").first();
+  for (const name of ["Recorded", "Available"]) await expect(stockRow.locator(".inventory-mobile-label").filter({ hasText: new RegExp(`^${name}$`) })).toBeVisible();
+  await expect(stockRow.locator(".inventory-status-cell")).toBeVisible();
   const scroller = page.locator(".inventory-register [data-slot=table-container]");
   expect(await scroller.evaluate((element) => { const rect = element.getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth; })).toBe(true);
-  await scroller.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
-  await expect(table.getByRole("columnheader", { name: "Available", exact: true })).toBeInViewport();
-  await expect(table.getByRole("columnheader", { name: "Status", exact: true })).toBeInViewport();
+  for (const cell of [".inventory-recorded-cell", ".inventory-available-cell", ".inventory-status-cell"]) {
+    expect(await stockRow.locator(cell).evaluate(element => { const rect = element.getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth; })).toBe(true);
+  }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   const horizontalScroll = await page.evaluate(() => { window.scrollTo(500, 0); return window.scrollX; });
   expect(horizontalScroll).toBe(0);
@@ -507,7 +511,7 @@ test("keeps inventory balances and status reachable in a bounded mobile register
   await page.getByText("Inventory-linked supplier records", { exact: true }).click(); await expect(page.locator(".shopping-section")).toBeVisible(); await assertPageFits(); }); test("keeps project navigation and build approach discoverable on mobile", async ({ page }) => { await page.setViewportSize({ width: 390, height: 844 }); await signIn(page);
   await expect(page.getByRole("heading", { name: "Workspace overview" })).toBeVisible();
   await page.getByRole("button", { name: "Open navigation" }).click();
-  await page.getByRole("button", { name: /^Projects/ }).click(); const buildApproach = page.getByRole("region", { name: "Build approach" });
+  await page.getByRole("button", { name: /^Projects/ }).click(); const buildApproach = page.getByRole("region", { name: "Next project action" });
   await expect(buildApproach).toBeVisible(); expect( await buildApproach.evaluate( (element) => element.scrollWidth <= element.clientWidth ) ).toBe(true); const tabs = page.getByRole("tablist", { name: "Project workspace" });
   await expect(tabs.getByRole("tab", { name: /^Plan/ })).toBeVisible();
   await expect(tabs.getByRole("tab", { name: /^Files/ })).toBeVisible();
@@ -644,14 +648,16 @@ test("keeps agent access contextual in Beginner and restores the nav in Expert",
 
   await page.getByRole("button", { name: /^Projects/u }).click(); const plan = page.getByRole("tab", { name: /^Plan\b/u }); await expect(plan).toHaveAttribute("aria-selected", "true");
   await expect .poll(() => new URL(page.url()).hash) .toMatch(/^#\/projects\/[^/]+\/plan$/u); await plan.press("ArrowRight"); const files = page.getByRole("tab", { name: /^Files\b/u }); await expect(files).toBeFocused(); await expect(files).toHaveAttribute("aria-selected", "true"); await expect.poll(() => new URL(page.url()).hash).toMatch(/\/files$/u);
-  await files.press("ArrowRight"); const assembly = page.getByRole("tab", { name: "Assembly", exact: true }); await expect(assembly).toBeFocused(); await expect(assembly).toHaveAttribute("aria-selected", "true"); await expect.poll(() => new URL(page.url()).hash).toMatch(/\/assembly$/u);
+  await files.press("ArrowRight"); const shopping = page.getByRole("tab", { name: /^Shopping list\b/u }); await expect(shopping).toBeFocused(); await expect(shopping).toHaveAttribute("aria-selected", "true"); await page.getByRole("button", { name: "Design tools", exact: true }).click(); await page.getByRole("tab", { name: "Assembly", exact: true }).click(); const assembly = page.getByRole("tab", { name: "Assembly", exact: true }); await expect(assembly).toBeFocused(); await expect(assembly).toHaveAttribute("aria-selected", "true"); await expect.poll(() => new URL(page.url()).hash).toMatch(/\/assembly$/u);
   await assembly.press("ArrowRight"); const pcb = page.getByRole("tab", { name: "PCB", exact: true }); await expect(pcb).toBeFocused(); await expect(pcb).toHaveAttribute("aria-selected", "true"); await expect.poll(() => new URL(page.url()).hash).toMatch(/\/pcb$/u);
   await page.reload(); await expect(pcb).toHaveAttribute("aria-selected", "true"); await expect(page.getByRole("heading", { name: "PCB viewer", exact: true })).toBeVisible();
-  await pcb.press("ArrowRight"); const shopping = page.getByRole("tab", { name: /^Shopping list\b/u }); await expect(shopping).toBeFocused(); await expect(shopping).toHaveAttribute("aria-selected", "true"); await expect.poll(() => new URL(page.url()).hash).toMatch(/\/offers$/u);
+  await pcb.press("ArrowRight"); await expect(plan).toBeFocused(); await expect(plan).toHaveAttribute("aria-selected", "true"); await expect.poll(() => new URL(page.url()).hash).toMatch(/\/plan$/u);
   await page.goBack();
   await expect(pcb).toHaveAttribute("aria-selected", "true");
   await page.goBack();
   await expect(assembly).toHaveAttribute("aria-selected", "true");
+  await page.goBack();
+  await expect(shopping).toHaveAttribute("aria-selected", "true");
   await page.goBack();
   await expect(files).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("main")).toBeFocused();

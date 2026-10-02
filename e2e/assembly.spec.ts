@@ -7,6 +7,7 @@ test("assembly explorer imports CAD, edits a guide, saves and reopens on desktop
   await page.getByRole("button", { name: /^Projects/u }).click(); await page.getByRole("tab", { name: /^Files/u }).click();
   await page.getByLabel("Choose files to upload").setInputFiles({ name: "synthetic-assembly.step", mimeType: "model/step", buffer: await readFile("packages/artifacts/testfiles/synthetic-assembly.step") });
   await page.getByRole("button", { name: "Add 1 file", exact: true }).click(); await expect(page.getByRole("button", { name: "Download synthetic-assembly.step", exact: true })).toBeVisible();
+  if (await page.getByRole("button", { name: "Design tools", exact: true }).getAttribute("aria-expanded") === "false") await page.getByRole("button", { name: "Design tools", exact: true }).click();
   await page.getByRole("tab", { name: "Assembly", exact: true }).click();
   await page.getByLabel("synthetic-assembly.step", { exact: true }).check(); await page.getByRole("button", { name: "Open assembly", exact: true }).click();
   await expect(page.locator(".assembly-canvas canvas")).toBeVisible(); await expect(page.locator(".assembly-dimensions")).toContainText("40.0 × 30.0 × 17.0 mm");
@@ -61,6 +62,7 @@ test("a large assembly keeps selection controls reachable in light, dark and nar
     model.parts = Array.from({ length: 26 }, (_, i) => ({ ...model.parts[0], id: `panel-${i}`, name: `Panel ${i + 1}`, position: [i % 5 * 45, Math.floor(i / 5) * 35, 0] }));
     await route.fulfill({ response, json: model });
   });
+  if (await page.getByRole("button", { name: "Design tools", exact: true }).getAttribute("aria-expanded") === "false") await page.getByRole("button", { name: "Design tools", exact: true }).click();
   await page.getByRole("tab", { name: "Assembly", exact: true }).click();
   await page.getByRole("button", { name: "Select all files", exact: true }).click(); await page.getByRole("button", { name: "Open assembly", exact: true }).click();
   await expect(page.locator(".assembly-canvas canvas")).toBeVisible();

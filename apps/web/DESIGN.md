@@ -90,8 +90,9 @@ to find, while keeping the meaning of stock evidence intact.
   arrow keys, Home/End and double-click reset; Columns offers a full layout reset.
   Item and Location headers expose the existing server-side sort options.
 - Inventory filters and sort are in the URL. Up to 12 named views are stored in
-  this browser, separately for sample and private workspaces. Mobile filters are
-  disclosed on demand; the register scrolls horizontally without widening the page.
+  this browser, separately for sample and private workspaces. Detailed filters and view configuration are
+  disclosed on demand at every width. Phone rows reflow to keep identity, recorded
+  and available quantities, and stock status together.
 - Copy for AI produces an explicit selected-record snapshot with identity, units,
   quantities, evidence, version and planning limits. It sends nothing to a service
   and provides selectable text when clipboard access is unavailable.
@@ -155,3 +156,18 @@ project compatibility or exact product identity.
 `workspace-layout.css` owns the shell, documents, register, category navigator,
 item inspector, forms, previews and evidence states. Retain keyboard labels, focus
 boundaries, browser history and direct project-tab URLs when changing layout.
+
+## Maker workflow hierarchy
+
+The current project keeps its next useful action above the document tabs, outside
+the optional inspector. Stock-ready messaging covers required parts and never
+claims design or physical validation. Revision creation is secondary. Assembly
+and PCB tabs are disclosed by Design tools and remain visible when linked directly.
+
+The workbench leads with resuming work and project actions, without a duplicate
+summary strip. Small project registers disclose search/sort; equipment details
+are optional. Inventory keeps search and stock views visible, with filters and
+view configuration behind one disclosure. Applied filters remain visible and
+clearable. Phone inventory rows keep item identity, recorded/available quantities
+and status together. The inspector discloses supporting evidence and AI handoff.
+The item drawer puts physical counting before images and maintenance actions.

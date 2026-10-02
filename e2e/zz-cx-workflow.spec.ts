@@ -12,7 +12,7 @@ async function startProject(page: Page, name: string) {
   await page.getByLabel("Project goal", { exact: true }).fill("Synthetic maker workflow acceptance.");
   await page.getByRole("button", { name: "Create project", exact: true }).click();
   await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Build approach", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("region", { name: "Next project action", exact: true })).toHaveCount(1);
   await expect(page.locator(".dossier-column .build-approach-card")).toHaveCount(0);
 }
 async function addRequirement(page: Page, name: string) {
