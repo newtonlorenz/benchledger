@@ -347,6 +347,14 @@ identity search.
 
 ## UI parity
 
+The web interface uses shadcn primitives throughout forms, navigation, tables,
+search, dialogs, menus and notifications, with one semantic light/dark theme.
+Radix provides interaction boundaries; domain guards retain final dismissal authority.
+The View popover changes browser-local appearance and row spacing only. This
+redesign adds no HTTP or MCP operations and changes no stock, authentication,
+confirmation, concurrency or evidence rules.
+
+
 The Inventory destination uses the authenticated `GET /api/v1/inventory` page
 directly, with server-side search, canonical kind/evidence/availability filters,
 stock-view and exact-location filters, stable name/location ordering, and a
@@ -516,3 +524,15 @@ The shared Assembly tab supports all fabrication routes. `inspect_assembly_sourc
 ### PCB inspection
 
 The `pcb.read` capability exposes a read-only project PCB tab over the existing assembly inspection service. Native KiCad PCB files preserve source thickness, supported drill/copper/footprint geometry and exact file hashes. STEP/GLB exports retain their node geometry. Top/bottom views, layer visibility and source-derived component selection are available where the source permits; missing bodies and unsupported geometry are reported explicitly. The same inspection is available through MCP. See [PCB viewer](pcb-viewer.md).
+
+## Maker experience navigation
+
+The web workspace exposes the next project action above its tabs. Design tools
+reveals Assembly and PCB viewers; existing direct links remain valid. Inventory
+Filters reveals detailed filters, sorting and saved views, while applied filters
+remain visible. Stock quantities and status stay together on phone screens.
+Supporting evidence remains in the item inspector; stock counting is first in
+the item drawer. These navigation changes do not alter HTTP/MCP capabilities,
+authorisation, stock evidence or physical-operation boundaries.
+
+See the [review and implementation plan](reviews/2026-10-02-maker-experience.md).

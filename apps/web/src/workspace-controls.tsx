@@ -1,4 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { RadioGroup, RadioGroupItem } from "./components/ui/radio-group";
+import { Label } from "./components/ui/label";
+import { Button } from "./components/ui/button";
+import { Popover, PopoverTrigger, PopoverContent } from "./components/ui/popover";
+import { useEffect, useState } from "react";
 import { Icon } from "./icons";
 import { applyAppearance, appearanceKey, parseAppearance, readAppearance, storeAppearance } from "./appearance";
 import type { Appearance, ColourMode, Density } from "./appearance";
@@ -9,19 +13,10 @@ export function useAppearance() {
   return { value, change: (patch: Partial<Appearance>) => setValue((current) => { const next = { ...current, ...patch }; storeAppearance(next); return next; }) };
 }
 export function AppearanceControl({ value, onChange }: { value: Appearance; onChange(patch: Partial<Appearance>): void }) {
-  const root = useRef<HTMLDetailsElement>(null);
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    if (!open) return;
-    const outside = (event: PointerEvent) => { if (event.target instanceof Node && !root.current?.contains(event.target)) root.current?.removeAttribute("open"); };
-    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); root.current?.removeAttribute("open"); root.current?.querySelector("summary")?.focus(); } };
-    document.addEventListener("pointerdown", outside); document.addEventListener("keydown", escape);
-    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape); };
-  }, [open]);
-  return <details ref={root} className="appearance-control" onToggle={(event) => setOpen(event.currentTarget.open)}><summary aria-label="Workspace appearance" title="Theme and row spacing"><Icon name="sliders" size={17} /><span>View</span></summary><div className="appearance-panel">
+  return <Popover><PopoverTrigger asChild><Button variant="ghost" type="button" className="appearance-trigger" aria-label="Workspace appearance" title="Theme and row spacing"><Icon name="sliders" size={17} /><span>View</span></Button></PopoverTrigger><PopoverContent className="appearance-panel" align="end" sideOffset={8} aria-label="Workspace view">
     <div className="control-panel-heading"><strong>Workspace view</strong><span>Saved in this browser.</span></div>
-    <fieldset><legend>Colour theme</legend><div className="segmented-options">{(["light", "dark", "system"] as ColourMode[]).map((mode) => <label key={mode}><input type="radio" name="workspace-colour" value={mode} checked={value.colourMode === mode} onChange={() => onChange({ colourMode: mode })} /><span>{mode === "system" ? "System" : mode === "light" ? "Light" : "Dark"}</span></label>)}</div></fieldset>
-    <fieldset><legend>Row spacing</legend><div className="segmented-options">{(["comfortable", "compact"] as Density[]).map((density) => <label key={density}><input type="radio" name="workspace-density" value={density} checked={value.density === density} onChange={() => onChange({ density })} /><span>{density === "comfortable" ? "Standard" : "Compact"}</span></label>)}</div></fieldset>
+    <fieldset><legend>Colour theme</legend><RadioGroup className="segmented-options" aria-label="Colour theme" value={value.colourMode} onValueChange={next => onChange({ colourMode: next as ColourMode })}>{(["light", "dark", "system"] as ColourMode[]).map((mode) => <Label key={mode}><RadioGroupItem value={mode} /><span>{mode === "system" ? "System" : mode === "light" ? "Light" : "Dark"}</span></Label>)}</RadioGroup></fieldset>
+    <fieldset><legend>Row spacing</legend><RadioGroup className="segmented-options" aria-label="Row spacing" value={value.density} onValueChange={next => onChange({ density: next as Density })}>{(["comfortable", "compact"] as Density[]).map((density) => <Label key={density}><RadioGroupItem value={density} /><span>{density === "comfortable" ? "Standard" : "Compact"}</span></Label>)}</RadioGroup></fieldset>
     <p>Compact rows apply to pointer devices. Touch controls keep their size.</p>
-  </div></details>;
+  </PopoverContent></Popover>;
 }

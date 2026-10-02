@@ -69,7 +69,7 @@ it("opens large imports in viewing mode and searches without hiding the selected
   vi.mocked(workflowRequest).mockImplementation(async path => path.endsWith("/inspect") ? { ...inspection, parts } : { assembly: null, warnings: [] });
   render(<AssemblyWorkspace project={project} onFiles={() => {}} />);
   await screen.findByRole("button", { name: "Select all files" }); click("Select all files");
-  expect(screen.getByLabelText("enclosure.glb")).toHaveProperty("checked", true);
+  expect(screen.getByLabelText("enclosure.glb")).toHaveProperty("ariaChecked", "true");
   click("Clear selection"); expect(screen.getByRole("button", { name: "Open assembly" }).matches(":disabled")).toBe(true);
   click("Select all files"); click("Open assembly"); await screen.findByRole("button", { name: "Panel 26" });
   expect(screen.queryByLabelText("Assembly name")).toBeNull(); expect(screen.getByRole("button", { name: "Save assembly" })).toBeTruthy();

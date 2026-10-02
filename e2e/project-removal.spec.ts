@@ -123,14 +123,14 @@ test("deletes an archived project after a single confirmation and hides it from 
   await page.getByRole("button", { name: /^Projects(?: \d+)?$/u }).click();
   await expect(page.getByRole("heading", { name: "Retained Archive E2E", exact: true })).toBeVisible();
 
-  if (!await page.locator(".project-actions").evaluate((element) => (element as HTMLDetailsElement).open)) await page.locator(".project-actions > summary").click();
+  if (!await page.locator(".project-actions").evaluate((element) => element.getAttribute("data-state") === "open")) await page.locator(".project-actions > [data-disclosure='trigger']").click();
   await page.locator(".project-actions").getByRole("button", { name: "Delete project", exact: true }).click();
   let dialog = page.getByRole("alertdialog", { name: "Delete Retained Archive E2E?" });
   await expect(dialog).toContainText("This action is irreversible.");
   await expect(dialog).not.toContainText(/reservation|tombstone|audit/iu);
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   expect(harness.deleteRequest()).toBeUndefined();
-  if (!await page.locator(".project-actions").evaluate((element) => (element as HTMLDetailsElement).open)) await page.locator(".project-actions > summary").click();
+  if (!await page.locator(".project-actions").evaluate((element) => element.getAttribute("data-state") === "open")) await page.locator(".project-actions > [data-disclosure='trigger']").click();
   await page.locator(".project-actions").getByRole("button", { name: "Delete project", exact: true }).click();
   dialog = page.getByRole("alertdialog", { name: "Delete Retained Archive E2E?" });
   const removeButton = dialog.getByRole("button", { name: "Delete project", exact: true });

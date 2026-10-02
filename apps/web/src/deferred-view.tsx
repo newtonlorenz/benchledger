@@ -1,3 +1,5 @@
+import { Alert } from "./components/ui/alert";
+import { Button } from "./components/ui/button";
 import { Component, lazy, Suspense, useState, type ComponentType, type ReactNode } from "react";
 import "./deferred-view.css";
 
@@ -11,11 +13,11 @@ class ViewBoundary extends Component<{ children: ReactNode; name: string; recove
   override render() {
     if (!this.state.failed) return this.props.children;
     return <div className="deferred-view-message">
-      <p role="alert">{this.props.name} could not be opened.</p>
+      <Alert asChild><p role="alert">{this.props.name} could not be opened.</p></Alert>
       <p>{this.props.recovery}</p>
       {this.state.loadFailed
         ? <p>Check your connection, save any open work, then refresh the page to load this view.</p>
-        : <button type="button" className="button button-secondary" onClick={this.props.onRetry}>Retry {this.props.name.toLowerCase()}</button>}
+        : <Button variant="outline" type="button" className="button button-secondary" onClick={this.props.onRetry}>Retry {this.props.name.toLowerCase()}</Button>}
     </div>;
   }
 }

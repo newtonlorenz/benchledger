@@ -42,14 +42,20 @@ it("changes local theme and density, follows system changes and responds to othe
   fireEvent(window, new StorageEvent("storage", { key: "other", newValue: "ignore" }));
   expect(document.documentElement.dataset.theme).toBe("light");
   fireEvent(window, new StorageEvent("storage", { key: null, newValue: null }));
-  await waitFor(() => expect((screen.getByRole("radio", { name: "System", hidden: true }) as HTMLInputElement).checked).toBe(true));
+  await waitFor(() => expect(screen.getByRole("radio", { name: "System", hidden: true }).getAttribute("aria-checked")).toBe("true"));
 });
 it("closes view controls on Escape and outside pointer clicks", async () => {
-  render(<Preferences />); const trigger = screen.getByLabelText("Workspace appearance"); const details = trigger.closest("details")!;
-  details.open = true; fireEvent(details, new Event("toggle")); await waitFor(() => expect(details.open).toBe(true));
-  fireEvent.keyDown(document, { key: "Escape" }); expect(details.open).toBe(false); expect(document.activeElement).toBe(trigger);
-  details.open = true; fireEvent(details, new Event("toggle"));
-  fireEvent.pointerDown(document.body); expect(details.open).toBe(false);
+  render(<Preferences />); const trigger = screen.getByLabelText("Workspace appearance");
+  fireEvent.click(trigger);
+  expect(screen.getByRole("dialog", { name: "Workspace view" })).toBeTruthy();
+  fireEvent.keyDown(document, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() => expect(document.activeElement).toBe(trigger));
+  fireEvent.click(trigger);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  fireEvent.pointerDown(document.body, { pointerType: "mouse" });
+  fireEvent.click(document.body);
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 });
 const commands = (run = vi.fn()): WorkspaceCommand[] => [
   { id: "inventory", label: "Inventory", detail: "Find stock records", group: "Navigation", icon: "box", run },

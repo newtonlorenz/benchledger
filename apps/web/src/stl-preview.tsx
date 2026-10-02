@@ -1,3 +1,5 @@
+import { Alert } from "./components/ui/alert";
+import { Button } from "./components/ui/button";
 import { useEffect, useRef, useState } from "react";
 import { AmbientLight, Color, DirectionalLight, Mesh, MeshStandardMaterial, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from "three";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
@@ -76,5 +78,5 @@ export default function StlPreview({ bytes }: { bytes: ArrayBuffer }) {
     } catch (cause) { dispose(); setError(cause instanceof Error ? cause.message : "The 3D viewer is unavailable. Download the STL to view it locally."); }
     return () => { reset.current = () => undefined; dispose(); };
   }, [bytes, attempt]);
-  return <div>{error ? <div><p role="alert">{error}</p><button type="button" className="button button-secondary" onClick={() => setAttempt(value => value + 1)}>Retry STL preview</button></div> : <><p>Drag to rotate. Scroll or pinch to zoom. This preview does not verify printability or physical fit.</p><button type="button" className="button button-quiet" onClick={() => reset.current()}>Reset view</button></>}<div ref={host} className="artifact-preview-stl" hidden={Boolean(error)} /></div>;
+  return <div>{error ? <div><Alert asChild><p role="alert">{error}</p></Alert><Button variant="outline" type="button" className="button button-secondary" onClick={() => setAttempt(value => value + 1)}>Retry STL preview</Button></div> : <><p>Drag to rotate. Scroll or pinch to zoom. This preview does not verify printability or physical fit.</p><Button variant="ghost" type="button" className="button button-quiet" onClick={() => reset.current()}>Reset view</Button></>}<div ref={host} className="artifact-preview-stl" hidden={Boolean(error)} /></div>;
 }

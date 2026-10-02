@@ -148,7 +148,7 @@ test("keeps inventory and shopping actions usable at 390px without horizontal ov
 
   await expect(page.locator(".global-search")).toHaveCount(0);
   await page.getByRole("button", { name: "Filters", exact: true }).click();
-  const inventoryControls = page.locator(".inventory-toolbar .field-search, .inventory-toolbar .category-control");
+  const inventoryControls = page.locator(".inventory-toolbar .field-search, .inventory-toolbar .category-control:visible");
   for (const control of await inventoryControls.all()) {
     const box = await control.boundingBox();
     expect(box?.width ?? 0).toBeGreaterThanOrEqual(44);
@@ -166,7 +166,7 @@ test("keeps inventory and shopping actions usable at 390px without horizontal ov
   await page.getByRole("dialog", { name: "Primary navigation" }).getByRole("button", { name: /^Projects/ }).click();
   await page.getByRole("tab", { name: /^Shopping list/ }).click();
   await page.getByText("Inventory-linked supplier records", { exact: true }).click(); await expect(page.locator(".shopping-section")).toBeVisible();
-  const shoppingControls = page.locator(".shopping-actions .button, .shopping-section .offer-row, .shopping-section .expert-detail > summary");
+  const shoppingControls = page.locator(".shopping-actions .button, .shopping-section .offer-row, .shopping-section .expert-detail > [data-disclosure='trigger']");
   for (const control of await shoppingControls.all()) {
     const box = await control.boundingBox();
     if (box) {

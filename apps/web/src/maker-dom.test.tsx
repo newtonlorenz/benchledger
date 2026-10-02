@@ -15,6 +15,23 @@ const project = { ...structuredClone(projects[0]!), fabricationRoute: "printed" 
 const change = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label, { exact: true }), { target: { value } });
 const click = (name: string) => fireEvent.click(screen.getByRole("button", { name }));
 
+it("explains an empty build plan and focuses the action needed to continue", () => {
+  render(<BuildEditor project={project} items={inventory} initial={null} root="/project" onCancel={() => undefined} onSaved={() => undefined} />);
+  click("Review build plan");
+  expect(screen.getByRole("alert").textContent).toBe("Add at least one required part before reviewing this plan.");
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Add build part" }));
+  expect(screen.queryByRole("button", { name: "Save planning snapshot" })).toBeNull();
+  click("Add build part");
+  expect(screen.queryByRole("alert")).toBeNull();
+  click("Review build plan");
+  expect(screen.getByRole("alert").textContent).toContain("parts.0.name");
+  expect(screen.queryByRole("button", { name: "Save planning snapshot" })).toBeNull();
+  change("Build part 1 name", "Spacer");
+  click("Review build plan");
+  expect(screen.getByRole("button", { name: "Save planning snapshot" })).toBeTruthy();
+  expect(workflowRequest).not.toHaveBeenCalled();
+});
+
 it("edits a repeated plate draft, reviews it and confirms its saved identity", async () => {
   const saved = vi.fn(); vi.mocked(workflowRequest).mockImplementation(async (_path, _method, body) => ({ data: { ...(body as object), id: "plan", version: 1, projectRevisionId: project.serverRevisionId, contentSha256: "a".repeat(64), totals: {} } }));
   render(<BuildEditor project={project} items={inventory} initial={null} root="/project" onCancel={() => undefined} onSaved={saved} />);
@@ -47,7 +64,7 @@ it("records explicit supplier amounts, tax and observation metadata", async () =
 it("keeps guided drafts editable and validates the mapped proposal before preview", async () => {
   const adapter = createSampleWorkspaceAdapter(); const preview = vi.spyOn(adapter, "previewProjectSetup").mockRejectedValue(new Error("Synthetic preview unavailable"));
   render(<GuidedSetup adapter={adapter} items={inventory} onDone={async () => undefined} onBusy={() => undefined} />);
-  change("Guided project name", "Sensor"); change("Guided project goal", "Useful sensor"); change("Guided build approach", "none"); change("BOM CSV text", "name,quantity,unit\nBracket,2,each"); click("Review CSV mapping"); change("CSV Quantity column", "1"); change("CSV default unit", "each"); change("CSV default use", "consumed"); change("CSV decimal convention", "dot"); click("Use mapped requirements in draft");
+  change("Guided project name", "Sensor"); change("Guided project goal", "Useful sensor"); change("Guided build approach", "none"); click("Import requirements CSV"); change("BOM CSV text", "name,quantity,unit\nBracket,2,each"); click("Review CSV mapping"); change("CSV Quantity column", "1"); change("CSV default unit", "each"); change("CSV default use", "consumed"); change("CSV decimal convention", "dot"); click("Use mapped requirements in draft");
   change("Requirement 1 name", "Revised bracket"); change("Requirement 1 quantity", "3"); change("Requirement 1 unit", "each"); change("Requirement 1 use", "consumed"); change("Requirement 1 owned item", ""); change("Requirement 1 specification", "20 mm mounting"); change("Setup workstreams", "Design\nAssembly");
   click("Preview complete project"); await waitFor(() => expect(preview).toHaveBeenCalledOnce()); expect(await screen.findByRole("alert")).toHaveProperty("textContent", "Synthetic preview unavailable");
   click("Add draft requirement"); change("Requirement 2 name", "Tool"); click("Remove draft row 2"); expect(screen.queryByLabelText("Requirement 2 name")).toBeNull();
@@ -55,6 +72,6 @@ it("keeps guided drafts editable and validates the mapped proposal before previe
 it("updates workstream status, notes and due date through an observed version", async () => {
   const row = { item: { id: "work", name: "Assembly", kind: "assembly", currentRevisionId: "rev" }, revision: { number: 1, name: "Initial" }, assignment: { version: 1, status: "todo" } };
   vi.mocked(workflowRequest).mockImplementation(async (path, method) => method === "PUT" ? { data: { id: "work", workItemId: "work", version: 2, status: "in_progress", notes: "Fit check first", dueDate: "2027-01-02" } } : path === "/team/directory" ? { members: [] } : { data: [row], total: 1 });
-  render(<WorkstreamPlanning project={project} />); await screen.findByText("Assembly · To do"); change("Status for Assembly", "in_progress"); change("Due date", "2027-01-02"); change("Workstream notes", "Fit check first"); click("Save workstream progress");
+  render(<WorkstreamPlanning project={project} />); await screen.findByText("Assembly · To do"); click("Assembly · To do"); change("Status for Assembly", "in_progress"); change("Due date", "2027-01-02"); change("Workstream notes", "Fit check first"); click("Save workstream progress");
   await waitFor(() => expect(vi.mocked(workflowRequest).mock.calls.some((call) => call[1] === "PUT")).toBe(true)); expect(vi.mocked(workflowRequest).mock.calls.find((call) => call[1] === "PUT")![2]).toMatchObject({ expectedVersion: 1, status: "in_progress", notes: "Fit check first", dueDate: "2027-01-02" });
 });

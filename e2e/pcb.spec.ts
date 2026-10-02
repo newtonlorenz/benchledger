@@ -9,6 +9,7 @@ test("PCB viewer imports a native board, preserves the file, and remains usable 
   await page.getByLabel("Choose files to upload").setInputFiles({ name: "synthetic-board.kicad_pcb", mimeType: "application/x-kicad-pcb", buffer: bytes });
   await page.getByRole("button", { name: "Add 1 file", exact: true }).click(); await expect(page.getByRole("button", { name: "Download synthetic-board.kicad_pcb", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Dismiss notification", exact: true }).click();
+  if (await page.getByRole("button", { name: "Design tools", exact: true }).getAttribute("aria-expanded") === "false") await page.getByRole("button", { name: "Design tools", exact: true }).click();
   await page.getByRole("tab", { name: "PCB", exact: true }).click();
   await page.getByLabel("Board source").selectOption({ label: "synthetic-board.kicad_pcb · r01" });
   await page.getByRole("button", { name: "Open PCB", exact: true }).click();

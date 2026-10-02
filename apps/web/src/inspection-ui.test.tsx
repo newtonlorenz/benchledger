@@ -1,4 +1,5 @@
-import { renderToStaticMarkup } from "react-dom/server";
+// @vitest-environment jsdom
+import { renderToStaticMarkup } from "./test-render-markup";
 import { describe, expect, it } from "vitest";
 import { InspectionQueuePanel, InspectionResultDialog, alternativeChanges, effectsLabel, formatObservedAt, formatQuantityConversion, gapQuantities, inspectionActionAccessibleNames, lineReferences, previewDescription } from "./inspection-ui";
 import type { InspectionAction } from "./inspection-ui";
@@ -65,7 +66,7 @@ describe("Project Plan Checks", () => {
     expect(markup).toContain("bom-line-1 · v2");
     expect(markup).toContain("item-1 · v4");
     expect(markup).toContain("delivered_uncounted · supplier label");
-    expect(markup).toContain("{&quot;kind&quot;:&quot;physical_quantity&quot;}");
+    expect(markup).toContain("{\"kind\":\"physical_quantity\"}");
     expect(markup).toContain("each");
     expect(markup).toContain("Updates physical quantity evidence.");
   });

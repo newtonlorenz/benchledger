@@ -12,12 +12,13 @@ must not be presented as zero or as a successful check.
 
 ## Visual system
 
-`apps/web/src/workspace-design.css` defines the theme and presentation tokens.
-`styles.css` retains component structure and the existing responsive behaviour.
+`apps/web/src/shadcn.css` defines the sole semantic theme and presentation tokens.
+`workspace-layout.css` owns domain composition and responsive geometry.
+Use the shared `components/ui` primitives for all controls and interaction boundaries.
 Use tokens for colours. Do not add fixed light backgrounds to individual panels.
 
 The visual language uses graphite navigation, neutral work surfaces, thin
-borders and small corner radii. Orange identifies primary interface actions.
+borders and small corner radii. Green identifies primary interface actions.
 Green, amber, blue and red identify existing status meanings. Always show status
 text as well as colour. Do not use colour to imply a check that did not occur.
 
@@ -142,3 +143,15 @@ Browsers can cache failed module downloads. In that case, explain that the user
 must check their connection, save open work and then refresh the page. Do not
 offer a retry that cannot clear that cache, or automatically reload the workspace.
 These presentation changes do not change HTTP/MCP contracts or stock evidence.
+
+## Maker experience navigation
+
+The web workspace exposes the next project action above its tabs. Design tools
+reveals Assembly and PCB viewers; existing direct links remain valid. Inventory
+Filters reveals detailed filters, sorting and saved views, while applied filters
+remain visible. Stock quantities and status stay together on phone screens.
+Supporting evidence remains in the item inspector; stock counting is first in
+the item drawer. These navigation changes do not alter HTTP/MCP capabilities,
+authorisation, stock evidence or physical-operation boundaries.
+
+See the [review and implementation plan](reviews/2026-10-02-maker-experience.md).

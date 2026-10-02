@@ -6,6 +6,7 @@ export default defineConfig({
   // its last compiled workspace copy. Build/typecheck retain package boundaries.
   resolve: { alias: [{ find: /^@benchledger\/application$/u, replacement: fileURLToPath(new URL("./packages/application/src/index.ts", import.meta.url)) }, { find: /^@benchledger\/mcp$/u, replacement: fileURLToPath(new URL("./apps/mcp/src/index.ts", import.meta.url)) }] },
   test: {
+    setupFiles: ["apps/web/src/test-browser-setup.ts"],
     include: ["apps/**/*.test.ts", "apps/**/*.test.tsx", "packages/**/*.test.ts"],
     coverage: {
       provider: "v8",

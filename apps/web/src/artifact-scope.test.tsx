@@ -1,4 +1,5 @@
-import { renderToStaticMarkup } from "react-dom/server";
+// @vitest-environment jsdom
+import { renderToStaticMarkup } from "./test-render-markup";
 import { describe, expect, it } from "vitest";
 import { EditBuildApproachDialog, InventoryDrawer, InventoryTable, NewProjectDialog, NewRevisionDialog, OverviewPage, ProjectExpertContext, ProjectFiles, Prompt, SettingsPage, humanizeSpecificationDecision, inventoryLocationLabel, managedInventoryLabel, revisionInputForRoute } from "./App";
 import { DEFAULT_MANAGED_INVENTORY_CATEGORIES } from "./category-ui"; import { buildItemEligibility } from "./catalog-ui"; import type { Artifact, Project } from "./domain";

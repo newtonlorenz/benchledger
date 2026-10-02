@@ -117,7 +117,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   expect(createdProjectId).toEqual(expect.any(String));
   await expect(page.getByRole("heading", { name: projectName, exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "Settings", exact: true }).click(); await page .getByRole("button", { name: "Show technical details", exact: true }) .click(); await expect( page.getByRole("button", { name: "Hide technical details", exact: true }) ).toBeVisible(); await page.getByRole("button", { name: /^Projects/u }).click(); await page.getByRole("button", { name: "New revision", exact: true }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click(); await page .getByRole("switch", { name: "Technical details" }) .click(); await expect( page.getByRole("switch", { name: "Technical details" }) ).toBeVisible(); await page.getByRole("button", { name: /^Projects/u }).click(); await page.getByRole("button", { name: "New revision", exact: true }).click();
   const revisionDialog = page.getByRole("dialog", { name: `New revision for ${projectName}` });
   await expect(revisionDialog).toBeVisible();
   await revisionDialog.getByLabel("Revision name").fill("Exact setup capture");
@@ -139,7 +139,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   await expect(ownedFilament).toHaveCount(1);
   await ownedFilament.click();
 
-  await expect( revisionDialog.locator("summary").filter({ hasText: "Technical details" }) ).toBeVisible();
+  await expect( revisionDialog.locator("[data-disclosure=trigger]").filter({ hasText: "Technical details" }) ).toBeVisible();
   await revisionDialog.getByLabel("Hotend side").fill("single nozzle");
   await revisionDialog.getByLabel("Nozzle diameter (mm)").fill("0.4");
   await revisionDialog.getByLabel("Nozzle material").fill("hardened steel");
@@ -194,7 +194,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   await expect(buildApproach).toContainText("Bambu Lab H2D");
   await expect( page.getByRole("region", { name: "Build setup summary" }) ).toBeVisible();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await expect( page.getByRole("button", { name: "Hide technical details", exact: true })).toBeVisible();
+  await expect( page.getByRole("switch", { name: "Technical details" })).toBeVisible();
 
   await page.getByRole("button", { name: /^Projects/u }).click(); await page.getByRole("button", { name: `Switch to project ${projectName}`, exact: true }).click(); const expertSummary = page.getByRole("region", { name: "Build setup summary" }); await expect(expertSummary).toContainText( "Use Bambu Lab · H2D with Bambu Lab · PETG · PETG HF." );
   await expect(expertSummary).toContainText( "Print setup: 0.4 mm nozzle · hardened steel · Textured PEI." ); await expect(expertSummary).toContainText( "Software: Bambu Studio 1.10.0 0.20 mm Standard." ); await expect(expertSummary).toContainText("Calibration: flow checked."); await expect( expertSummary.getByText("Show IDs, versions, evidence & unknowns", { exact: true })).toBeVisible();

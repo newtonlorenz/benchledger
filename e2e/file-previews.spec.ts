@@ -21,7 +21,7 @@ test("project files preview Markdown, images and STL and preserve download-only 
   await expect(dialog.getByRole("heading", { name: "Assembly preview" })).toBeVisible();
   await expect(dialog.locator("strong")).toHaveText("Read first");
   await expect(dialog.locator("img, script")).toHaveCount(0);
-  expect(await markdownButton.evaluate((element) => Boolean(element.closest("[inert]")))).toBe(true);
+  expect(await page.locator('button[aria-label="Preview preview-instructions.md"]').evaluate((element) => Boolean(element.closest('[aria-hidden="true"]')))).toBe(true);
   await page.keyboard.press("Escape"); await expect(dialog).toHaveCount(0); await expect(markdownButton).toBeFocused();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "Preview preview-drawing.png", exact: true }).click();

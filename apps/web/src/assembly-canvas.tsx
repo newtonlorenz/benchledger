@@ -1,3 +1,5 @@
+import { Alert } from "./components/ui/alert";
+import { Button } from "./components/ui/button";
 import { useEffect, useRef, useState } from "react";
 import { ACESFilmicToneMapping, SRGBColorSpace, AmbientLight, Box3, Box3Helper, BufferGeometry, Color, DirectionalLight, Euler, Float32BufferAttribute, Mesh, MeshStandardMaterial, PerspectiveCamera, Raycaster, Scene, Vector2, Vector3, WebGLRenderer } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -82,5 +84,5 @@ export default function AssemblyCanvas(props: AssemblyCanvasProps) {
   }, [props.geometry, props.parts.map(p => `${p.id}:${p.artifactId}:${p.nodeId}`).join("|"), attempt]);
   useEffect(() => update.current(), [props.parts, props.hidden, props.selected, props.explosion]);
   useEffect(() => fitView.current(), [props.fit, props.view]);
-  return <><div className="assembly-dimensions">{dimensions}<small>assembled model bounds</small></div>{error && <div className="assembly-render-error"><p role="alert">{error} The parts list, notes and edits remain available.</p><button type="button" className="button button-secondary" onClick={() => setAttempt(value => value + 1)}>Retry 3D viewer</button></div>}<div className="assembly-canvas" ref={host} hidden={Boolean(error)} /></>;
+  return <><div className="assembly-dimensions">{dimensions}<small>assembled model bounds</small></div>{error && <div className="assembly-render-error"><Alert asChild><p role="alert">{error} The parts list, notes and edits remain available.</p></Alert><Button variant="outline" type="button" className="button button-secondary" onClick={() => setAttempt(value => value + 1)}>Retry 3D viewer</Button></div>}<div className="assembly-canvas" ref={host} hidden={Boolean(error)} /></>;
 }
