@@ -6,6 +6,8 @@ import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-500.css";
 import "./shadcn.css";
 import "./workspace-layout.css";
+import "./workspace-shell.css";
+import "./project-workspace.css";
 import { applyAppearance, readAppearance } from "./appearance";
 
 applyAppearance(readAppearance());

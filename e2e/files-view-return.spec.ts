@@ -1,3 +1,4 @@
+import { clickProjectAction } from "./workspace-controls";
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 
@@ -44,7 +45,7 @@ test("Files keeps workstream scope and search across project tabs and resets for
   await page.getByRole("tab", { name: /^Files/u }).click();
   await expect(scope).toHaveValue(workstreamScope!);
   await expect(page.getByRole("button", { name: "Add 1 file", exact: true })).toHaveCount(0);
-  await page.getByRole("button", { name: "New revision", exact: true }).click();
+  await clickProjectAction(page, "New revision");
   const dialog = page.getByRole("dialog", { name: "New revision for Synthetic file return", exact: true });
   await dialog.getByLabel("Revision name", { exact: true }).fill("Next fit");
   await dialog.getByRole("button", { name: "Create revision", exact: true }).click();

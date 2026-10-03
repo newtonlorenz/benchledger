@@ -1,3 +1,4 @@
+import { clickProjectAction } from "./workspace-controls";
 import { expect, test, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import AxeBuilder from "@axe-core/playwright";
@@ -159,20 +160,20 @@ test("inspection confirmation isolates focus and preserves the exact reviewed in
 });
 test("project refresh reads external updates without losing an in-progress stock draft", async ({ page }) => {
   const { revision, post } = await fixture(page);
-  await result(page); await page.getByRole("button", { name: "Refresh project", exact: true }).click();
+  await result(page); await clickProjectAction(page, "Refresh project");
   await expect(page.getByRole("alertdialog")).toBeVisible(); await page.getByRole("button", { name: "Keep editing", exact: true }).click();
   await expect(page.getByLabel("Quantity for result 1")).toHaveValue("4");
   await tab(page, "Plan"); await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click();
   await post(`/project-revisions/${revision}/bom`, { name: "Requirement added by another client", requiredQuantity: 1, unit: "each", role: "consumed", optional: false, constraints: {}, alternatives: [] });
   const writes: string[] = []; page.on("request", (request) => { if (request.url().includes("/api/") && !["GET", "HEAD", "OPTIONS"].includes(request.method())) writes.push(request.url()); });
-  await page.getByRole("button", { name: "Refresh project", exact: true }).click();
+  await clickProjectAction(page, "Refresh project");
   await expect(page.locator(".bom-row").filter({ hasText: "Requirement added by another client" })).toBeVisible();
   await expect(page.getByText("Project refreshed from the workspace.", { exact: true })).toBeVisible(); expect(writes).toEqual([]);
 });
 test("a project refresh failure preserves confirmed records and explains the stale view", async ({ page }) => {
   await fixture(page, false); await tab(page, "Plan");
   await page.route("**/workspace", (route) => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: { message: "Synthetic workspace outage" } }) }));
-  await page.getByRole("button", { name: "Refresh project", exact: true }).click();
+  await clickProjectAction(page, "Refresh project");
   await expect(page.locator(".project-management-bar").getByRole("alert")).toContainText("Previous records remain visible");
   await expect(page.locator(".bom-row").filter({ hasText: "Mounting fasteners" })).toBeVisible();
 });
@@ -181,7 +182,7 @@ test("explicit refresh discard resets the local build editor rather than claimin
   await page.getByRole("button", { name: "Parts and print plates, optional", exact: true }).click();
   await page.getByRole("button", { name: "Create build plan", exact: true }).click();
   await page.getByLabel("Build plan name", { exact: true }).fill("Unsaved local name");
-  await page.getByRole("button", { name: "Refresh project", exact: true }).click();
+  await clickProjectAction(page, "Refresh project");
   await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click();
   await expect(page.getByText("Project refreshed from the workspace.", { exact: true })).toBeVisible();
   const optionalPlan = page.getByRole("button", { name: "Parts and print plates, optional", exact: true });

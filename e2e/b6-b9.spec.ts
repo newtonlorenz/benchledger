@@ -38,11 +38,12 @@ function inventoryRecord(id: string, name: string) {
 
 test("launches inventory before sequential typing from the topbar", async ({ page }) => {
   await signIn(page);
-  const topbarSearch = page.getByRole("button", { name: "Search inventory" });
+  const topbarSearch = page.getByRole("button", { name: "Open workspace commands" });
   await expect(topbarSearch).toBeVisible();
   await topbarSearch.focus();
   await expect(topbarSearch).toBeFocused();
   await topbarSearch.click();
+  await page.getByRole("dialog", { name: "Workspace commands", exact: true }).getByRole("option", { name: /^Inventory Open inventory/u }).click();
   const inventorySearch = page.getByRole("textbox", { name: "Search inventory" });
   await expect(inventorySearch).toBeFocused();
 
@@ -55,7 +56,7 @@ test("launches inventory before sequential typing from the topbar", async ({ pag
 
 test("Cmd/Ctrl+K launches inventory and focuses its single search field", async ({ page }) => {
   await signIn(page);
-  const topbarSearch = page.getByRole("button", { name: "Search inventory" });
+  const topbarSearch = page.getByRole("button", { name: "Open workspace commands" });
   await expect(topbarSearch).toBeVisible();
   await topbarSearch.evaluate((element) => {
     element.addEventListener("focus", () => { document.body.dataset.topbarSearchFocused = "true"; }, { once: true });
@@ -72,7 +73,8 @@ test("keeps one local inventory search and lets the shared shortcut focus it", a
 
   const search = page.getByRole("textbox", { name: "Search inventory" });
   await expect(search).toBeVisible();
-  await expect(page.locator(".global-search")).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Search inventory", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Open workspace commands", exact: true })).toBeVisible();
   await page.keyboard.press("Control+K");
   await expect(search).toBeFocused();
 
@@ -135,7 +137,7 @@ test("only reports a cleared selection when a selection existed before filtering
 test("keeps inventory and shopping actions usable at 390px without horizontal overflow", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await signIn(page);
-  const launcher = page.getByRole("button", { name: "Search inventory" });
+  const launcher = page.getByRole("button", { name: "Open workspace commands" });
   await expect(launcher).toBeVisible();
   const restingLauncherBox = await launcher.boundingBox();
   expect(restingLauncherBox?.width ?? 0).toBeGreaterThanOrEqual(44);
@@ -146,7 +148,8 @@ test("keeps inventory and shopping actions usable at 390px without horizontal ov
   expect(focusedLauncherBox?.height ?? 0).toBeGreaterThanOrEqual(44);
   await openInventory(page);
 
-  await expect(page.locator(".global-search")).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Search inventory", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Open workspace commands", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Filters", exact: true }).click();
   const inventoryControls = page.locator(".inventory-toolbar .field-search, .inventory-toolbar .category-control:visible");
   for (const control of await inventoryControls.all()) {

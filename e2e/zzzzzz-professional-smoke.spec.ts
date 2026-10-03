@@ -1,3 +1,4 @@
+import { clickProjectAction, openProjectDetails } from "./workspace-controls";
 import { expect, test, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { randomUUID } from "node:crypto";
@@ -50,6 +51,8 @@ test("staged files require a decision before switching revision scope", async ({
 });
 test("mobile task area precedes setup context and remains within the viewport", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 800 }); await login(page); await seed(page, "Smoke mobile hierarchy", 3);
+  await expect(page.getByRole("complementary", { name: "Project details" })).toBeHidden();
+  await openProjectDetails(page);
   const order = await page.evaluate(() => { const workspace = document.querySelector(".dossier-workspace")!.getBoundingClientRect(), context = document.querySelector(".dossier-column")!.getBoundingClientRect(); return { workspace: workspace.top, context: context.top, width: document.documentElement.scrollWidth }; });
   expect(order.workspace).toBeLessThan(order.context); expect(order.width).toBeLessThanOrEqual(320);
   await tab(page, "Shopping list"); await expect(page.locator(".sourcing-requirement")).toHaveCount(3);
@@ -65,7 +68,7 @@ for (const dark of [false, true]) test(`rendered pages and dialogs pass accessib
   for (const hash of ["", "inventory", `projects/${id}/plan`, `projects/${id}/files`, `projects/${id}/offers`, `projects/${id}/build`, "settings", "capabilities"]) { await page.goto(`/#/${hash}`); await expect(page.locator("main")).toBeVisible(); await audit(); }
   await page.goto("/#/inventory"); await page.locator(".inventory-table .row-open").first().click(); await audit(); await page.keyboard.press("Escape");
   await page.getByLabel("Open workspace commands").click(); await audit(); await page.keyboard.press("Escape");
-  await page.goto(`/#/projects/${id}/plan`); await page.getByRole("button", { name: "Edit project", exact: true }).click(); await audit(); await page.keyboard.press("Escape");
+  await page.goto(`/#/projects/${id}/plan`); await clickProjectAction(page, "Edit project"); await audit(); await page.keyboard.press("Escape");
   await page.setViewportSize({ width: 320, height: 800 }); await audit();
 });
 test("an unconfirmed plan save stays protected until an unchanged retry resolves it", async ({ page }) => {

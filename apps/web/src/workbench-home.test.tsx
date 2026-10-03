@@ -13,10 +13,9 @@ it("searches, pins and resumes accessible projects using local preferences", asy
   const data = props(); render(<WorkbenchHome {...data} />);
   expect(screen.getByLabelText("Resume recent project").textContent).toContain("Sensor box");
   fireEvent.click(screen.getByRole("button", { name: "Resume project" })); expect(data.onOpen).toHaveBeenCalledWith("Sensor box");
-  fireEvent.click(screen.getByRole("button", { name: "Find and sort projects" }));
   fireEvent.change(screen.getByLabelText("Find a project"), { target: { value: "cafe" } }); expect(document.querySelectorAll(".home-project-row")).toHaveLength(1);
   fireEvent.click(screen.getByRole("button", { name: "Pin project Café fixture" }));
-  fireEvent.change(screen.getByLabelText("Find a project"), { target: { value: "" } }); fireEvent.click(within(screen.getByRole("group", { name: "Filter projects" })).getByRole("button", { name: /^Pinned/u }));
+  fireEvent.change(screen.getByLabelText("Find a project"), { target: { value: "" } }); fireEvent.change(screen.getByLabelText("Filter projects"), { target: { value: "pinned" } });
   expect(document.querySelectorAll(".home-project-row")).toHaveLength(1); expect(localStorage.getItem(homePreferenceKey(false))).toContain("Café fixture");
   fireEvent.click(screen.getByRole("button", { name: "Unpin project Café fixture" })); expect(screen.getByText("No projects match this view")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Show all projects" })); expect(document.querySelectorAll(".home-project-row")).toHaveLength(3);
@@ -24,8 +23,9 @@ it("searches, pins and resumes accessible projects using local preferences", asy
 });
 it("opens concrete tasks, provides quick entry and preserves refresh failures", async () => {
   const data = props(); data.onRefresh.mockResolvedValue(false); render(<WorkbenchHome {...data} />);
-  fireEvent.click(screen.getByRole("button", { name: "New project" })); fireEvent.click(screen.getByRole("button", { name: "Add inventory" })); fireEvent.click(screen.getByRole("button", { name: "Import requirements" }));
+  fireEvent.click(screen.getByRole("button", { name: "New project" })); fireEvent.click(screen.getByRole("button", { name: "Workspace tools" })); fireEvent.click(screen.getByRole("button", { name: "Add inventory" })); fireEvent.click(screen.getByRole("button", { name: "Import requirements" }));
   expect(data.onNewProject).toHaveBeenCalledOnce(); expect(data.onAddItem).toHaveBeenCalledOnce(); expect(data.onImport).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole("button", { name: "All next actions" }));
   fireEvent.click(document.querySelector<HTMLButtonElement>(".home-task")!); expect(data.onTask).toHaveBeenCalledOnce();
   fireEvent.click(screen.getByRole("button", { name: "Refresh workspace" })); await screen.findByRole("alert"); expect(document.querySelectorAll(".home-project-row")).toHaveLength(2);
 });
@@ -37,11 +37,13 @@ it("handles empty, unavailable and long project lists without invented totals", 
   view.rerender(<WorkbenchHome {...data} projects={Array.from({ length: 18 }, (_, i) => fixture(`Project ${i}`))} />);
   expect(document.querySelectorAll(".home-project-row")).toHaveLength(12); fireEvent.click(screen.getByRole("button", { name: "Show more projects" })); expect(document.querySelectorAll(".home-project-row")).toHaveLength(18);
   expect(screen.queryByLabelText("Workspace task shortcuts")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Stock checks" })); expect(screen.getByRole("button", { name: "Stock checks" }).getAttribute("aria-pressed")).toBe("true");
-  fireEvent.click(screen.getByRole("button", { name: "Sourcing" })); fireEvent.click(screen.getByRole("button", { name: "All tasks" }));
-  const filters = screen.getByRole("group", { name: "Filter projects" });
-  fireEvent.click(within(filters).getByRole("button", { name: /^Needs attention/u })); fireEvent.click(within(filters).getByRole("button", { name: /^Active/u }));
-  fireEvent.click(screen.getByRole("button", { name: "Workshop equipment" }));
+  fireEvent.click(screen.getByRole("button", { name: "All next actions" }));
+  fireEvent.change(screen.getByLabelText("Filter attention queue"), { target: { value: "check" } });
+  expect((screen.getByLabelText("Filter attention queue") as HTMLSelectElement).value).toBe("check");
+  fireEvent.change(screen.getByLabelText("Filter attention queue"), { target: { value: "source" } });
+  fireEvent.change(screen.getByLabelText("Filter attention queue"), { target: { value: "all" } });
+  fireEvent.change(screen.getByLabelText("Filter projects"), { target: { value: "attention" } });
+  fireEvent.change(screen.getByLabelText("Filter projects"), { target: { value: "active" } });
   fireEvent.click(screen.getByRole("button", { name: "Manage inventory" })); expect(data.onInventory).toHaveBeenCalledOnce();
   data.onRefresh.mockRejectedValueOnce(new Error("offline")); fireEvent.click(screen.getByRole("button", { name: "Refresh workspace" })); await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("could not refresh"));
 });
@@ -51,25 +53,39 @@ it("keeps an empty workshop focused on getting started without empty registers o
   expect(screen.queryByRole("region", { name: "Project register" })).toBeNull();
   expect(screen.queryByRole("region", { name: "Workspace attention queue" })).toBeNull();
   expect(screen.queryByText("No open planning checks")).toBeNull();
-  expect(screen.getByRole("button", { name: "Workshop equipment" }).getAttribute("aria-expanded")).toBe("false");
-  expect(screen.queryByRole("button", { name: "Manage inventory" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Workspace tools" }).getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getByRole("button", { name: "Add inventory" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Import requirements" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Refresh workspace" }));
   expect(data.onRefresh).toHaveBeenCalledOnce();
 });
-it("discloses small-workspace search and equipment while retaining next-action navigation", () => {
+it("keeps project search visible and discloses supporting tools without blocking next actions", () => {
   const data = props(); render(<WorkbenchHome {...data} />);
-  expect(screen.getByRole("button", { name: "Find and sort projects" }).getAttribute("aria-expanded")).toBe("false");
-  expect(screen.queryByRole("textbox", { name: "Find a project" })).toBeNull();
+  expect(screen.getByRole("textbox", { name: "Find a project" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "All next actions" }).getAttribute("aria-expanded")).toBe("false");
+  expect(screen.getByRole("button", { name: "Workspace tools" }).getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByRole("region", { name: "Workspace attention queue" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Import requirements" })).toBeNull();
   const projectRow = screen.getByRole("button", { name: "Open project Café fixture" }).closest("article")!;
-  const nextAction = within(projectRow).getByRole("button", { name: /: Café fixture$/u });
-  fireEvent.click(nextAction);
+  fireEvent.click(within(projectRow).getByRole("button", { name: /: Café fixture$/u }));
   expect(data.onTask).toHaveBeenCalledWith(expect.objectContaining({ projectId: "Café fixture" }));
   expect(screen.getByText(/Projects and task counts cover loaded records only/u)).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Find and sort projects" }));
-  expect(screen.getByRole("textbox", { name: "Find a project" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Open inventory" }));
+  expect(data.onInventory).toHaveBeenCalledOnce();
 });
-it("opens search by default for a larger project register", () => {
-  render(<WorkbenchHome {...props()} projects={Array.from({ length: 7 }, (_, i) => fixture(`Project ${i}`))} />);
-  expect(screen.getByRole("button", { name: "Find and sort projects" }).getAttribute("aria-expanded")).toBe("true");
-  expect(screen.getByRole("textbox", { name: "Find a project" })).toBeTruthy();
+it("expands a filtered task queue and opens equipment without implying usability", () => {
+  const data = props();
+  const printer = inventory.find((item) => item.category === "Printers")!;
+  render(<WorkbenchHome {...data} projects={Array.from({ length: 10 }, (_, i) => fixture(`Project ${i}`))} printers={[printer]} isPrinterUsable={() => false} />);
+  fireEvent.click(screen.getByRole("button", { name: "All next actions" }));
+  const queue = screen.getByRole("region", { name: "Workspace attention queue" });
+  expect(within(queue).getAllByRole("button", { name: /: Project/u })).toHaveLength(8);
+  fireEvent.click(within(queue).getByRole("button", { name: "Show more tasks" }));
+  expect(within(queue).getAllByRole("button", { name: /: Project/u }).length).toBeGreaterThan(8);
+  fireEvent.change(screen.getByLabelText("Filter attention queue"), { target: { value: "check" } });
+  expect(within(queue).getAllByRole("button", { name: /: Project/u }).length).toBeLessThanOrEqual(8);
+  fireEvent.click(screen.getByRole("button", { name: "Workspace tools" }));
+  expect(screen.getByText("Needs stock or product setup check")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: new RegExp(printer.name, "u") }));
+  expect(data.onItem).toHaveBeenCalledWith(printer.id);
 });

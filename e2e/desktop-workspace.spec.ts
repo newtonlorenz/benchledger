@@ -15,8 +15,12 @@ test("desktop keeps navigation stable, opens a document and gives its work area 
   await navigator.getByRole("button", { name: "Switch to project Synthetic H2D desk lamp", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Synthetic H2D desk lamp", exact: true })).toBeVisible();
   const workArea = page.locator(".dossier-workspace");
-  const before = await workArea.evaluate((element) => element.clientWidth);
   const details = page.getByRole("button", { name: "Project details", exact: true });
+  await expect(details).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("complementary", { name: "Project details" })).toBeHidden();
+  await details.click();
+  await expect(page.getByRole("complementary", { name: "Project details" })).toBeVisible();
+  const before = await workArea.evaluate((element) => element.clientWidth);
   await details.click();
   await expect(page.getByRole("complementary", { name: "Project details" })).toBeHidden();
   await expect(details).toHaveAttribute("aria-expanded", "false");
@@ -78,3 +82,39 @@ test("mobile project browsing closes the drawer and restores the working area", 
   await page.getByRole("button", { name: "Archived (0)", exact: true }).click();
   await expect(page.getByRole("heading", { name: "No archived projects", exact: true })).toBeVisible();
 });
+
+for (const width of [1280, 820, 390]) {
+  test(`inventory controls preserve a usable work area at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await login(page);
+    if (width <= 800) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
+    await page.getByRole("button", { name: "Inventory", exact: true }).click();
+    await expect(page.locator(".inventory-table .table-item").first()).toBeVisible();
+    await expect(page.getByRole("complementary", { name: "Inventory inspector" })).toHaveCount(0);
+    const assertFits = async () => expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await assertFits();
+    if (width > 800) {
+      await page.getByRole("button", { name: "Collapse navigation", exact: true }).click();
+      await expect(page.getByRole("region", { name: "Inventory navigator", exact: true })).toBeHidden();
+      await assertFits();
+      await page.getByRole("button", { name: "Expand navigation", exact: true }).click();
+      await expect(page.getByRole("region", { name: "Inventory navigator", exact: true })).toBeVisible();
+    }
+    await page.getByRole("button", { name: "View options", exact: true }).click();
+    await expect(page.getByRole("combobox", { name: "Sort inventory", exact: true })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Saved inventory view", exact: true })).toBeVisible();
+    await assertFits();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("button", { name: "View options", exact: true })).toBeFocused();
+    await page.locator(".inventory-table .table-item").first().click();
+    if (width <= 800) {
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await expect(page.getByRole("button", { name: "Close item details", exact: true })).toBeVisible();
+      await page.getByRole("button", { name: "Close item details", exact: true }).click();
+    } else {
+      await expect(page.getByRole("complementary", { name: "Inventory inspector" })).toBeVisible();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+    }
+    await assertFits();
+  });
+}

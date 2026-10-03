@@ -1,3 +1,4 @@
+import { openProjectDetails } from "./workspace-controls";
 import { expect, test, type Page } from "@playwright/test";
 
 const project = {
@@ -93,6 +94,7 @@ test.describe("restore confirmation", () => {
     await page.getByRole("button", { name: /^Projects(?: \d+)?$/u }).click();
     await expect(page.getByRole("heading", { name: "Retained Archive E2E", exact: true })).toBeVisible();
 
+    await openProjectDetails(page);
     await page.getByText("Project settings", { exact: true }).click();
     await expect(page.locator("#main-content")).not.toContainText(/reservation|tombstone|audit/iu);
     const restoreButton = page.getByRole("button", { name: "Restore project", exact: true });
@@ -123,6 +125,7 @@ test("deletes an archived project after a single confirmation and hides it from 
   await page.getByRole("button", { name: /^Projects(?: \d+)?$/u }).click();
   await expect(page.getByRole("heading", { name: "Retained Archive E2E", exact: true })).toBeVisible();
 
+  await openProjectDetails(page);
   if (!await page.locator(".project-actions").evaluate((element) => element.getAttribute("data-state") === "open")) await page.locator(".project-actions > [data-disclosure='trigger']").click();
   await page.locator(".project-actions").getByRole("button", { name: "Delete project", exact: true }).click();
   let dialog = page.getByRole("alertdialog", { name: "Delete Retained Archive E2E?" });
@@ -130,6 +133,7 @@ test("deletes an archived project after a single confirmation and hides it from 
   await expect(dialog).not.toContainText(/reservation|tombstone|audit/iu);
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   expect(harness.deleteRequest()).toBeUndefined();
+  await openProjectDetails(page);
   if (!await page.locator(".project-actions").evaluate((element) => element.getAttribute("data-state") === "open")) await page.locator(".project-actions > [data-disclosure='trigger']").click();
   await page.locator(".project-actions").getByRole("button", { name: "Delete project", exact: true }).click();
   dialog = page.getByRole("alertdialog", { name: "Delete Retained Archive E2E?" });

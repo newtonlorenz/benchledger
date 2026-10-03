@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const appSource = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
-const stylesSource = readFileSync(new URL("./workspace-layout.css", import.meta.url), "utf8");
+const stylesSource = readFileSync(new URL("./workspace-shell.css", import.meta.url), "utf8");
 const faviconSource = readFileSync(new URL("../public/favicon.svg", import.meta.url), "utf8");
 
 describe("BenchLedger brand mark", () => {
@@ -16,8 +16,8 @@ describe("BenchLedger brand mark", () => {
     expect(stylesSource).toContain(".brand-mark span:nth-child(1) { height: 48%; }");
     expect(stylesSource).toContain(".brand-mark span:nth-child(2) { height: 78%; }");
     expect(stylesSource).toContain(".brand-mark span:nth-child(3) { height: 100%; }");
-    expect(stylesSource).toContain("background: #1F4A40");
-    expect(stylesSource).toContain("background: #A5D5AF");
+    expect(stylesSource).toMatch(/\.brand-mark\s*\{[^}]*background: var\(--accent-soft\);/u);
+    expect(stylesSource).toMatch(/\.brand-mark span\s*\{[^}]*background: var\(--primary\);/u);
 
     expect(faviconSource).toContain('viewBox="0 0 28 28"');
     expect(faviconSource).toContain('fill="#1F4A40"');

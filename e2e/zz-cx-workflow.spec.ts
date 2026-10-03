@@ -1,3 +1,4 @@
+import { clickProjectAction } from "./workspace-controls";
 import { expect, test, type Page } from "@playwright/test";
 
 async function startProject(page: Page, name: string) {
@@ -7,7 +8,7 @@ async function startProject(page: Page, name: string) {
   await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
   if ((page.viewportSize()?.width ?? 1440) < 801) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
   await page.getByRole("button", { name: /^Projects/u }).click();
-  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await clickProjectAction(page, "New project");
   await page.getByLabel("Project name", { exact: true }).fill(name);
   await page.getByLabel("Project goal", { exact: true }).fill("Synthetic maker workflow acceptance.");
   await page.getByRole("button", { name: "Create project", exact: true }).click();
@@ -45,7 +46,7 @@ for (const width of [1440, 320]) test(`maker can correct, remove, restore and ha
   await page.getByText("Removed requirements", { exact: true }).click();
   await page.getByRole("button", { name: "Restore requirement M3 enclosure screws", exact: true }).click();
   await expect(page.locator(".bom-row")).toHaveCount(1);
-  await page.getByRole("button", { name: "Edit project", exact: true }).click();
+  await clickProjectAction(page, "Edit project");
   await page.getByLabel("Project name", { exact: true }).fill(`${name} revised`);
   await page.getByLabel("Project goal and brief").fill("Build and test a reusable enclosure fixture.");
   await page.getByLabel("Project stage", { exact: true }).selectOption("building");
@@ -54,7 +55,7 @@ for (const width of [1440, 320]) test(`maker can correct, remove, restore and ha
   await page.reload();
   await expect(page.locator(".project-stage")).toContainText("Building");
   await expect(page.locator(".bom-row")).toHaveCount(1);
-  await page.getByText("Export project", { exact: true }).click();
+  await clickProjectAction(page, "Export project");
   const jsonEvent = page.waitForEvent("download");
   await page.getByRole("menuitem", { name: "Download project brief JSON", exact: true }).click();
   const jsonDownload = await jsonEvent;
@@ -63,7 +64,7 @@ for (const width of [1440, 320]) test(`maker can correct, remove, restore and ha
   expect(handoff.project).toMatchObject({ name: `${name} revised`, stage: "building" });
   expect(handoff.requirements).toHaveLength(1);
   expect(handoff.requirements[0]).toMatchObject({ name: "M3 enclosure screws", quantity: 8 });
-  await page.getByRole("button", { name: "Export project", exact: true }).click();
+  await clickProjectAction(page, "Export project");
   const csvEvent = page.waitForEvent("download");
   await page.getByRole("menuitem", { name: "Download requirements CSV", exact: true }).click();
   const csvDownload = await csvEvent; expect(csvDownload.suggestedFilename()).toMatch(/\.csv$/u);

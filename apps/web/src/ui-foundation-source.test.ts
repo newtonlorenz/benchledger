@@ -8,8 +8,8 @@ it("keeps native control implementations inside the shared foundation", () => {
   expect(source, name).not.toMatch(/role="(?:tablist|combobox|listbox)"/);
  }
 });
-it("loads one token foundation and one domain layout stylesheet", () => {
+it("loads one token foundation with separately owned workspace styles", () => {
  const main=readFileSync(new URL("./main.tsx",import.meta.url),"utf8");
- expect(main.match(/import "\.\/[^\"]+\.css";/g)).toEqual(['import "./shadcn.css";', 'import "./workspace-layout.css";']);
+ expect(main.match(/import "\.\/[^\"]+\.css";/g)).toEqual(['import "./shadcn.css";', 'import "./workspace-layout.css";', 'import "./workspace-shell.css";', 'import "./project-workspace.css";']);
  const layout=readFileSync(new URL("./workspace-layout.css",import.meta.url),"utf8");expect(layout).not.toMatch(/--(?:background|foreground|primary|surface|ink|accent)\s*:/);
 });

@@ -37,12 +37,12 @@ it("explains missing category data without hiding all-inventory access", () => {
   fireEvent.change(screen.getByLabelText("Find an inventory category"), { target: { value: "wire" } }); expect(screen.getByText("No matching categories.")).toBeTruthy();
 });
 it("validates and bounds layout preferences, without mixing sample and workspace settings", () => {
-  expect(parseInventoryLayout("broken")).toMatchObject({ inspectorOpen: true, inspectorWidth: 300 });
+  expect(parseInventoryLayout("broken")).toMatchObject({ inspectorOpen: false, inspectorWidth: 300 });
   expect(parseInventoryLayout("null").columns).toEqual(["location"]);
   const value = parseInventoryLayout(JSON.stringify({ inspectorOpen: false, inspectorWidth: 900, columns: ["sku", "invented", "sku", "category"] }));
   expect(value).toEqual({ inspectorOpen: false, inspectorWidth: 480, columns: ["category", "sku"] });
   expect(parseInventoryLayout('{"inspectorWidth":1,"columns":[]}')).toMatchObject({ inspectorWidth: 260, columns: [] });
-  expect(writeInventoryLayout(value, true)).toBe(true); expect(readInventoryLayout(true)).toEqual(value); expect(readInventoryLayout(false).inspectorOpen).toBe(true);
+  expect(writeInventoryLayout(value, true)).toBe(true); expect(readInventoryLayout(true)).toEqual(value); expect(readInventoryLayout(false).inspectorOpen).toBe(false);
   vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("denied"); });
   expect(writeInventoryLayout(value, false)).toBe(false);
   vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("denied"); });
@@ -69,4 +69,17 @@ it("separates row inspection from opening, and sorts from labelled column header
   view.rerender(<InventoryTable {...props} sort="name_desc" visibleColumns={["location"]} />);
   fireEvent.click(screen.getByRole("button", { name: "Item" })); expect(onSortChange).toHaveBeenLastCalledWith("name");
   fireEvent.click(screen.getByRole("button", { name: "Location" })); expect(onSortChange).toHaveBeenLastCalledWith("location");
+});
+
+it("preserves a focused register control when opening and closing the desktop inspector", () => {
+  vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+  const register = <button>Inspect the selected stock item</button>;
+  const view = render(<InventoryPanels width={300} onChange={vi.fn()} register={register} inspector={null} />);
+  const control = screen.getByRole("button", { name: "Inspect the selected stock item" });
+  control.focus();
+  view.rerender(<InventoryPanels width={300} onChange={vi.fn()} register={register} inspector={<aside>Stock evidence</aside>} />);
+  expect(document.activeElement).toBe(control);
+  expect(screen.getByRole("button", { name: "Inspect the selected stock item" })).toBe(control);
+  view.rerender(<InventoryPanels width={300} onChange={vi.fn()} register={register} inspector={null} />);
+  expect(document.activeElement).toBe(control);
 });
