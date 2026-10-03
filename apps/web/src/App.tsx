@@ -291,6 +291,14 @@ export function formatSourceReadyMessage(count: number): string {
   const [offers, setOffers] = useState(fixtureOffers);
   const [selectedProjectId, setSelectedProjectId] = useState( initialNavigation.projectId ?? "project-lamp");
   const [selectedItemId, setSelectedItemId] = useState<string>();
+  // In-memory recovery only: authenticated rendering resumes the original review.
+  const [pendingStockObservation, setPendingStockObservation] = useState<PendingStockObservation>();
+  const [missingPendingStockItem, setMissingPendingStockItem] = useState(false);
+  const pendingStockObservationRef = useRef<PendingStockObservation | undefined>(undefined);
+  const rememberStockObservation = useCallback((value: PendingStockObservation | undefined) => {
+    pendingStockObservationRef.current = value; setPendingStockObservation(value);
+    navigationGuard.registry.set("pending-stock-observation", value ? { label: "stock observation", unresolved: true } : undefined);
+  }, [navigationGuard.registry]);
   const [projectTab, setProjectTab] = useState<ProjectTab>( initialNavigation.tab );
   const [homeTask, setHomeTask] = useState<(HomeTask & { request: number })>();
   const [search, setSearch] = useState(() => readInventoryUrlState().search);
@@ -347,10 +355,20 @@ export function formatSourceReadyMessage(count: number): string {
     let active = true;
     setLoading(true);
     setConnection("loading");
+    setMissingPendingStockItem(false);
     bootstrapWorkspace().then(async (snapshot) => {
       if (!active) return;
       const archived = await adapter.listArchivedProjects().catch((error: unknown) => error instanceof ApiError && error.status === 404 ? [] : Promise.reject(error));
-      setItems(snapshot.inventory);
+      // The workspace snapshot is bounded. Restore the exact item independently
+      // of the reviewed command so returning to editing cannot remove the drawer.
+      const retained = pendingStockObservationRef.current;
+      const restoredItem = retained ? await adapter.readInventoryItem(retained.item.id).catch((error: unknown) => {
+        if (active && !retained.uncertain && error instanceof ApiError && error.status === 404) setMissingPendingStockItem(true);
+        throw error;
+      }) : undefined;
+      if (!active) return;
+      setItems(restoredItem ? [...snapshot.inventory.filter((item) => item.id !== restoredItem.id), restoredItem] : snapshot.inventory);
+      if (restoredItem) setSelectedItemId(restoredItem.id);
       setProjects(snapshot.projects);
       setArchivedProjects(archived);
       const requestedNavigation = readNavigationUrlState();
@@ -426,7 +444,7 @@ export function formatSourceReadyMessage(count: number): string {
   const selectedProject = selectedProjectId ? visibleProjects.find((project) => project.id === selectedProjectId) : visibleProjects[0];
   useEffect(() => { if (page === "projects" && selectedProject?.id === selectedProjectId) recordOpenedProject(selectedProjectId, sampleMode); }, [page, selectedProject?.id, selectedProjectId, sampleMode]);
   const referencedInventory = useReferencedInventory(page === "projects" ? selectedProject : undefined, items, adapter.readInventoryItem, mergeReferencedItems);
-  const selectedItem = items.find((item) => item.id === selectedItemId);
+  const selectedItem = items.find((item) => item.id === selectedItemId) ?? (pendingStockObservation && pendingStockObservation.item.id === selectedItemId ? pendingStockObservation.item : undefined);
   const overlayOpen = Boolean(navigationGuard.pending || showBomImport || commandsOpen || showGuidedSetup || editingProject || editingRequirement || selectedItem || showNewProject || showNewRevision || showEditBuildApproach || showAddBom || showNewItem || bulkInventorySelection);
   useEffect(() => {
     const commands = (event: KeyboardEvent) => {
@@ -548,6 +566,7 @@ export function formatSourceReadyMessage(count: number): string {
   };
 
   const useSampleWorkspace = () => {
+    if (pendingStockObservationRef.current) return;
     setConnectionError(undefined);
     setAdapter(createSampleWorkspaceAdapter());
   };
@@ -579,6 +598,7 @@ export function formatSourceReadyMessage(count: number): string {
   const signOut = async () => {
     try {
       await adapter.logout();
+      rememberStockObservation(undefined);
       setItems([]);
       setProjects([]);
       setArchivedProjects([]);
@@ -915,7 +935,7 @@ export function formatSourceReadyMessage(count: number): string {
     }
   }; const linkExactInventoryItem = async ( item: InventoryItem, input: ExactInventoryInput ): Promise<boolean> => { try { const linked = await adapter.linkExactInventoryItem( item.id, input, item.productProfile?.version ); setItems((current) => current.map((candidate) => candidate.id === linked.id ? linked : candidate ) ); closeNewItem(); if (!showNewProject && !showNewRevision && !showEditBuildApproach) setSelectedItemId(linked.id); if (await refreshProjectReadiness()) setToast( `${linked.name} now has an exact product link. Its stock evidence is unchanged.` ); return true; } catch (error: unknown) { handleMutationError(error, "linking that exact product"); return false; } }; if (loading || connection === "loading") return <LoadingScreen />;
   if (connection !== "ready" && connection !== "sample") {
-    return ( <ConnectionScreen state={connection} error={connectionError} demoAvailable={demoAvailable} onLogin={signIn} onRetry={retryConnection} onSample={useSampleWorkspace} /> );
+    return ( <ConnectionScreen state={connection} error={connectionError} demoAvailable={demoAvailable && !pendingStockObservation} recoveryNotice={missingPendingStockItem ? "This item is no longer available. Discard the unsaved observation to return to your workspace." : pendingStockObservation ? "Reconnect or sign in to resume your reviewed stock observation. Nothing will be sent again until you choose Retry." : undefined} onDiscardRecovery={missingPendingStockItem && pendingStockObservation && !pendingStockObservation.uncertain ? () => { rememberStockObservation(undefined); setSelectedItemId(undefined); setMissingPendingStockItem(false); retryConnection(); } : undefined} onLogin={signIn} onRetry={retryConnection} onSample={useSampleWorkspace} /> );
   }
 
   const openHomeTask = (task: HomeTask) => {
@@ -971,7 +991,7 @@ export function formatSourceReadyMessage(count: number): string {
 
       {navigationGuard.pending && <Dialog title={navigationGuard.pending.unresolved ? "Finish the pending save" : "Leave without saving?"} role="alertdialog" onClose={navigationGuard.cancel}><p className="dialog-intro">{navigationGuard.pending.unresolved ? "A save or upload is still running or has not been confirmed. Stay on this page and resolve it before leaving." : `Your ${navigationGuard.pending.labels.join(", ")} has unsaved changes. Keep editing, or discard this draft.`}</p><div className="dialog-actions"><Button variant="default" data-autofocus type="button" className="button button-primary" onClick={navigationGuard.cancel}>Keep editing</Button>{!navigationGuard.pending.unresolved && <Button variant="destructive" type="button" className="button button-danger" onClick={navigationGuard.discard}>Discard changes and leave</Button>}</div></Dialog>}
       {commandsOpen && <Dialog title="Workspace commands" onClose={() => setCommandsOpen(false)}><WorkspaceCommands commands={commandItems} onRun={(command) => { setCommandsOpen(false); command.run(); }} onSearchInventory={() => { setCommandsOpen(false); launchInventorySearch(); }} /></Dialog>}
-      {selectedItem && ( <InventoryDrawer nextStep={receivedStock?.itemId === selectedItem.id ? <ReceivedStockNextStep context={receivedStock.context} item={selectedItem} project={projects.find((project) => project.id === receivedStock.context.projectId)} onReview={() => navigationGuard.registry.request(() => { const project = projects.find((candidate) => candidate.id === receivedStock.context.projectId); const line = receiptRequirement(receivedStock.context, project); if (!line || !project) return; setSelectedItemId(undefined); setEditingRequirement({ projectId: project.id, line, initialFocus: "stock", initialItemId: selectedItem.id }); })} /> : undefined} suspended={Boolean(navigationGuard.pending)} sampleMode={sampleMode} item={selectedItem} items={items} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} expert={expert} onClose={() => navigationGuard.registry.request(() => setSelectedItemId(undefined))} onCount={recordCount} onCommission={commissionInventoryItem} onUpdate={updateInventoryItem} onDelete={async (item) => {
+      {selectedItem && ( <InventoryDrawer resumeObservation={pendingStockObservation?.item.id === selectedItem.id ? pendingStockObservation : undefined} onPendingObservation={rememberStockObservation} nextStep={receivedStock?.itemId === selectedItem.id ? <ReceivedStockNextStep context={receivedStock.context} item={selectedItem} project={projects.find((project) => project.id === receivedStock.context.projectId)} onReview={() => navigationGuard.registry.request(() => { const project = projects.find((candidate) => candidate.id === receivedStock.context.projectId); const line = receiptRequirement(receivedStock.context, project); if (!line || !project) return; setSelectedItemId(undefined); setEditingRequirement({ projectId: project.id, line, initialFocus: "stock", initialItemId: selectedItem.id }); })} /> : undefined} suspended={Boolean(navigationGuard.pending)} sampleMode={sampleMode} item={selectedItem} items={items} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} expert={expert} onClose={() => navigationGuard.registry.request(() => setSelectedItemId(undefined))} onCount={recordCount} onCommission={commissionInventoryItem} onUpdate={updateInventoryItem} onDelete={async (item) => {
         if (item.version === undefined) throw new Error("Reload this item before deleting it.");
         await adapter.deleteInventoryItem(item.id, item.version);
         setItems((current) => current.filter((candidate) => candidate.id !== item.id));
@@ -1049,7 +1069,7 @@ function isAmbiguousMutation(error: ApiError): boolean {
   return !["validation", "forbidden", "unauthenticated", "csrf"].includes(error.kind);
 }
 
-export function ConnectionScreen({ state, error, demoAvailable, onLogin, onRetry, onSample }: { state: Exclude<ConnectionState, "loading" | "ready" | "sample">; error: ApiError | undefined; demoAvailable: boolean; onLogin: (password: string) => Promise<void>; onRetry: () => void; onSample: () => void; }) {
+export function ConnectionScreen({ state, error, demoAvailable, recoveryNotice, onDiscardRecovery, onLogin, onRetry, onSample }: { recoveryNotice?: string | undefined; onDiscardRecovery?: (() => void) | undefined; state: Exclude<ConnectionState, "loading" | "ready" | "sample">; error: ApiError | undefined; demoAvailable: boolean; onLogin: (password: string) => Promise<void>; onRetry: () => void; onSample: () => void; }) {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string>();
@@ -1063,9 +1083,9 @@ export function ConnectionScreen({ state, error, demoAvailable, onLogin, onRetry
   const isOffline = state === "offline";
   const isAuth = state === "unauthenticated";
   const title = isAuth ? "Sign in" : isOffline ? "Private service offline" : "Cannot open workspace";
-  const description = isAuth ? "Enter the password for this private workspace." : isOffline ? "BenchLedger cannot reach the private service. It did not replace private data with sample data." : "The service returned an error before it loaded the workspace. Nothing changed.";
+  const description = isAuth ? "Enter the password for this private workspace." : recoveryNotice ? "The workspace could not be reloaded. Your reviewed observation is still kept in this window." : isOffline ? "BenchLedger cannot reach the private service. It did not replace private data with sample data." : "The service returned an error before it loaded the workspace. Nothing changed.";
   const detail = error && !isAuth && !isOffline ? error.correlationId ? `Reference ${error.correlationId}` : error.message : undefined;
-  return ( <main className="connection-screen"><section className="connection-card" aria-labelledby="connection-title"><div className="loading-brand"><BrandMark /><span>BenchLedger · private workspace</span></div><div className="connection-state-icon"><Icon name={isAuth ? "info" : isOffline ? "link" : "warning"} size={22} /></div><h1 id="connection-title">{title}</h1><p className="connection-description">{description}</p>{detail && ( <Alert asChild><p className="connection-detail" role="alert">{detail}</p></Alert> )}{" "}{isAuth && ( <form className="login-form" onSubmit={submit} noValidate><Label className="form-field" htmlFor="workspace-password"><span>Workspace password</span><Input id="workspace-password" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} aria-describedby={formError ? "workspace-password-error" : undefined} aria-invalid={Boolean(formError)} autoFocus /></Label>{formError && ( <Alert asChild><p id="workspace-password-error" className="form-error" role="alert">{formError}</p></Alert> )}<Button variant="default" className="button button-primary login-submit" type="submit" disabled={submitting}>{submitting ? "Signing in…" : "Sign in"}<Icon name="arrow-right" size={16} /></Button></form> )}{" "}{!isAuth && ( <Button variant="outline" className="button button-secondary connection-retry" onClick={onRetry}><Icon name="refresh" size={16} /> Try again{" "} </Button> )}{" "}{demoAvailable && ( <div className="sample-choice"><span>Sample workspace</span><Button variant="ghost" className="text-button" onClick={onSample}> {" "}Open sample workspace <Icon name="arrow-right" size={15} /></Button><small> {" "}Sample records are for practice. BenchLedger does not mix them with private records.{" "} </small></div> )}</section></main> );
+  return ( <main className="connection-screen"><section className="connection-card" aria-labelledby="connection-title"><div className="loading-brand"><BrandMark /><span>BenchLedger · private workspace</span></div><div className="connection-state-icon"><Icon name={isAuth ? "info" : isOffline ? "link" : "warning"} size={22} /></div><h1 id="connection-title">{title}</h1><p className="connection-description">{description}</p>{recoveryNotice && <p role="status">{recoveryNotice}</p>}{detail && ( <Alert asChild><p className="connection-detail" role="alert">{detail}</p></Alert> )}{" "}{isAuth && ( <form className="login-form" onSubmit={submit} noValidate><Label className="form-field" htmlFor="workspace-password"><span>Workspace password</span><Input id="workspace-password" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} aria-describedby={formError ? "workspace-password-error" : undefined} aria-invalid={Boolean(formError)} autoFocus /></Label>{formError && ( <Alert asChild><p id="workspace-password-error" className="form-error" role="alert">{formError}</p></Alert> )}<Button variant="default" className="button button-primary login-submit" type="submit" disabled={submitting}>{submitting ? "Signing in…" : "Sign in"}<Icon name="arrow-right" size={16} /></Button></form> )}{" "}{!isAuth && ( <Button variant="outline" className="button button-secondary connection-retry" onClick={onRetry}><Icon name="refresh" size={16} /> Try again{" "} </Button> )}{" "}{onDiscardRecovery && <Button variant="outline" onClick={onDiscardRecovery}>Discard observation and reload</Button>}{demoAvailable && ( <div className="sample-choice"><span>Sample workspace</span><Button variant="ghost" className="text-button" onClick={onSample}> {" "}Open sample workspace <Icon name="arrow-right" size={15} /></Button><small> {" "}Sample records are for practice. BenchLedger does not mix them with private records.{" "} </small></div> )}</section></main> );
 } export function SampleBanner({ onReturn }: { onReturn: () => void }) {
   return ( <div className="offline-banner sample-banner" role="status"><Icon name="info" size={17} /><div><strong>Sample workspace</strong><span> {" "}
           Try the workflow here. Changes do not affect your private
@@ -2136,15 +2156,18 @@ export function ShoppingList({ project: _project, summary, offers, expert, onToa
 function Legend({ tone, title, text }: { tone: StockLabelTone; title: string; text: string; }) { return ( <div className="legend-row"><span className={`legend-mark mark-${tone}`}>{tone === "good" ? "✓" : tone === "warn" ? "?" : "!"}</span><div><strong>{title}</strong><span>{text}</span></div></div> ); }
 
 
-export function InventoryDrawer({ item, nextStep, suspended = false, sampleMode = false, items = [item], categories, categoriesLoading, categoriesError, expert, onClose, onCount, onCommission, onUpdate, onDelete, onLinkProduct, onCreateReplacement }: { item: InventoryItem; nextStep?: ReactNode; sampleMode?: boolean; suspended?: boolean; items?: readonly InventoryItem[]; categories: readonly ManagedInventoryCategory[]; categoriesLoading: boolean; categoriesError?: string | undefined; expert: boolean; onClose: () => void; onCount: (id: string, quantity: number) => Promise<InventoryItem>; onCommission: (id: string, input: InventoryCommissionInput, expectedVersion: number) => Promise<InventoryItem>; onUpdate: (id: string, input: Partial<InventoryUpdateInput>, expectedVersion?: number) => Promise<InventoryItem>; onDelete?: (item: InventoryItem) => Promise<void>; onLinkProduct?: (item: InventoryItem) => void; onCreateReplacement?: (item: InventoryItem) => void; }) {
+export function InventoryDrawer({ item, resumeObservation, onPendingObservation, nextStep, suspended = false, sampleMode = false, items = [item], categories, categoriesLoading, categoriesError, expert, onClose, onCount, onCommission, onUpdate, onDelete, onLinkProduct, onCreateReplacement }: { item: InventoryItem; resumeObservation?: PendingStockObservation | undefined; onPendingObservation?: ((value: PendingStockObservation | undefined) => void) | undefined; nextStep?: ReactNode; sampleMode?: boolean; suspended?: boolean; items?: readonly InventoryItem[]; categories: readonly ManagedInventoryCategory[]; categoriesLoading: boolean; categoriesError?: string | undefined; expert: boolean; onClose: () => void; onCount: (id: string, quantity: number) => Promise<InventoryItem>; onCommission: (id: string, input: InventoryCommissionInput, expectedVersion: number) => Promise<InventoryItem>; onUpdate: (id: string, input: Partial<InventoryUpdateInput>, expectedVersion?: number) => Promise<InventoryItem>; onDelete?: (item: InventoryItem) => Promise<void>; onLinkProduct?: (item: InventoryItem) => void; onCreateReplacement?: (item: InventoryItem) => void; }) {
   const unverifiedQuantity = item.evidence === "delivered" || item.evidence === "ordered";
-  const [quantity, setQuantity] = useState(unverifiedQuantity ? "" : String(item.quantity));
+  const [quantity, setQuantity] = useState(resumeObservation?.kind === "count" ? String(resumeObservation.quantity) : unverifiedQuantity ? "" : String(item.quantity));
   const [countSaving, setCountSaving] = useState(false);
-  const [countError, setCountError] = useState<string>();
+  const [countError, setCountError] = useState<string | undefined>(resumeObservation?.kind === "count" ? resumeObservation.uncertain ? "The count save is not confirmed. Retry unchanged to check the same observation." : "This observation was not saved. Review it before retrying." : undefined);
   const [countSaved, setCountSaved] = useState<string>();
-  const [mutationReview, setMutationReview] = useState<InventoryMutationReview & { item: InventoryItem; expectedVersion?: number }>();
-  const [stockUncertain, setStockUncertain] = useState(false);
-  const [countBaseline, setCountBaseline] = useState(quantity);
+  const [mutationReview, setMutationReview] = useState<PendingStockObservation | undefined>(resumeObservation);
+  const [stockUncertain, setStockUncertain] = useState(resumeObservation?.uncertain ?? false);
+  // Mount the sheet before its restored review so their modal layers cannot hide each other.
+  const [reviewLayerReady, setReviewLayerReady] = useState(!resumeObservation);
+  useEffect(() => { setReviewLayerReady(true); }, []);
+  const [countBaseline, setCountBaseline] = useState(unverifiedQuantity ? "" : String(item.quantity));
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string>();
@@ -2156,16 +2179,16 @@ export function InventoryDrawer({ item, nextStep, suspended = false, sampleMode 
     finally { setDeleting(false); }
   };
 
-  const [commissionQuantity, setCommissionQuantity] = useState("");
-  const [commissionSource, setCommissionSource] = useState(item.provenance?.source ?? "");
-  const [commissionSourceId, setCommissionSourceId] = useState(item.provenance?.sourceId ?? "");
-  const [commissionObservedAt, setCommissionObservedAt] = useState(() => localDateTimeValue(item.provenance?.observedAt));
-  const [commissionNote, setCommissionNote] = useState("");
+  const [commissionQuantity, setCommissionQuantity] = useState(resumeObservation?.kind === "commission" ? String(resumeObservation.input.quantity) : "");
+  const [commissionSource, setCommissionSource] = useState(resumeObservation?.kind === "commission" ? resumeObservation.input.source : item.provenance?.source ?? "");
+  const [commissionSourceId, setCommissionSourceId] = useState(resumeObservation?.kind === "commission" ? resumeObservation.input.sourceId ?? "" : item.provenance?.sourceId ?? "");
+  const [commissionObservedAt, setCommissionObservedAt] = useState(() => localDateTimeValue(resumeObservation?.kind === "commission" ? resumeObservation.input.observedAt : item.provenance?.observedAt));
+  const [commissionNote, setCommissionNote] = useState(resumeObservation?.kind === "commission" ? resumeObservation.input.note ?? "" : "");
   const commissionDraft = JSON.stringify([commissionQuantity, commissionSource, commissionSourceId, commissionObservedAt, commissionNote]);
-  const [commissionBaseline, setCommissionBaseline] = useState(commissionDraft);
+  const [commissionBaseline, setCommissionBaseline] = useState(() => JSON.stringify(["", item.provenance?.source ?? "", item.provenance?.sourceId ?? "", localDateTimeValue(item.provenance?.observedAt), ""]));
   const [commissionSaving, setCommissionSaving] = useState(false);
   useUnsavedWork(quantity !== countBaseline || commissionDraft !== commissionBaseline, "stock observation", countSaving || commissionSaving || stockUncertain);
-  const [commissionError, setCommissionError] = useState<string>();
+  const [commissionError, setCommissionError] = useState<string | undefined>(resumeObservation?.kind === "commission" ? resumeObservation.uncertain ? "The commissioning save is not confirmed. Retry unchanged to check the same observation." : "This observation was not saved. Review it before retrying." : undefined);
   const [commissionSaved, setCommissionSaved] = useState<string>();
   const [editing, setEditing] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
@@ -2199,7 +2222,7 @@ export function InventoryDrawer({ item, nextStep, suspended = false, sampleMode 
       return;
     }
     setStockUncertain(false);
-    setMutationReview({ kind: "count", quantity: parsed, item });
+    setMutationReview({ kind: "count", quantity: parsed, item, uncertain: false });
   };
 
   const submitCount = async () => {
@@ -2207,15 +2230,20 @@ export function InventoryDrawer({ item, nextStep, suspended = false, sampleMode 
     setCountSaving(true);
     setCountError(undefined);
     try {
+      onPendingObservation?.({ ...mutationReview, uncertain: stockUncertain });
       const result = await onCount(mutationReview.item.id, mutationReview.quantity);
       setQuantity(String(result.quantity));
       setCountBaseline(String(result.quantity));
       setStockUncertain(false);
       setCountSaved(`Confirmed ${formatQuantity(result.quantity, result.unit)} as the on-hand quantity.`);
       setMutationReview(undefined);
+      onPendingObservation?.(undefined);
     } catch (error: unknown) {
       const failure = normalizeApiError(error);
       const unresolved = stockUncertain || failure.kind === "offline" || failure.kind === "server";
+      const retained = { ...mutationReview, uncertain: unresolved };
+      setMutationReview(retained);
+      onPendingObservation?.(unresolved || failure.kind === "unauthenticated" || failure.kind === "csrf" ? retained : undefined);
       setStockUncertain(unresolved);
       setCountError(unresolved ? "The count save is not confirmed. Retry unchanged to check the same observation." : failure.message);
     } finally {
@@ -2247,6 +2275,7 @@ export function InventoryDrawer({ item, nextStep, suspended = false, sampleMode 
     }
     setMutationReview({
       kind: "commission",
+      uncertain: false,
       item,
       expectedVersion: item.version,
       input: {
@@ -2264,6 +2293,7 @@ export function InventoryDrawer({ item, nextStep, suspended = false, sampleMode 
     setCommissionSaving(true);
     setCommissionError(undefined);
     try {
+      onPendingObservation?.({ ...mutationReview, uncertain: stockUncertain });
       const result = await onCommission(mutationReview.item.id, mutationReview.input, mutationReview.expectedVersion);
       setCommissionQuantity(String(result.quantity));
       setCommissionBaseline(JSON.stringify([String(result.quantity), commissionSource, commissionSourceId, commissionObservedAt, commissionNote]));
@@ -2272,9 +2302,13 @@ export function InventoryDrawer({ item, nextStep, suspended = false, sampleMode 
       setStockUncertain(false);
       setCommissionSaved(`Commissioned ${formatQuantity(result.quantity, result.unit)} as confirmed stock.`);
       setMutationReview(undefined);
+      onPendingObservation?.(undefined);
     } catch (error: unknown) {
       const failure = normalizeApiError(error);
       const unresolved = stockUncertain || failure.kind === "offline" || failure.kind === "server";
+      const retained = { ...mutationReview, uncertain: unresolved };
+      setMutationReview(retained);
+      onPendingObservation?.(unresolved || failure.kind === "unauthenticated" || failure.kind === "csrf" ? retained : undefined);
       setStockUncertain(unresolved);
       setCommissionError(unresolved ? "The commissioning save is not confirmed. Retry unchanged to check the same observation." : failure.message);
     } finally {
@@ -2385,7 +2419,7 @@ export function InventoryDrawer({ item, nextStep, suspended = false, sampleMode 
       <div className="dialog-actions"><Button variant="ghost" type="button" className="button button-quiet" disabled={deleting} onClick={() => setDeleteOpen(false)}>Cancel</Button><Button variant="destructive" type="button" className="button button-danger" disabled={deleting || item.version === undefined} aria-busy={deleting} onClick={() => { void confirmDelete(); }}>{deleting ? "Deleting…" : item.kind === "printer" ? "Delete printer" : "Delete item"}</Button></div>
       {item.version === undefined && <Alert asChild><p role="alert">Reload this item before deleting it.</p></Alert>}
     </Dialog>}
-    {mutationReview && ( <InventoryMutationReviewDialog item={mutationReview.item} review={mutationReview} unresolved={stockUncertain} error={mutationReview.kind === "count" ? countError : commissionError} saving={mutationReview.kind === "count" ? countSaving : commissionSaving} onClose={() => { if (!countSaving && !commissionSaving && !stockUncertain) setMutationReview(undefined); }} onConfirm={() => { void (mutationReview.kind === "count" ? submitCount() : submitCommission()); }} /> )}
+    {mutationReview && reviewLayerReady && ( <InventoryMutationReviewDialog item={mutationReview.item} review={mutationReview} unresolved={stockUncertain} error={mutationReview.kind === "count" ? countError : commissionError} saving={mutationReview.kind === "count" ? countSaving : commissionSaving} onClose={() => { if (!countSaving && !commissionSaving && !stockUncertain) { setMutationReview(undefined); onPendingObservation?.(undefined); } }} onConfirm={() => { void (mutationReview.kind === "count" ? submitCount() : submitCommission()); }} /> )}
   </> );
 }
 
@@ -2585,6 +2619,8 @@ const inventoryUnitLabels: Readonly<Record<InventoryItem["unit"], string>> = {
 }; function inventoryUnitLabel( unit: InventoryItem["unit"], expert: boolean, serverUnit?: string ): string { if (!expert) return inventoryUnitLabels[unit]; if (serverUnit?.trim()) return serverUnit; if (unit === "g") return "gram"; if (unit === "m") return "metre"; return unit; } type InventoryMutationReview =
   | { readonly kind: "count"; readonly quantity: number }
   | { readonly kind: "commission"; readonly input: InventoryCommissionInput };
+
+export type PendingStockObservation = InventoryMutationReview & { readonly item: InventoryItem; readonly expectedVersion?: number; readonly uncertain: boolean };
 
 function displayCategoryForKind(kind: InventoryItemType): InventoryCategory {
   if (kind === "printer") return "Printers";

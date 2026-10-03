@@ -575,4 +575,7 @@ Record received stock carries the original requirement into inventory capture.
 The maker enters the actual received quantity, explicitly confirms its physical
 count, then reviews the match. No quote quantity or compatibility is inferred.
 Count/commission recovery preserves its original command through ambiguous
-responses and browser session renewal.
+responses and browser session renewal. The complete reviewed observation resumes
+after sign-in, with explicit retry and no unauthenticated inventory display.
+Initial authentication rejection does not make a draft permanently ambiguous;
+a subsequent definitive conflict permits editing and a fresh review.

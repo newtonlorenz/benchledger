@@ -53,6 +53,14 @@ still requires an explicit count; the requirement match is reviewed separately.
 View retention lasts for the mounted workspace and is not durable preference
 storage across browser restarts.
 
+Session recovery keeps the complete reviewed stock observation in memory and
+resumes it only after authentication, without automatic resubmission. The editor
+reloads the exact item even when it falls outside the initial inventory page.
+Lost acknowledgements keep the original payload, replay key and version; first
+authentication rejections remain editable after a definitive conflict. An item
+deleted after a definitive rejection offers explicit draft discard. No private
+draft is persisted in browser storage or displayed while signed out.
+
 ## Verification and release plan
 
 1. Run focused unit/component regressions for receipt context, exact quantity,
@@ -75,13 +83,16 @@ release does not claim that research has already happened.
 ## Results
 
 The final `npm run check` passed public-source checks, all builds/typechecks,
-1,212 tests across 147 files, and 158 browser tests. Coverage was 87.8%
-statements/lines, 82.61% branches and 82.1% functions. The first full run exposed
-an existing test race between popover focus restoration and keyboard resizing;
-the test now waits for focus restoration, and the complete gate passed again.
+1,216 tests across 147 files, and 162 browser tests. Coverage was 87.8%
+statements/lines, 82.62% branches and 82.1% functions. Earlier full runs exposed two existing test races: popover focus restoration
+before keyboard resizing, and responsive cell replacement during viewport
+measurement. The tests now wait for the relevant focus and geometry conditions;
+all assertions remain in place, and the complete gate passed again.
 
-Independent final source review found no remaining material issue in the changed
-flows. Six final desktop-light/phone-dark views had no axe violations or document
+GitHub and independent reviews exposed additional session-recovery edge cases.
+These were corrected and covered by component and real-browser regressions,
+including exact post-login retries, version conflicts and deleted items. Final
+source review found no remaining material issue in the changed flows. Six final desktop-light/phone-dark views had no axe violations or document
 overflow; the wrapped filter rectangles and proposal controls were also checked.
 All new browser journeys passed with synthetic data. Source/privacy review was
 separate from the automated gate.
