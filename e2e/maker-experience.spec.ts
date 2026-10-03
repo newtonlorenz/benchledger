@@ -1,3 +1,4 @@
+import { clickProjectAction } from "./workspace-controls";
 import { expect, test } from "@playwright/test";
 
 for (const width of [1440, 390]) {
@@ -6,7 +7,7 @@ for (const width of [1440, 390]) {
     await page.goto("/");
     await page.getByLabel("Workspace password").fill("demo-password-please-change");
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
-    await page.getByRole("button", { name: "New project", exact: true }).click();
+    await clickProjectAction(page, "New project");
     await page.getByLabel("Project name", { exact: true }).fill("Synthetic retained draft");
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Keep editing", exact: true }).click();
@@ -39,7 +40,12 @@ for (const width of [1440, 390]) {
     const guidance = page.getByRole("region", { name: "Next project action" });
     await expect(guidance).toBeVisible();
     expect((await guidance.boundingBox())!.y).toBeLessThan(400);
-    await page.getByRole("button", { name: "Project details", exact: true }).click();
+    const details = page.getByRole("button", { name: "Project details", exact: true });
+    await expect(details).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByRole("complementary", { name: "Project details" })).toBeHidden();
+    await details.click();
+    await expect(page.getByRole("complementary", { name: "Project details" })).toBeVisible();
+    await details.click();
     await expect(page.getByRole("complementary", { name: "Project details" })).toBeHidden();
     await expect(guidance.getByRole("button", { name: "Review stock checks" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Assembly", exact: true })).toHaveCount(0);

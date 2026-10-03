@@ -1,3 +1,4 @@
+import { clickProjectAction } from "./workspace-controls";
 import { test, expect, type Page } from "@playwright/test";
 async function login(page: Page) {
   await page.goto("/"); await page.getByLabel("Workspace password").fill("demo-password-please-change"); await page.getByRole("button", { name: "Sign in", exact: true }).click();
@@ -6,7 +7,7 @@ async function login(page: Page) {
   await page.getByRole("button", { name: /^Projects/u }).click();
 }
 async function guided(page: Page, name: string) {
-  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await clickProjectAction(page, "New project");
   await page.getByRole("button", { name: "Use a template or import a BOM", exact: true }).click();
   await page.getByLabel("Guided project name").fill(name); await page.getByRole("button", { name: "Project details, optional", exact: true }).click(); await page.getByLabel("Guided project goal").fill("Synthetic acceptance of reviewed maker requirements.");
   await page.getByLabel("Guided build approach").selectOption("printed");

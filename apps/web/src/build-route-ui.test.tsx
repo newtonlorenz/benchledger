@@ -134,7 +134,7 @@ describe("build route UI", () => {
 
     const printer = inventory.find((item) => item.category === "Printers")!;
     const cards = renderToStaticMarkup(<OverviewPage items={[printer]} projects={[]} expert={false} sampleMode={false} onNavigate={noop} onOpenProject={noop} onSelectItem={noop} onNewProject={noop} />);
-    expect(cards).toContain("workshop-printer-card");
+    expect(cards).toContain("home-equipment-item");
     expect(cards).toContain(printerBuildVolumeCopy(printer)!);
   });
 

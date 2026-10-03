@@ -1,3 +1,4 @@
+import { clickProjectAction, openProjectDetails } from "./workspace-controls";
 import { expect, test, type Page, type Response } from "@playwright/test";
 
 const demoPassword = "demo-password-please-change";
@@ -107,7 +108,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   expect(filamentResponse.request().postDataJSON().profile).not.toHaveProperty("itemId");
 
   await page.getByRole("button", { name: /^Projects/u }).click();
-  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await clickProjectAction(page, "New project");
   await page.getByLabel("Project name").fill(projectName);
   await page.getByLabel("Project goal").fill("A small exact-catalog test enclosure for the maker workflow.");
   const projectResponse = page.waitForResponse(mutationResponse("/api/v1/projects/with-initial-revision"));
@@ -119,7 +120,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   expect(createdProjectId).toEqual(expect.any(String));
   await expect(page.getByRole("heading", { name: projectName, exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "Settings", exact: true }).click(); await page .getByRole("switch", { name: "Technical details" }) .click(); await expect( page.getByRole("switch", { name: "Technical details" }) ).toBeVisible(); await page.getByRole("button", { name: /^Projects/u }).click(); await page.getByRole("button", { name: "New revision", exact: true }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click(); await page .getByRole("switch", { name: "Technical details" }) .click(); await expect( page.getByRole("switch", { name: "Technical details" }) ).toBeVisible(); await page.getByRole("button", { name: /^Projects/u }).click(); await clickProjectAction(page, "New revision");
   const revisionDialog = page.getByRole("dialog", { name: `New revision for ${projectName}` });
   await expect(revisionDialog).toBeVisible();
   await revisionDialog.getByLabel("Revision name").fill("Exact setup capture");
@@ -192,13 +193,14 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   await page.getByRole("button", { name: `Switch to project ${projectName}`, exact: true }).click();
   await expect(page.getByRole("heading", { name: projectName, exact: true })).toBeVisible();
 
+  await openProjectDetails(page);
   const buildApproach = page.getByRole("region", { name: "Build approach" });
   await expect(buildApproach).toContainText("Bambu Lab H2D");
   await expect( page.getByRole("region", { name: "Build setup summary" }) ).toBeVisible();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect( page.getByRole("switch", { name: "Technical details" })).toBeVisible();
 
-  await page.getByRole("button", { name: /^Projects/u }).click(); await page.getByRole("button", { name: `Switch to project ${projectName}`, exact: true }).click(); const expertSummary = page.getByRole("region", { name: "Build setup summary" }); await expect(expertSummary).toContainText( "Use Bambu Lab · H2D with Bambu Lab · PETG · PETG HF." );
+  await page.getByRole("button", { name: /^Projects/u }).click(); await page.getByRole("button", { name: `Switch to project ${projectName}`, exact: true }).click(); await openProjectDetails(page); const expertSummary = page.getByRole("region", { name: "Build setup summary" }); await expect(expertSummary).toContainText( "Use Bambu Lab · H2D with Bambu Lab · PETG · PETG HF." );
   await expect(expertSummary).toContainText( "Print setup: 0.4 mm nozzle · hardened steel · Textured PEI." ); await expect(expertSummary).toContainText( "Software: Bambu Studio 1.10.0 0.20 mm Standard." ); await expect(expertSummary).toContainText("Calibration: flow checked."); await expect( expertSummary.getByText("Show IDs, versions, evidence & unknowns", { exact: true })).toBeVisible();
   await expertSummary .getByText("Show IDs, versions, evidence & unknowns", { exact: true }).click();
   await expect(expertSummary).toContainText("Revision ID");

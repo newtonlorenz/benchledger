@@ -2,6 +2,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { AddBomDialog, BomLineRow, NewProjectDialog } from "./App";
+import { ProjectEditingContext } from "./project-editing";
 import { projectNextAction } from "./requirement-journey";
 import { inventory, projects } from "./mock-data";
 import type { BomInput } from "./api";
@@ -86,4 +87,16 @@ it("starts an empty project with requirements and resolves stock before optional
   expect(projectNextAction({ ...empty, totalLines: 1, inspectLines: 1 }, false, true, false)).toBe("check");
   expect(projectNextAction({ ...empty, totalLines: 1, sourceLines: 1 }, false, true, false)).toBe("source");
   expect(projectNextAction({ ...empty, totalLines: 1 }, false, true, false)).toBe("approach");
+});
+
+it("discloses confirmed stock detail while keeping the requirement edit action labelled", () => {
+  const line: BomLineStatus = { line: { id: "synthetic-ready", version: 1, label: "Confirmed connector", required: 1, unit: "each", role: "consumed" }, supplied: 1, remaining: 0, decision: "ready", state: "ready", gap: { lineId: "synthetic-ready", status: "supplied", decision: "ready", suppliedQuantity: 1, inspectQuantity: 0, missingQuantity: 0, matchedItemIds: [], reasons: ["A physical count confirms this connector."] } };
+  const edit = vi.fn();
+  render(<ProjectEditingContext.Provider value={{ project: projects[0]!, editRequirement: edit, editProject: vi.fn(), listRemoved: async () => [], restore: async () => undefined }}><BomLineRow line={line} expert={false} onOpenItem={vi.fn()} /></ProjectEditingContext.Provider>);
+  const reason = screen.getByText("A physical count confirms this connector.");
+  expect(reason.closest("[hidden]")).not.toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Stock details" }));
+  expect(reason.closest("[hidden]")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Edit requirement Confirmed connector" }));
+  expect(edit).toHaveBeenCalledWith(line.line);
 });

@@ -50,7 +50,7 @@ test("commands open pages and forms by keyboard while retaining focus boundaries
   await page.getByLabel("Open workspace commands").click(); await input.fill("new project"); await input.press("Enter");
   await expect(page.getByRole("dialog", { name: "Create project", exact: true })).toBeVisible(); await expect(page.locator(".app-background")).toHaveAttribute("aria-hidden", "true");
   await page.keyboard.press("Escape"); await expect(page.getByRole("dialog")).toHaveCount(0);
-  await page.keyboard.press("Control+k"); await expect(page.getByPlaceholder("Search name, model, tag, or location")).toBeFocused();
+  await page.keyboard.press("Control+k"); await expect(page.getByRole("textbox", { name: "Search inventory", exact: true })).toBeFocused();
 });
 test("system colour changes and reduced motion work without reload", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" }); await signIn(page);

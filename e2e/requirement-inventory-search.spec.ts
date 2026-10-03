@@ -1,3 +1,4 @@
+import { clickProjectAction } from "./workspace-controls";
 import { expect, test } from "@playwright/test";
 
 test("requirement editing searches beyond the 200-item snapshot and restores that choice after reload", async ({ page }) => {
@@ -20,7 +21,7 @@ test("requirement editing searches beyond the 200-item snapshot and restores tha
     await route.fulfill({ response, json: body });
   });
   await page.reload();
-  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await clickProjectAction(page, "New project");
   await page.getByLabel("Project name", { exact: true }).fill("Synthetic remote stock journey");
   await page.getByRole("button", { name: "Create project", exact: true }).click();
   await page.getByRole("region", { name: "Next project action" }).getByRole("button", { name: "Add first requirement", exact: true }).click();

@@ -1,3 +1,4 @@
+import { clickProjectAction } from "./workspace-controls";
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 
@@ -23,14 +24,14 @@ for (const width of [390, 1440]) {
     await page.getByRole("tab", { name: /^Files/u }).click();
     await expect(page.getByRole("alertdialog")).toHaveCount(0);
     await expect(page.getByRole("region", { name: "Next project action", exact: true })).toHaveCount(0);
-    await expect(page.getByLabel("Project task shortcuts", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Project task shortcuts", { exact: true })).toHaveCount(0);
     await page.getByRole("tab", { name: /^Plan/u }).click();
     await expect(query).toHaveValue("Connector 24"); await expect(filter).toHaveValue("source");
     await page.getByRole("button", { name: "Clear requirement filters", exact: true }).click();
     await expect(query).toHaveValue(""); await expect(filter).toHaveValue("all");
     await expect(page.locator(".bom-row")).toHaveCount(24);
     await query.fill("Connector 24"); await filter.selectOption("source");
-    await page.getByRole("button", { name: "New revision", exact: true }).click();
+    await clickProjectAction(page, "New revision");
     const dialog = page.getByRole("dialog", { name: `New revision for Synthetic plan return ${width}`, exact: true });
     await dialog.getByLabel("Revision name", { exact: true }).fill("Next revision");
     await dialog.getByRole("button", { name: "Create revision", exact: true }).click();

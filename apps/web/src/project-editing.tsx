@@ -33,10 +33,10 @@ function correctionError(error: unknown): string {
   return error instanceof Error ? error.message : "The change was not saved. Review the project and retry.";
 }
 
-export function RequirementEditAction({ line }: { line: BomLine }) {
+export function RequirementEditAction({ line, compact = false }: { line: BomLine; compact?: boolean }) {
   const actions = useContext(ProjectEditingContext);
   if (!actions || actions.project.status === "archived") return null;
-  return <Button variant="ghost" type="button" className="text-button requirement-edit-action" aria-label={`Edit requirement ${line.label}`} onClick={() => actions.editRequirement(line)}>Edit requirement</Button>;
+  return <Button variant="ghost" type="button" className="text-button requirement-edit-action" aria-label={`Edit requirement ${line.label}`} onClick={() => actions.editRequirement(line)}>{compact ? "Edit" : "Edit requirement"}</Button>;
 }
 
 export function ProjectManagementBar() {

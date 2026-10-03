@@ -23,7 +23,7 @@ import {
   TooltipTrigger,
 } from "./tooltip"
 
-const SIDEBAR_WIDTH = "232px"
+const SIDEBAR_WIDTH = "216px"
 const SIDEBAR_WIDTH_MOBILE = "18rem"
 const SIDEBAR_WIDTH_ICON = "64px"
 const SIDEBAR_KEYBOARD_SHORTCUT = "b"

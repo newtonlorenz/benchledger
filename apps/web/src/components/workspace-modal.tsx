@@ -3,11 +3,24 @@ import { Dialog, DialogContent } from "./ui/dialog";
 import { AlertDialog, AlertDialogContent } from "./ui/alert-dialog";
 import { Sheet, SheetContent } from "./ui/sheet";
 
+/** A popover action disappears when the modal takes focus; retain its launcher. */
+function returnFocusTarget(): HTMLElement | null {
+  if (typeof document === "undefined") return null;
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement)) return null;
+  const popover = active.closest<HTMLElement>('[data-slot="popover-content"]');
+  if (popover?.id) {
+    return [...document.querySelectorAll<HTMLElement>('[aria-controls]')]
+      .find(element => element.getAttribute("aria-controls") === popover.id) ?? active;
+  }
+  return active;
+}
+
 /** One Radix focus/dismissal boundary. Domain callbacks retain all save/approval guards. */
 export function WorkspaceModal({ children, onClose, active = true, kind = "dialog" }: {
   children: React.ReactElement; onClose(): void; active?: boolean; kind?: "dialog" | "alertdialog" | "sheet";
 }) {
-  const previous = React.useRef<HTMLElement | null>(typeof document === "undefined" ? null : document.activeElement as HTMLElement);
+  const previous = React.useRef<HTMLElement | null>(returnFocusTarget());
   const content = React.useRef<HTMLDivElement>(null);
   const focus = (event: Event) => {
     event.preventDefault();
