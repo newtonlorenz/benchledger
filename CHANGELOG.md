@@ -2,6 +2,12 @@
 
 ## Maker experience
 
+- Start projects with a name, review owned stock beside each requirement, and defer optional planning details.
+- Retain project/import drafts and guide captured inventory directly into physical-count review.
+- Set aside and release confirmed stock from Build planning before recording actual use.
+- Keep build warnings visible, reuse the intended printer, and upload missing files without leaving a build draft.
+- Connect selected quotes to received-stock capture and explicit requirement matching.
+
 - Protect project, requirement and item-edit drafts; focus item editing on its active task.
 - Keep printer setup tasks consistent and quote review status faithful to estimates.
 - Improve quote-entry focus, shopping evidence copying and build-part validation.

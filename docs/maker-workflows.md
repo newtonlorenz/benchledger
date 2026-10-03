@@ -128,3 +128,46 @@ local drafts. An explicit discard followed by a successful refresh reloads the
 working view; a failed refresh retains the current records and explains that the
 view is stale. A denied workflow read clears its prior result instead of leaving
 restricted data visible. Workstream pagination uses the same draft guard.
+
+## Capture, reuse and build continuity
+
+A new project needs only a name. Add its first requirement before choosing a build
+approach or printer; those remain available under Planning details. Template and
+CSV setup retain the name and goal already entered. The Workbench import action
+opens CSV entry directly. Requirement details and workstreams are optional
+disclosures; the reviewed preview remains the boundary before creating records.
+
+Requirement entry starts with loaded suggestions and searches the full inventory
+in bounded pages using the requirement name. Select
+an item explicitly after checking its identity and evidence. Selecting an item
+does not assert compatibility or convert quantities. A different stock unit has
+an explicit unit action; exact canonical validation still decides readiness.
+Normal requirement rows explain their gap without requiring expert mode.
+
+Inventory capture asks where the item is stored, allows incomplete identity, and
+puts catalogue search before optional product filters. Saving ordinary capture
+opens the item for physical-count review. The recorded quantity is not silently
+promoted to confirmed stock. On phones, tapping an item opens its details.
+
+After selecting a supplier quote, **Record received stock** opens inventory
+capture. Confirm what physically arrived, then use **Match owned stock** to link
+it to the requirement. Quote package quantities remain supplier observations;
+they do not become received quantities or purchasing authority.
+
+On persistent hosts that support stock closeout, **Stock for this build** offers
+confirmed, compatible stock for consumed requirements. Choose a quantity and
+review **Confirm set aside**. This reserves availability without consuming stock.
+**Release stock** requires its own review and an observed reservation version.
+After the build, **Record actual stock use** opens the existing closeout review.
+A revision whose closeout is committed cannot accept new reservations; start a
+new revision. The application enforces that rule on every transport.
+
+Build planning keeps warnings visible while file hashes remain disclosed. New
+plates start with the usable intended printer and its matching recorded setup,
+with explicit overrides available. Add a missing build file inside the editor,
+then select its exact revision file for the part; the draft is retained.
+Non-print projects lead with workstreams and keep part/plate planning optional.
+
+Changed capture, import and requirement-edit drafts are protected on exit. An
+unconfirmed save keeps its exact command and retry key until acknowledged,
+including when an intervening retry is rejected.

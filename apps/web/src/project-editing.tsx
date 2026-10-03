@@ -7,19 +7,20 @@ import { Checkbox } from "./components/ui/checkbox";
 import { Button } from "./components/ui/button";
 import { Textarea } from "./components/ui/textarea";
 import { Input } from "./components/ui/input";
-import { UnsavedWorkContext } from "./unsaved-work";
+import { UnsavedWorkContext, useUnsavedWork } from "./unsaved-work";
 import { Icon } from "./icons";
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { BomLine, BomLineStatus, InventoryItem, Project } from "./domain";
 import { ApiError } from "./api";
 import type { BomUpdateInput, ProjectEditInput } from "./api";
 import { matchesInventorySearch } from "@benchledger/domain/inventory-search";
-import { inventoryCandidateText } from "./inventory-identity";
+import { RequirementOwnedItems, type OwnedItemSearch } from "./requirement-owned-items";
+import { formatQuantity } from "./domain";
 import { saveProjectHandoff } from "./project-handoff";
 
 export const ProjectEditingContext = createContext<{
   project: Project;
-  editRequirement(line: BomLine): void;
+  editRequirement(line: BomLine, focus?: "stock"): void;
   editProject(): void;
   refreshProject?: (() => Promise<boolean>) | undefined;
   listRemoved(): Promise<BomLine[]>;
@@ -91,22 +92,30 @@ export function RemovedRequirements() {
   </DisclosureContent></Disclosure>;
 }
 
-export function RequirementEditForm({ line, items, onSave, onRetire, onClose, onBusy }: { line: BomLine; items: InventoryItem[]; onSave(input: BomUpdateInput): Promise<void>; onRetire(): Promise<void>; onClose(): void; onBusy(value: boolean): void }) {
+export function RequirementEditForm({ line, items, initialFocus, onSave, onRetire, onClose, onBusy, onSearchOwnedItems }: { onSearchOwnedItems?: OwnedItemSearch | undefined; line: BomLine; items: InventoryItem[]; initialFocus?: "stock" | undefined; onSave(input: BomUpdateInput): Promise<void>; onRetire(): Promise<void>; onClose(): void; onBusy(value: boolean): void }) {
   const [name, setName] = useState(line.label), [quantity, setQuantity] = useState(String(line.required));
   const [unit, setUnit] = useState(line.unit), [role, setRole] = useState(line.role ?? "");
-  const [itemId, setItemId] = useState(line.itemId ?? ""), [query, setQuery] = useState("");
+  const [itemId, setItemId] = useState(line.itemId ?? ""), [query, setQuery] = useState<string>();
   const [optional, setOptional] = useState(line.optional ?? false), [note, setNote] = useState(line.note ?? "");
   const [busy, setBusy] = useState(false), [confirmRemove, setConfirmRemove] = useState(false), [error, setError] = useState<string>();
   const [uncertainOperation, setUncertainOperation] = useState<"save" | "remove">();
-  const eligible = items.filter((item) => item.category !== "Printers" && (item.id === itemId || matchesInventorySearch([item.name, item.manufacturer, item.variant, item.location, item.sku], query)));
+  const pendingSave = useRef<BomUpdateInput | undefined>(undefined);
+  const dirty = name.trim() !== line.label || Number(quantity) !== line.required || unit !== line.unit || role !== (line.role ?? "") || itemId !== (line.itemId ?? "") || optional !== (line.optional ?? false) || note !== (line.note ?? "");
+  useUnsavedWork(dirty, "requirement changes", busy || uncertainOperation !== undefined);
   const run = async (kind: "save" | "remove", operation: () => Promise<void>) => {
-    if (busy) return; setBusy(true); onBusy(true); setError(undefined);
-    try { await operation(); }
-    catch (failure) { setError(correctionError(failure)); setUncertainOperation(ambiguous(failure) ? kind : undefined); }
+    if (busy) return;
+    setBusy(true); onBusy(true); setError(undefined);
+    try { await operation(); pendingSave.current = undefined; setUncertainOperation(undefined); }
+    catch (failure) {
+      setError(correctionError(failure));
+      if (uncertainOperation || ambiguous(failure)) setUncertainOperation(kind);
+      else { pendingSave.current = undefined; setUncertainOperation(undefined); }
+    }
     finally { setBusy(false); onBusy(false); }
   };
   const save = () => {
     if (uncertainOperation === "remove") { void run("remove", onRetire); return; }
+    if (pendingSave.current) { const input = pendingSave.current; void run("save", () => onSave(input)); return; }
     const amount = Number(quantity);
     if (!name.trim() || !Number.isFinite(amount) || amount <= 0) { setError("Enter a requirement name and a quantity greater than zero."); return; }
     const input: BomUpdateInput = {
@@ -115,34 +124,46 @@ export function RequirementEditForm({ line, items, onSave, onRetire, onClose, on
       ...(itemId === (line.itemId ?? "") ? {} : { itemId: itemId || null }), ...(optional === (line.optional ?? false) ? {} : { optional }), ...(note === (line.note ?? "") ? {} : { note }),
     };
     if (!Object.keys(input).length) { onClose(); return; }
+    pendingSave.current = input;
     void run("save", () => onSave(input));
   };
+  const disabled = busy || uncertainOperation !== undefined;
+  const ownedItems = <RequirementOwnedItems onSearch={onSearchOwnedItems} items={items} requirementName={name} selectedId={itemId} onSelect={setItemId} unit={unit} onUnitChange={setUnit} queryOverride={query} onQueryChange={setQuery} disabled={disabled} focusSearch={initialFocus === "stock"} />;
   return <form onSubmit={(event) => { event.preventDefault(); save(); }} className="correction-form">
-    <p className="dialog-intro">Correct this requirement without replacing its history. Reserved stock must be released before its planning details change.</p>
-    <fieldset disabled={busy || uncertainOperation !== undefined} className="correction-fields">
-      <Label className="form-field"><span>Requirement name</span><Input autoFocus required maxLength={240} value={name} onChange={(event) => setName(event.target.value)} /></Label>
-      <div className="form-row"><Label className="form-field"><span>Required quantity</span><Input type="number" required min="0.000001" step="any" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></Label><Label className="form-field"><span>Requirement unit</span><NativeSelect aria-label="Requirement unit" value={unit} onChange={(event) => setUnit(event.target.value as BomLine["unit"])}>{[["each", "pieces"], ["g", "grams"], ["m", "metres"], ["millimetre", "millimetres"], ["millilitre", "millilitres"], ["set", "sets"]].map(([value, label]) => <NativeSelectOption key={value} value={value}>{label}</NativeSelectOption>)}</NativeSelect></Label></div>
-      <Label className="form-field"><span>How it is used</span><NativeSelect aria-label="How it is used" value={role} onChange={(event) => setRole(event.target.value as typeof role)}><NativeSelectOption value="" disabled>Review use</NativeSelectOption><NativeSelectOption value="consumed">Part or material, used up or built in</NativeSelectOption><NativeSelectOption value="reusable">Reusable tool or equipment</NativeSelectOption></NativeSelect></Label>
-      <Label className="form-field"><span>Find owned stock</span><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, maker, colour or location" /></Label>
-      <Label className="form-field"><span>Selected owned item</span><NativeSelect aria-label="Selected owned item" value={itemId} onChange={(event) => setItemId(event.target.value)}><NativeSelectOption value="">No selected item</NativeSelectOption>{itemId && !eligible.some((item) => item.id === itemId) && <NativeSelectOption value={itemId}>Previously selected item, not in the loaded inventory</NativeSelectOption>}{eligible.map((item) => <NativeSelectOption value={item.id} key={item.id}>{inventoryCandidateText(item, items)}</NativeSelectOption>)}</NativeSelect></Label>
-      <p className="form-hint">Selecting an item is a planning choice, not proof of compatibility or available stock. Clearing it preserves other recorded alternatives and specifications.</p>
-      <Label className="form-field"><span>Requirement note</span><Textarea rows={3} maxLength={2000} value={note} onChange={(event) => setNote(event.target.value)} /></Label>
-      <Label className="check-field"><Checkbox  checked={optional} onCheckedChange={(checked) => setOptional(checked === true)} /><span>Optional requirement</span></Label>
+    <p className="dialog-intro">{initialFocus === "stock" ? `${name || line.label} · ${Number.isFinite(Number(quantity)) ? formatQuantity(Number(quantity), unit) : "Review quantity"} required. Review an owned item before sourcing.` : "Update this requirement and review any owned stock you plan to use."}</p>
+    <fieldset disabled={disabled} className="correction-fields">
+      {initialFocus === "stock" && ownedItems}
+      <Disclosure defaultOpen={initialFocus !== "stock"}><DisclosureTrigger>Requirement details</DisclosureTrigger><DisclosureContent>
+        <Label className="form-field"><span>Requirement name</span><Input autoFocus={initialFocus !== "stock"} required maxLength={240} value={name} onChange={(event) => setName(event.target.value)} /></Label>
+        <div className="form-row requirement-quantity-row"><Label className="form-field"><span>Required quantity</span><Input type="number" required min="0.000001" step="any" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></Label><Label className="form-field"><span>Requirement unit</span><NativeSelect aria-label="Requirement unit" value={unit} onChange={(event) => setUnit(event.target.value as BomLine["unit"])}>{[["each", "pieces"], ["g", "grams"], ["m", "metres"], ["millimetre", "millimetres"], ["millilitre", "millilitres"], ["set", "sets"]].map(([value, label]) => <NativeSelectOption key={value} value={value}>{label}</NativeSelectOption>)}</NativeSelect></Label></div>
+        <Label className="form-field"><span>How it is used</span><NativeSelect aria-label="How it is used" value={role} onChange={(event) => setRole(event.target.value)}><NativeSelectOption value="" disabled>Review use</NativeSelectOption><NativeSelectOption value="consumed">Part or material, used up or built in</NativeSelectOption><NativeSelectOption value="reusable">Reusable tool or equipment</NativeSelectOption></NativeSelect></Label>
+      </DisclosureContent></Disclosure>
+      {initialFocus !== "stock" && ownedItems}
+      <Disclosure className="requirement-details"><DisclosureTrigger>More requirement details{optional ? " · optional" : ""}{note ? " · has a note" : ""}</DisclosureTrigger><DisclosureContent>
+        <Label className="form-field"><span>Requirement note</span><Textarea rows={3} maxLength={2000} value={note} onChange={(event) => setNote(event.target.value)} /></Label>
+        <Label className="check-field"><Checkbox checked={optional} onCheckedChange={(checked) => setOptional(checked === true)} /><span>Optional requirement</span></Label>
+      </DisclosureContent></Disclosure>
     </fieldset>
+    <p className="form-hint">Selecting an item is a planning choice, not proof of compatibility or available stock. Other recorded alternatives and specifications are retained. Reserved stock must be released before planning details change.</p>
     {error && <Alert asChild><p className="form-error" role="alert">{error}</p></Alert>}
-    <Disclosure className="requirement-removal"><DisclosureTrigger>Remove requirement</DisclosureTrigger><DisclosureContent><p>This hides the requirement from the active plan, not its history. Restore it from Removed requirements. Reserved stock is never silently released.</p><Label className="check-field"><Checkbox  checked={confirmRemove} onCheckedChange={(checked) => setConfirmRemove(checked === true)} disabled={busy || uncertainOperation !== undefined} /><span>I want to remove this requirement from the plan</span></Label><Button variant="destructive" type="button" className="button button-danger" disabled={busy || !confirmRemove || uncertainOperation !== undefined} onClick={() => { void run("remove", onRetire); }}>Remove from plan</Button></DisclosureContent></Disclosure>
+    <Disclosure className="requirement-removal"><DisclosureTrigger>Remove requirement</DisclosureTrigger><DisclosureContent><p>This hides the requirement from the active plan, not its history. Restore it from Removed requirements. Reserved stock is never silently released.</p><Label className="check-field"><Checkbox checked={confirmRemove} onCheckedChange={(checked) => setConfirmRemove(checked === true)} disabled={disabled} /><span>I want to remove this requirement from the plan</span></Label><Button variant="destructive" type="button" className="button button-danger" disabled={disabled || !confirmRemove} onClick={() => { void run("remove", onRetire); }}>Remove from plan</Button></DisclosureContent></Disclosure>
     <div className="dialog-actions"><Button variant="ghost" type="button" className="button button-quiet" disabled={busy} onClick={onClose}>Cancel</Button><Button variant="default" type="submit" className="button button-primary" disabled={busy} aria-busy={busy}>{busy ? "Saving…" : uncertainOperation === "remove" ? "Retry unchanged removal" : uncertainOperation === "save" ? "Retry unchanged save" : "Save requirement"}</Button></div>
   </form>;
 }
 
-export function ProjectEditForm({ project, onSave, onClose, onBusy }: { project: Project; onSave(input: ProjectEditInput): Promise<void>; onClose(): void; onBusy(value: boolean): void }) {
+export function ProjectEditForm({ project, onSave, onClose, onBusy, onDraftChange }: { project: Project; onDraftChange?: (state: { dirty: boolean; unresolved: boolean }) => void; onSave(input: ProjectEditInput): Promise<void>; onClose(): void; onBusy(value: boolean): void }) {
   const [name, setName] = useState(project.name), [description, setDescription] = useState(project.description);
   const [status, setStatus] = useState<ProjectEditInput["status"]>(project.status === "archived" ? "idea" : project.status);
   const [busy, setBusy] = useState(false), [error, setError] = useState<string>(), [uncertain, setUncertain] = useState(false);
+  const pendingSave = useRef<ProjectEditInput | undefined>(undefined);
+  const dirty = name.trim() !== project.name || description !== project.description || status !== (project.status === "archived" ? "idea" : project.status);
+  useUnsavedWork(dirty, "project changes", busy || uncertain);
+  useEffect(() => { onDraftChange?.({ dirty, unresolved: busy || uncertain }); }, [dirty, busy, uncertain, onDraftChange]);
+  useEffect(() => () => onDraftChange?.({ dirty: false, unresolved: false }), [onDraftChange]);
   const save = async () => {
     if (busy) return; setBusy(true); onBusy(true); setError(undefined);
-    try { await onSave({ name: name.trim(), description, status }); }
-    catch (failure) { setError(correctionError(failure)); setUncertain(ambiguous(failure)); }
+    try { const input = pendingSave.current ?? { name: name.trim(), description, status }; pendingSave.current = input; await onSave(input); pendingSave.current = undefined; setUncertain(false); }
+    catch (failure) { setError(correctionError(failure)); if (uncertain || ambiguous(failure)) setUncertain(true); else { pendingSave.current = undefined; setUncertain(false); } }
     finally { setBusy(false); onBusy(false); }
   };
   return <form onSubmit={(event) => { event.preventDefault(); void save(); }} className="correction-form">

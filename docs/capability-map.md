@@ -543,3 +543,18 @@ the item drawer. These navigation changes do not alter HTTP/MCP capabilities,
 authorisation, stock evidence or physical-operation boundaries.
 
 See the [review and implementation plan](reviews/2026-10-02-maker-experience.md).
+
+### Browser stock set-aside and closeout
+
+Persistent browser workspaces expose reviewed reservation creation and release
+in Build planning, followed by the existing actual-use review. These actions use
+the canonical reservation endpoints and evidence/availability rules. Release
+retains optimistic concurrency. No reservation consumes stock. New reservations
+are rejected after that revision's stock reconciliation is committed. Demo
+hosts without reconciliation capability do not advertise this complete flow.
+
+Project creation accepts a name without a goal or build method. Requirement
+entry and editing expose explicit owned-item selection with identity, evidence
+and available quantity. Suggestions search the full inventory in bounded pages; the canonical gap
+evaluation remains authoritative. Active-project references are hydrated on
+reload without walking the complete inventory.

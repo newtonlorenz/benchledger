@@ -28,9 +28,10 @@ export function useWorkflowCommand() {
     if (running.current) throw new ApiError("Wait for the current save to finish.", { kind: "validation", status: 409 });
     const signature = JSON.stringify({ path, method, body });
     if (pending.current && pending.current.signature !== signature) throw new ApiError("The previous save was not confirmed. Retry unchanged or reload before making another change.", { kind: "validation", status: 409 });
+    const wasUncertain = pending.current !== undefined;
     pending.current ??= { signature, key: workflowCommandKey("maker") }; running.current = true; setBusy(true); setError(undefined);
     try { const value = validate(await workflowRequest(path, method, body, pending.current.key)); pending.current = undefined; setUncertain(false); return value; }
-    catch (failure) { const ambiguous = !(failure instanceof ApiError) || failure.kind === "server" || failure.kind === "offline"; setUncertain(ambiguous); if (!ambiguous) pending.current = undefined; setError(ambiguous ? "The save was not confirmed. Retry the unchanged request; do not create a replacement." : failure.message); throw failure; }
+    catch (failure) { const ambiguous = !(failure instanceof ApiError) || failure.kind === "server" || failure.kind === "offline"; setUncertain(ambiguous || wasUncertain); if (!ambiguous && !wasUncertain) pending.current = undefined; setError(ambiguous || wasUncertain ? "The save was not confirmed. Retry the unchanged request; do not create a replacement." : failure.message); throw failure; }
     finally { running.current = false; setBusy(false); }
   };
   return { execute, busy, uncertain, error, clear: () => { if (!running.current && !uncertain) setError(undefined); } };

@@ -29,6 +29,7 @@ for (const width of [1440, 320]) test(`maker can correct, remove, restore and ha
   await page.getByRole("button", { name: "Edit requirement Enclosure screws", exact: true }).click();
   await page.getByLabel("Requirement name", { exact: true }).fill("M3 enclosure screws");
   await page.getByLabel("Required quantity", { exact: true }).fill("8");
+  await page.getByRole("button", { name: /^More requirement details/u }).click();
   await page.getByLabel("Requirement note", { exact: true }).fill("Check length against the drawing.");
   await page.getByRole("button", { name: "Save requirement", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);

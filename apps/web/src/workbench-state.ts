@@ -31,17 +31,17 @@ export function deriveHomeProjects(projects: readonly Project[], items: Inventor
     const tasks: HomeTask[] = [];
     const add = (kind: HomeTaskKind, label: string, detail: string, count = 1) => tasks.push({ id: `${project.id}:${kind}`, projectId: project.id, projectName: project.name, kind, label, detail, count });
     if (project.status !== "complete") {
+      if (!project.bom.length) add("requirements", "Add requirements", "Start with one part, material or tool. Choose how to build it later.");
       if (unknown) add("refresh", "Refresh stock results", "The current stock result is unavailable.");
-      if (route === "undecided") add("setup", "Set build approach", "Choose how this project will be made.");
-      if (!project.bom.length) add("requirements", "Add requirements", "Record the parts, materials or tools required.");
       if (!unknown) for (const kind of ["decide", "check", "source"] as const) {
         const count = lines.filter((line) => line.decision === kind).length;
         if (count) add(kind, kind === "decide" ? "Review requirements" : kind === "check" ? "Check stock" : "Review sourcing", `${count} required ${count === 1 ? "line" : "lines"} ${kind === "source" ? count === 1 ? "has a stock gap" : "have stock gaps" : `${count === 1 ? "needs" : "need"} ${kind === "decide" ? "more detail" : "a physical or compatibility check"}`}.`, count);
       }
-      if (route === "printed" && (!printer || !isUsableOwnedPrinter(printer))) add("setup", printer ? "Review printer setup" : "Choose a printer", "Choose an owned printer with confirmed stock and exact product details before checking this build.");
+      if (project.bom.length > 0 && route === "undecided") add("setup", "Set build approach", "Choose how this project will be made when its requirements are known.");
+      if (project.bom.length > 0 && route === "printed" && (!printer || !isUsableOwnedPrinter(printer))) add("setup", printer ? "Review printer setup" : "Choose a printer", "Choose an owned printer with confirmed stock and exact product details before checking this build.");
       const currentWork = new Map((project.workItems ?? []).map((item) => [item.id, item.currentRevisionId ?? item.currentRevision?.id]));
       const hasDesign = (project.allArtifacts ?? project.artifacts).some((file) => ["STL", "STEP", "Build plate", "Editable CAD"].includes(file.role) && (file.workItemId ? Boolean(file.workItemRevisionId) && currentWork.get(file.workItemId) === file.workItemRevisionId : Boolean(project.serverRevisionId) && file.projectRevisionId === project.serverRevisionId));
-      if (route === "printed" && !hasDesign) add("files", "Add design files", "No design file is attached to a current project or work-item revision.");
+      if (project.bom.length > 0 && route === "printed" && !hasDesign) add("files", "Add design files", "No design file is attached to a current project or work-item revision.");
     }
     return { project, tasks, required, ready: unknown ? 0 : lines.filter((line) => line.decision === "ready").length, unknown };
   });

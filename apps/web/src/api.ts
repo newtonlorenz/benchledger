@@ -89,7 +89,7 @@ type ServerProject = { id: string; name: string; description?: string; status: s
 type ServerProjectTombstone = { id: string; name: string; removedAt: string; removedBy: string; lastLifecycleStatus: string; releasedReservationIds: string[]; version: number; auditId?: string };
 type ServerOffer = { id: string; itemId?: string; name: string; supplier: string; url: string; priceMinor: number; currency: CurrencyCode; packageQuantity?: number; observedAt: string; staleAfterDays?: number; version: number };
 type ServerWorkspace = { inventory: ServerInventoryItem[]; projects: ServerProject[]; offers: ServerOffer[]; source: "api"; fetchedAt: string; capabilities?: unknown };
-type ServerUploadSession = { id: string; artifactId: string; expiresAt: string; maxBytes: number; uploadUrl: string; status: "pending" | "finalized" | "expired" };
+type ServerUploadSession = { receivedBytes?: number; id: string; artifactId: string; expiresAt: string; maxBytes: number; uploadUrl: string; status: "pending" | "finalized" | "expired" };
 type ServerReconciliationEvidence = { state: string; source?: string; sourceId?: string; observedAt?: string; note?: string; condition?: string; uncertainty?: number };
 type ServerReconciliationConvertedAsset = { id?: string; name: string; kind: string; quantity: number; unit: string; location?: string; tags?: string[]; links?: unknown[]; evidence?: ServerReconciliationEvidence };
 type ServerReconciliationOutcome = { reservationId?: string; itemId?: string; kind: string; quantity: number; unit: string; evidence: ServerReconciliationEvidence; convertedAsset?: ServerReconciliationConvertedAsset };
@@ -264,7 +264,8 @@ export interface WorkspaceAdapter {
   loadWorkspace(): Promise<WorkspaceSnapshot>;
   listArchivedProjects(): Promise<Project[]>;
   refreshProjectReadiness(): Promise<Project[]>;
-  listInventory(query: InventoryListQuery): Promise<InventoryPage>;
+  listInventory(query: InventoryListQuery, options?: { signal?: AbortSignal }): Promise<InventoryPage>;
+  readInventoryItem(itemId: string, options?: { signal?: AbortSignal }): Promise<InventoryItem>;
   bulkUpdateInventory(input: InventoryBulkUpdateInput): Promise<InventoryBulkUpdateResult>;
   recordCount(itemId: string, quantity: number): Promise<InventoryItem>;
   commissionInventoryItem(itemId: string, input: InventoryCommissionInput, expectedVersion: number): Promise<InventoryItem>;
@@ -2178,7 +2179,7 @@ function reconciliationInitialModel(project: Project, reservations: readonly Ser
   };
 }
 
-export async function binaryRequest<T>(url: string, body: ArrayBuffer, csrfToken: string): Promise<T> {
+export async function binaryRequest<T>(url: string, body: ArrayBuffer, csrfToken: string, expectedOffset?: number): Promise<T> {
   const configuredRoot = apiRoot();
   const target = url.startsWith("http")
     ? url
@@ -2194,7 +2195,7 @@ export async function binaryRequest<T>(url: string, body: ArrayBuffer, csrfToken
   }
   let response: Response;
   try {
-    response = await fetch(target, { method: "PUT", body, credentials: "include", redirect: "error", headers: { "Accept": "application/json", "Content-Type": "application/octet-stream", "X-CSRF-Token": csrfToken } });
+    response = await fetch(target, { method: "PUT", body, credentials: "include", redirect: "error", signal: AbortSignal.timeout(120_000), headers: { "Accept": "application/json", "Content-Type": "application/octet-stream", "X-CSRF-Token": csrfToken, ...(expectedOffset === undefined ? {} : { "Upload-Offset": String(expectedOffset) }) } });
   } catch (error) {
     throw new ApiError(error instanceof Error ? error.message : "The BenchLedger service could not be reached", { kind: "offline" });
   }
@@ -2359,6 +2360,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     async listArchivedProjects() { return structuredClone(state.projects.filter((project) => project.status === "archived")); },
     async refreshProjectReadiness() { return structuredClone(state.projects); },
     async listInventory(query) { return sampleInventoryPage(state.inventory, query); },
+    async readInventoryItem(itemId) { const item = state.inventory.find((entry) => entry.id === itemId); if (!item) throw new ApiError("Inventory item not found", { kind: "validation", status: 404 }); return structuredClone(item); },
     async bulkUpdateInventory(input) {
       const prepared = prepareBulkInventoryInput(input);
       const currentById = new Map(state.inventory.map((item) => [item.id, item] as const));
@@ -2754,6 +2756,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
   const pendingBuildConfigCommands = new Map<string, PendingBuildConfigCommand>();
   const pendingBomRoleCommands = new Map<string, PendingBomRoleCommand>();
   const pendingProjectCommands = new Map<string, PendingProjectCommand>();
+  const pendingUploads = new Map<string, { beginKey: string; finalizeKey: string; body: string; session?: ServerUploadSession; bytesUploaded: boolean; byteWriteAttempted: boolean }>();
   const pendingProjectRemovalCommands = new Map<string, PendingProjectRemovalCommand>();
   const pendingExactInventoryCommands = new Map<string, PendingExactInventoryCommand>();
   const pendingInventoryCommands = new Map<string, PendingInventoryCommand>();
@@ -2764,6 +2767,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
   const pendingInspectionCompletionCommands = new Map<string, PendingInspectionCompletionCommand>();
   const pendingRequirementCommands = new Map<string, string>();
   const pendingProjectEdits = new Map<string, string>();
+  const pendingRevisionEdits = new Map<string, { key: string; body: ProjectRevisionUpdateInput }>();
   const retiredRequirementOwners = new Map<string, { projectId: string; revisionId: string; version: number }>();
   const confirmedRequirement = (payload: { data?: ServerBomLine }, revisionId: string, expectedId?: string): BomLine => {
     const saved = mutationData(payload);
@@ -2792,7 +2796,8 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
     if (operation === "restore" ? (retiredRequirementOwners.get(lineId)?.projectId !== projectId || retiredRequirementOwners.get(lineId)?.revisionId !== current.serverRevisionId) : !current.bom.some((line) => line.id === lineId)) throw new ApiError("Read this requirement in the selected project before changing it.", { kind: "validation", status: 409 });
     const body = input === undefined ? undefined : { ...(input.name === undefined ? {} : { name: input.name }), ...(input.requiredQuantity === undefined ? {} : { requiredQuantity: input.requiredQuantity }), ...(input.unit === undefined ? {} : { unit: input.unit === "g" ? "gram" : input.unit === "m" ? "metre" : input.unit }), ...(input.role === undefined ? {} : { role: input.role }), ...(input.itemId === undefined ? {} : { itemId: input.itemId }), ...(input.optional === undefined ? {} : { optional: input.optional }), ...(input.note === undefined ? {} : { notes: input.note }) };
     const commandId = JSON.stringify({ projectId, lineId, expectedVersion, operation, body });
-    const key = pendingRequirementCommands.get(commandId) ?? idempotencyKey("requirement");
+    const pending = pendingRequirementCommands.get(commandId);
+    const key = pending ?? idempotencyKey("requirement");
     pendingRequirementCommands.set(commandId, key);
     let line: BomLine;
     try {
@@ -2800,7 +2805,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       line = confirmedRequirement(result, current.serverRevisionId, lineId);
       pendingRequirementCommands.delete(commandId);
     } catch (error) {
-      if (!mutationFailureIsAmbiguous(error)) pendingRequirementCommands.delete(commandId);
+      if (pending === undefined && !mutationFailureIsAmbiguous(error)) pendingRequirementCommands.delete(commandId);
       throw error;
     }
     const latest = projectCache.get(projectId) ?? current;
@@ -2816,7 +2821,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       serverUnits.clear();
       inventoryCache.clear();
       projectCache.clear();
-      pendingRequirementCommands.clear(); pendingProjectEdits.clear(); retiredRequirementOwners.clear();
+      pendingRequirementCommands.clear(); pendingProjectEdits.clear(); pendingRevisionEdits.clear(); retiredRequirementOwners.clear();
     },
     async checkHealth() { health = await request<ServerHealth>("/health"); return health; },
     async getWorkspaceAccess() {
@@ -2979,7 +2984,14 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       refreshed.forEach((project) => projectCache.set(project.id, project));
       return refreshed;
     },
-    async listInventory(query) {
+    async readInventoryItem(itemId, options) {
+      const raw = await request<ServerInventoryItem>(`/inventory/${encodeURIComponent(itemId)}`, options?.signal ? { signal: options.signal } : undefined);
+      if (!raw || raw.id !== itemId || typeof raw.name !== "string" || !Number.isSafeInteger(raw.version)) throw new ApiError("The inventory item could not be confirmed. Retry loading its details.", { kind: "server", status: 502 });
+      const item = mapInventoryItem(raw);
+      if (!options?.signal?.aborted) { serverUnits.set(item.id, raw.unit); inventoryCache.set(item.id, item); }
+      return item;
+    },
+    async listInventory(query, options) {
       const params = new URLSearchParams();
       const normalizedQuery = query.q?.trim().slice(0, MAX_INVENTORY_SEARCH_LENGTH);
       if (normalizedQuery) params.set("q", normalizedQuery);
@@ -2993,7 +3005,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       if (query.unassigned !== undefined) params.set("unassigned", String(query.unassigned));
       params.set("limit", String(query.limit));
       if (query.cursor !== undefined) params.set("cursor", query.cursor);
-      const payload = await request<unknown>(`/inventory?${params.toString()}`);
+      const payload = await request<unknown>(`/inventory?${params.toString()}`, options?.signal ? { signal: options.signal } : undefined);
       const record = asRecord(payload);
       const rawData = record?.data;
       const values = Array.isArray(rawData) ? rawData : asRecord(rawData)?.data && Array.isArray(asRecord(rawData)?.data) ? asRecord(rawData)?.data as unknown[] : [];
@@ -3297,7 +3309,8 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       if (!token) throw new ApiError("Sign in again before editing the project.", { kind: "csrf", status: 403 });
       if (!current || current.status === "archived" || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1) throw new ApiError("Restore or reload this project before editing it.", { kind: "validation", status: 409 });
       const commandId = JSON.stringify({ projectId, input, expectedVersion });
-      const key = pendingProjectEdits.get(commandId) ?? idempotencyKey("project-edit");
+      const pending = pendingProjectEdits.get(commandId);
+      const key = pending ?? idempotencyKey("project-edit");
       pendingProjectEdits.set(commandId, key);
       try {
         const payload = await request<{ data: ServerProject }>(`/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", headers: { "If-Match": String(expectedVersion), "Idempotency-Key": key }, body: JSON.stringify(input) }, token);
@@ -3305,7 +3318,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         if (saved.id !== projectId || saved.version === undefined || !Number.isSafeInteger(saved.version) || saved.version < 1) throw new ApiError("The service did not confirm the project version. Reload before retrying.", { kind: "server", status: 502 });
         const project: Project = { ...current, name: saved.name, description: saved.description, status: saved.status, version: saved.version, updated: saved.updated };
         pendingProjectEdits.delete(commandId); projectCache.set(projectId, project); return project;
-      } catch (error) { if (!mutationFailureIsAmbiguous(error)) pendingProjectEdits.delete(commandId); throw error; }
+      } catch (error) { if (pending === undefined && !mutationFailureIsAmbiguous(error)) pendingProjectEdits.delete(commandId); throw error; }
     },
     async updateBomLine(projectId, lineId, input, expectedVersion) { return changeRequirement(projectId, lineId, expectedVersion, "update", input); },
     async retireBomLine(projectId, lineId, expectedVersion) { return changeRequirement(projectId, lineId, expectedVersion, "retire"); },
@@ -3387,6 +3400,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       try {
         const payload = await request<{ data: ServerRevision }>(`/projects/${encodeURIComponent(projectId)}/revisions`, { method: "POST", headers: { "Idempotency-Key": command.key }, body: JSON.stringify(command.body) }, token);
         const revision = mutationData(payload);
+        if (!revision.id?.trim() || revision.projectId !== projectId || !Number.isSafeInteger(revision.number) || revision.number < 1 || !Number.isSafeInteger(revision.version) || revision.version < 1) throw new ApiError("The service did not confirm the new revision. Retry unchanged.", { kind: "server", status: 502 });
         const project: Project = {
           ...withoutRevisionScopedProjectState(current),
           currentRevision: `r${String(revision.number).padStart(2, "0")}`,
@@ -3408,7 +3422,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         if (pendingRevisionCommands.get(commandId)?.key === command.key) pendingRevisionCommands.delete(commandId);
         return project;
       } catch (error: unknown) {
-        if (!mutationFailureIsAmbiguous(error) && pendingRevisionCommands.get(commandId)?.key === command.key) pendingRevisionCommands.delete(commandId);
+        if (pending === undefined && !mutationFailureIsAmbiguous(error) && pendingRevisionCommands.get(commandId)?.key === command.key) pendingRevisionCommands.delete(commandId);
         throw error;
       }
     },
@@ -3423,12 +3437,18 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         ...(input.fabricationRoute === undefined ? {} : { fabricationRoute: input.fabricationRoute }),
         ...(input.intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId: input.intendedPrinterItemId })
       };
+      const commandId = JSON.stringify({ revisionId, version, body });
+      const pending = pendingRevisionEdits.get(commandId);
+      const command = pending ?? { key: idempotencyKey("revision-approach"), body };
+      if (pending === undefined) pendingRevisionEdits.set(commandId, command);
+      try {
       const payload = await request<{ data?: ServerRevision }>(`/project-revisions/${encodeURIComponent(revisionId)}`, {
         method: "PATCH",
-        headers: { "If-Match": String(version), "Idempotency-Key": idempotencyKey("revision-approach") },
-        body: JSON.stringify(body)
+        headers: { "If-Match": String(version), "Idempotency-Key": command.key },
+        body: JSON.stringify(command.body)
       }, token);
       const revision = mutationData(payload);
+      if (revision.id !== revisionId || !Number.isSafeInteger(revision.version) || revision.version < 1) throw new ApiError("The service did not confirm the updated revision. Retry unchanged.", { kind: "server", status: 502 });
       const { fabricationRoute: _priorRoute, intendedPrinterItemId: _priorPrinter, serverRevisionVersion: _priorVersion, ...withoutApproach } = current;
       const updated: Project = {
         ...withoutApproach,
@@ -3437,7 +3457,12 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         ...(revision.version === undefined ? {} : { serverRevisionVersion: revision.version })
       };
       projectCache.set(updated.id, updated);
+      pendingRevisionEdits.delete(commandId);
       return updated;
+      } catch (error) {
+        if (pending === undefined && !mutationFailureIsAmbiguous(error)) pendingRevisionEdits.delete(commandId);
+        throw error;
+      }
     },
     async readReconciliation(projectId, revisionId) {
       const current = projectCache.get(projectId);
@@ -3613,10 +3638,8 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         && (current.buildConfigSnapshot.revisionId === projectRevisionId || current.buildConfigSnapshot.projectRevisionId === projectRevisionId)
         ? current.buildConfigSnapshot.id
         : undefined;
-      const beginPayload = await request<{ data: ServerUploadSession }>("/artifacts/uploads", {
-        method: "POST",
-        headers: { "Idempotency-Key": idempotencyKey("upload-begin") },
-        body: JSON.stringify({
+      const commandId = JSON.stringify([projectId, selectedTarget, role, file.name, file.type, file.size, sha256]);
+      const pending = pendingUploads.get(commandId) ?? { beginKey: idempotencyKey("upload-begin"), finalizeKey: idempotencyKey("upload-finalize"), bytesUploaded: false, byteWriteAttempted: false, body: JSON.stringify({
           projectId,
           ...(selectedTarget.kind === "project"
             ? { projectRevisionId: selectedTarget.projectRevisionId }
@@ -3628,19 +3651,53 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
           sha256,
           source: "web",
           ...(buildConfigurationSnapshotId === undefined ? {} : { buildConfigurationSnapshotId })
-        })
-      }, token);
-      const session = mutationData(beginPayload);
+        }) };
+      pendingUploads.set(commandId, pending);
+      if (!pending.session) {
+        const beginPayload = await request<{ data: ServerUploadSession }>("/artifacts/uploads", { method: "POST", redirect: "error", signal: AbortSignal.timeout(120_000), headers: { "Idempotency-Key": pending.beginKey }, body: pending.body }, token);
+        const session = mutationData(beginPayload);
+        if (!session || typeof session.id !== "string" || typeof session.artifactId !== "string" || typeof session.uploadUrl !== "string") throw new ApiError("The service did not confirm the upload session. Retry unchanged.", { kind: "server", status: 502 });
+        pending.session = session;
+      }
+      const session = pending.session;
       const uploadUrl = session.uploadUrl.startsWith("http") ? session.uploadUrl : session.uploadUrl.startsWith("/api/v1") ? session.uploadUrl : `${apiRoot()}${session.uploadUrl.startsWith("/") ? session.uploadUrl : `/${session.uploadUrl}`}`;
-      await binaryRequest(uploadUrl, bytes, token);
-      const finalizePayload = await request<{ data: ServerArtifact }>(`/artifacts/uploads/${encodeURIComponent(session.id)}/finalize`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey("upload-finalize") } }, token);
-      const artifact = mutationData(finalizePayload);
-      if (!current) throw new ApiError("The project is not available in this workspace snapshot", { kind: "validation", status: 409 });
-      const currentRevision = { id: current.serverRevisionId ?? "", projectId, number: Number.parseInt(current.currentRevision.replace(/\D/gu, ""), 10) || 1, name: current.currentRevision, status: "concept", createdAt: new Date().toISOString(), version: 1 };
-      const mappedArtifact = mapArtifact(artifact, selectedTarget.kind === "project" ? currentRevision : undefined, selectedTarget.kind === "project" ? { projectRevisionId: selectedTarget.projectRevisionId } : { workItemId: selectedTarget.workItemId, workItemRevisionId: selectedTarget.workItemRevisionId });
-      const project = { ...current, artifacts: selectedTarget.kind === "project" ? [mappedArtifact, ...current.artifacts] : current.artifacts, allArtifacts: [mappedArtifact, ...(current.allArtifacts ?? current.artifacts)] };
-      projectCache.set(projectId, project);
-      return project;
+      try {
+        if (!pending.bytesUploaded && session.status !== "finalized") {
+          let offset = 0;
+          if (pending.byteWriteAttempted) {
+            const progress = await request<ServerUploadSession>(`/artifacts/uploads/${encodeURIComponent(session.id)}`, { signal: AbortSignal.timeout(120_000), redirect: "error" });
+            if (progress.id !== session.id || progress.artifactId !== session.artifactId || !Number.isSafeInteger(progress.receivedBytes) || progress.receivedBytes! < 0 || progress.receivedBytes! > bytes.byteLength) throw new ApiError("The uploaded byte count could not be verified. Retry unchanged.", { kind: "server", status: 502 });
+            if (progress.status === "expired") throw new ApiError("The previous upload expired without being finalized. Retry the same file to begin a fresh upload.", { kind: "validation", status: 410, code: "upload_expired" });
+            offset = progress.status === "finalized" ? bytes.byteLength : progress.receivedBytes!;
+          }
+          if (offset < bytes.byteLength) {
+            pending.byteWriteAttempted = true;
+            await binaryRequest(uploadUrl, bytes.slice(offset), token, offset);
+          }
+          pending.bytesUploaded = true;
+        }
+        const finalizePayload = await request<{ data: ServerArtifact }>(`/artifacts/uploads/${encodeURIComponent(session.id)}/finalize`, { method: "POST", redirect: "error", signal: AbortSignal.timeout(120_000), headers: { "Idempotency-Key": pending.finalizeKey } }, token);
+        const artifact = mutationData(finalizePayload);
+        if (!artifact || artifact.id !== session.artifactId || artifact.projectId !== projectId) throw new ApiError("The service did not confirm the uploaded file. Retry unchanged.", { kind: "server", status: 502 });
+        if (!current) throw new ApiError("The project is not available in this workspace snapshot", { kind: "validation", status: 409 });
+        const currentRevision = { id: current.serverRevisionId ?? "", projectId, number: Number.parseInt(current.currentRevision.replace(/\D/gu, ""), 10) || 1, name: current.currentRevision, status: "concept", createdAt: new Date().toISOString(), version: 1 };
+        const mappedArtifact = mapArtifact(artifact, selectedTarget.kind === "project" ? currentRevision : undefined, selectedTarget.kind === "project" ? { projectRevisionId: selectedTarget.projectRevisionId } : { workItemId: selectedTarget.workItemId, workItemRevisionId: selectedTarget.workItemRevisionId });
+        const latest = projectCache.get(projectId) ?? current;
+        const project = { ...latest, artifacts: selectedTarget.kind === "project" ? [mappedArtifact, ...latest.artifacts.filter((entry) => entry.id !== artifact.id)] : latest.artifacts, allArtifacts: [mappedArtifact, ...(latest.allArtifacts ?? latest.artifacts).filter((entry) => entry.id !== artifact.id)] };
+        projectCache.set(projectId, project);
+        pendingUploads.delete(commandId);
+        return project;
+      } catch (error) {
+        // A byte-write state error may mean another attempt finalized this session.
+        // Release the command only after canonical metadata confirms it expired.
+        if (error instanceof ApiError && error.code === "upload_expired") {
+          try {
+            const progress = await request<ServerUploadSession>(`/artifacts/uploads/${encodeURIComponent(session.id)}`, { signal: AbortSignal.timeout(120_000), redirect: "error" });
+            if (progress.id === session.id && progress.artifactId === session.artifactId && progress.status === "expired") pendingUploads.delete(commandId);
+          } catch { /* Keep the original command when the authoritative read fails. */ }
+        }
+        throw error;
+      }
     }
   };
   return adapter;
@@ -3656,3 +3713,11 @@ export async function workflowRequest<T>(path: string, method: "GET" | "POST" | 
 export function workflowCommandKey(prefix: string): string { return idempotencyKey(prefix); }
 
 export function inventoryImageUrl(itemId: string, imageId: string): string { return `${apiRoot()}/inventory/${encodeURIComponent(itemId)}/images/${encodeURIComponent(imageId)}/content`; }
+
+/** Release only the reservation/version reviewed by the caller; preserve its command key on retry. */
+export async function releaseStockReservationRequest(id: string, expectedVersion: number, commandKey: string): Promise<unknown> {
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) throw new ApiError("Refresh stock set aside before releasing it.", { kind: "validation", status: 400 });
+  const csrf = cookieValue("forge_csrf");
+  if (!csrf) throw new ApiError("Sign in again before releasing stock.", { kind: "csrf", status: 403 });
+  return request(`/reservations/${encodeURIComponent(id)}/release`, { method: "POST", redirect: "error", signal: AbortSignal.timeout(120_000), headers: { "If-Match": String(expectedVersion), "Idempotency-Key": commandKey } }, csrf);
+}

@@ -23,7 +23,7 @@ describe("maker correction surfaces", () => {
   });
   it("keeps editing distinct from stock evidence and permanent deletion", () => {
     const html = renderToStaticMarkup(<RequirementEditForm line={line} items={inventory} onSave={async () => undefined} onRetire={async () => undefined} onClose={() => undefined} onBusy={() => undefined} />);
-    expect(html).toContain("Required quantity"); expect(html).toContain("No selected item"); expect(html).toContain("not proof of compatibility"); expect(html).toContain("Remove from plan"); expect(html).toContain("Restore it from Removed requirements");
+    expect(html).toContain("Required quantity"); expect(html).toContain("Already in your workshop?"); expect(html).toContain("not proof of compatibility"); expect(html).toContain("Remove from plan"); expect(html).toContain("Restore it from Removed requirements");
     const projectHtml = renderToStaticMarkup(<ProjectEditForm project={project} onSave={async () => undefined} onClose={() => undefined} onBusy={() => undefined} />);
     expect(projectHtml).toContain("Project stage"); expect(projectHtml).toContain("does not certify readiness");
   });

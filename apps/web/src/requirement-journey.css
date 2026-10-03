@@ -1,0 +1,18 @@
+.project-planning-details,
+.requirement-details { margin-block: 1rem; }
+.requirement-owned-options { margin-block: 1rem; }
+.requirement-owned-options h3 { margin-block: 0 .35rem; font-size: .95rem; }
+.requirement-candidates { display: grid; gap: .5rem; }
+.requirement-candidate { width: 100%; height: auto; min-height: 3rem; justify-content: space-between; padding: .7rem; text-align: left; white-space: normal; }
+.requirement-candidate > span:first-child { display: grid; gap: .2rem; min-width: 0; }
+.requirement-candidate small { color: var(--muted-foreground); font-size: .75rem; font-weight: normal; }
+.requirement-candidate[aria-pressed="true"] { border-color: var(--primary); background: var(--ui-accent); color: var(--accent-foreground); }
+.requirement-selection { padding: .6rem 0; font-size: .8rem; }
+.requirement-selection p { margin-block: .4rem; }
+.requirement-stock-reason { margin-block: .35rem; color: var(--muted-foreground); font-size: .78rem; line-height: 1.45; }
+@media (max-width: 600px) {
+  .form-row.requirement-quantity-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .dialog .form-row.requirement-quantity-row > .form-field:last-child { grid-column: auto; }
+  .requirement-quantity-row > * { min-width: 0; }
+  .requirement-quantity-row input, .requirement-quantity-row select { width: 100%; }
+}

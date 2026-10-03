@@ -200,7 +200,7 @@ test("completes the LAN-open to password and back access journey without exposin
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByLabel("Name", { exact: true }).fill("LAN-open write check");
   await page.getByRole("button", { name: "Add item", exact: true }).last().click();
-  await expect(page.getByText("LAN-open write check")).toBeVisible();
+  await expect(page.getByRole("dialog").getByRole("heading", { name: "LAN-open write check", exact: true })).toBeVisible();
   expect(harness.state()).toMatchObject({ mode: "lan_open", itemCount: 1 });
   await expect(page.locator("body")).not.toContainText("replacement-password");
 });

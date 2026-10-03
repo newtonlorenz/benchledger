@@ -25,10 +25,11 @@ test("home attention opens the selected stock check and leaves archive view", as
   expect(csrf).toBeTruthy();
   const seeded = await page.request.post("/api/v1/inventory", { headers: { "X-CSRF-Token": csrf! }, data: { name: "Polish uncertain connector", kind: "electronic", quantity: 1, unit: "each", tags: [], links: [], evidence: { state: "delivered_uncounted" } } });
   expect(seeded.status()).toBe(201); await page.reload(); await create(page, "Polish check pointer");
-  await page.locator(".bom-section").getByRole("button", { name: "Add first requirement", exact: true }).click();
+  await page.getByRole("region", { name: "Next project action" }).getByRole("button", { name: "Add first requirement", exact: true }).click();
   await page.getByLabel("What do you need?", { exact: true }).fill("Check connector");
-  const picker = page.getByLabel("Choose matching inventory", { exact: true });
-  const item = await picker.locator("option").filter({ hasText: "Polish uncertain connector" }).getAttribute("value"); await picker.selectOption(item!);
+  await page.getByRole("button", { name: "Find a different owned item" }).click();
+  await page.getByLabel("Search matching inventory").fill("Polish uncertain connector");
+  await page.getByRole("button", { name: "Choose owned item Polish uncertain connector", exact: true }).click();
   await page.getByRole("button", { name: "Add requirement", exact: true }).click();
   await page.getByRole("button", { name: /^Archived \(/u }).click(); await nav(page, "Workbench");
   const queue = page.getByRole("region", { name: "Workspace attention queue" }); await queue.getByRole("button", { name: "Stock checks", exact: true }).click();
@@ -40,7 +41,7 @@ test("home attention opens the selected stock check and leaves archive view", as
 test("build planning is a direct route and import opens an isolated dialog", async ({ page }) => {
   await login(page); await create(page, "Polish build route");
   await page.getByRole("tab", { name: "Build planning", exact: true }).click(); await expect(page).toHaveURL(/\/build$/u);
-  await expect(page.getByRole("heading", { name: "Parts and build plates", exact: true })).toBeVisible(); await page.reload();
+  await expect(page.getByRole("heading", { name: "Workstreams", exact: true })).toBeVisible(); await expect(page.getByRole("button", { name: /Parts and print plates/u })).toHaveAttribute("aria-expanded", "false"); await page.reload();
   await expect(page.getByRole("tab", { name: "Build planning", exact: true })).toHaveAttribute("aria-selected", "true");
   await page.getByRole("tab", { name: /^Plan/u }).click(); await page.getByRole("button", { name: "Import requirements from CSV", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Import requirements from CSV", exact: true })).toBeVisible(); await expect(page.locator(".app-background")).toHaveAttribute("aria-hidden", "true"); await expect(page.locator(".skip-link")).toHaveAttribute("inert", ""); await expect(page.getByLabel("Requirements CSV text", { exact: true })).toBeFocused();

@@ -1012,6 +1012,96 @@ fetchMock.mockResolvedValueOnce(jsonResponse({ data: serverRevision({ id: "revis
     });
   });
 
+  it.each(["begin", "bytes", "finalize"])("retries a lost upload %s response without creating another artifact", async (phase) => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-upload-retry" });
+    const session = { id: "upload-retry", artifactId: "artifact-1", expiresAt: "2026-10-03T23:00:00.000Z", maxBytes: 5, uploadUrl: "/api/v1/artifacts/uploads/upload-retry", status: "pending" };
+    let lost = false;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({ data: { project: serverProject(), revision: serverRevision() } })).mockImplementation(async (url, init) => {
+      if (!init?.method && String(url).endsWith("/upload-retry")) return jsonResponse({ ...session, receivedBytes: 5 });
+      const stage = String(url).endsWith("/finalize") ? "finalize" : init?.method === "PUT" ? "bytes" : "begin";
+      if (stage === phase && !lost) { lost = true; throw new TypeError("Response lost after commit"); }
+      return jsonResponse(stage === "begin" ? { data: session } : stage === "bytes" ? { receivedBytes: 5 } : { data: serverArtifact() });
+    });
+    const adapter = createWorkspaceAdapter();
+    await adapter.createProject({ name: "Upload recovery", description: "Synthetic" });
+    const file = new File(["solid"], "model.step", { type: "model/step" });
+    await expect(adapter.uploadArtifact("project-1", file, "STEP")).rejects.toMatchObject({ kind: "offline" });
+    const recovered = await adapter.uploadArtifact("project-1", file, "STEP");
+    expect(recovered.artifacts.filter((entry) => entry.id === "artifact-1")).toHaveLength(1);
+    const calls = fetchMock.mock.calls.slice(1);
+    const begin = calls.filter(([url]) => String(url).endsWith("/artifacts/uploads"));
+    const finalize = calls.filter(([url]) => String(url).endsWith("/finalize"));
+    expect(begin).toHaveLength(phase === "begin" ? 2 : 1);
+    expect(finalize).toHaveLength(phase === "finalize" ? 2 : 1);
+    for (const attempts of [begin, finalize]) expect(new Set(attempts.map(([, init]) => new Headers(init?.headers).get("idempotency-key"))).size).toBe(1);
+    await adapter.uploadArtifact("project-1", file, "STEP");
+    const newBegin = fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/artifacts/uploads")).at(-1);
+    expect(new Headers(newBegin?.[1]?.headers).get("idempotency-key")).not.toBe(new Headers(begin[0]?.[1]?.headers).get("idempotency-key"));
+  });
+
+  it.each([0, 2, 5])("resumes a lost byte response at canonical offset %s", async (receivedBytes) => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-resume" });
+    const session = { id: "resume", artifactId: "artifact-1", uploadUrl: "/api/v1/artifacts/uploads/resume", status: "pending" };
+    const calls: { offset: string | null; body: string }[] = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ data: { project: serverProject(), revision: serverRevision() } }))
+      .mockResolvedValueOnce(jsonResponse({ data: session }))
+      .mockRejectedValueOnce(new TypeError("Lost PUT acknowledgement"))
+      .mockImplementation(async (url, init) => {
+        if (!init?.method) return jsonResponse({ ...session, receivedBytes });
+        if (init.method === "PUT") { calls.push({ offset: new Headers(init.headers).get("Upload-Offset"), body: new TextDecoder().decode(init.body as ArrayBuffer) }); return jsonResponse({ receivedBytes: 5 }); }
+        return jsonResponse({ data: serverArtifact() });
+      });
+    const adapter = createWorkspaceAdapter(); await adapter.createProject({ name: "Resume", description: "Synthetic" });
+    const file = new File(["solid"], "model.step", { type: "model/step" });
+    await expect(adapter.uploadArtifact("project-1", file, "STEP")).rejects.toMatchObject({ kind: "offline" });
+    await expect(adapter.uploadArtifact("project-1", file, "STEP")).resolves.toMatchObject({ artifacts: [{ id: "artifact-1" }] });
+    expect(calls).toEqual(receivedBytes === 5 ? [] : [{ offset: String(receivedBytes), body: "solid".slice(receivedBytes) }]);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/artifacts/uploads"))).toHaveLength(1);
+  });
+
+  it("starts a fresh session only after canonical confirmation that the earlier upload expired", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-expired" });
+    const session = { id: "expired", artifactId: "artifact-1", uploadUrl: "/api/v1/artifacts/uploads/expired", status: "pending" };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ data: { project: serverProject(), revision: serverRevision() } }))
+      .mockResolvedValueOnce(jsonResponse({ data: session }))
+      .mockRejectedValueOnce(new TypeError("Lost PUT acknowledgement"))
+      .mockResolvedValueOnce(jsonResponse({ ...session, receivedBytes: 5, status: "expired" }))
+      .mockResolvedValueOnce(jsonResponse({ ...session, receivedBytes: 5, status: "expired" }))
+      .mockResolvedValueOnce(jsonResponse({ data: { ...session, id: "fresh", uploadUrl: "/api/v1/artifacts/uploads/fresh" } }))
+      .mockResolvedValueOnce(jsonResponse({ receivedBytes: 5 }))
+      .mockResolvedValueOnce(jsonResponse({ data: serverArtifact() }));
+    const adapter = createWorkspaceAdapter(); await adapter.createProject({ name: "Expiry", description: "Synthetic" });
+    const file = new File(["solid"], "model.step", { type: "model/step" });
+    await expect(adapter.uploadArtifact("project-1", file, "STEP")).rejects.toMatchObject({ kind: "offline" });
+    await expect(adapter.uploadArtifact("project-1", file, "STEP")).rejects.toMatchObject({ code: "upload_expired" });
+    await expect(adapter.uploadArtifact("project-1", file, "STEP")).resolves.toMatchObject({ artifacts: [{ id: "artifact-1" }] });
+    const begins = fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/artifacts/uploads"));
+    expect(begins).toHaveLength(2);
+    expect(new Set(begins.map(([, init]) => new Headers(init?.headers).get("idempotency-key"))).size).toBe(2);
+  });
+
+  it("retains a pending finalize key after a rejected recovery attempt", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-upload-rejected-retry" });
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ data: { project: serverProject(), revision: serverRevision() } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { id: "upload-retry", artifactId: "artifact-1", uploadUrl: "/api/v1/artifacts/uploads/upload-retry", status: "pending" } }))
+      .mockResolvedValueOnce(jsonResponse({ receivedBytes: 5 }))
+      .mockRejectedValueOnce(new TypeError("Lost finalize response"))
+      .mockResolvedValueOnce(jsonResponse({ error: { message: "Forbidden before replay" } }, 403))
+      .mockResolvedValueOnce(jsonResponse({ data: serverArtifact() }));
+    const adapter = createWorkspaceAdapter(); await adapter.createProject({ name: "Upload recovery", description: "Synthetic" });
+    const file = new File(["solid"], "model.step", { type: "model/step" });
+    await expect(adapter.uploadArtifact("project-1", file, "STEP")).rejects.toMatchObject({ kind: "offline" });
+    await expect(adapter.uploadArtifact("project-1", file, "STEP")).rejects.toMatchObject({ status: 403 });
+    await expect(adapter.uploadArtifact("project-1", file, "STEP")).resolves.toMatchObject({ artifacts: [{ id: "artifact-1" }] });
+    const finalizes = fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/finalize"));
+    expect(finalizes).toHaveLength(3);
+    expect(new Set(finalizes.map(([, init]) => new Headers(init?.headers).get("idempotency-key"))).size).toBe(1);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/artifacts/uploads"))).toHaveLength(1);
+  });
+
   it("uploads an artifact with a browser hash and finalizes the server candidate", async () => {
     vi.stubGlobal("document", { cookie: "forge_csrf=csrf-upload" });
     const fetchMock = vi.spyOn(globalThis, "fetch")
@@ -1851,4 +1941,57 @@ describe("inventory deletion", () => {
     await adapter.deleteInventoryItem(item.id, item.version!);
     expect((await adapter.loadWorkspace()).inventory.some((entry) => entry.id === item.id)).toBe(false);
   });
+});
+
+
+it("retains a requirement correction key across a lost acknowledgement and rejected retry", async () => {
+  vi.stubGlobal("document", { cookie: "forge_csrf=synthetic-requirement-csrf" });
+  const line = { id: "line-1", revisionId: "revision-1", name: "Synthetic bracket", role: "consumed", requiredQuantity: 1, unit: "each", optional: false, constraints: {}, alternatives: [], createdAt: "2026-10-03T00:00:00.000Z", updatedAt: "2026-10-03T00:00:00.000Z", version: 1 };
+  const fetch = vi.spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "test", demo: false, now: "2026-10-03T00:00:00.000Z" }))
+    .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "synthetic", scopes: ["read", "write"] }))
+    .mockResolvedValueOnce(jsonResponse({ source: "api", fetchedAt: "2026-10-03T00:00:00.000Z", inventory: [], projects: [serverProject({ currentRevision: serverRevision({ bom: [line] }) })], offers: [] }))
+    .mockRejectedValueOnce(new TypeError("Synthetic response lost after commit"))
+    .mockResolvedValueOnce(jsonResponse({ error: { message: "Synthetic permission refusal" } }, 403))
+    .mockResolvedValueOnce(jsonResponse({ data: { ...line, requiredQuantity: 2, version: 2 } }))
+    .mockResolvedValueOnce(jsonResponse({ revisionId: "revision-1", lines: [], totals: { requiredLines: 0, optionalLines: 0, partialLines: 0, missingLines: 0 } }));
+  const adapter = createWorkspaceAdapter(); await adapter.loadWorkspace();
+  await expect(adapter.updateBomLine("project-1", "line-1", { requiredQuantity: 2 }, 1)).rejects.toMatchObject({ kind: "offline" });
+  await expect(adapter.updateBomLine("project-1", "line-1", { requiredQuantity: 2 }, 1)).rejects.toMatchObject({ status: 403 });
+  await expect(adapter.updateBomLine("project-1", "line-1", { requiredQuantity: 2 }, 1)).resolves.toMatchObject({ bom: [{ required: 2, version: 2 }] });
+  const writes = fetch.mock.calls.filter(([, options]) => options?.method === "PATCH");
+  expect(writes).toHaveLength(3);
+  const keys = writes.map(([, options]) => new Headers(options?.headers).get("Idempotency-Key"));
+  expect(keys[0]).toBeTruthy(); expect(new Set(keys).size).toBe(1);
+  for (const [, options] of writes) { expect(new Headers(options?.headers).get("If-Match")).toBe("1"); expect(JSON.parse(String(options?.body))).toEqual({ requiredQuantity: 2 }); }
+});
+
+for (const operation of ["project edit", "revision create", "build approach", "malformed build approach", "malformed revision create"] as const) {
+  it(`keeps the ${operation} request key and body after an ambiguous response followed by a rejected retry`, async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=synthetic-primary-retry" });
+    const response = operation === "project edit" ? serverProject({ name: "Original correction", version: 2 }) : serverRevision({ id: operation.includes("revision create") ? "revision-2" : "revision-1", number: operation.includes("revision create") ? 2 : 1, version: 2, fabricationRoute: "none" });
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", service: "benchledger", version: "test", demo: false }))
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", scopes: ["read", "write"] }))
+      .mockResolvedValueOnce(jsonResponse({ source: "api", fetchedAt: "2026-08-30T10:00:00Z", inventory: [], projects: [serverProject({ currentRevision: serverRevision() })], offers: [] }))
+      .mockImplementationOnce(async () => { if (operation.startsWith("malformed")) return jsonResponse({ data: { id: "revision-1" } }); throw new TypeError("Synthetic lost response"); })
+      .mockResolvedValueOnce(jsonResponse({ error: { message: "Synthetic retry rejected" } }, 409))
+      .mockResolvedValueOnce(jsonResponse({ data: response }));
+    const adapter = createWorkspaceAdapter(); await adapter.loadWorkspace();
+    const save = () => operation === "project edit" ? adapter.updateProject("project-1", { name: "Original correction", description: "Synthetic", status: "planned" }, 1) : operation.includes("revision create") ? adapter.createRevision("project-1", { name: "Original revision", status: "concept", notes: "Synthetic retained notes", fabricationRoute: "none" }) : adapter.updateProjectRevision("revision-1", { fabricationRoute: "none", intendedPrinterItemId: null }, 1);
+    await expect(save()).rejects.toMatchObject({ kind: operation.startsWith("malformed") ? "server" : "offline" });
+    await expect(save()).rejects.toMatchObject({ status: 409 });
+    await save();
+    const calls = fetchMock.mock.calls.slice(-3).map(([, init]) => ({ key: new Headers(init?.headers).get("idempotency-key"), body: init?.body, version: new Headers(init?.headers).get("if-match") }));
+    expect(calls[0]!.key).toBeTruthy();expect(calls[1]).toEqual(calls[0]);expect(calls[2]).toEqual(calls[0]);
+  });
+}
+
+it("reads one normalized referenced inventory item with cancellation and exact server identity", async () => {
+  const controller = new AbortController();
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse(serverItem({ id: "remote-item", unit: "gram", kind: "filament", quantity: 500, availableQuantity: 320 })));
+  const result = await createWorkspaceAdapter().readInventoryItem("remote-item", { signal: controller.signal });
+  expect(result).toMatchObject({ id: "remote-item", unit: "g", quantity: 500, availableQuantity: 320 });
+  expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/inventory/remote-item");
+  expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
 });

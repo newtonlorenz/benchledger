@@ -161,9 +161,8 @@ describe("artifact scope selection", () => {
       renderToStaticMarkup(<NewRevisionDialog project={project} items={inventory} expert={false} onClose={() => undefined} onCreate={async () => true} />),
       renderToStaticMarkup(<EditBuildApproachDialog project={project} items={inventory} expert={false} onClose={() => undefined} onSave={async () => true} />),
     ];
-    for (const markup of markups) {
-      expect(markup).toContain("build anything");
-      expect(markup).not.toContain("fabricate");
-    }
+    expect(markups[0]).toContain("This records a plan; it does not reserve stock.");
+    for (const markup of markups.slice(1)) expect(markup).toContain("build anything");
+    for (const markup of markups) expect(markup).not.toContain("fabricate");
   });
 });

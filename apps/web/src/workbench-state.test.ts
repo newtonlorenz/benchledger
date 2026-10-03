@@ -14,6 +14,15 @@ describe("workbench task model", () => {
     expect(rows[1]!.tasks).toEqual([]);
     expect(rows[2]!.tasks.map((task) => task.kind)).toEqual(["requirements"]);
   });
+  it("prioritises first requirements and stock decisions before deferred build setup", () => {
+    const empty = project("empty-idea", { bom: [], fabricationRoute: "undecided" });
+    delete empty.gapEvaluation;
+    expect(deriveHomeProjects([empty], inventory)[0]!.tasks.map((task) => task.kind)).toEqual(["requirements"]);
+    const missing = project("missing-part", { fabricationRoute: "undecided", bom: [{ id: "new-line", version: 1, label: "Synthetic unmatched bracket", required: 1, unit: "each", role: "consumed" }] });
+    delete missing.gapEvaluation;
+    expect(deriveHomeProjects([missing], inventory)[0]!.tasks.map((task) => task.kind)).toEqual(["source", "setup"]);
+    expect(deriveHomeProjects([{ ...missing, readinessUnavailable: true }], inventory)[0]!.tasks.map((task) => task.kind)).toEqual(["refresh", "setup"]);
+  });
   it("counts required lines rather than implying a validated physical build", () => {
     const source = project("required", { fabricationRoute: "none", bom: [{ id: "missing", version: 1, label: "Spacer", required: 2, unit: "each", role: "consumed", optional: true }], readinessUnavailable: false });
     delete source.gapEvaluation;

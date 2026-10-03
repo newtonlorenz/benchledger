@@ -6,7 +6,7 @@ import { NativeSelect, NativeSelectOption } from "./components/ui/native-select"
 import { Disclosure, DisclosureTrigger, DisclosureContent } from "./components/ui/disclosure";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
-import { useEffect, useId, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useId, useMemo, useState } from "react";
 import type { FormEvent, KeyboardEvent, ReactNode } from "react";
 import type {
   BuildConfigInput,
@@ -18,7 +18,7 @@ import type {
   LinkState
 } from "./domain";
 import { buildSetupSummary, catalogProductLabel, exactProductLabel, isExactProductIdentityComplete, isUnknownFilamentSelection } from "./domain";
-import type { CatalogProductDraft, CatalogProductPage, CatalogSearchOptions, ExactInventoryInput } from "./api";
+import type { InventoryPage, CatalogProductDraft, CatalogProductPage, CatalogSearchOptions, ExactInventoryInput } from "./api";
 import { Icon } from "./icons";
 import { inventoryCandidateLabel, inventoryCandidateText } from "./inventory-identity";
 
@@ -461,18 +461,35 @@ export function buildFilamentSelection(item: InventoryItem): BuildFilamentSelect
   return { itemId: item.id, catalogIdentityState: "unknown" };
 }
 
+export type OwnedInventorySearch = (category: "Printers" | "Filament", query: string, signal: AbortSignal) => Promise<InventoryPage>;
+export const OwnedInventorySearchContext = createContext<OwnedInventorySearch | undefined>(undefined);
+
 export interface OwnedItemComboboxProps {
   category: "Printers" | "Filament";
+  candidateFilter?: ((item: InventoryItem) => boolean) | undefined;
   items: InventoryItem[];
   value?: InventoryItem | undefined;
   onSelect: (item: InventoryItem | undefined) => void; onResolveItem?: ((item: InventoryItem) => void) | undefined; label: string; helper?: string; showInitialChoices?: boolean; }
 
-export function OwnedItemCombobox({ category, items, value, onSelect, onResolveItem, label, helper, showInitialChoices = false }: OwnedItemComboboxProps) {
+export function OwnedItemCombobox({ category, items, value, onSelect, onResolveItem, label, helper, showInitialChoices = false, candidateFilter }: OwnedItemComboboxProps) {
  const [query,setQuery] = useState("");
- const candidates = items.filter(item => item.category === category && (!query.trim() || inventoryCandidateText(item,items).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())));
+ const search = useContext(OwnedInventorySearchContext);
+ const [page,setPage] = useState<InventoryPage>();
+ const [loading,setLoading] = useState(false);
+ const [error,setError] = useState(false);
+ const [retry,setRetry] = useState(0);
+ useEffect(() => {
+   if (!search) return;
+   let active = true; const controller = new AbortController();
+   setLoading(true); setError(false); setPage(undefined);
+   const timer = setTimeout(() => { void search(category, query.trim().slice(0,200), controller.signal).then(result => { if (active) setPage(result); }).catch(() => { if (active) setError(true); }).finally(() => { if (active) setLoading(false); }); }, 250);
+   return () => { active = false; clearTimeout(timer); controller.abort(); };
+ }, [search,category,query,retry]);
+ const candidates = (page?.items ?? items).filter(item => item.category === category && !item.tags.includes("retired") && (!candidateFilter || candidateFilter(item)) && (page !== undefined || !query.trim() || inventoryCandidateText(item,items).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())));
+ const lookupStatus = <>{loading && <p role="status" className="form-hint">Searching owned inventory…</p>}{error && <div role="alert"><p>Owned inventory search is unavailable. Loaded suggestions are still shown.</p><Button variant="outline" type="button" onClick={() => setRetry(value => value + 1)}>Retry owned inventory search</Button></div>}{page && <p className="form-hint">{candidates.length} selectable {category === "Printers" ? "printers" : "filament items"} shown from {page.total} inventory matches.{page.nextCursor ? " Refine the search to find another item." : ""} Eligibility checks still apply.</p>}</>;
  const choose = (item: InventoryItem) => { onSelect(item); setQuery(""); };
  const eligibility = value ? buildItemEligibility(value,category) : undefined;
- return <div className="catalog-combobox owned-combobox"><SearchCombobox label={label} value={value ? ownedItemLabel(value,items) : query} onValueChange={next => { if (value) onSelect(undefined); setQuery(next); }} placeholder={`Choose an owned ${category === "Printers" ? "printer" : "filament"}`} options={candidates.map(item => ({ id:item.id, content:<span><strong>{ownedItemLabel(item,items)}</strong><small>{item.quantity.toLocaleString()} {item.unit} · {exactProductLabel(item)} · {buildItemEligibility(item,category).eligible ? "Eligible" : "Needs details"}</small></span> }))} onSelect={id => { const item=candidates.find(item=>item.id===id); if(item)choose(item); }} empty={`No owned ${category === "Printers" ? "printers" : "filament"} match that search.`}/>{helper && <small className="form-field-help">{helper}</small>}{showInitialChoices && !value && !query.trim() && <div className="owned-quick-choices" aria-label={`${label} quick choices`}>{candidates.slice(0,4).map(item=><Button variant="ghost" type="button" className="owned-quick-choice" key={item.id} onClick={()=>choose(item)}><strong>{ownedItemLabel(item,items)}</strong><small>{ownedPrinterVolumeLabel(item) ?? exactProductLabel(item)}</small></Button>)}</div>}{value && <div className="catalog-selected"><span className="catalog-selected-label">Owned item</span><strong>{ownedItemLabel(value,items)}</strong><small>{value.catalogProduct ? exactProductLabel(value) : category === "Printers" ? "Printer model not recorded" : "Filament details not recorded"}</small>{eligibility && !eligibility.eligible && <Alert><span>{category === "Printers" ? "Add the exact printer model and variant." : eligibility.reason}</span>{category === "Printers" && onResolveItem && <Button variant="ghost" type="button" className="text-button" onClick={()=>onResolveItem(value)}>Add printer details</Button>}</Alert>}</div>}</div>;
+ return <div className="catalog-combobox owned-combobox"><SearchCombobox label={label} value={value ? ownedItemLabel(value,items) : query} onValueChange={next => { if (value) onSelect(undefined); setQuery(next); }} placeholder={`Choose an owned ${category === "Printers" ? "printer" : "filament"}`} loading={loading} options={candidates.map(item => ({ id:item.id, content:<span><strong>{ownedItemLabel(item,items)}</strong><small>{item.quantity.toLocaleString()} {item.unit} · {exactProductLabel(item)} · {buildItemEligibility(item,category).eligible ? "Eligible" : "Needs details"}</small></span> }))} onSelect={id => { const item=candidates.find(item=>item.id===id); if(item)choose(item); }} empty={error ? "Search unavailable; retry to check other owned items." : `No selectable ${category === "Printers" ? "printers" : "filament"} in these results.`}/>{lookupStatus}{helper && <small className="form-field-help">{helper}</small>}{showInitialChoices && !value && !query.trim() && <div className="owned-quick-choices" aria-label={`${label} quick choices`}>{candidates.slice(0,4).map(item=><Button variant="ghost" type="button" className="owned-quick-choice" key={item.id} onClick={()=>choose(item)}><strong>{ownedItemLabel(item,items)}</strong><small>{ownedPrinterVolumeLabel(item) ?? exactProductLabel(item)}</small></Button>)}</div>}{value && <div className="catalog-selected"><span className="catalog-selected-label">Owned item</span><strong>{ownedItemLabel(value,items)}</strong><small>{value.catalogProduct ? exactProductLabel(value) : category === "Printers" ? "Printer model not recorded" : "Filament details not recorded"}</small>{eligibility && !eligibility.eligible && <Alert><span>{category === "Printers" ? "Add the exact printer model and variant." : eligibility.reason}</span>{category === "Printers" && onResolveItem && <Button variant="ghost" type="button" className="text-button" onClick={()=>onResolveItem(value)}>Add printer details</Button>}</Alert>}</div>}</div>;
 }
 
 export interface SetupSummaryProps {
@@ -540,6 +557,7 @@ export function BuildSetupSummary({ input, printer, filament, expert, heading = 
 
 export interface CatalogInventoryFlowProps {
   category: "Printers" | "Filament";
+  onDraftChange?: (state: { dirty: boolean; busy: boolean }) => void;
   products: CatalogProduct[];
   query: string;
   onQueryChange: (query: string) => void;
@@ -548,7 +566,7 @@ export interface CatalogInventoryFlowProps {
   onCreateProduct: (input: CatalogProductDraft) => Promise<CatalogProduct | undefined>;
   onCreate: (input: ExactInventoryInput) => Promise<boolean>; onAddManually?: () => void; existingItem?: InventoryItem; }
 
-export function CatalogInventoryFlow({ category, products, query, onQueryChange, onSearch, onSearchPage, onCreateProduct, onCreate, onAddManually, existingItem }: CatalogInventoryFlowProps) {
+export function CatalogInventoryFlow({ onDraftChange, category, products, query, onQueryChange, onSearch, onSearchPage, onCreateProduct, onCreate, onAddManually, existingItem }: CatalogInventoryFlowProps) {
   const kind: CatalogKind = category === "Filament" ? "filament" : "printer";
   const [selected, setSelected] = useState<CatalogProduct>();
   const [completeProducts, setCompleteProducts] = useState<CatalogProduct[]>(products);
@@ -568,6 +586,10 @@ export function CatalogInventoryFlow({ category, products, query, onQueryChange,
   const [commissionedAt, setCommissionedAt] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string>();
+  const [creatingProduct, setCreatingProduct] = useState(false);
+  const dirty = Boolean(selected || query.trim() || showCreate || lotBatch || openedAt || tareMass || placement || assetLabel || commissionedAt || linkState !== "reported" || spoolState !== "sealed" || quantity !== (existingItem ? String(existingItem.quantity) : category === "Filament" ? "" : "1"));
+  useEffect(() => { onDraftChange?.({ dirty, busy: submitting || creatingProduct }); }, [dirty, submitting, creatingProduct, onDraftChange]);
+  useEffect(() => () => { onDraftChange?.({ dirty: false, busy: false }); }, [onDraftChange]);
 
   useEffect(() => {
     const reset = resetCatalogKindState();
@@ -627,9 +649,12 @@ export function CatalogInventoryFlow({ category, products, query, onQueryChange,
   };
 
   const createProduct = async (input: CatalogProductDraft) => {
-    const product = await onCreateProduct(input);
-    if (product) selectProduct(product);
-    return product;
+    setCreatingProduct(true);
+    try {
+      const product = await onCreateProduct(input);
+      if (product) selectProduct(product);
+      return product;
+    } finally { setCreatingProduct(false); }
   };
 
   const submit = async (event: FormEvent) => {
@@ -670,12 +695,10 @@ export function CatalogInventoryFlow({ category, products, query, onQueryChange,
   const activeSelected = selected?.kind === kind ? selected : undefined;
   const submitLabel = existingItem ? existingItem.productProfile ? "Change exact product" : "Link exact product" : `Add ${category === "Filament" ? "filament spool" : "printer"}`; const facetProducts = completeProductsLoaded || completeProducts.length === 0 ? completeProducts : products;
   const noSearchResults = !activeSelected && query.trim() && !loading && products.length === 0 && !showCreate;
-  return ( <div className="catalog-inventory-flow"><CatalogFacetPicker key={kind} kind={kind} products={facetProducts.length ? facetProducts : products} selected={activeSelected} partial={completeProductsPartial} partialCount={completeProducts.length} partialReason={completeProductsPartialReason} onSelect={selectProduct} onAddUnlisted={() => setShowCreate(true)} /><div className="catalog-search-divider"><span>or search by name / code</span></div><CatalogCombobox key={kind} kind={kind} products={products} query={query} selected={activeSelected} onQueryChange={onQueryChange} onSelect={selectProduct} label={`Exact ${category === "Filament" ? "filament product" : "printer model"}`} loading={loading} hint="Search the local catalog. A catalog match does not indicate ownership, available stock, or compatibility." />{noSearchResults && ( <div className="catalog-no-results"><p>
+  return ( <div className="catalog-inventory-flow"><CatalogCombobox key={kind} kind={kind} products={products} query={query} selected={activeSelected} onQueryChange={onQueryChange} onSelect={selectProduct} label={`Exact ${category === "Filament" ? "filament product" : "printer model"}`} loading={loading} hint="Search by name or product code. If you cannot identify it yet, add the details you know." /><Disclosure className="catalog-browse-details"><DisclosureTrigger>Find by product details</DisclosureTrigger><DisclosureContent><CatalogFacetPicker key={kind} kind={kind} products={facetProducts.length ? facetProducts : products} selected={activeSelected} partial={completeProductsPartial} partialCount={completeProducts.length} partialReason={completeProductsPartialReason} onSelect={selectProduct} onAddUnlisted={() => setShowCreate(true)} /></DisclosureContent></Disclosure>{onAddManually && !activeSelected && !showCreate && <Button variant="ghost" type="button" className="button button-quiet" onClick={onAddManually}>Add details myself</Button>}{noSearchResults && ( <div className="catalog-no-results"><p>
             No exact product found. Add it to the catalog, or record the
             physical item now and confirm its exact details later.
-          </p><div className="dialog-actions"> <Button variant="outline" type="button" className="button button-secondary" onClick={() => setShowCreate(true)}><Icon name="plus" size={15} /> Add product</Button> {onAddManually && ( <Button variant="ghost" type="button" className="button button-quiet" onClick={onAddManually} >
-                Add details myself
-              </Button> )} </div> </div> )}{showCreate && ( <CatalogProductCreateForm kind={kind} onCreate={createProduct} onCancel={() => setShowCreate(false)} /> )}{activeSelected && ( <form className="exact-inventory-form" onSubmit={(event) => { void submit(event); }}><div className="exact-product-card"><span className="eyebrow">Exact product selected</span><strong>{catalogProductDisplayName(activeSelected)}</strong><small>{productDetailLine(activeSelected) || "Product details not recorded yet"}</small></div><div className="form-row"><Label className="form-field"><span>{existingItem ? "Recorded quantity (unchanged)" : category === "Filament" ? "Current mass (g)" : "Owned units"}</span><Input type="number" min="0.01" step="any" required value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={submitting || Boolean(existingItem)} /></Label><Label className="form-field"><span>Link state</span><NativeSelect value={linkState} onChange={(event) => setLinkState(event.target.value as LinkState)} disabled={submitting}><NativeSelectOption value="reported">Reported (check later)</NativeSelectOption><NativeSelectOption value="confirmed">Confirmed exact product</NativeSelectOption></NativeSelect></Label></div>{category === "Filament" ? ( <div className="physical-profile-grid"><Label className="form-field"><span>Lot / batch <small>(optional)</small></span><Input value={lotBatch} onChange={(event) => setLotBatch(event.target.value)} placeholder="Printed spool lot" disabled={submitting} /></Label><Label className="form-field"><span>Spool state</span><NativeSelect value={spoolState} onChange={(event) => setSpoolState(event.target.value as "sealed" | "opened")} disabled={submitting}><NativeSelectOption value="sealed">Sealed</NativeSelectOption><NativeSelectOption value="opened">Opened</NativeSelectOption></NativeSelect></Label>{spoolState === "opened" && ( <Label className="form-field"><span>Opened date</span><Input type="date" value={openedAt} onChange={(event) => setOpenedAt(event.target.value)} disabled={submitting} /></Label> )}<Label className="form-field"><span>Tare mass (g) <small>(optional)</small></span><Input type="number" min="0" step="any" value={tareMass} onChange={(event) => setTareMass(event.target.value)} placeholder="Empty spool weight" disabled={submitting} /></Label><Label className="form-field"><span>Current placement <small>(optional)</small></span><Input value={placement} onChange={(event) => setPlacement(event.target.value)} placeholder="Shelf / AMS slot" disabled={submitting} /></Label></div> ) : ( <div className="physical-profile-grid"><Label className="form-field"><span>Asset label <small>(optional)</small></span><Input value={assetLabel} onChange={(event) => setAssetLabel(event.target.value)} placeholder="e.g. PRINT-01" disabled={submitting} /></Label><Label className="form-field"><span>
+          </p><div className="dialog-actions"> <Button variant="outline" type="button" className="button button-secondary" onClick={() => setShowCreate(true)}><Icon name="plus" size={15} /> Add product</Button> </div> </div> )}{showCreate && ( <CatalogProductCreateForm kind={kind} onCreate={createProduct} onCancel={() => setShowCreate(false)} /> )}{activeSelected && ( <form className="exact-inventory-form" onSubmit={(event) => { void submit(event); }}><div className="exact-product-card"><span className="eyebrow">Exact product selected</span><strong>{catalogProductDisplayName(activeSelected)}</strong><small>{productDetailLine(activeSelected) || "Product details not recorded yet"}</small></div><div className="form-row"><Label className="form-field"><span>{existingItem ? "Recorded quantity (unchanged)" : category === "Filament" ? "Current mass (g)" : "Owned units"}</span><Input type="number" min="0.01" step="any" required value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={submitting || Boolean(existingItem)} /></Label><Label className="form-field"><span>Product identity</span><NativeSelect value={linkState} onChange={(event) => setLinkState(event.target.value as LinkState)} disabled={submitting}><NativeSelectOption value="reported">Not checked yet</NativeSelectOption><NativeSelectOption value="confirmed">I checked the exact product</NativeSelectOption></NativeSelect></Label></div>{category === "Filament" ? ( <div className="physical-profile-grid"><Label className="form-field"><span>Lot / batch <small>(optional)</small></span><Input value={lotBatch} onChange={(event) => setLotBatch(event.target.value)} placeholder="Printed spool lot" disabled={submitting} /></Label><Label className="form-field"><span>Spool state</span><NativeSelect value={spoolState} onChange={(event) => setSpoolState(event.target.value as "sealed" | "opened")} disabled={submitting}><NativeSelectOption value="sealed">Sealed</NativeSelectOption><NativeSelectOption value="opened">Opened</NativeSelectOption></NativeSelect></Label>{spoolState === "opened" && ( <Label className="form-field"><span>Opened date</span><Input type="date" value={openedAt} onChange={(event) => setOpenedAt(event.target.value)} disabled={submitting} /></Label> )}<Label className="form-field"><span>Tare mass (g) <small>(optional)</small></span><Input type="number" min="0" step="any" value={tareMass} onChange={(event) => setTareMass(event.target.value)} placeholder="Empty spool weight" disabled={submitting} /></Label><Label className="form-field"><span>Current placement <small>(optional)</small></span><Input value={placement} onChange={(event) => setPlacement(event.target.value)} placeholder="Shelf / AMS slot" disabled={submitting} /></Label></div> ) : ( <div className="physical-profile-grid"><Label className="form-field"><span>Asset label <small>(optional)</small></span><Input value={assetLabel} onChange={(event) => setAssetLabel(event.target.value)} placeholder="e.g. PRINT-01" disabled={submitting} /></Label><Label className="form-field"><span>
                   Setup date <small>(optional)</small></span><Input type="date" value={commissionedAt} onChange={(event) => setCommissionedAt(event.target.value)} disabled={submitting} /></Label><Label className="form-field"><span>Current placement <small>(optional)</small></span><Input value={placement} onChange={(event) => setPlacement(event.target.value)} placeholder="Print room" disabled={submitting} /></Label></div> )}<p className={`link-state-note ${linkState === "confirmed" ? "is-confirmed" : ""}`}><Icon name={linkState === "confirmed" ? "check-circle" : "info"} size={15} />{confirmation}</p>{formError && ( <Alert asChild><p className="form-error" role="alert">{formError}</p></Alert> )}<div className="dialog-actions"><Button variant="ghost" type="button" className="button button-quiet" onClick={() => setSelected(undefined)} disabled={submitting}>Change product</Button><Button variant="default" type="submit" className="button button-primary" disabled={submitting}>{submitting ? "Saving…" : submitLabel}<Icon name="plus" size={16} /></Button></div></form> )}</div> );
 }
 
