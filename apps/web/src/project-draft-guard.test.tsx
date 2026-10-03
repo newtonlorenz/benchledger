@@ -107,3 +107,14 @@ it("locks the printer picker while project creation is pending and unconfirmed",
   expect(fieldset.hasAttribute("inert")).toBe(true);
   expect(picker.matches(":disabled")).toBe(true);
 });
+
+it("does not warn about a hidden printer after returning a blank project to undecided", async () => {
+  render(<DraftHarness kind="project" />);
+  fireEvent.click(screen.getByRole("radio", { name: /3D-print parts/i }));
+  fireEvent.click(document.querySelector<HTMLButtonElement>(".owned-quick-choice")!);
+  expect(screen.getByText("Owned item")).toBeTruthy();
+  fireEvent.click(screen.getByRole("radio", { name: /Decide later/i }));
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(screen.queryByRole("dialog")).toBeNull();
+});

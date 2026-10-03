@@ -2331,7 +2331,7 @@ function InventoryMutationReviewDialog({ item, review, saving, onClose, onConfir
   const [formError, setFormError] = useState<string>();
   const [unconfirmed, setUnconfirmed] = useState(false);
   const pendingCreate = useRef<ProjectCreateInput | undefined>(undefined);
-  useUnsavedWork(Boolean(name || description || fabricationRoute !== "undecided" || printer), "new project", submitting || unconfirmed);
+  useUnsavedWork(Boolean(name || description || fabricationRoute !== "undecided"), "new project", submitting || unconfirmed);
   if (suspended) return null;
   const printers = items.filter(isUsableOwnedPrinter); const submit = async (event: FormEvent) => {
     event.preventDefault();
