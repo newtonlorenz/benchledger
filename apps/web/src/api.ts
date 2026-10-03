@@ -2767,6 +2767,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
   const pendingInspectionCompletionCommands = new Map<string, PendingInspectionCompletionCommand>();
   const pendingRequirementCommands = new Map<string, string>();
   const pendingProjectEdits = new Map<string, string>();
+  const pendingStockObservations = new Map<string, { key: string; body: string; version?: number }>();
   const pendingRevisionEdits = new Map<string, { key: string; body: ProjectRevisionUpdateInput }>();
   const retiredRequirementOwners = new Map<string, { projectId: string; revisionId: string; version: number }>();
   const confirmedRequirement = (payload: { data?: ServerBomLine }, revisionId: string, expectedId?: string): BomLine => {
@@ -2822,6 +2823,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       inventoryCache.clear();
       projectCache.clear();
       pendingRequirementCommands.clear(); pendingProjectEdits.clear(); pendingRevisionEdits.clear(); retiredRequirementOwners.clear();
+      // Unconfirmed stock writes retain their replay keys across session renewal.
     },
     async checkHealth() { health = await request<ServerHealth>("/health"); return health; },
     async getWorkspaceAccess() {
@@ -3049,42 +3051,58 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
     async recordCount(itemId, quantity) {
       const token = csrfToken ?? cookieValue("forge_csrf");
       if (!token) throw new ApiError("Your session needs a fresh CSRF token before changing stock", { kind: "csrf", status: 403 });
-      const payload = await request<{ data: { event: unknown; item: ServerInventoryItem } }>(`/inventory/${encodeURIComponent(itemId)}/count`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey("count") }, body: JSON.stringify({ quantity }) }, token);
-      const item = payload.data?.item;
-      if (!item) throw new ApiError("The service returned an incomplete count", { kind: "server", status: 502 });
-      serverUnits.set(item.id, item.unit);
-      const mapped = mapInventoryItem(item);
-      inventoryCache.set(mapped.id, mapped);
-      return mapped;
+      const commandId = JSON.stringify({ operation: "count", itemId, quantity });
+      const pending = pendingStockObservations.get(commandId);
+      const command = pending ?? { key: idempotencyKey("count"), body: JSON.stringify({ quantity }) };
+      pendingStockObservations.set(commandId, command);
+      try {
+        const payload = await request<{ data: { event: unknown; item: ServerInventoryItem } }>(`/inventory/${encodeURIComponent(itemId)}/count`, { method: "POST", redirect: "error", signal: AbortSignal.timeout(120_000), headers: { "Idempotency-Key": command.key }, body: command.body }, token);
+        const item = payload.data?.item;
+        if (!item || item.id !== itemId || !Number.isSafeInteger(item.version) || item.version < 1 || !Number.isFinite(item.quantity)) throw new ApiError("The service returned an incomplete count", { kind: "server", status: 502 });
+        serverUnits.set(item.id, item.unit);
+        const mapped = mapInventoryItem(item);
+        inventoryCache.set(mapped.id, mapped);
+        pendingStockObservations.delete(commandId);
+        return mapped;
+      } catch (error) {
+        if (pending === undefined && !mutationFailureIsAmbiguous(error)) pendingStockObservations.delete(commandId);
+        throw error;
+      }
     },
     async commissionInventoryItem(itemId, input, expectedVersion) {
       const token = csrfToken ?? cookieValue("forge_csrf");
       if (!token) throw new ApiError("Your session needs a fresh CSRF token before commissioning stock", { kind: "csrf", status: 403 });
       const source = input.source.trim();
       if (!source || !input.observedAt.trim()) throw new ApiError("Commissioning requires a source and observed time", { kind: "validation", status: 400 });
+      const commandId = JSON.stringify({ operation: "commission", itemId, input, expectedVersion });
+      const pending = pendingStockObservations.get(commandId);
       const cached = inventoryCache.get(itemId);
       const unit = serverUnits.get(itemId) ?? (cached === undefined ? "each" : serverUnitFor(cached));
-      const payload = await request<{ data: { event: unknown; item: ServerInventoryItem } }>(`/inventory/${encodeURIComponent(itemId)}/commission`, {
-        method: "POST",
-        headers: { "If-Match": String(expectedVersion), "Idempotency-Key": idempotencyKey("commission") },
-        body: JSON.stringify({
-          quantity: input.quantity,
-          unit,
-          evidence: {
-            state: "commissioned",
-            source,
-            ...(input.sourceId?.trim() ? { sourceId: input.sourceId.trim() } : {}),
-            observedAt: input.observedAt,
-            ...(input.note?.trim() ? { note: input.note.trim() } : {})
-          }
-        })
-      }, token);
-      const item = payload.data?.item;
-      if (!item) throw new ApiError("The service returned an incomplete commissioning result", { kind: "server", status: 502 });
-      serverUnits.set(item.id, item.unit);
-      const mapped = mapInventoryItem(item);
-      inventoryCache.set(mapped.id, mapped);
-      return mapped;
+      const command = pending ?? {
+        key: idempotencyKey("commission"), version: expectedVersion,
+        body: JSON.stringify({ quantity: input.quantity, unit, evidence: {
+          state: "commissioned", source,
+          ...(input.sourceId?.trim() ? { sourceId: input.sourceId.trim() } : {}),
+          observedAt: input.observedAt,
+          ...(input.note?.trim() ? { note: input.note.trim() } : {})
+        } })
+      };
+      pendingStockObservations.set(commandId, command);
+      try {
+        const payload = await request<{ data: { event: unknown; item: ServerInventoryItem } }>(`/inventory/${encodeURIComponent(itemId)}/commission`, {
+          method: "POST", redirect: "error", signal: AbortSignal.timeout(120_000), headers: { "If-Match": String(command.version), "Idempotency-Key": command.key }, body: command.body
+        }, token);
+        const item = payload.data?.item;
+        if (!item || item.id !== itemId || !Number.isSafeInteger(item.version) || item.version < 1 || !Number.isFinite(item.quantity)) throw new ApiError("The service returned an incomplete commissioning result", { kind: "server", status: 502 });
+        serverUnits.set(item.id, item.unit);
+        const mapped = mapInventoryItem(item);
+        inventoryCache.set(mapped.id, mapped);
+        pendingStockObservations.delete(commandId);
+        return mapped;
+      } catch (error) {
+        if (pending === undefined && !mutationFailureIsAmbiguous(error)) pendingStockObservations.delete(commandId);
+        throw error;
+      }
     },
     async deleteInventoryItem(itemId, expectedVersion) {
       const token = csrfToken ?? cookieValue("forge_csrf");
@@ -3704,11 +3722,11 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
 }
 
 /** Same-origin typed workflow transport. The caller retains its command key until the acknowledgement is confirmed. */
-export async function workflowRequest<T>(path: string, method: "GET" | "POST" | "PUT" | "PATCH" = "GET", body?: unknown, commandKey?: string): Promise<T> {
+export async function workflowRequest<T>(path: string, method: "GET" | "POST" | "PUT" | "PATCH" = "GET", body?: unknown, commandKey?: string, options?: { signal?: AbortSignal }): Promise<T> {
   if (!path.startsWith("/") || path.startsWith("//")) throw new ApiError("Invalid workflow path", { kind: "validation", status: 400 });
   const csrf = cookieValue("forge_csrf");
   if (method !== "GET" && !csrf && !path.startsWith("/auth/")) throw new ApiError("Sign in again before saving this workflow.", { kind: "csrf", status: 403 });
-  return request<T>(path, { method, redirect: "error", signal: AbortSignal.timeout(120_000), ...(body === undefined ? {} : { body: JSON.stringify(body) }), ...(commandKey ? { headers: { "Idempotency-Key": commandKey } } : {}) }, csrf);
+  return request<T>(path, { method, redirect: "error", signal: options?.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000), ...(body === undefined ? {} : { body: JSON.stringify(body) }), ...(commandKey ? { headers: { "Idempotency-Key": commandKey } } : {}) }, csrf);
 }
 export function workflowCommandKey(prefix: string): string { return idempotencyKey(prefix); }
 

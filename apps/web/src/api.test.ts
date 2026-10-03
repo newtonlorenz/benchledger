@@ -1995,3 +1995,80 @@ it("reads one normalized referenced inventory item with cancellation and exact s
   expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/inventory/remote-item");
   expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
 });
+
+for (const operation of ["count", "commission"] as const) {
+  it(`retries one ${operation} observation with the same key and reviewed payload after uncertainty and rejection`, async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=synthetic-observation-retry" });
+    const result = { data: { event: { id: "synthetic-observation" }, item: serverItem({ quantity: 7, version: 4 }) } };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(new TypeError("Synthetic lost response"))
+      .mockResolvedValueOnce(jsonResponse({ error: { message: "Synthetic retry rejected" } }, 409))
+      .mockResolvedValueOnce(jsonResponse(result))
+      .mockResolvedValueOnce(jsonResponse(result));
+    const adapter = createWorkspaceAdapter();
+    const save = () => operation === "count" ? adapter.recordCount("item-1", 7) : adapter.commissionInventoryItem("item-1", { quantity: 7, source: "Synthetic bench observation", observedAt: "2026-10-03T09:00:00Z", note: "Counted in hand" }, 3);
+    await expect(save()).rejects.toMatchObject({ kind: "offline" });
+    await expect(save()).rejects.toMatchObject({ status: 409 });
+    await expect(save()).resolves.toMatchObject({ id: "item-1", quantity: 7 });
+    const writes = fetchMock.mock.calls.map(([, init]) => ({ key: new Headers(init?.headers).get("idempotency-key"), body: init?.body, version: new Headers(init?.headers).get("if-match") }));
+    expect(writes[0]!.key).toBeTruthy(); expect(writes[1]).toEqual(writes[0]); expect(writes[2]).toEqual(writes[0]);
+    if (operation === "commission") expect(writes[0]!.version).toBe("3");
+    await save(); expect(new Headers(fetchMock.mock.calls[3]![1]?.headers).get("idempotency-key")).not.toBe(writes[0]!.key);
+  });
+}
+
+
+for (const operation of ["count", "commission"] as const) {
+  it(`preserves an unresolved ${operation} command across session clearing and sign-in`, async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=synthetic-expiring-session" });
+    const observedItem = serverItem({ kind: "filament", unit: "gram", quantity: 7, version: 4 });
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(observedItem))
+      .mockRejectedValueOnce(new TypeError("Synthetic lost acknowledgement"))
+      .mockResolvedValueOnce(jsonResponse({ error: { code: "unauthenticated", message: "Synthetic session expired" } }, 401))
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, actor: "admin", csrfToken: "synthetic-renewed-session", expiresAt: "2026-10-04T09:00:00Z" }))
+      .mockResolvedValueOnce(jsonResponse({ data: { event: { id: "original-observation" }, item: observedItem } }));
+    const adapter = createWorkspaceAdapter();
+    await adapter.readInventoryItem("item-1");
+    const save = () => operation === "count" ? adapter.recordCount("item-1", 7) : adapter.commissionInventoryItem("item-1", { quantity: 7, source: "Synthetic bench observation", observedAt: "2026-10-03T09:00:00Z" }, 3);
+    await expect(save()).rejects.toMatchObject({ kind: "offline" });
+    await expect(save()).rejects.toMatchObject({ kind: "unauthenticated" });
+    adapter.clearAuthenticatedState();
+    vi.stubGlobal("document", { cookie: "" });
+    await adapter.login("synthetic-password");
+    await expect(save()).resolves.toMatchObject({ id: "item-1", quantity: 7 });
+    const calls = fetchMock.mock.calls.filter(([url]) => String(url).endsWith(`/${operation}`));
+    expect(calls).toHaveLength(3);
+    const commands = calls.map(([, init]) => ({ key: new Headers(init?.headers).get("idempotency-key"), body: init?.body, version: new Headers(init?.headers).get("if-match") }));
+    expect(commands[0]!.key).toBeTruthy(); expect(commands[1]).toEqual(commands[0]); expect(commands[2]).toEqual(commands[0]);
+    if (operation === "commission") expect(JSON.parse(String(commands[2]!.body))).toMatchObject({ quantity: 7, unit: "gram" });
+    expect(new Headers(calls[2]![1]?.headers).get("x-csrf-token")).toBe("synthetic-renewed-session");
+  });
+}
+
+
+for (const operation of ["count", "commission"] as const) {
+  it(`bounds a stalled ${operation} request and retries with a fresh signal but the original command`, async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=synthetic-timeout-session" });
+    const controllers: AbortController[] = [];
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => { const controller = new AbortController(); controllers.push(controller); return controller.signal; });
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce((_url, init) => new Promise<Response>((_resolve, reject) => {
+        init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason), { once: true });
+      }))
+      .mockResolvedValueOnce(jsonResponse({ data: { event: { id: "original-observation" }, item: serverItem({ quantity: 7, version: 4 }) } }));
+    const adapter = createWorkspaceAdapter();
+    const save = () => operation === "count" ? adapter.recordCount("item-1", 7) : adapter.commissionInventoryItem("item-1", { quantity: 7, source: "Synthetic observation", observedAt: "2026-10-03T09:00:00Z" }, 3);
+    const pending = save();
+    const rejected = expect(pending).rejects.toMatchObject({ kind: "offline" });
+    expect(timeout).toHaveBeenCalledWith(120_000);
+    expect(fetchMock.mock.calls[0]![1]).toMatchObject({ redirect: "error", signal: controllers[0]!.signal });
+    controllers[0]!.abort(new DOMException("Synthetic observation timeout", "TimeoutError"));
+    await rejected;
+    await expect(save()).resolves.toMatchObject({ quantity: 7 });
+    expect(controllers).toHaveLength(2); expect(controllers[1]!.signal.aborted).toBe(false);
+    const commands = fetchMock.mock.calls.map(([, init]) => ({ key: new Headers(init?.headers).get("idempotency-key"), body: init?.body, version: new Headers(init?.headers).get("if-match"), redirect: init?.redirect }));
+    expect(commands[0]!.key).toBeTruthy(); expect(commands[1]).toEqual(commands[0]);
+    expect(fetchMock.mock.calls[1]![1]?.signal).toBe(controllers[1]!.signal);
+  });
+}

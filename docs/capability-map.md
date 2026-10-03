@@ -330,7 +330,8 @@ application, HTTP, MCP, and web surfaces: `identity`, `purpose`, `voltage`,
 and `power_rating`. LED resistor requirements remain Decide until both
 `resistance` and `power_rating` are resolved. MCP evaluation preserves those
 exact `missingDecisions` and returns `recommendedAction: specify`; web shopping
-rows, counts, and copied drafts include only required Source lines. Guided
+purchase rows and totals include only required Source lines. Full proposal
+exports label other lines separately as readiness context. Guided
 specification editing remains deferred.
 
 The production runtime seeds a curated, versioned starter catalog on startup:
@@ -376,7 +377,7 @@ profiles when present.
 | Start a project | Guided project setup | `create_project_with_initial_revision` → `create_work_item`; optional stable `projectId`/`revisionId` identify records; use `create_project_revision` for later planning baselines |
 | Archive or restore a project | Project Archive action and explicit Archived view | `archive_project` / `restore_project`; archive hides default lists, releases active reservations with evidence, retains history, and restore never recreates reservations |
 | Understand a build gap | BOM editor and gap panel | `list_bom_lines` → `calculate_bom_gaps`; Decide before supplier lookup, inspect candidate diagnostics and conversion capacity/overage reasons in Check results, and shop only Source lines |
-| Resolve a physical project check | Project Plan Checks panel above the BOM; beginner shows three concrete questions and View all, expert reveals canonical traceability; confirmed compatibility and conversion collect explicit values/evidence, and completion is preview-first with exact before/after line alternatives/conversions plus explicit confirmation | HTTP: `GET /api/v1/project-revisions/{revisionId}/inspections` → `GET .../{inspectionId}` → `POST .../{inspectionId}/completion-preview` → explicit `POST .../{inspectionId}/completion-commit`; MCP: `list_inspections` → `read_inspection` → `preview_inspection_completion` → `commit_inspection_completion`, with nested REST `each` ↔ MCP `piece` unit/conversion mapping, affected line/item plus relevant reservation staleness basis, before/after items/gaps/lines, affected and reevaluated gaps, refreshed inspections/evidence, and project-scoped fail-closed authorization |
+| Resolve a physical project check | Project Plan Checks panel below the requirements; beginner shows three concrete questions and View all, expert reveals canonical traceability; confirmed compatibility and conversion collect explicit values/evidence, and completion is preview-first with exact before/after line alternatives/conversions plus explicit confirmation | HTTP: `GET /api/v1/project-revisions/{revisionId}/inspections` → `GET .../{inspectionId}` → `POST .../{inspectionId}/completion-preview` → explicit `POST .../{inspectionId}/completion-commit`; MCP: `list_inspections` → `read_inspection` → `preview_inspection_completion` → `commit_inspection_completion`, with nested REST `each` ↔ MCP `piece` unit/conversion mapping, affected line/item plus relevant reservation staleness basis, before/after items/gaps/lines, affected and reevaluated gaps, refreshed inspections/evidence, and project-scoped fail-closed authorization |
 | Hold confirmed parts | Reservation panel | `create_reservation` → `list_reservations` / `read_reservation` → read BOM/gaps again |
 | Preview a project file | Files: images, formatted Markdown, plain text and interactive STL; unsupported formats stay download-only. Optional code loads on demand; viewer failures remain local, and lost graphics connections support local retry | Existing authenticated artifact download with SHA-256 verification; browser-only rendering and recovery, no MCP/API schema change; see preview limits in [agent quickstart](agent-quickstart.md) |
 | Add a CAD revision | Files scope selector defaults to the exact project revision and offers named work-item revisions; All files is read-only; upload status shows the file role | Authenticated browser/HTTP upload through the existing begin → write → finalize flow; raw MCP transfer commands remain fail-closed |
@@ -558,3 +559,20 @@ entry and editing expose explicit owned-item selection with identity, evidence
 and available quantity. Suggestions search the full inventory in bounded pages; the canonical gap
 evaluation remains authoritative. Active-project references are hydrated on
 reload without walking the complete inventory.
+
+
+### Maker flow continuity
+
+Plan search/filter and Files scope/search survive tab changes within the current
+project revision. New revisions reset these views. Shopping offers owned-stock
+matching before a quote is selected. Copy proposal and Download proposal text
+read the full canonical revision, separating readiness context from required
+Source estimates, retaining selected supplier evidence and separate currency
+totals. Incomplete or changing reads cannot produce partial exports. These are
+browser conveniences over existing read APIs, not new MCP commands.
+
+Record received stock carries the original requirement into inventory capture.
+The maker enters the actual received quantity, explicitly confirms its physical
+count, then reviews the match. No quote quantity or compatibility is inferred.
+Count/commission recovery preserves its original command through ambiguous
+responses and browser session renewal.

@@ -6,6 +6,7 @@ import { StockReservationPlanning } from "./stock-reservation-ui";
 import type { BuildFileUpload } from "./build-plan-ui";
 import { BuildPlanning } from "./build-plan-ui";
 import { WorkstreamPlanning } from "./workstream-ui";
+import type { StockReceiptContext } from "./stock-receipt";
 import { RequirementSourcing } from "./requirement-sourcing";
 
 export function MakerPlanningTools({ project, items, onRefresh, onUsedStock, onUpload, onApproach, stockReservationsSupported = false }: { project: Project; items: InventoryItem[]; onRefresh(): Promise<boolean>; onUsedStock?: (() => void) | undefined; onUpload?: BuildFileUpload | undefined; onApproach?: (() => void) | undefined; stockReservationsSupported?: boolean }) {
@@ -20,6 +21,6 @@ export function MakerPlanningTools({ project, items, onRefresh, onUsedStock, onU
     {printed ? [plan, stock, work] : [work, stock, plan]}
   </div>;
 }
-export function ProjectQuoteTools({ project, onPlan, onInventory, onMatch }: { project: Project; onPlan?: (() => void) | undefined; onInventory?: (() => void) | undefined; onMatch?: ((lineId: string) => void) | undefined }) {
+export function ProjectQuoteTools({ project, onPlan, onInventory, onMatch }: { project: Project; onPlan?: (() => void) | undefined; onInventory?: ((context: StockReceiptContext) => void) | undefined; onMatch?: ((lineId: string) => void) | undefined }) {
   return <RequirementSourcing key={`${project.id}:${project.serverRevisionId}`} project={project} onPlan={onPlan} onInventory={onInventory} onMatch={onMatch} />;
 }

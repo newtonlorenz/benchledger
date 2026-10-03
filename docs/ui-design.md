@@ -164,3 +164,15 @@ Quote entry moves focus into Supplier and restores it to Record quote on exit.
 A failed refresh or missing trigger moves focus to the sourcing region instead.
 Selected quote wording follows the canonical estimate result. Inventory-linked
 offer prices disclose package and coverage limits; copied drafts retain sources.
+
+
+## Maker flow refinements
+
+The [follow-up review](reviews/2026-10-03-maker-flow-refinements.md) focuses on
+continuity between useful screens. Plan and Files keep their view across tab
+detours. Plan puts requirements before physical checks; secondary tabs omit
+repeated next-action guidance. Workbench filters wrap on phones. Shopping exports
+the complete canonical proposal and offers owned-stock matching before quoting.
+Receiving retains its requirement context through capture, count and explicit
+match review. Save failures remain visible within their active confirmation and
+uncertain stock commands retain their original identity through retries.

@@ -147,6 +147,8 @@ test("inventory uses its own navigator and restores configurable desktop layout"
   await expect(page.getByRole("columnheader", { name: "Location", exact: true })).toHaveCount(0);
   const splitter = page.getByRole("separator", { name: "Resize item inspector" });
   await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Inventory columns" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Columns", exact: true })).toBeFocused();
   const panel = page.locator('[data-slot="resizable-panel"]').last();
   const before = (await panel.boundingBox())!.width;
   await splitter.focus(); await page.keyboard.press("ArrowLeft");

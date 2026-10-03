@@ -556,6 +556,7 @@ export function BuildSetupSummary({ input, printer, filament, expert, heading = 
 }
 
 export interface CatalogInventoryFlowProps {
+  initialQuantity?: string | undefined;
   category: "Printers" | "Filament";
   onDraftChange?: (state: { dirty: boolean; busy: boolean }) => void;
   products: CatalogProduct[];
@@ -566,7 +567,7 @@ export interface CatalogInventoryFlowProps {
   onCreateProduct: (input: CatalogProductDraft) => Promise<CatalogProduct | undefined>;
   onCreate: (input: ExactInventoryInput) => Promise<boolean>; onAddManually?: () => void; existingItem?: InventoryItem; }
 
-export function CatalogInventoryFlow({ onDraftChange, category, products, query, onQueryChange, onSearch, onSearchPage, onCreateProduct, onCreate, onAddManually, existingItem }: CatalogInventoryFlowProps) {
+export function CatalogInventoryFlow({ initialQuantity, onDraftChange, category, products, query, onQueryChange, onSearch, onSearchPage, onCreateProduct, onCreate, onAddManually, existingItem }: CatalogInventoryFlowProps) {
   const kind: CatalogKind = category === "Filament" ? "filament" : "printer";
   const [selected, setSelected] = useState<CatalogProduct>();
   const [completeProducts, setCompleteProducts] = useState<CatalogProduct[]>(products);
@@ -575,7 +576,7 @@ export function CatalogInventoryFlow({ onDraftChange, category, products, query,
   const [completeProductsPartialReason, setCompleteProductsPartialReason] = useState<CatalogFacetPartialReason>();
   const [loading, setLoading] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
-  const [quantity, setQuantity] = useState( existingItem ? String(existingItem.quantity) : category === "Filament" ? "" : "1");
+  const [quantity, setQuantity] = useState(initialQuantity ?? (existingItem ? String(existingItem.quantity) : category === "Filament" ? "" : "1"));
   const [linkState, setLinkState] = useState<LinkState>("reported");
   const [lotBatch, setLotBatch] = useState("");
   const [spoolState, setSpoolState] = useState<"sealed" | "opened">("sealed");
@@ -587,7 +588,7 @@ export function CatalogInventoryFlow({ onDraftChange, category, products, query,
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string>();
   const [creatingProduct, setCreatingProduct] = useState(false);
-  const dirty = Boolean(selected || query.trim() || showCreate || lotBatch || openedAt || tareMass || placement || assetLabel || commissionedAt || linkState !== "reported" || spoolState !== "sealed" || quantity !== (existingItem ? String(existingItem.quantity) : category === "Filament" ? "" : "1"));
+  const dirty = Boolean(selected || query.trim() || showCreate || lotBatch || openedAt || tareMass || placement || assetLabel || commissionedAt || linkState !== "reported" || spoolState !== "sealed" || quantity !== (initialQuantity ?? (existingItem ? String(existingItem.quantity) : category === "Filament" ? "" : "1")));
   useEffect(() => { onDraftChange?.({ dirty, busy: submitting || creatingProduct }); }, [dirty, submitting, creatingProduct, onDraftChange]);
   useEffect(() => () => { onDraftChange?.({ dirty: false, busy: false }); }, [onDraftChange]);
 

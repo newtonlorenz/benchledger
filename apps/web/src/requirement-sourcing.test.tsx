@@ -111,3 +111,11 @@ it("connects selected quotes to explicit receipt and matching without changing s
   expect(receive).toHaveBeenCalledOnce(); expect(match).toHaveBeenCalledWith(line.id);
   expect(vi.mocked(workflowRequest).mock.calls.every((call) => call[1] === undefined)).toBe(true);
 });
+
+it("offers owned stock matching before any quote is selected", async () => {
+  vi.mocked(workflowRequest).mockResolvedValue(result({ status: "needs_review", reason: "No quote selected", shippingKnown: false }, false));
+  const match = vi.fn(); render(<RequirementSourcing project={project} onMatch={match} onInventory={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Match owned stock" }));
+  expect(match).toHaveBeenCalledWith(line.id);
+  expect(screen.queryByRole("button", { name: "Record received stock" })).toBeNull();
+});
