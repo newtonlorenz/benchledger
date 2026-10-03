@@ -103,3 +103,28 @@ it("closes untouched nested inventory capture without discarding its parent proj
   expect(registry.request).not.toHaveBeenCalled();
   expect(screen.queryByRole("alertdialog")).toBeNull();
 });
+
+it("receives the requirement context without guessing a package quantity or unit conversion", async () => {
+  const actions = props();
+  render(<NewInventoryDialog {...actions} receiving={{ projectId: "synthetic-project", revisionId: "synthetic-revision", projectName: "Synthetic lamp", lineId: "synthetic-wire", lineName: "Silicone wire", unit: "m" }} />);
+  choose("wire");
+  expect(screen.getByLabelText("Name")).toHaveProperty("value", "Silicone wire");
+  expect(screen.getByLabelText("Quantity received")).toHaveProperty("value", "");
+  expect(screen.getByLabelText("Unit")).toHaveProperty("value", "m");
+  fireEvent.change(screen.getByLabelText("Quantity received"), { target: { value: "2.5" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add item" }));
+  await waitFor(() => expect(actions.onCreate).toHaveBeenCalledOnce());
+  expect(actions.onCreate.mock.calls[0]?.[0]).toMatchObject({ name: "Silicone wire", quantity: 2.5, unit: "m", kind: "wire" });
+  expect(actions.onCreate.mock.calls[0]?.[0]).not.toHaveProperty("evidence");
+});
+
+it("requires an explicit received quantity for an exact printer", async () => {
+  const actions = props();
+  render(<NewInventoryDialog {...actions} catalogProducts={catalogProducts.filter(product => product.kind === "printer")} receiving={{ projectId: "synthetic-project", revisionId: "synthetic-revision", projectName: "Synthetic workshop", lineId: "synthetic-printer", lineName: "Workshop printer", unit: "each" }} />);
+  choose("printer");
+  await waitFor(() => expect(screen.queryByRole("status", { name: "Searching" })).toBeNull());
+  fireEvent.change(screen.getByRole("combobox", { name: "Exact printer model" }), { target: { value: "Bambu" } });
+  fireEvent.click(await screen.findByRole("option", { name: /Bambu Lab/ }));
+  expect(await screen.findByLabelText("Owned units")).toHaveProperty("value", "");
+  expect(actions.onCreateExact).not.toHaveBeenCalled();
+});

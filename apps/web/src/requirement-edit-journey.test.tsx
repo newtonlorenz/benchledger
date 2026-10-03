@@ -90,3 +90,12 @@ it("uses server search from the stock edit entry when the candidate is outside t
   await waitFor(() => expect(save).toHaveBeenCalledWith({ itemId: stock.id }));
   expect(search).toHaveBeenCalledWith(line.label, expect.any(AbortSignal));
 });
+
+it("reviews a received item without saving a match until explicitly confirmed", async () => {
+  const save = vi.fn(async () => undefined);
+  render(<RequirementEditForm {...props} initialFocus="stock" initialItemId={stock.id} onSave={save} />);
+  expect(save).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Clear owned item selection" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Save requirement" }));
+  await waitFor(() => expect(save).toHaveBeenCalledWith({ itemId: stock.id }));
+});

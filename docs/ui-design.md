@@ -164,3 +164,25 @@ Quote entry moves focus into Supplier and restores it to Record quote on exit.
 A failed refresh or missing trigger moves focus to the sourcing region instead.
 Selected quote wording follows the canonical estimate result. Inventory-linked
 offer prices disclose package and coverage limits; copied drafts retain sources.
+
+
+## Maker flow refinements
+
+The [follow-up review](reviews/2026-10-03-maker-flow-refinements.md) focuses on
+continuity between useful screens. Plan and Files keep their view across tab
+detours. Plan puts requirements before physical checks; secondary tabs omit
+repeated next-action guidance. Workbench filters wrap on phones. Shopping exports
+the complete canonical proposal and offers owned-stock matching before quoting.
+Receiving retains its requirement context through capture, count and explicit
+match review. Save failures remain visible within their active confirmation and
+uncertain stock commands retain their original identity through retries.
+
+Session renewal restores the reviewed stock observation from memory after sign-in,
+without displaying inventory while signed out or automatically sending it again.
+A lost response keeps the original payload and replay identity frozen until
+acknowledged. A first authentication rejection preserves an editable draft, so a
+later version conflict can return to the item for a fresh review. Recovery lasts
+for the open workspace; it does not persist private draft content in browser storage.
+Reload the exact item before restoring the editor, even when it is outside the
+initial inventory page. If a definitive rejection was followed by item deletion,
+offer an explicit discard path; never infer that an ambiguous save was rejected.

@@ -16,3 +16,9 @@
   .requirement-quantity-row > * { min-width: 0; }
   .requirement-quantity-row input, .requirement-quantity-row select { width: 100%; }
 }
+
+.stock-receipt-context { margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.stock-receipt-context p { margin-block: 6px; }
+.stock-receipt-next-step { border-top: 1px solid var(--line); padding-top: 20px; margin-top: 20px; }
+.stock-receipt-next-step p { color: var(--ink-soft); margin-block: 8px 16px; }
+.stock-receipt-context a { overflow-wrap: anywhere; }

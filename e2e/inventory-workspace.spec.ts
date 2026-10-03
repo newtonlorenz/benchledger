@@ -99,10 +99,13 @@ test("inventory register and inspector remain accessible in light, dark and narr
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     const firstRow = page.locator(".inventory-table tbody tr").first();
     for (const cell of [".inventory-name-cell", ".inventory-recorded-cell", ".inventory-available-cell", ".inventory-status-cell"]) {
-      const bounds = await firstRow.locator(cell).boundingBox();
-      expect(bounds).not.toBeNull();
-      expect(bounds!.x).toBeGreaterThanOrEqual(0);
-      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+      // Resizing can replace the responsive table cells during measurement.
+      await expect(async () => {
+        const bounds = await firstRow.locator(cell).boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.x).toBeGreaterThanOrEqual(0);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+      }).toPass({ timeout: 5_000 });
     }
     await page.getByRole("columnheader", { name: "Item", exact: true }).getByRole("button").focus();
     await page.keyboard.press("Tab");
@@ -147,6 +150,8 @@ test("inventory uses its own navigator and restores configurable desktop layout"
   await expect(page.getByRole("columnheader", { name: "Location", exact: true })).toHaveCount(0);
   const splitter = page.getByRole("separator", { name: "Resize item inspector" });
   await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Inventory columns" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Columns", exact: true })).toBeFocused();
   const panel = page.locator('[data-slot="resizable-panel"]').last();
   const before = (await panel.boundingBox())!.width;
   await splitter.focus(); await page.keyboard.press("ArrowLeft");

@@ -92,10 +92,10 @@ export function RemovedRequirements() {
   </DisclosureContent></Disclosure>;
 }
 
-export function RequirementEditForm({ line, items, initialFocus, onSave, onRetire, onClose, onBusy, onSearchOwnedItems }: { onSearchOwnedItems?: OwnedItemSearch | undefined; line: BomLine; items: InventoryItem[]; initialFocus?: "stock" | undefined; onSave(input: BomUpdateInput): Promise<void>; onRetire(): Promise<void>; onClose(): void; onBusy(value: boolean): void }) {
+export function RequirementEditForm({ line, items, initialFocus, initialItemId, onSave, onRetire, onClose, onBusy, onSearchOwnedItems }: { onSearchOwnedItems?: OwnedItemSearch | undefined; line: BomLine; items: InventoryItem[]; initialFocus?: "stock" | undefined; initialItemId?: string | undefined; onSave(input: BomUpdateInput): Promise<void>; onRetire(): Promise<void>; onClose(): void; onBusy(value: boolean): void }) {
   const [name, setName] = useState(line.label), [quantity, setQuantity] = useState(String(line.required));
   const [unit, setUnit] = useState(line.unit), [role, setRole] = useState(line.role ?? "");
-  const [itemId, setItemId] = useState(line.itemId ?? ""), [query, setQuery] = useState<string>();
+  const [itemId, setItemId] = useState(initialItemId ?? line.itemId ?? ""), [query, setQuery] = useState<string>();
   const [optional, setOptional] = useState(line.optional ?? false), [note, setNote] = useState(line.note ?? "");
   const [busy, setBusy] = useState(false), [confirmRemove, setConfirmRemove] = useState(false), [error, setError] = useState<string>();
   const [uncertainOperation, setUncertainOperation] = useState<"save" | "remove">();

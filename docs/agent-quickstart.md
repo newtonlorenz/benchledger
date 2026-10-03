@@ -139,7 +139,7 @@ When a connected revision exposes a Check candidate, use the revision-scoped
 inspection queue: list and read the action, submit its observation to the
 `completion-preview` endpoint, show the server preview, and ask for explicit
 human confirmation before calling `completion-commit`. The Project Plan Checks
-panel sits above the BOM, shows three concrete beginner questions plus **View
+panel sits below the requirements, shows three concrete beginner questions plus **View
 all**, and reveals action/line/item versions, evidence, predicate, unit, and
 effects in expert mode. Confirmed compatibility and unit conversion require
 explicit values and evidence (source, basis, and observed time); never infer
@@ -345,7 +345,8 @@ Call `list_offers` and optionally `record_offer_snapshot` for supplied supplier
 observations. A shopping proposal contains only required BOM lines whose
 decision is **Source**. Keep Ready, Check, Decide, and optional lines visible
 as separate readiness context; never turn them into shopping rows, counts, or
-copied draft text. If no Source line exists while Decide or Check work remains,
+purchase totals. Browser proposal exports may include them in separately labelled
+readiness context. If no Source line exists while Decide or Check work remains,
 say “Nothing is ready to source” and explain those blockers. A useful readiness
 summary separates:
 
@@ -432,3 +433,10 @@ to that count. A stale offset returns 409 without appending; read progress again
 Finalize verifies the declared size and SHA-256. Retry an uncertain finalization
 with its original command key. Only a confirmed expired session permits starting
 a fresh upload; session reads do not renew the fifteen-minute expiry.
+
+
+The browser Shopping list can copy or download a dated full-revision proposal.
+The export keeps selected quote sources, observation dates, package quantities,
+unresolved gaps and currency totals even when the visible list is filtered.
+It is not a live supplier check or purchase instruction. Received stock uses an
+explicit receipt quantity, then count review and separate requirement matching.

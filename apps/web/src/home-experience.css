@@ -30,7 +30,7 @@
   .home-experience .home-resume { padding: 12px; gap: 12px; }
   .home-experience .home-resume > span:not(.home-resume-revision) { flex: 1; }
   .home-experience .home-resume > .button { margin-left: 30px; }
-  .home-experience .home-project-filters { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 8px; }
+  .home-experience .home-project-filters { flex-wrap: wrap; overflow-x: visible; padding-bottom: 8px; }
   .home-experience .home-project-filters > button { flex-shrink: 0; min-height: 44px; }
   .home-experience .home-project-next { min-height: 44px; }
   .home-experience .home-onboarding { padding: 18px; }
