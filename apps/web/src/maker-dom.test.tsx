@@ -24,7 +24,8 @@ it("explains an empty build plan and focuses the action needed to continue", () 
   click("Add build part");
   expect(screen.queryByRole("alert")).toBeNull();
   click("Review build plan");
-  expect(screen.getByRole("alert").textContent).toContain("parts.0.name");
+  expect(screen.getByRole("alert").textContent).toBe("Give part 1 a name so you can identify it on your plates.");
+  expect(document.activeElement).toBe(screen.getByLabelText("Build part 1 name"));
   expect(screen.queryByRole("button", { name: "Save planning snapshot" })).toBeNull();
   change("Build part 1 name", "Spacer");
   click("Review build plan");

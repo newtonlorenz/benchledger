@@ -480,12 +480,19 @@ results. It does not invent inventory totals or validation evidence. Unknown
 results remain explicit. Pins, filters, sort and recently opened project IDs
 are browser preferences, filtered against the projects the workspace returned.
 Home Check/Decide actions open the selected project with that requirement filter.
+Missing or unusable printer setup is also a home task for printed projects,
+using the same eligibility rules as project guidance.
 
 Build planning is a direct project route. Plan exposes add and reviewed CSV
 append actions together. Shopping shows project quotes first and retains older
 inventory-linked offers separately. Files supports scoped search and drop staging;
 the user must still confirm Add files. No new API, permission or stock semantics
 are introduced by these navigation changes.
+
+Selected quote labels reflect the canonical estimate status. Historical offer
+prices describe recorded packages and copied drafts retain package/source/date
+evidence. Changed project, requirement and item metadata forms use the shared
+browser draft guard. These are web interaction refinements, not new endpoints.
 
 ## Strict MCP client readiness
 

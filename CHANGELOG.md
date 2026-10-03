@@ -2,6 +2,9 @@
 
 ## Maker experience
 
+- Protect project, requirement and item-edit drafts; focus item editing on its active task.
+- Keep printer setup tasks consistent and quote review status faithful to estimates.
+- Improve quote-entry focus, shopping evidence copying and build-part validation.
 - Prioritise next project actions, simplify Workbench and disclose specialist viewers.
 - Simplify inventory controls and show stock balances together on phones.
 - Put physical counting first and explain empty build-plan recovery in plain language.

@@ -171,3 +171,9 @@ view configuration behind one disclosure. Applied filters remain visible and
 clearable. Phone inventory rows keep item identity, recorded/available quantities
 and status together. The inspector discloses supporting evidence and AI handoff.
 The item drawer puts physical counting before images and maintenance actions.
+While editing item details, show the metadata form and retain other sections
+hidden, preserving their drafts. Protect changed project, requirement and item
+forms with the shared unsaved-work guard. Workbench printer tasks use the same
+eligibility rules as project guidance. Quote entry focuses Supplier and restores
+its trigger on exit, or the sourcing region if a refresh fails or the trigger
+is unavailable. Selected quote status follows the canonical estimate.

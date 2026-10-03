@@ -46,3 +46,7 @@
   .inventory-experience.inventory-workstation .inventory-table .stock-indicator { white-space: normal; }
   .inventory-experience.inventory-workstation .inventory-mobile-label { display: block; color: var(--ink-muted); font-family: var(--font-ui); font-size: .75rem; line-height: 1.5; }
 }
+
+/* Editing item details is one task; retained stock and image drafts stay mounted. */
+.detail-drawer .inventory-detail-edit { padding: 0; border: 0; background: transparent; }
+.detail-drawer .inventory-detail-edit > h3 { margin: 0 0 8px; font-size: 1rem; }

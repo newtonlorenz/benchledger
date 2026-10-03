@@ -569,8 +569,10 @@ test("asks one Beginner question and persists the derived category for quick inv
     } await route.continue(); } ); await page.getByRole("button", { name: "New project" }).click(); const dialog = page.getByRole("dialog", { name: "Create project" }); await dialog.getByLabel("Project name").fill("Ambiguous project"); await dialog .getByLabel("Project goal").fill("A project whose response was intentionally lost.");
       await dialog.getByRole("button", { name: "Create project" }).click(); await expect(dialog.getByRole("alert")).toContainText( "BenchLedger could not confirm whether this project was created." ); await expect(dialog.getByRole("alert")).not.toContainText( /Nothing was saved|was not created/iu ); await expect(dialog.getByLabel("Project name")).toHaveValue( "Ambiguous project" );
 
-  await expect(dialog.getByLabel("Project goal")).toHaveValue( "A project whose response was intentionally lost." ); await dialog.getByRole("button",
-    { name: "Create project" }).click();
+  await expect(dialog.getByLabel("Project goal")).toHaveValue( "A project whose response was intentionally lost." );
+  await expect(dialog.getByLabel("Project name")).toBeDisabled();
+  await expect(dialog.getByLabel("Project goal")).toBeDisabled();
+  await dialog.getByRole("button", { name: "Retry unchanged project" }).click();
   await expect(dialog).toHaveCount(0);
   expect(requestKeys).toHaveLength(2); expect(requestKeys[0]).toBe(requestKeys[1]);
   await page.unroute("**/api/v1/projects/with-initial-revision"); }); test("keeps modal focus surfaces isolated and restores the workspace on Escape", async ({ page }) => { await signIn(page); await page.getByRole("button", { name: /^Projects/ }).click(); await page.getByRole("button", { name: "New project", exact: true }).click(); await expect(page.locator(".app-background")).toHaveAttribute("aria-hidden", "true"); await expect( page.getByRole("button", { name: "Open workspace settings" }) ).toHaveCount(0); await page.keyboard.press("Escape"); await expect(page.locator(".app-background")).not.toHaveAttribute( "aria-hidden", "true" ); await expect( page.getByRole("button", { name: "Open workspace settings" }) ).toBeVisible(); });
@@ -814,6 +816,7 @@ test("resumes project and build-approach drafts after adding a printer", async (
   await expect(projectDialog.getByLabel("Project goal")).toHaveValue("Keep this text while recording a printer.");
   await expect(projectDialog.getByRole("radio", { name: /^3D-print parts/u })).toBeChecked();
   await projectDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click();
 
   // An undecided project now has one setup action, not a duplicate card.
   await page.getByRole("button", { name: "Set build approach", exact: true }).click();

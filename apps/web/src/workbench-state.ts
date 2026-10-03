@@ -1,3 +1,4 @@
+import { projectFabricationRoute, projectIntendedPrinterId, isUsableOwnedPrinter } from "./project-build-readiness";
 import { calculateProjectSummary } from "./domain";
 import type { Project, InventoryItem } from "./domain";
 import { matchesInventorySearch } from "@benchledger/domain/inventory-search";
@@ -24,7 +25,9 @@ export function deriveHomeProjects(projects: readonly Project[], items: Inventor
     const lines = summary.lineStatuses.filter((line) => !line.line.optional);
     const unknown = project.readinessUnavailable === true || summary.readinessUnavailable;
     const required = project.bom.filter((line) => !line.optional).length;
-    const route = project.fabricationRoute ?? (project.intendedPrinterItemId !== undefined ? project.intendedPrinterItemId ? "printed" : "undecided" : project.buildConfigSnapshot?.printerItemId ? "printed" : "undecided");
+    const route = projectFabricationRoute(project);
+    const printerId = projectIntendedPrinterId(project);
+    const printer = items.find((item) => item.id === printerId);
     const tasks: HomeTask[] = [];
     const add = (kind: HomeTaskKind, label: string, detail: string, count = 1) => tasks.push({ id: `${project.id}:${kind}`, projectId: project.id, projectName: project.name, kind, label, detail, count });
     if (project.status !== "complete") {
@@ -35,6 +38,7 @@ export function deriveHomeProjects(projects: readonly Project[], items: Inventor
         const count = lines.filter((line) => line.decision === kind).length;
         if (count) add(kind, kind === "decide" ? "Review requirements" : kind === "check" ? "Check stock" : "Review sourcing", `${count} required ${count === 1 ? "line" : "lines"} ${kind === "source" ? count === 1 ? "has a stock gap" : "have stock gaps" : `${count === 1 ? "needs" : "need"} ${kind === "decide" ? "more detail" : "a physical or compatibility check"}`}.`, count);
       }
+      if (route === "printed" && (!printer || !isUsableOwnedPrinter(printer))) add("setup", printer ? "Review printer setup" : "Choose a printer", "Choose an owned printer with confirmed stock and exact product details before checking this build.");
       const currentWork = new Map((project.workItems ?? []).map((item) => [item.id, item.currentRevisionId ?? item.currentRevision?.id]));
       const hasDesign = (project.allArtifacts ?? project.artifacts).some((file) => ["STL", "STEP", "Build plate", "Editable CAD"].includes(file.role) && (file.workItemId ? Boolean(file.workItemRevisionId) && currentWork.get(file.workItemId) === file.workItemRevisionId : Boolean(project.serverRevisionId) && file.projectRevisionId === project.serverRevisionId));
       if (route === "printed" && !hasDesign) add("files", "Add design files", "No design file is attached to a current project or work-item revision.");

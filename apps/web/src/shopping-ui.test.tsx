@@ -43,6 +43,29 @@ const offer: Offer = {
 };
 
 describe("shopping proposal surface", () => {
+  it("retains package, source and observation evidence in the copied proposal", () => {
+    const line = sourceSummary().lineStatuses[0]!;
+    const draft = shoppingDraftText([{ line, offers: [offer] }]);
+    expect(draft).toContain("8 pieces to source");
+    expect(draft).toContain("Recorded supplier · M3 insert pack");
+    expect(draft).toContain("EUR per recorded package · 8 pieces");
+    expect(draft).toContain("Price recorded 3 Sep 2026");
+    expect(draft).toContain(offer.url);
+    expect(draft).toContain("not a quantity-adjusted order total");
+    expect(shoppingDraftText([{ line, offers: [{ ...offer, url: "javascript:alert(1)" }] }])).not.toContain("javascript:");
+    expect(shoppingDraftText([{ line, offers: [] }])).toContain("No supplier offer recorded.");
+  });
+
+  it("labels partial package-price coverage without claiming an order total", () => {
+    const summary = sourceSummary();
+    summary.lineStatuses.push({ ...summary.lineStatuses[0]!, line: { ...summary.lineStatuses[0]!.line, id: "unpriced", label: "Unpriced part" } });
+    const markup = renderToStaticMarkup(<ShoppingList project={projects[0]!} summary={summary} offers={[offer]} expert={false} onToast={() => undefined} onBackToPlan={() => undefined} />);
+    expect(markup).toContain("Recorded offer prices");
+    expect(markup).toContain("1 of 2 requirements priced");
+    expect(markup).toContain("One recorded package per priced requirement");
+    expect(markup).not.toContain("Estimated total");
+  });
+
   it("keeps an empty Source proposal out of the copied draft", () => {
     expect(shoppingDraftText([])).toBe("");
     expect(shoppingDraftText([])).not.toContain("Nothing is ready to source");

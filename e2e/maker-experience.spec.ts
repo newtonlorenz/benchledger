@@ -1,6 +1,35 @@
 import { expect, test } from "@playwright/test";
 
 for (const width of [1440, 390]) {
+  test(`maker drafts and quote focus recover at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/");
+    await page.getByLabel("Workspace password").fill("demo-password-please-change");
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await page.getByRole("button", { name: "New project", exact: true }).click();
+    await page.getByLabel("Project name", { exact: true }).fill("Synthetic retained draft");
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Keep editing", exact: true }).click();
+    await expect(page.getByLabel("Project name", { exact: true })).toHaveValue("Synthetic retained draft");
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click();
+    await page.getByRole("button", { name: "Open project Synthetic H2D desk lamp", exact: true }).click();
+    await page.getByRole("button", { name: "Add a requirement", exact: true }).click();
+    await page.getByLabel("What do you need?", { exact: true }).fill("Synthetic retained requirement");
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Keep editing", exact: true }).click();
+    await expect(page.getByLabel("What do you need?", { exact: true })).toHaveValue("Synthetic retained requirement");
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click();
+    await page.getByRole("tab", { name: /^Shopping list/u }).click();
+    const quote = page.getByRole("button", { name: "Record quote for M3 mounting screws", exact: true });
+    await quote.click();
+    await expect(page.getByLabel("Supplier", { exact: true })).toBeFocused();
+    await page.getByRole("button", { name: "Cancel quote", exact: true }).click();
+    await expect(quote).toBeFocused();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+
   test(`next action stays visible without the inspector at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.goto("/");
