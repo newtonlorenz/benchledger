@@ -1078,6 +1078,7 @@ export const artifactListQuerySchema = z.union([
 ]);
 
 export const uploadSessionSchema = z.object({
+  receivedBytes: z.number().int().nonnegative().optional(),
   id: idSchema,
   artifactId: idSchema,
   expiresAt: isoDateSchema,

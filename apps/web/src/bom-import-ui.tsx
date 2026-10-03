@@ -12,6 +12,7 @@ import { parseBomTable, mapBomTable, suggestBomMapping, MAX_BOM_INTAKE_BYTES } f
 import type { BomColumn, BomColumnMapping, BomIntakeUnit } from "@benchledger/domain/bom-intake";
 import type { Project } from "./domain";
 import { workflowRequest } from "./api";
+import { useUnsavedWork } from "./unsaved-work";
 import { mutationValue, revisionWorkflowPath, useWorkflowCommand } from "./workflow-ui";
 const fields: [BomColumn, string][] = [["name", "Name"], ["quantity", "Quantity"], ["unit", "Unit"], ["role", "Use"], ["optional", "Optional"], ["notes", "Notes"], ["itemId", "Exact inventory ID"]];
 export function ExistingBomImport({ project, onRefresh, onBusy }: { project: Project; onRefresh(): Promise<boolean>; onBusy?: ((busy: boolean) => void) | undefined }) {
@@ -20,6 +21,7 @@ export function ExistingBomImport({ project, onRefresh, onBusy }: { project: Pro
   const [unit, setUnit] = useState<BomIntakeUnit>("each"), [role, setRole] = useState<"consumed" | "reusable">("consumed"), [duplicates, setDuplicates] = useState(false);
   const [preview, setPreview] = useState<BomImportPreview>(), [saved, setSaved] = useState<number>(), [error, setError] = useState<string>(), [previewBusy, setPreviewBusy] = useState(false);
   const command = useWorkflowCommand();
+  useUnsavedWork(saved === undefined && Boolean(text || preview), "requirements import", saved === undefined && (previewBusy || command.busy || command.uncertain));
   useEffect(() => { onBusy?.(command.busy || command.uncertain); return () => onBusy?.(false); }, [command.busy, command.uncertain, onBusy]);
   const root = project.serverRevisionId ? revisionWorkflowPath(project.id, project.serverRevisionId) : undefined;
   const parse = () => { try { const value = parseBomTable(text, delimiter); setTable(value); setMapping(suggestBomMapping(value.headers)); setError(undefined); } catch (failure) { setError((failure as Error).message); } };

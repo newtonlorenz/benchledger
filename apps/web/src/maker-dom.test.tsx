@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, it, expect, vi } from "vitest";
 import { render, fireEvent, screen, waitFor, cleanup } from "@testing-library/react";
+import { MakerPlanningTools } from "./maker-planning-ui";
+import { PlanSummary } from "./build-plan-ui";
 import { BuildEditor } from "./build-plan-ui";
 import { QuoteForm } from "./requirement-sourcing";
 import { ExistingBomImport } from "./bom-import-ui";
@@ -75,4 +77,79 @@ it("updates workstream status, notes and due date through an observed version", 
   vi.mocked(workflowRequest).mockImplementation(async (path, method) => method === "PUT" ? { data: { id: "work", workItemId: "work", version: 2, status: "in_progress", notes: "Fit check first", dueDate: "2027-01-02" } } : path === "/team/directory" ? { members: [] } : { data: [row], total: 1 });
   render(<WorkstreamPlanning project={project} />); await screen.findByText("Assembly · To do"); click("Assembly · To do"); change("Status for Assembly", "in_progress"); change("Due date", "2027-01-02"); change("Workstream notes", "Fit check first"); click("Save workstream progress");
   await waitFor(() => expect(vi.mocked(workflowRequest).mock.calls.some((call) => call[1] === "PUT")).toBe(true)); expect(vi.mocked(workflowRequest).mock.calls.find((call) => call[1] === "PUT")![2]).toMatchObject({ expectedVersion: 1, status: "in_progress", notes: "Fit check first", dueDate: "2027-01-02" });
+});
+
+
+it("defaults new plates to the confirmed project printer and matching setup only", () => {
+  const printer = inventory.find((item) => item.category === "Printers")!;
+  const configured = { ...project, intendedPrinterItemId: printer.id, buildConfigSnapshot: { ...project.buildConfigSnapshot!, id: "setup-current", printerItemId: printer.id } };
+  const view = render(<BuildEditor project={configured} items={inventory} initial={null} root="/project" onCancel={() => undefined} onSaved={() => undefined} />);
+  click("Add build part"); change("Build part 1 name", "Lid"); click("Add plate layout");
+  expect(screen.getByLabelText("Plate 1 printer")).toHaveProperty("value", printer.id);
+  expect(screen.getByRole("checkbox", { name: "Link this revision's recorded printer setup" }).getAttribute("data-state")).toBe("checked");
+  change("Plate 1 printer", ""); expect(screen.queryByRole("checkbox", { name: "Link this revision's recorded printer setup" })).toBeNull();
+  view.unmount();
+  render(<BuildEditor project={configured} items={inventory.map((item) => item.id === printer.id ? { ...item, serverEvidence: "delivered_uncounted" } : item)} initial={null} root="/project" onCancel={() => undefined} onSaved={() => undefined} />);
+  click("Add build part"); change("Build part 1 name", "Lid"); click("Add plate layout");
+  expect(screen.getByLabelText("Plate 1 printer")).toHaveProperty("value", "");
+});
+
+it("uploads a missing file without leaving or losing the current build draft", async () => {
+  const onUpload = vi.fn(async () => undefined);
+  const props = { project, items: inventory, initial: null, root: "/project", onCancel: () => undefined, onSaved: () => undefined, onUpload };
+  const view = render(<BuildEditor {...props} />);
+  click("Add build part"); change("Build part 1 name", "Enclosure lid"); change("Build part 1 quantity", "3");
+  const file = new File(["synthetic"], "lid.stl");
+  fireEvent.change(screen.getByLabelText("Add a missing build file"), { target: { files: [file] } });
+  await screen.findByText("File uploaded. Select it under Exact revision file for the matching part.");
+  expect(onUpload).toHaveBeenCalledWith(file, "STL", { kind: "project", projectRevisionId: project.serverRevisionId });
+  const artifact = { id: "new-lid", name: "lid.stl", role: "STL" as const, revision: "r01", projectRevisionId: project.serverRevisionId!, status: "candidate" as const, hash: "a".repeat(64), size: "1 KB", updated: "2026-10-03" };
+  view.rerender(<BuildEditor {...props} project={{ ...project, artifacts: [artifact], allArtifacts: [artifact] }} />);
+  expect(screen.getByLabelText("Build part 1 name")).toHaveProperty("value", "Enclosure lid");
+  expect(screen.getByLabelText("Build part 1 quantity")).toHaveProperty("value", "3");
+  change("Build part 1 file", "new-lid"); expect(screen.getByLabelText("Build part 1 file")).toHaveProperty("value", "new-lid");
+});
+
+it("keeps build warnings visible and technical evidence collapsed", () => {
+  const plan = { id: "p", projectId: project.id, projectRevisionId: project.serverRevisionId!, version: 1, name: "Bracket", parts: [], plates: [], contentSha256: "a".repeat(64), createdAt: "2026-10-03T00:00:00.000Z", createdBy: "synthetic", warnings: ["Filament: planned 100 g exceeds currently available 20 g."], artifactBasis: [], totals: { parts: [], materialGrams: [], minutes: 0, timeComplete: true } };
+  render(<PlanSummary plan={plan} items={inventory} />);
+  expect(screen.getByText(plan.warnings[0]! ).closest("[hidden]")).toBeNull();
+  expect(screen.getByText(/Snapshot:/).closest("[hidden]")).not.toBeNull();
+});
+it("leads non-print projects to workstreams while print details remain optional", async () => {
+  vi.mocked(workflowRequest).mockImplementation(async (path) => path === "/team/directory" ? { members: [] } : path.endsWith("/build-plan") ? null : { data: [], total: 0 });
+  render(<MakerPlanningTools project={{ ...project, fabricationRoute: "none" }} items={inventory} onRefresh={async () => true} />);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Add workstream" })).toHaveProperty("disabled", false));
+  expect(screen.queryByRole("button", { name: "Create build plan" })).toBeNull();
+  click("Parts and print plates, optional"); expect(screen.getByRole("button", { name: "Create build plan" })).toBeTruthy();
+});
+
+it("retains the build draft while the project switches to a printed approach", async () => {
+  vi.mocked(workflowRequest).mockImplementation(async (path) => path === "/team/directory" ? { members: [] } : path.endsWith("/build-plan") ? null : { data: [], total: 0 });
+  const onApproach = vi.fn(), onRefresh = async () => true;
+  const view = render(<MakerPlanningTools project={{ ...project, fabricationRoute: "undecided" }} items={inventory} onRefresh={onRefresh} onApproach={onApproach} />);
+  click("Parts and print plates, optional");
+  await waitFor(() => expect(screen.getByRole("button", { name: "Create build plan" })).toHaveProperty("disabled", false));
+  click("Create build plan"); click("Add build part"); change("Build part 1 name", "Keep this lid"); change("Build part 1 quantity", "3"); click("Choose build approach"); expect(onApproach).toHaveBeenCalledOnce();
+  view.rerender(<MakerPlanningTools project={{ ...project, fabricationRoute: "printed" }} items={inventory} onRefresh={onRefresh} onApproach={onApproach} />);
+  expect(screen.getByLabelText("Build part 1 name")).toHaveProperty("value", "Keep this lid");
+  expect(screen.getByLabelText("Build part 1 quantity")).toHaveProperty("value", "3");
+  expect(screen.getByRole("button", { name: "Add plate layout" })).toHaveProperty("disabled", false);
+});
+
+it("freezes an ambiguous upload and retries the same file until confirmed", async () => {
+  const onUpload = vi.fn().mockRejectedValueOnce(new ApiError("Lost response", { kind: "offline" })).mockRejectedValueOnce(new ApiError("Forbidden", { kind: "forbidden", status: 403 })).mockResolvedValueOnce(undefined);
+  render(<BuildEditor project={project} items={inventory} initial={null} root="/project" onCancel={() => undefined} onSaved={() => undefined} onUpload={onUpload} />);
+  click("Add build part"); change("Build part 1 name", "Retained lid");
+  const file = new File(["synthetic"], "lid.stl");
+  fireEvent.change(screen.getByLabelText("Add a missing build file"), { target: { files: [file] } });
+  await screen.findByRole("button", { name: "Retry unchanged file upload" });
+  expect(screen.getByLabelText("Add a missing build file").matches(":disabled")).toBe(true);
+  click("Retry unchanged file upload"); await waitFor(() => expect(onUpload).toHaveBeenCalledTimes(2));
+  await screen.findByRole("button", { name: "Retry unchanged file upload" });
+  expect(screen.getByLabelText("Build part 1 name").matches(":disabled")).toBe(true);
+  click("Retry unchanged file upload"); await screen.findByText("File uploaded. Select it under Exact revision file for the matching part.");
+  expect(screen.getByLabelText("Build part 1 name")).toHaveProperty("value", "Retained lid");
+  expect(onUpload.mock.calls.every(([uploaded]) => uploaded === file)).toBe(true);
+  expect(screen.getByLabelText("Add a missing build file").matches(":disabled")).toBe(false);
 });

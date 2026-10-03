@@ -93,6 +93,7 @@ it("locks the printer picker while project creation is pending and unconfirmed",
   render(<DraftHarness kind="project" create={create} />);
   fireEvent.change(screen.getByLabelText("Project name", { exact: true }), { target: { value: "Printed project" } });
   fireEvent.change(screen.getByLabelText("Project goal", { exact: true }), { target: { value: "Check printer recovery" } });
+  fireEvent.click(screen.getByRole("button", { name: "Planning details" }));
   fireEvent.click(screen.getByRole("radio", { name: /3D-print parts/i }));
   const picker = screen.getByPlaceholderText("Choose an owned printer");
   const fieldset = picker.closest("fieldset")!;
@@ -110,6 +111,7 @@ it("locks the printer picker while project creation is pending and unconfirmed",
 
 it("does not warn about a hidden printer after returning a blank project to undecided", async () => {
   render(<DraftHarness kind="project" />);
+  fireEvent.click(screen.getByRole("button", { name: "Planning details" }));
   fireEvent.click(screen.getByRole("radio", { name: /3D-print parts/i }));
   fireEvent.click(document.querySelector<HTMLButtonElement>(".owned-quick-choice")!);
   expect(screen.getByText("Owned item")).toBeTruthy();

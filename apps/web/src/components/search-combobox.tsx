@@ -9,7 +9,7 @@ export function SearchCombobox({ label, value, onValueChange, options, onSelect,
 }) {
  const [open,setOpen] = useState(false);
  const [host,setHost] = useState<HTMLDivElement | null>(null);
- return <Popover open={open} onOpenChange={setOpen}><Command ref={setHost} shouldFilter={false} loop className="search-combobox">
+ return <Popover open={open} onOpenChange={setOpen}><Command label={label} ref={setHost} shouldFilter={false} loop className="search-combobox">
  <PopoverAnchor asChild><div><Label className="form-field"><span>{label}</span><CommandInput aria-label={label} aria-expanded={open} value={value} onValueChange={next => { onValueChange(next); setOpen(true); }} onFocus={() => setOpen(true)} placeholder={placeholder} disabled={disabled}/></Label></div></PopoverAnchor>
  {loading && <span role="status" aria-label="Searching">Searching…</span>}
  <PopoverContent container={host} className="search-results-popover" align="start" onOpenAutoFocus={event => event.preventDefault()} onCloseAutoFocus={event => event.preventDefault()} onInteractOutside={event => { if (host?.querySelector('[data-slot="command-input"]') === event.target) event.preventDefault(); }}>

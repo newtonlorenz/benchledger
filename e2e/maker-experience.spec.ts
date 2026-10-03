@@ -41,7 +41,7 @@ for (const width of [1440, 390]) {
     expect((await guidance.boundingBox())!.y).toBeLessThan(400);
     await page.getByRole("button", { name: "Project details", exact: true }).click();
     await expect(page.getByRole("complementary", { name: "Project details" })).toBeHidden();
-    await expect(guidance.getByRole("button", { name: "Set build approach" })).toBeVisible();
+    await expect(guidance.getByRole("button", { name: "Review stock checks" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Assembly", exact: true })).toHaveCount(0);
     await page.getByRole("button", { name: "Design tools", exact: true }).click();
     await page.getByRole("tab", { name: "Assembly", exact: true }).click();

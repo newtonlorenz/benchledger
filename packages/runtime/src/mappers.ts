@@ -560,6 +560,7 @@ export function apiArtifactFromStore(artifact: ArtifactRevision, metadata: Artif
 export function apiUploadSessionFromStore(session: StoreUploadSession, maxBytes: number): ApiUploadSession {
   return {
     id: session.sessionId,
+    receivedBytes: session.bytesWritten,
     artifactId: session.artifactId,
     expiresAt: session.expiresAt,
     maxBytes,

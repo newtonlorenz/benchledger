@@ -178,10 +178,14 @@ test("a project refresh failure preserves confirmed records and explains the sta
 });
 test("explicit refresh discard resets the local build editor rather than claiming a stale draft was refreshed", async ({ page }) => {
   await fixture(page, false); await tab(page, "Build planning");
+  await page.getByRole("button", { name: "Parts and print plates, optional", exact: true }).click();
   await page.getByRole("button", { name: "Create build plan", exact: true }).click();
   await page.getByLabel("Build plan name", { exact: true }).fill("Unsaved local name");
   await page.getByRole("button", { name: "Refresh project", exact: true }).click();
   await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click();
+  await expect(page.getByText("Project refreshed from the workspace.", { exact: true })).toBeVisible();
+  const optionalPlan = page.getByRole("button", { name: "Parts and print plates, optional", exact: true });
+  if (await optionalPlan.getAttribute("aria-expanded") === "false") await optionalPlan.click();
   await expect(page.getByRole("button", { name: "Create build plan", exact: true })).toBeVisible();
   await expect(page.getByLabel("Build plan name", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Project refreshed from the workspace.", { exact: true })).toBeVisible();
@@ -210,4 +214,52 @@ for (const colour of ["light", "dark"] as const) test(`durable stock review and 
   const dialog = page.getByRole("dialog", { name: "Apply these changes?" });
   await expect(dialog.getByRole("button", { name: "Apply stock changes", exact: true })).toBeInViewport();
   await audit(); await page.keyboard.press("Escape"); await expect(dialog).toHaveCount(0);
+});
+
+
+test("sets stock aside through the UI before recording actual use", async ({ page }) => {
+  const { itemId, base } = await fixture(page, false);
+  await tab(page, "Build planning");
+  await page.getByLabel("Requirement and confirmed stock").selectOption({ label: "Mounting fasteners — Synthetic acceptance fasteners" });
+  await page.getByLabel("Quantity to set aside (each)", { exact: true }).fill("4");
+  await page.getByRole("button", { name: "Review stock to set aside", exact: true }).click();
+  let stock = await (await page.request.get(`${base}/api/v1/inventory/${itemId}`)).json();
+  expect(stock.quantity).toBe(10); expect(stock.availableQuantity).toBe(10);
+  await page.getByRole("button", { name: "Confirm set aside", exact: true }).click();
+  await expect(page.getByText("Stock set aside. Record what was actually used after the build.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Release stock", exact: true })).toBeEnabled();
+  stock = await (await page.request.get(`${base}/api/v1/inventory/${itemId}`)).json();
+  expect(stock.quantity).toBe(10); expect(stock.availableQuantity).toBe(6);
+  await page.getByRole("button", { name: "Record actual stock use", exact: true }).click();
+  await result(page);
+  await page.getByRole("button", { name: "Review changes", exact: true }).click();
+  await page.getByRole("button", { name: "Apply stock changes", exact: true }).click();
+  await page.getByRole("dialog", { name: "Apply these changes?", exact: true }).getByRole("button", { name: "Apply stock changes", exact: true }).click();
+  await expect(page.locator(".reconciliation-committed")).toBeVisible();
+  stock = await (await page.request.get(`${base}/api/v1/inventory/${itemId}`)).json();
+  expect(stock.quantity).toBe(6); expect(stock.availableQuantity).toBe(6);
+});
+
+
+test("mobile build tables keep neighbouring stock controls and warnings within the viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+  await fixture(page, false); await tab(page, "Build planning");
+  await page.getByRole("button", { name: "Parts and print plates, optional", exact: true }).click();
+  await page.getByRole("button", { name: "Create build plan", exact: true }).click();
+  await page.getByRole("button", { name: "Add build part", exact: true }).click();
+  await page.getByLabel("Build part 1 name", { exact: true }).fill("Sensor mounting plate");
+  await page.getByLabel("Build part 1 quantity", { exact: true }).fill("2");
+  await page.getByRole("button", { name: "Review build plan", exact: true }).click();
+  await page.getByRole("button", { name: "Save planning snapshot", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Before you build", exact: true })).toBeVisible();
+  await expect(page.getByText("Sensor mounting plate: no versioned build file is attached.", { exact: true })).toBeVisible();
+  const bounds = await page.locator('.build-workspace > *, .build-workspace .dialog-actions button, [aria-label="Build checks"]').evaluateAll((elements) => elements.map((element) => {
+    const rect = element.getBoundingClientRect();
+    return { text: element.textContent?.slice(0, 50), left: rect.left, right: rect.right, viewport: innerWidth };
+  }));
+  expect(bounds.length).toBeGreaterThan(4);
+  for (const element of bounds) { expect(element.left, JSON.stringify(element)).toBeGreaterThanOrEqual(0); expect(element.right, JSON.stringify(element)).toBeLessThanOrEqual(element.viewport); }
+  await page.getByRole("button", { name: "Record actual stock use", exact: true }).scrollIntoViewIfNeeded();
+  await expect(page.getByRole("button", { name: "Record actual stock use", exact: true })).toBeInViewport();
 });

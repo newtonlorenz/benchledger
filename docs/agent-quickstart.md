@@ -418,3 +418,17 @@ Inventory deletion is a browser/HTTP action, not an advertised MCP tool.
 Use `inspect_assembly_sources` on exact, already uploaded KiCad PCB/STEP/GLB/STL files, paging through all parts. Read the current version with `read_project_assembly`, then use `save_project_assembly` with the full snapshot, observed expectedVersion and a stable host command key. Units/up axis, positions, separation, names, BOM links and steps are shared with the browser. See [Assembly explorer](assembly-explorer.md) for the full contract and import limits.
 
 Native PCB inspection uses fixed millimetres and Z up. References, values and footprint notes describe source pads/outlines, not verified component bodies. External model paths are never loaded. Read returned omissions before using a view as evidence. See [PCB viewer](pcb-viewer.md).
+
+Reservation creation is rejected after a project revision's reconciliation has
+been committed. Start a new revision for another build cycle. Reserving stock
+still requires confirmed usable evidence and compatibility; release uses the
+observed reservation version. Browser set-aside and actual-use actions follow
+the same application rules as agent calls.
+
+HTTP upload recovery: after a lost byte-write response, read
+`GET /api/v1/artifacts/uploads/:id` with read access to the upload's project.
+Use `receivedBytes` to send only the remaining suffix, with `Upload-Offset` set
+to that count. A stale offset returns 409 without appending; read progress again.
+Finalize verifies the declared size and SHA-256. Retry an uncertain finalization
+with its original command key. Only a confirmed expired session permits starting
+a fresh upload; session reads do not renew the fifteen-minute expiry.

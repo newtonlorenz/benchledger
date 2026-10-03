@@ -52,12 +52,14 @@ async function addExactInventory(
   await productOption.click();
 
   await page.getByLabel(category === "Filament" ? "Current mass (g)" : "Owned units").fill(quantity);
-  await page.getByLabel("Link state").selectOption("confirmed"); if (category === "Printers") await page.getByLabel("Setup date").fill("2026-09-04"); const createResponse = page.waitForResponse(mutationResponse("/api/v1/inventory/with-product-profile"));
+  await page.getByLabel("Product identity").selectOption("confirmed"); if (category === "Printers") await page.getByLabel("Setup date").fill("2026-09-04"); const createResponse = page.waitForResponse(mutationResponse("/api/v1/inventory/with-product-profile"));
   await page.getByRole("button", {
     name: category === "Filament" ? "Add filament spool" : "Add printer",
     exact: true,
   }).click();
   const response = await createResponse;
+  await expect(page.getByRole("button", { name: "Close item details" })).toBeVisible();
+  await page.getByRole("button", { name: "Close item details" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   return response;
 }
@@ -124,8 +126,8 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
 
   await expect(revisionDialog.getByText("How will you build it?", { exact: true })).toBeVisible();
   await revisionDialog.getByRole("radio", { name: /^3D-print parts/u }).check();
-  await expect(revisionDialog.getByText("Printer for this revision", { exact: true })).toBeVisible();
-  await expect(revisionDialog.getByText("Filament (optional technical setup)", { exact: true })).toBeVisible();
+  await expect(revisionDialog.getByRole("combobox", { name: "Printer for this revision" })).toBeVisible();
+  await expect(revisionDialog.getByRole("combobox", { name: "Filament (optional technical setup)" })).toBeVisible();
   await expect(revisionDialog).not.toContainText("immutable snapshot");
   const printerPicker = revisionDialog.getByRole("combobox", { name: "Printer for this revision" });
   await printerPicker.click();
@@ -292,6 +294,7 @@ test("keeps the starter catalog facet path accessible and honest at 390px", asyn
   await completeCatalog;
   const addDialog = page.getByRole("dialog", { name: "Add filament" });
 
+  await addDialog.getByRole("button", { name: "Find by product details" }).click();
   await addDialog.getByLabel("Manufacturer / brand").selectOption({ label: "Bambu Lab" });
   await addDialog.getByLabel("Product line / material family").selectOption({ label: "PETG" });
   const materialSubtype = addDialog.getByLabel("Material subtype");

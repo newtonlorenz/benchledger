@@ -91,6 +91,21 @@ const setupCommitInput = (preview: ProjectSetupPreview): { previewId: string; ex
 });
 
 describe("ApplicationService", () => {
+  it("rejects new reservations after this revision's stock review is committed", async () => {
+    const ports = fakePorts();
+    const reviewed = { status: "committed" } as import("@benchledger/api-contract").ReconciliationDraft;
+    const service = new ApplicationService({ ...ports, reconciliations: {
+      getDraft: async () => reviewed,
+      saveDraft: async () => { throw new Error("not used"); },
+      commit: async () => { throw new Error("not used"); }
+    } });
+    const line = await service.createBomLine("rev-1", { name: "PETG", role: "consumed", itemId: "item-1", requiredQuantity: 10, unit: "gram", optional: false, alternatives: [], constraints: {} }, context);
+    await expect(service.createReservation("rev-1", { lineId: line.data.id, itemId: "item-1", quantity: 1 }, context)).rejects.toMatchObject({ code: "conflict", message: expect.stringContaining("stock review is complete") });
+    expect(await service.listReservations("rev-1")).toEqual([]);
+    reviewed.status = "draft";
+    await expect(service.createReservation("rev-1", { lineId: line.data.id, itemId: "item-1", quantity: 1 }, context)).resolves.toMatchObject({ data: { quantity: 1, status: "active" } });
+  });
+
   it("keeps a reserved requirement consumable until its reservation is released", async () => {
     const ports = fakePorts();
     const service = new ApplicationService(ports);

@@ -101,3 +101,13 @@ it.each(["optional", "ready", "check"])("does not ask for quote review solely be
   expect(screen.queryByText("Selected quote needs review")).toBeNull();
   expect(screen.queryByRole("button", { name: "Record replacement quote" })).toBeNull();
 });
+
+it("connects selected quotes to explicit receipt and matching without changing stock", async () => {
+  vi.mocked(workflowRequest).mockResolvedValue(result({ status: "estimated", packages: 1, partsSupplied: 4, priceMinor: 250, totalMinor: 250, currency: "EUR", shippingKnown: false }));
+  const receive = vi.fn(), match = vi.fn();
+  render(<RequirementSourcing project={project} onInventory={receive} onMatch={match} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Record received stock" }));
+  fireEvent.click(screen.getByRole("button", { name: "Match owned stock" }));
+  expect(receive).toHaveBeenCalledOnce(); expect(match).toHaveBeenCalledWith(line.id);
+  expect(vi.mocked(workflowRequest).mock.calls.every((call) => call[1] === undefined)).toBe(true);
+});

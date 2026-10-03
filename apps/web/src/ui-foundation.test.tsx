@@ -23,5 +23,5 @@ it("retains an editor draft while a nested confirmation opens and closes", async
 });
 it("uses keyboard selection in the shared search picker and closes its results", async () => {
  const select=vi.fn();render(<SearchCombobox label="Owned item" value="" onValueChange={()=>{}} options={[{id:"first",content:"First item"},{id:"second",content:"Second item"}]} onSelect={select} empty="No stock"/>);
- const input=screen.getByRole("combobox");fireEvent.focus(input);await screen.findByRole("option",{name:"First item"});fireEvent.keyDown(input,{key:"ArrowDown"});fireEvent.keyDown(input,{key:"Enter"});expect(select).toHaveBeenCalledWith("second");expect(screen.queryByRole("listbox")).toBeNull();
+ const input=screen.getByRole("combobox", { name: "Owned item" });fireEvent.focus(input);await screen.findByRole("option",{name:"First item"});fireEvent.keyDown(input,{key:"ArrowDown"});fireEvent.keyDown(input,{key:"Enter"});expect(select).toHaveBeenCalledWith("second");expect(screen.queryByRole("listbox")).toBeNull();
 });

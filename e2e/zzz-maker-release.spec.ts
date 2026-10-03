@@ -8,12 +8,13 @@ async function login(page: Page) {
 async function guided(page: Page, name: string) {
   await page.getByRole("button", { name: "New project", exact: true }).click();
   await page.getByRole("button", { name: "Use a template or import a BOM", exact: true }).click();
-  await page.getByLabel("Guided project name").fill(name); await page.getByLabel("Guided project goal").fill("Synthetic acceptance of reviewed maker requirements.");
+  await page.getByLabel("Guided project name").fill(name); await page.getByRole("button", { name: "Project details, optional", exact: true }).click(); await page.getByLabel("Guided project goal").fill("Synthetic acceptance of reviewed maker requirements.");
   await page.getByLabel("Guided build approach").selectOption("printed");
   await page.getByText("Import requirements CSV", { exact: true }).click();
   await page.getByLabel("BOM CSV text").fill("name,quantity,unit\nPrinted bracket,5,each\nM3 mounting screw,7,each");
   await page.getByRole("button", { name: "Review CSV mapping", exact: true }).click();
   await page.getByRole("button", { name: "Use mapped requirements in draft", exact: true }).click();
+  await page.getByRole("button", { name: "Workstreams, optional", exact: true }).click();
   await page.getByLabel("Setup workstreams").fill("Design review\nAssembly");
   await page.getByRole("button", { name: "Preview complete project", exact: true }).click();
   await expect(page.getByRole("heading", { name: `Review ${name}`, exact: true })).toBeVisible();

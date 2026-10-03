@@ -2501,6 +2501,9 @@ export class ApplicationService {
     const parentId = requireId(revisionId, "revision id");
     return this.mutate(ctx, "project.reservation.create", "reservation", parsed.id ?? "pending", async () => {
       await this.assertProjectActiveFromRevision(parentId);
+      if ((await this.ports.reconciliations?.getDraft(parentId))?.status === "committed") {
+        throw conflict("This revision's stock review is complete. Create a new project revision before reserving more stock.");
+      }
       const lines = await this.ports.projects.listBomLines(parentId);
       const line = lines.find((candidate) => candidate.id === parsed.lineId);
       if (line === undefined) throw notFound("BOM line", parsed.lineId);
@@ -2795,10 +2798,11 @@ export class ApplicationService {
     });
   }
 
-  async writeArtifactUpload(sessionId: string, body: Uint8Array) {
+  async writeArtifactUpload(sessionId: string, body: Uint8Array, expectedOffset?: number) {
+    if (expectedOffset !== undefined && (!Number.isSafeInteger(expectedOffset) || expectedOffset < 0)) throw new ApplicationError("validation", "Upload offset must be a non-negative integer");
     requireId(sessionId, "upload session id");
     if (body.byteLength > MAX_UPLOAD_BYTES) throw new ApplicationError("quota_exceeded", "Upload exceeds the per-file limit");
-    return this.ports.unitOfWork.exclusive(() => this.ports.artifacts.writeUpload(sessionId, body));
+    return this.ports.unitOfWork.exclusive(() => this.ports.artifacts.writeUpload(sessionId, body, expectedOffset));
   }
 
   async finalizeArtifactUpload(sessionId: string, ctx: RequestContext): Promise<Mutation<Artifact>> {

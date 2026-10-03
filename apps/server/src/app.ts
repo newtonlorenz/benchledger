@@ -1186,12 +1186,18 @@ function jsonOpenApi(version: string): Record<string, unknown> {
         }
       },
       "/artifacts/uploads/{id}": {
+        get: {
+          summary: "Read durable upload progress before retrying bytes",
+          description: "Requires read access and upload project scope. Returns session identity, status and receivedBytes. Reading does not extend expiry. Resume only the remaining bytes at the reported offset, then finalize to verify size and SHA-256.",
+          parameters: [{ name: "id", in: "path", required: true, schema: artifactIdSchema }],
+          responses: { "200": { description: "Upload session with receivedBytes" }, "403": { description: "Read access or upload project scope denied" }, "404": { description: "Upload not found" } }
+        },
         put: {
           summary: "Write the bytes for an existing artifact upload",
-          description: "Requires write access. Project-scoped bearer tokens resolve the upload's durable project ancestry before writing. Send the exact declared bytes; maximum 100 MiB, subject to the configured server limit. Browser sessions require CSRF protection.",
-          parameters: [{ name: "id", in: "path", required: true, schema: artifactIdSchema }],
+          description: "Requires write access. Project-scoped bearer tokens resolve the upload's durable project ancestry before writing. Send the exact declared bytes, or the remaining suffix with Upload-Offset after reading session progress. The offset is checked atomically; a stale offset returns 409 without appending. Maximum 100 MiB, subject to the configured server limit. Browser sessions require CSRF protection.",
+          parameters: [{ name: "id", in: "path", required: true, schema: artifactIdSchema }, { name: "Upload-Offset", in: "header", required: false, schema: { type: "integer", minimum: 0 } }],
           requestBody: { required: true, content: { "application/octet-stream": { schema: { type: "string", format: "binary" } } } },
-          responses: { "200": { description: "Bytes received", content: { "application/json": { schema: { type: "object", required: ["receivedBytes"], properties: { receivedBytes: { type: "integer", minimum: 0 } } } } } }, "403": { description: "Write access or upload project scope denied" }, "413": { description: "Configured byte limit exceeded" } }
+          responses: { "200": { description: "Bytes received", content: { "application/json": { schema: { type: "object", required: ["receivedBytes"], properties: { receivedBytes: { type: "integer", minimum: 0 } } } } } }, "403": { description: "Write access or upload project scope denied" }, "409": { description: "Byte offset changed; read progress before resuming" }, "413": { description: "Configured byte limit exceeded" } }
         }
       },
       "/artifacts/uploads/{id}/finalize": {
@@ -1809,7 +1815,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     rejectScopedGlobalAccess(request);
     return service.bulkUpdateInventoryItems(parseBody(inventoryBulkUpdateSchema, request.body), requestContext(request));
   });
-  app.get(route("/inventory/:id"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; return service.getInventoryItem(params.id); });
+  app.get(route("/inventory/:id"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; const item = await service.getInventoryItem(params.id); return request.principal?.projectIds === undefined ? (await hydrateWorkspaceInventory(service, [item]))[0] : item; });
   app.post(route("/inventory/:id/count"), async (request, reply) => {
     requireScope(request, "write", auth);
     rejectScopedGlobalAccess(request);
@@ -2029,7 +2035,8 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const mutation = await service.beginArtifactUpload(input, requestContext(request));
     return reply.code(201).send(mutation);
   });
-  app.put(route("/artifacts/uploads/:id"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id, true); const body = request.body; if (!(body instanceof Uint8Array)) throw new ApplicationError("validation", "Upload body must be binary"); return service.writeArtifactUpload(params.id, body); });
+  app.get(route("/artifacts/uploads/:id"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id, true); return (await service.getUploadSessionDetails(params.id)).session; });
+  app.put(route("/artifacts/uploads/:id"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id, true); const body = request.body; if (!(body instanceof Uint8Array)) throw new ApplicationError("validation", "Upload body must be binary"); const offset = request.headers["upload-offset"]; if (offset !== undefined && (typeof offset !== "string" || !/^(0|[1-9]\d*)$/u.test(offset) || !Number.isSafeInteger(Number(offset)))) throw new ApplicationError("validation", "Upload-Offset must be a non-negative integer"); return service.writeArtifactUpload(params.id, body, offset === undefined ? undefined : Number(offset)); });
   app.post(route("/artifacts/uploads/:id/finalize"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id, true); return service.finalizeArtifactUpload(params.id, requestContext(request)); });
   app.put(route("/transfers/uploads/:id"), async (request, reply) => {
     const params = request.params as { id: string };

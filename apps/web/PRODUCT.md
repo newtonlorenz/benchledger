@@ -63,3 +63,19 @@ visible if a continuation request fails. Filter changes and inventory mutations
 restart at page one. Pagination is read-committed, so concurrent writes can
 shift later pages; the current offset cursor is opaque and keyset snapshots are
 deferred.
+
+## Capture and reuse
+
+A name is enough to start a project. Its first useful action is recording what it
+needs; build method and equipment remain optional until they affect the plan.
+Requirement creation and editing share explicit owned-item selection. Search
+uses bounded server results across the inventory, preserves the selected item,
+and never implies fit or changes units silently. Referenced stock details are
+loaded for the active project so reloads do not turn known selections into
+apparently missing stock.
+
+Inventory capture records what is known, including storage location. Catalogue
+identity can be completed later. Saving opens an explicit physical-count review;
+recording an item, confirming its quantity and confirming exact identity remain
+separate decisions. Keep drafts intact across supporting tasks such as adding a
+printer or uploading a missing design file.

@@ -112,7 +112,9 @@ test("inventory register and inspector remain accessible in light, dark and narr
     expect((await locationHeader.boundingBox())!.width).toBeGreaterThan(20);
     const inspect = page.locator(".inventory-table .table-item").filter({ hasText: "Inspector part 01" });
     await inspect.click();
-    await expect(page.getByRole("complementary", { name: "Inventory inspector" }).getByRole("heading", { name: "Inspector part 01", exact: true })).toBeVisible();
+    await expect(page.getByRole("dialog").getByRole("heading", { name: "Inspector part 01", exact: true })).toBeVisible();
+    await expect(page.getByLabel("Counted quantity")).toBeVisible();
+    await page.getByRole("button", { name: "Close item details" }).click();
   }
 });
 
