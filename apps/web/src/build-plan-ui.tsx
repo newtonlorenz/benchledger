@@ -42,6 +42,7 @@ export function BuildEditor({ project, items, initial, root, onCancel, onSaved }
   const [draft, setDraft] = useState<BuildPlanInput>(() => initial ? { expectedVersion: initial.version, name: initial.name, parts: initial.parts, plates: initial.plates, ...(initial.notes ? { notes: initial.notes } : {}) } : { expectedVersion: 0, name: `${project.name} build plan`, parts: [], plates: [] });
   const [review, setReview] = useState<BuildPlanInput>(), [error, setError] = useState<string>();
   const addPartButton = useRef<HTMLButtonElement>(null);
+  const partNameInputs = useRef(new Map<number, HTMLInputElement>());
   const command = useWorkflowCommand();
   const original: BuildPlanInput = initial ? { expectedVersion: initial.version, name: initial.name, parts: initial.parts, plates: initial.plates, ...(initial.notes ? { notes: initial.notes } : {}) } : { expectedVersion: 0, name: `${project.name} build plan`, parts: [], plates: [] };
   useUnsavedWork(JSON.stringify(draft) !== JSON.stringify(original), "build plan", command.busy || command.uncertain);
@@ -52,8 +53,14 @@ export function BuildEditor({ project, items, initial, root, onCancel, onSaved }
     if (!parsed.success) {
       setError(parsed.error.issues.map((issue) => issue.path.length === 1 && issue.path[0] === "parts" && draft.parts.length === 0
         ? "Add at least one required part before reviewing this plan."
-        : `${issue.path.join(".")}: ${issue.message}`).join("\n"));
+        : issue.path[0] === "parts" && typeof issue.path[1] === "number" && issue.path[2] === "name"
+          ? `Give part ${issue.path[1] + 1} a name so you can identify it on your plates.`
+          : `${issue.path.join(".")}: ${issue.message}`).join("\n"));
       if (draft.parts.length === 0) addPartButton.current?.focus();
+      else {
+        const missingName = parsed.error.issues.find((issue) => issue.path[0] === "parts" && issue.path[2] === "name");
+        if (typeof missingName?.path[1] === "number") partNameInputs.current.get(missingName.path[1])?.focus();
+      }
       return;
     }
     setError(undefined);
@@ -63,7 +70,7 @@ export function BuildEditor({ project, items, initial, root, onCancel, onSaved }
   if (review) return <section className="workflow-review"><h3>Review build plan</h3><p>{review.parts.length} parts · {review.plates.length} plate layouts · {review.plates.reduce((sum, plate) => sum + plate.copies, 0)} planned runs</p>{review.plates.map((plate) => <p key={plate.id}>{plate.name}: {plate.copies} runs, with {plate.parts.map((part) => `${part.quantity} × ${review.parts.find((entry) => entry.id === part.partId)?.name}`).join(", ")} per run.</p>)}<p>This records planning intent, not available stock, validated geometry or a completed print.</p>{command.error && <Alert asChild><p role="alert">{command.error}</p></Alert>}<div className="dialog-actions"><Button variant="ghost" type="button" className="button button-quiet" disabled={command.busy || command.uncertain} onClick={() => setReview(undefined)}>Back to build draft</Button><Button variant="default" type="button" className="button button-primary" disabled={command.busy} onClick={() => { void save(); }}>{command.busy ? "Saving…" : command.uncertain ? "Retry unchanged plan" : "Save planning snapshot"}</Button></div></section>;
   const files = (project.allArtifacts ?? project.artifacts).filter((file) => file.status !== "superseded" && (file.workItemRevisionId || file.projectRevisionId === project.serverRevisionId));
   return <section className="workflow-form"><Label className="form-field"><span>Build plan name</span><Input value={draft.name} maxLength={240} onChange={(event) => setDraft((value) => ({ ...value, name: event.target.value }))} /></Label>
-    <h3>Required parts</h3>{draft.parts.map((part, index) => <div className="intake-row" key={part.id}><Label className="form-field"><span>Part name</span><Input aria-label={`Build part ${index + 1} name`} value={part.name} maxLength={240} onChange={(event) => updatePart(index, { name: event.target.value })} /></Label><Label className="form-field"><span>Total required</span><Input aria-label={`Build part ${index + 1} quantity`} type="number" min="1" step="1" value={part.quantity} onChange={(event) => updatePart(index, { quantity: Number(event.target.value) })} /></Label>
+    <h3>Required parts</h3>{draft.parts.map((part, index) => <div className="intake-row" key={part.id}><Label className="form-field"><span>Part name</span><Input ref={(element) => { if (element) partNameInputs.current.set(index, element); else partNameInputs.current.delete(index); }} aria-label={`Build part ${index + 1} name`} value={part.name} maxLength={240} onChange={(event) => updatePart(index, { name: event.target.value })} /></Label><Label className="form-field"><span>Total required</span><Input aria-label={`Build part ${index + 1} quantity`} type="number" min="1" step="1" value={part.quantity} onChange={(event) => updatePart(index, { quantity: Number(event.target.value) })} /></Label>
       <Label className="form-field"><span>Exact revision file</span><NativeSelect aria-label={`Build part ${index + 1} file`} value={part.artifactId ?? ""} onChange={(event) => { const file = files.find((entry) => entry.id === event.target.value); updatePart(index, { artifactId: file?.id, workItemId: file?.workItemId, workItemRevisionId: file?.workItemRevisionId }); }}><NativeSelectOption value="">Not attached</NativeSelectOption>{part.artifactId && !files.some((file) => file.id === part.artifactId) && <NativeSelectOption value={part.artifactId}>Previously attached file (not loaded)</NativeSelectOption>}{files.map((file) => <NativeSelectOption key={file.id} value={file.id}>{file.name} · {file.revision}</NativeSelectOption>)}</NativeSelect></Label>
       <Button variant="ghost" type="button" className="text-button" onClick={() => setDraft((value) => ({ ...value, parts: value.parts.filter((entry) => entry.id !== part.id), plates: value.plates.map((plate) => ({ ...plate, parts: plate.parts.filter((entry) => entry.partId !== part.id) })) }))}>Remove draft part {index + 1}</Button></div>)}
     <Button ref={addPartButton} variant="outline" type="button" className="button button-secondary" disabled={draft.parts.length >= 100} onClick={() => { setError(undefined); setDraft((value) => ({ ...value, parts: [...value.parts, { id: workflowCommandKey("part"), name: "", quantity: 1 }] })); }}>Add build part</Button>

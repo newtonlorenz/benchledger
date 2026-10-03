@@ -607,6 +607,41 @@ describe("authenticated BenchLedger API adapter", () => {
     });
   });
 
+  it.each([403, 400])("retains an unresolved project command after a %i retry rejection", async (status) => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-project-retry" });
+    const result = { data: { project: serverProject(), revision: serverRevision() } };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(new TypeError("Response lost after commit"))
+      .mockResolvedValueOnce(jsonResponse({ error: { message: "Retry rejected before replay" } }, status))
+      .mockResolvedValueOnce(jsonResponse(result))
+      .mockResolvedValueOnce(jsonResponse(result));
+    const adapter = createWorkspaceAdapter();
+    const input = { name: "Synthetic retry project", description: "Check recovery" };
+    await expect(adapter.createProject(input)).rejects.toMatchObject({ kind: "offline" });
+    await expect(adapter.createProject(input)).rejects.toMatchObject({ status });
+    await expect(adapter.createProject(input)).resolves.toMatchObject({ id: "project-1" });
+    await adapter.createProject(input);
+    const keys = fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("idempotency-key"));
+    expect(keys[0]).toMatch(/^web-project-/u);
+    expect(keys.slice(0, 3)).toEqual([keys[0], keys[0], keys[0]]);
+    expect(keys[3]).not.toBe(keys[0]);
+    expect(new Set(fetchMock.mock.calls.map(([, init]) => init?.body)).size).toBe(1);
+  });
+
+  it("releases a new project command after an initial definitive rejection", async () => {
+    vi.stubGlobal("document", { cookie: "forge_csrf=csrf-project-rejected" });
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ error: { message: "Invalid project" } }, 400))
+      .mockResolvedValueOnce(jsonResponse({ data: { project: serverProject(), revision: serverRevision() } }));
+    const adapter = createWorkspaceAdapter();
+    const input = { name: "Synthetic rejected project", description: "Check recovery" };
+    await expect(adapter.createProject(input)).rejects.toMatchObject({ status: 400 });
+    await adapter.createProject(input);
+    const keys = fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("idempotency-key"));
+    expect(keys[0]).toMatch(/^web-project-/u);
+    expect(keys[1]).not.toBe(keys[0]);
+  });
+
   it("keeps the project vertical slice on real endpoints", async () => {
     vi.stubGlobal("document", { cookie: "forge_csrf=csrf-project" });
     const fetchMock = vi.spyOn(globalThis, "fetch")

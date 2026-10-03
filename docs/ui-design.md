@@ -104,8 +104,9 @@ an instruction without an action. Quote lists use compact requirement rows, with
 detail shown when a quote exists or a user starts recording one. Search always
 states its scope. An unavailable project link never opens another project.
 
-Draft protection covers inline build plans, supplier quotes, workstream edits
-and staged files. Keep editing preserves the current draft. Discard is explicit;
+Draft protection covers new project and requirement forms, inventory metadata,
+inline build plans, supplier quotes, workstream edits and staged files.
+Keep editing preserves the current draft. Discard is explicit;
 unconfirmed mutations remain protected. Before-unload protection is used only
 while a protected draft or operation exists. Appearance settings remain local.
 
@@ -155,3 +156,11 @@ the item drawer. These navigation changes do not alter HTTP/MCP capabilities,
 authorisation, stock evidence or physical-operation boundaries.
 
 See the [review and implementation plan](reviews/2026-10-02-maker-experience.md).
+
+The [second workflow review](reviews/2026-10-03-maker-refinements.md) tightens
+task consistency and recovery. The workbench includes missing printer setup.
+Item editing focuses on metadata while retaining hidden stock/image drafts.
+Quote entry moves focus into Supplier and restores it to Record quote on exit.
+A failed refresh or missing trigger moves focus to the sourcing region instead.
+Selected quote wording follows the canonical estimate result. Inventory-linked
+offer prices disclose package and coverage limits; copied drafts retain sources.

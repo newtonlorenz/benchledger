@@ -37,6 +37,21 @@ describe("workbench task model", () => {
     expect(filterHomeProjects(rows, "", { ...defaultHomePreferences, filter: "attention", sort: "attention" }).every((row) => row.tasks.length > 0)).toBe(true);
     expect(JSON.stringify(rows)).toBe(before);
   });
+  it("keeps printer setup actionable after stock and design files are ready", () => {
+    const printer = inventory.find((item) => item.category === "Printers")!;
+    const printed = project("printed", { fabricationRoute: "printed", intendedPrinterItemId: null, bom: [{ id: "optional", version: 1, label: "Optional bracket", required: 1, unit: "each", optional: true }], artifacts: [{ id: "design", name: "body.stl", role: "STL", revision: "r01", size: "1 KB", hash: "a".repeat(64), updated: "2026-10-03", status: "candidate", projectRevisionId: projects[0]!.serverRevisionId! }] });
+    delete printed.gapEvaluation;
+    const missing = deriveHomeProjects([printed], inventory)[0]!;
+    expect(missing.tasks).toMatchObject([{ kind: "setup", label: "Choose a printer" }]);
+    expect(filterHomeProjects([missing], "", { ...defaultHomePreferences, filter: "attention" })).toHaveLength(1);
+    expect(deriveHomeProjects([{ ...printed, intendedPrinterItemId: printer.id }], inventory)[0]!.tasks).toEqual([]);
+    const withoutIdentity = { ...printer }; delete withoutIdentity.productProfile;
+    for (const unavailable of [{ ...printer, availableQuantity: 0 }, { ...printer, serverEvidence: "delivered_uncounted" as const }, withoutIdentity]) {
+      expect(deriveHomeProjects([{ ...printed, intendedPrinterItemId: printer.id }], [unavailable])[0]!.tasks).toMatchObject([{ kind: "setup", label: "Review printer setup" }]);
+    }
+    for (const fabricationRoute of ["none", "ready_made"] as const) expect(deriveHomeProjects([{ ...printed, fabricationRoute }], [])[0]!.tasks).toEqual([]);
+    expect(deriveHomeProjects([{ ...printed, status: "complete" }], [])[0]!.tasks).toEqual([]);
+  });
   it("validates browser preferences and keeps only bounded record identifiers", () => {
     for (const raw of [null, "wrong", "null", "[]", "5"]) expect(parseHomePreferences(raw)).toEqual(defaultHomePreferences);
     expect(parseHomePreferences('{"pins":["one","one",5,""],"recent":["two"],"sort":"weird","filter":"bad"}')).toEqual({ pins: ["one"], recent: ["two"], filter: "active", sort: "recent" });

@@ -1754,7 +1754,8 @@ function inspectionCompletionCommandId(revisionId: string, inspectionId: string,
 function mutationFailureIsAmbiguous(error: unknown): boolean {
   // An offline/server failure can occur after the server committed but before
   // the browser received its response. Keep the key for an explicit retry.
-  // Validation/auth/CSRF failures have a known outcome and can release it.
+  // Validation/auth/CSRF failures settle this attempt only; they do not
+  // resolve an earlier ambiguous attempt using the same command key.
   return !(error instanceof ApiError && error.status < 500 && ["validation", "forbidden", "unauthenticated", "csrf"].includes(error.kind));
 }
 
@@ -3285,7 +3286,8 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         if (pendingProjectCommands.get(commandId)?.key === command.key) pendingProjectCommands.delete(commandId);
         return project;
       } catch (error: unknown) {
-        if (!mutationFailureIsAmbiguous(error) && pendingProjectCommands.get(commandId)?.key === command.key) pendingProjectCommands.delete(commandId);
+        // A rejected retry cannot settle an earlier attempt whose response was lost.
+        if (pending === undefined && !mutationFailureIsAmbiguous(error) && pendingProjectCommands.get(commandId)?.key === command.key) pendingProjectCommands.delete(commandId);
         throw error;
       }
     },
