@@ -10,13 +10,28 @@ import { inventoryLayoutKey, readInventoryLayout } from "./inventory-layout";
 beforeEach(() => { vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} })); localStorage.clear(); window.history.replaceState(null, "", "/inventory"); });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-function renderInventory() {
+function renderInventory(options: { empty?: boolean; search?: string; failure?: Error } = {}) {
   const item = inventory[0]!;
-  const listInventory = vi.fn().mockResolvedValue({ items: [item], total: 1 });
+  const listInventory = options.failure ? vi.fn().mockRejectedValue(options.failure) : vi.fn().mockResolvedValue({ items: options.empty ? [] : [item], total: options.empty ? 0 : 1 });
   const onSelectItem = vi.fn();
-  render(<InventoryPage categoryNodeId="" setCategoryNodeId={vi.fn()} sampleMode={false} adapter={{ listInventory } as unknown as WorkspaceAdapter} categories={[]} expert={false} search="" searchInputRef={createRef<HTMLInputElement>()} refreshKey={0} bulkSelectionResetKey={0} onSearch={vi.fn()} onSessionExpired={vi.fn()} onPageItems={vi.fn()} onSelectItem={onSelectItem} onNewItem={vi.fn()} onBulkSelectionChange={vi.fn()} />);
+  render(<InventoryPage categoryNodeId="" setCategoryNodeId={vi.fn()} sampleMode={false} adapter={{ listInventory } as unknown as WorkspaceAdapter} categories={[]} expert={false} search={options.search ?? ""} searchInputRef={createRef<HTMLInputElement>()} refreshKey={0} bulkSelectionResetKey={0} onSearch={vi.fn()} onSessionExpired={vi.fn()} onPageItems={vi.fn()} onSelectItem={onSelectItem} onNewItem={vi.fn()} onBulkSelectionChange={vi.fn()} />);
   return { item, listInventory, onSelectItem };
 }
+
+it("shows a focused first item action only after an empty unfiltered inventory succeeds", async () => {
+  renderInventory({ empty: true });
+  await screen.findByRole("heading", { name: "Start with what you have" });
+  expect(screen.getByRole("button", { name: "Add first item" })).toBeTruthy();
+  expect(screen.queryByRole("navigation", { name: "Inventory stock views" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "View options" })).toBeNull();
+});
+
+it.each(["filtered", "failed"])("keeps recovery available for a %s inventory result", async kind => {
+  renderInventory({ empty: true, ...(kind === "filtered" ? { search: "no-match" } : { failure: new Error("Unable to read stock") }) });
+  await screen.findByRole(kind === "filtered" ? "heading" : "alert", kind === "filtered" ? { name: "No matching items" } : {});
+  expect(screen.queryByRole("heading", { name: "Start with what you have" })).toBeNull();
+  expect(screen.getAllByRole("button", { name: kind === "filtered" ? "Clear filters" : "Try again" }).length).toBeGreaterThan(0);
+});
 
 it("starts with the full register and opens details when a maker selects an item", async () => {
   const { item, onSelectItem } = renderInventory();

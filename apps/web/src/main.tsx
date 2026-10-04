@@ -8,6 +8,7 @@ import "./shadcn.css";
 import "./workspace-layout.css";
 import "./workspace-shell.css";
 import "./project-workspace.css";
+import "./specialist-journey.css";
 import { applyAppearance, readAppearance } from "./appearance";
 
 applyAppearance(readAppearance());

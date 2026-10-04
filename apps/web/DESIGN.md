@@ -164,16 +164,27 @@ the optional inspector. Stock-ready messaging covers required parts and never
 claims design or physical validation. Revision creation is secondary. Assembly
 and PCB tabs are disclosed by Design tools and remain visible when linked directly.
 
-The workbench leads with resuming work and project actions, without a duplicate
-summary strip. Small project registers disclose search/sort; equipment details
+Projects is the single register destination and leads with resuming work and
+project actions. Empty workspaces offer Start a project and Add inventory;
+archive-only and failed-load states remain distinct. Small registers disclose search/sort; equipment details
 are optional. Inventory keeps search and stock views visible, with filters and
 view configuration behind one disclosure. Applied filters remain visible and
 clearable. Phone inventory rows keep item identity, recorded/available quantities
 and status together. The inspector discloses supporting evidence and AI handoff.
-The item drawer puts physical counting before images and maintenance actions.
+The item drawer puts physical counting before images and maintenance actions,
+then replaces the repeated form with a receipt after confirmation. Supporting
+inventory capture retains a requirement draft and returns to it explicitly.
+Requirements and Build steps distinguish the materials list from execution
+planning. Empty stock shortcuts and removal history stay out of the first-use
+view, while recorded removed requirements remain recoverable. Disappearing
+first-use controls return keyboard focus to their persistent equivalent.
 While editing item details, show the metadata form and retain other sections
 hidden, preserving their drafts. Protect changed project, requirement and item
 forms with the shared unsaved-work guard. Workbench printer tasks use the same
 eligibility rules as project guidance. Quote entry focuses Supplier and restores
 its trigger on exit, or the sourcing region if a refresh fails or the trigger
 is unavailable. Selected quote status follows the canonical estimate.
+
+On phones, Project tools holds CSV import, design tools and stock updates. The
+active stock-update tab remains visible. Keep the first working requirement in
+the initial viewport, with its quantity, match and status readable together.

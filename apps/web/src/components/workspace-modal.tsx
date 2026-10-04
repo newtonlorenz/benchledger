@@ -8,6 +8,10 @@ function returnFocusTarget(): HTMLElement | null {
   if (typeof document === "undefined") return null;
   const active = document.activeElement;
   if (!(active instanceof HTMLElement)) return null;
+  // First-use actions can disappear after a save. Return to their persistent
+  // equivalent instead of leaving keyboard users at the document body.
+  const persistentTarget = active.dataset.focusReturn;
+  if (persistentTarget) return document.getElementById(persistentTarget) ?? active;
   const popover = active.closest<HTMLElement>('[data-slot="popover-content"]');
   if (popover?.id) {
     return [...document.querySelectorAll<HTMLElement>('[aria-controls]')]

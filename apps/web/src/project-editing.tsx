@@ -65,19 +65,20 @@ export function ProjectManagementBar() {
   </section>;
 }
 
-export function RemovedRequirements() {
+export function RemovedRequirements({ hideWhenEmpty = false }: { hideWhenEmpty?: boolean }) {
   const actions = useContext(ProjectEditingContext);
   const [open, setOpen] = useState(false), [rows, setRows] = useState<BomLine[]>([]);
   const [loading, setLoading] = useState(false), [busy, setBusy] = useState<string>(), [error, setError] = useState<string>();
   const [refresh, setRefresh] = useState(0);
   const projectId = actions?.project.id, revisionId = actions?.project.serverRevisionId, lineCount = actions?.project.bom.length;
   useEffect(() => {
-    if (!open || !actions) return;
+    if ((!open && !hideWhenEmpty) || !actions) return;
     let active = true; setLoading(true); setError(undefined);
     void actions.listRemoved().then((items) => { if (active) setRows(items); }).catch((failure: unknown) => { if (active) setError(correctionError(failure)); }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [open, projectId, revisionId, lineCount, refresh]);
+  }, [open, hideWhenEmpty, projectId, revisionId, lineCount, refresh]);
   if (!actions) return null;
+  if (hideWhenEmpty && rows.length === 0 && !error) return null;
   const restore = async (line: BomLine) => {
     setBusy(line.id); setError(undefined);
     try { await actions.restore(line); setRows((current) => current.filter((entry) => entry.id !== line.id)); }

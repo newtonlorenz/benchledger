@@ -4,7 +4,7 @@ import AxeBuilder from "@axe-core/playwright";
 test("assembly explorer imports CAD, edits a guide, saves and reopens on desktop and mobile", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/"); await page.getByLabel("Workspace password").fill("demo-password-please-change"); await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await page.getByRole("button", { name: /^Projects/u }).click(); await page.getByRole("tab", { name: /^Files/u }).click();
+  await page.getByRole("button", { name: "Switch to project Synthetic H2D desk lamp", exact: true }).click(); await page.getByRole("tab", { name: /^Files/u }).click();
   await page.getByLabel("Choose files to upload").setInputFiles({ name: "synthetic-assembly.step", mimeType: "model/step", buffer: await readFile("packages/artifacts/testfiles/synthetic-assembly.step") });
   await page.getByRole("button", { name: "Add 1 file", exact: true }).click(); await expect(page.getByRole("button", { name: "Download synthetic-assembly.step", exact: true })).toBeVisible();
   if (await page.getByRole("button", { name: "Design tools", exact: true }).getAttribute("aria-expanded") === "false") await page.getByRole("button", { name: "Design tools", exact: true }).click();
@@ -52,7 +52,7 @@ test("assembly explorer imports CAD, edits a guide, saves and reopens on desktop
 test("a large assembly keeps selection controls reachable in light, dark and narrow views", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/"); await page.getByLabel("Workspace password").fill("demo-password-please-change"); await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await page.getByRole("button", { name: /^Projects/u }).click(); await page.getByRole("tab", { name: /^Files/u }).click();
+  await page.getByRole("button", { name: "Switch to project Synthetic H2D desk lamp", exact: true }).click(); await page.getByRole("tab", { name: /^Files/u }).click();
   await page.getByLabel("Choose files to upload").setInputFiles({ name: "synthetic-panels.step", mimeType: "model/step", buffer: await readFile("packages/artifacts/testfiles/synthetic-assembly.step") });
   await page.getByRole("button", { name: "Add 1 file", exact: true }).click(); await expect(page.getByRole("button", { name: "Download synthetic-panels.step", exact: true })).toBeVisible();
   await page.route("**/assembly", route => route.request().method() === "GET" ? route.fulfill({ json: { assembly: null, warnings: [] } }) : route.abort());
@@ -89,7 +89,7 @@ test("a large assembly keeps selection controls reachable in light, dark and nar
 test("the downloadable GLB showcase uploads with its standard browser media type", async ({ page }) => {
   await page.goto("/"); await page.getByLabel("Workspace password").fill("demo-password-please-change");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await page.getByRole("button", { name: /^Projects/u }).click(); await page.getByRole("tab", { name: /^Files/u }).click();
+  await page.getByRole("button", { name: "Switch to project Synthetic H2D desk lamp", exact: true }).click(); await page.getByRole("tab", { name: /^Files/u }).click();
   const bytes = await readFile("docs/assets/showcase/synthetic-enclosure.glb");
   await page.getByLabel("Choose files to upload").setInputFiles({ name: "synthetic-enclosure.glb", mimeType: "model/gltf-binary", buffer: bytes });
   await page.getByRole("button", { name: "Add 1 file", exact: true }).click();

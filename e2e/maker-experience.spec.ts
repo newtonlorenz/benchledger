@@ -49,13 +49,21 @@ for (const width of [1440, 390]) {
     await expect(page.getByRole("complementary", { name: "Project details" })).toBeHidden();
     await expect(guidance.getByRole("button", { name: "Review stock checks" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Assembly", exact: true })).toHaveCount(0);
-    await page.getByRole("button", { name: "Design tools", exact: true }).click();
+    await clickProjectAction(page, "Design tools");
     await page.getByRole("tab", { name: "Assembly", exact: true }).click();
     await page.reload();
     await expect(page.getByRole("tab", { name: "Assembly", exact: true })).toHaveAttribute("aria-selected", "true");
-    await page.getByRole("button", { name: "Design tools", exact: true }).click();
+    await clickProjectAction(page, "Design tools");
     await expect(page.getByRole("tab", { name: /^Files/u })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("tab", { name: "Assembly", exact: true })).toHaveCount(0);
+    if (width === 390) {
+      // The demo does not advertise stock reconciliation. Moving actions into
+      // Project tools must preserve that capability boundary.
+      await expect(page.getByRole("tab", { name: /^Update used stock/u })).toHaveCount(0);
+      await page.getByRole("button", { name: "Project tools", exact: true }).click();
+      await expect(page.getByRole("button", { name: "Update used stock", exact: true })).toHaveCount(0);
+      await page.keyboard.press("Escape");
+    }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   });
 }

@@ -5,7 +5,7 @@ async function login(page: Page) {
   await page.goto("/");
   await page.getByLabel("Workspace password").fill("demo-password-please-change");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
 }
 const records = Array.from({ length: 32 }, (_, i) => ({ id: `inspector-part-${i}`, name: `Inspector part ${String(i).padStart(2,"0")}`, kind: "electronic", quantity: 10, availableQuantity: i < 28 ? 0 : 8, allocatedQuantity: i < 28 ? 0 : 2, unit: "each", location: i % 2 === 0 ? "Drawer A" : "Drawer B", manufacturer: "Example Components", model: `EX-${i}`, tags: ["test fixture"], links: [], evidence: { state: i < 28 ? "delivered_uncounted" : "physically_counted", source: "synthetic fixture", observedAt: "2026-09-19T08:00:00Z" }, createdAt: "2026-09-19T08:00:00Z", updatedAt: "2026-09-19T08:00:00Z", version: 1 }));
 async function fixtureInventory(page: Page) {
@@ -216,13 +216,15 @@ test("empty inventory offers its first item while an empty search offers filter 
   await login(page);
   await page.route("**/api/v1/inventory?**", route => route.fulfill({ json: { data: [], total: 0, limit: 25 } }));
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Your inventory starts here" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Start with what you have", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Search inventory", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Add first item", exact: true }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.keyboard.press("Escape");
-  await page.getByLabel("Search inventory", { exact: true }).fill("missing component");
+  await page.goto("/?q=missing+component#/inventory");
+  await expect(page.getByLabel("Search inventory", { exact: true })).toHaveValue("missing component");
   await expect(page.getByRole("heading", { name: "No matching items" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add first item", exact: true })).toHaveCount(0);
   await page.locator(".inventory-active-filters").getByRole("button", { name: "Clear filters" }).click();
-  await expect(page.getByRole("heading", { name: "Your inventory starts here" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Start with what you have", exact: true })).toBeVisible();
 });

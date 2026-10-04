@@ -4,7 +4,7 @@ for (const kind of ["printer", "electronic"] as const) test(`delete ${kind} with
   await page.goto("/");
   await page.getByLabel("Workspace password").fill("demo-password-please-change");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
   const name = `Deletion test ${kind}`;
   const result = await page.evaluate(async ({ name, kind }) => {
     const csrf = document.cookie.split("; ").find((entry) => entry.startsWith("forge_csrf="))?.split("=")[1];

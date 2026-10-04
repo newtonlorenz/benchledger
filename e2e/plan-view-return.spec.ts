@@ -8,7 +8,7 @@ for (const width of [390, 1440]) {
     await page.goto("/");
     await page.getByLabel("Workspace password").fill("demo-password-please-change");
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
     const id = `plan-return-${randomUUID()}`, revision = `${id}-r1`;
     const csrf = (await page.context().cookies()).find(cookie => cookie.name === "forge_csrf")!.value;
     const post = async (path: string, data: object) => {
@@ -25,7 +25,7 @@ for (const width of [390, 1440]) {
     await expect(page.getByRole("alertdialog")).toHaveCount(0);
     await expect(page.getByRole("region", { name: "Next project action", exact: true })).toHaveCount(0);
     await expect(page.getByLabel("Project task shortcuts", { exact: true })).toHaveCount(0);
-    await page.getByRole("tab", { name: /^Plan/u }).click();
+    await page.getByRole("tab", { name: /^Requirements/u }).click();
     await expect(query).toHaveValue("Connector 24"); await expect(filter).toHaveValue("source");
     await page.getByRole("button", { name: "Clear requirement filters", exact: true }).click();
     await expect(query).toHaveValue(""); await expect(filter).toHaveValue("all");

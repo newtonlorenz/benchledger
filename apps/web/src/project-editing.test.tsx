@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { calculateProjectSummary } from "./domain";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
-import { ProjectEditingContext, ProjectManagementBar, RequirementEditAction, RequirementEditForm, ProjectEditForm, matchesRequirementFilter } from "./project-editing";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ProjectEditingContext, ProjectManagementBar, RequirementEditAction, RequirementEditForm, ProjectEditForm, RemovedRequirements, matchesRequirementFilter } from "./project-editing";
 import { inventory, projects } from "./mock-data";
 
 describe("maker correction surfaces", () => {
@@ -45,4 +45,20 @@ it("requirement discovery matches words across its name and note", () => {
   const entry = { ...row, line: { ...row.line, label: "Café spacer", note: "Anodised aluminium", optional: false }, decision: "source" as const };
   expect(matchesRequirementFilter(entry, "aluminium cafe", "source")).toBe(true);
   expect(matchesRequirementFilter(entry, "steel", "all")).toBe(false);
+});
+
+
+afterEach(cleanup);
+it("hides an empty removal history but makes a removed last requirement recoverable", async () => {
+  const listRemoved = vi.fn().mockResolvedValue([]);
+  const actions = { project: { ...projects[0]!, bom: [] }, editRequirement: vi.fn(), editProject: vi.fn(), listRemoved, restore: vi.fn().mockResolvedValue(undefined) };
+  const view = render(<ProjectEditingContext.Provider value={actions}><RemovedRequirements hideWhenEmpty /></ProjectEditingContext.Provider>);
+  await waitFor(() => expect(listRemoved).toHaveBeenCalledTimes(1));
+  expect(screen.queryByRole("button", { name: "Removed requirements" })).toBeNull();
+  listRemoved.mockResolvedValue([projects[0]!.bom[0]!]);
+  view.rerender(<ProjectEditingContext.Provider value={{ ...actions, project: { ...actions.project, serverRevisionId: "synthetic-new-revision" } }}><RemovedRequirements hideWhenEmpty /></ProjectEditingContext.Provider>);
+  fireEvent.click(await screen.findByRole("button", { name: "Removed requirements" }));
+  fireEvent.click(await screen.findByRole("button", { name: `Restore requirement ${projects[0]!.bom[0]!.label}` }));
+  await waitFor(() => expect(actions.restore).toHaveBeenCalledWith(projects[0]!.bom[0]!));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Removed requirements" })).toBeNull());
 });

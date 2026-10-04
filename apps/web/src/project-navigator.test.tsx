@@ -22,10 +22,16 @@ it("finds a project, reports selection and delegates navigation without mutating
   expect(onViewChange).toHaveBeenCalledWith("archived");
   expect(records.map((project) => project.name)).toEqual(["Café fixture", "Sensor box"]);
 });
-it("keeps an empty archive distinct from an empty active workspace", () => {
+it("hides an empty workspace navigator while keeping archive states available", () => {
   const props = { projects: [], selectedId: undefined, archivedCount: 0, onSelect: vi.fn(), onViewChange: vi.fn() };
   const view = render(<ProjectNavigator {...props} view="active" />);
-  expect(screen.getByText("Your projects will appear here.")).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "Project navigator" })).toBeNull();
+  expect(screen.queryByLabelText("Filter project navigator")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Archived (0)" })).toBeNull();
+  view.rerender(<ProjectNavigator {...props} archivedCount={2} view="active" />);
+  expect(screen.getByText("No active projects. Open the archive to review earlier work.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Archived (2)" }));
+  expect(props.onViewChange).toHaveBeenCalledWith("archived");
   fireEvent.click(screen.getByRole("button", { name: "Active projects" }));
   expect(props.onViewChange).toHaveBeenCalledWith("active");
   view.rerender(<ProjectNavigator {...props} view="archived" />);

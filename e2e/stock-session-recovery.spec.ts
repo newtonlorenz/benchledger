@@ -33,7 +33,7 @@ test("a first commissioning auth rejection remains editable after a post-login v
     return route.fulfill({ status: 409, json: { error: { code: "version_conflict", message: "Synthetic item changed; review the latest stock." } } });
   });
   await page.goto("/"); await signIn(page);
-  await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("switch", { name: "Technical details", exact: true }).check();
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
@@ -77,8 +77,8 @@ test("a first commissioning auth rejection remains editable after a post-login v
   await guard.getByRole("button", { name: "Discard changes and leave", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
-  await page.getByRole("button", { name: "Workbench", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: /^Projects/u }).click();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
   expect(writes).toHaveLength(2);
   expect(pageErrors).toEqual([]);
 });
@@ -108,7 +108,7 @@ test("a definitively rejected observation can be discarded when its item is gone
     return route.fulfill({ status: 401, json: { error: { code: "unauthenticated", message: "Synthetic session expired before the observation was saved." } } });
   });
   await page.goto("/"); await signIn(page);
-  await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("switch", { name: "Technical details", exact: true }).check();
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
@@ -133,8 +133,8 @@ test("a definitively rejected observation can be discarded when its item is gone
   const readsBeforeDiscard = exactReads;
   await page.getByRole("button", { name: "Discard observation and reload", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Cannot open workspace", exact: true })).toHaveCount(0);
-  await page.getByRole("button", { name: "Workbench", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: /^Projects/u }).click();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
   expect(writes).toBe(1);
@@ -173,7 +173,7 @@ for (const scenario of [
       return route.fulfill({ json: { data: { item, event: { id: `synthetic-${scenario.operation}-event` } } } });
     });
     await page.goto("/"); await signIn(page);
-    await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
     if (scenario.operation === "commission") {
       await page.getByRole("button", { name: "Settings", exact: true }).click();
       await page.getByRole("switch", { name: "Technical details", exact: true }).check();
@@ -230,7 +230,8 @@ for (const scenario of [
     expect(writes[0]!.key).toBeTruthy(); expect(writes[2]).toEqual(writes[0]);
     if (scenario.operation === "count") {
       expect(JSON.parse(writes[2]!.body!)).toEqual({ quantity: 7 });
-      await expect(drawer.getByLabel("Counted quantity")).toHaveValue("7");
+      await expect(drawer.getByLabel("Counted quantity")).toHaveCount(0);
+      await expect(drawer.getByRole("status")).toContainText("Confirmed 7");
     } else {
       expect(writes[2]!.version).toBe("3");
       expect(JSON.parse(writes[2]!.body!)).toEqual({ quantity: 7, unit: "each", evidence: {

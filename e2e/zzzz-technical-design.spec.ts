@@ -4,7 +4,7 @@ async function signIn(page: Page) {
   await page.goto("/");
   await page.getByLabel("Workspace password").fill("demo-password-please-change");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
 }
 async function navigate(page: Page, name: string) {
   if ((page.viewportSize()?.width ?? 1400) < 801) await page.getByLabel("Open navigation", { exact: true }).click();
@@ -18,8 +18,13 @@ async function theme(page: Page, name: string) {
 }
 for (const width of [1536, 390, 320]) for (const mode of ["Light", "Dark"]) test(`technical workspace stays readable in ${mode} at ${width}px`, async ({ page }) => {
   await page.setViewportSize({ width, height: 900 }); await signIn(page); await theme(page, mode);
-  for (const section of ["Workbench", "Inventory", "Projects", "Settings"]) {
-    await navigate(page, section);
+  for (const section of ["Projects", "Inventory", "Project details", "Settings"]) {
+    await navigate(page, section === "Project details" ? "Projects" : section);
+    if (section === "Project details") {
+      if (width < 801) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
+      await page.getByRole("button", { name: "Switch to project Synthetic H2D desk lamp", exact: true }).click();
+      await expect(page.getByRole("heading", { name: "Synthetic H2D desk lamp", exact: true })).toBeVisible();
+    }
     await expect(page.locator("html")).toHaveAttribute("data-theme", mode.toLowerCase());
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(await page.locator("main").evaluate((element) => { const rect = element.getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth; })).toBe(true);
@@ -40,7 +45,7 @@ test("appearance and compact navigation persist without business-data writes", a
   await page.getByLabel("Collapse navigation", { exact: true }).click();
   expect(await page.getByLabel("Primary navigation", { exact: true }).evaluate((nav) => nav.getBoundingClientRect().width)).toBe(64);
   await page.reload(); await expect(page.locator("html")).toHaveAttribute("data-theme", "dark"); await expect(page.locator("html")).toHaveAttribute("data-density", "compact"); await expect(page.locator("html")).toHaveAttribute("data-nav", "rail");
-  await navigate(page, "Workbench"); await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
+  await navigate(page, "Projects"); await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
   await page.getByLabel("Expand navigation", { exact: true }).click(); expect(writes).toEqual([]);
 });
 test("commands open pages and forms by keyboard while retaining focus boundaries", async ({ page }) => {

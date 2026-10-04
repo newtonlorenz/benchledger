@@ -5,7 +5,7 @@ for (const width of [390, 1440]) test(`received stock returns to its requirement
   await page.setViewportSize({ width, height: 900 });
   await page.goto("/"); await page.getByLabel("Workspace password").fill("demo-password-please-change");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
   const id = `receipt-${randomUUID()}`, revision = `${id}-r1`;
   const csrf = (await page.context().cookies()).find(cookie => cookie.name === "forge_csrf")!.value;
   const post = async (path: string, data: object) => {
@@ -22,7 +22,7 @@ for (const width of [390, 1440]) test(`received stock returns to its requirement
   await row.getByLabel("Supplier source URL").fill("https://supplier.example/connectors");
   await row.getByLabel("Quantity per pack", { exact: true }).fill("10");
   await row.getByLabel("Pack price", { exact: true }).fill("2.50");
-  await row.getByRole("button", { name: "Save supplier observation" }).click();
+  await row.getByRole("button", { name: "Save quote" }).click();
   await row.getByLabel("I checked that this quoted item meets the current requirement").check();
   await row.getByRole("button", { name: "Use reviewed quote" }).click();
   await row.getByRole("button", { name: "Record received stock" }).click();
@@ -48,7 +48,7 @@ for (const width of [390, 1440]) test(`received stock returns to its requirement
   await expect(edit.getByRole("button", { name: "Clear owned item selection" })).toBeVisible();
   await edit.getByRole("button", { name: "Save requirement", exact: true }).click();
   await expect(edit).toHaveCount(0);
-  await page.getByRole("tab", { name: /^Plan/u }).click();
+  await page.getByRole("tab", { name: /^Requirements/u }).click();
   await expect(page.locator(".bom-row")).toContainText("Ready");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

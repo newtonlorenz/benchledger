@@ -9,6 +9,24 @@ import { Button } from "./components/ui/button";
 
 afterEach(cleanup);
 
+function FirstRequirement() {
+  const [editing, setEditing] = useState(false), [saved, setSaved] = useState(false);
+  return <>
+    {!saved && <Button data-focus-return="add-project-requirement" onClick={() => setEditing(true)}>Add first requirement</Button>}
+    <Button id="add-project-requirement" onClick={() => setEditing(true)}>Add a requirement</Button>
+    {editing && <WorkspaceModal onClose={() => setEditing(false)}><section><DialogTitle>Add requirement</DialogTitle><Button onClick={() => { setSaved(true); setEditing(false); }}>Save requirement</Button></section></WorkspaceModal>}
+  </>;
+}
+
+it("returns a disappearing first-use action to the persistent add requirement control", async () => {
+  render(<FirstRequirement />);
+  const first = screen.getByRole("button", { name: "Add first requirement" });
+  first.focus(); fireEvent.click(first);
+  fireEvent.click(await screen.findByRole("button", { name: "Save requirement" }));
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Add a requirement" })));
+  expect(screen.queryByRole("button", { name: "Add first requirement" })).toBeNull();
+});
+
 function ProjectTool({ title }: { title: string }) {
   const [editing, setEditing] = useState(false);
   return <>

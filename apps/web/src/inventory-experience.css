@@ -557,3 +557,10 @@
 /* Item-detail editing keeps its own draft while stock and image tasks are used. */
 .detail-drawer .inventory-detail-edit { padding: 0; border: 0; background: transparent; }
 .detail-drawer .inventory-detail-edit > h3 { margin: 0 0 8px; font-size: 1rem; }
+
+
+/* The count receipt is a close-out step; its actions follow the full-width result. */
+.detail-drawer .inventory-count-receipt { grid-template-columns: minmax(0, 1fr); }
+.detail-drawer .inventory-count-receipt > div:first-child strong { letter-spacing: -0.02em; }
+.detail-drawer .inventory-count-receipt > div:first-child p { max-width: none; }
+.inventory-count-receipt .drawer-form-actions { justify-content: flex-start; flex-wrap: wrap; margin-top: 0; }

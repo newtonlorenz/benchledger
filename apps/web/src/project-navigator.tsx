@@ -15,20 +15,21 @@ export function ProjectNavigator({ projects, selectedId, view, archivedCount, on
   onViewChange(view: "active" | "archived"): void;
 }) {
   const [query, setQuery] = useState("");
+  if (projects.length === 0 && archivedCount === 0 && view === "active") return null;
   const normalise = (value: string) => value.normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase();
   const matches = projects.filter((project) => normalise(project.name).includes(normalise(query.trim())));
   return <section className="project-navigator" aria-label="Project navigator">
-    <div className="navigator-heading"><strong>Projects</strong><span>{projects.length} loaded</span></div>
+    <div className="navigator-heading"><strong>Projects</strong><span>{projects.length} shown</span></div>
     <div className="project-view-switch" role="group" aria-label="Project view">
       <Button variant="ghost" type="button" aria-pressed={view === "active"} className={view === "active" ? "is-active" : ""} onClick={() => onViewChange("active")}>Active projects</Button>
       <Button variant="ghost" type="button" aria-pressed={view === "archived"} className={view === "archived" ? "is-active" : ""} onClick={() => onViewChange("archived")}>Archived ({archivedCount})</Button>
     </div>
-    <Label className="navigator-search"><Icon name="search" size={14} /><Input aria-label="Filter project navigator" placeholder="Filter projects…" value={query} onChange={(event) => setQuery(event.target.value)} /></Label>
+    {(projects.length > 0 || query) && <Label className="navigator-search"><Icon name="search" size={14} /><Input aria-label="Filter project navigator" placeholder="Filter projects…" value={query} onChange={(event) => setQuery(event.target.value)} /></Label>}
     <div className="navigator-projects">
       {matches.map((project) => <Button variant="ghost" type="button" key={project.id} className={`navigator-project ${project.id === selectedId ? "is-selected" : ""}`} aria-current={project.id === selectedId ? "page" : undefined} aria-label={`Switch to project ${project.name}`} title={project.name} onClick={() => onSelect(project.id)}>
         <Icon name="folder" size={16} /><span><strong>{project.name}</strong><small>{project.currentRevision} · {project.status}</small></span>
       </Button>)}
-      {!matches.length && <p className="navigator-empty">{query.trim() ? "No matching projects." : view === "archived" ? "No archived projects." : "Your projects will appear here."}</p>}
+      {!matches.length && <p className="navigator-empty">{query.trim() ? "No matching projects." : view === "archived" ? "No archived projects." : "No active projects. Open the archive to review earlier work."}</p>}
     </div>
     {query && <Button variant="ghost" type="button" className="text-button navigator-clear" onClick={() => setQuery("")}>Clear project filter</Button>}
   </section>;

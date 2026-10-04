@@ -8,7 +8,7 @@ async function signIn(page: Page): Promise<void> {
   await page.goto("/");
   await page.getByLabel("Workspace password").fill(demoPassword);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("heading", { name: "Workspace overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
 }
 
 function catalogResponse(kind: "filament" | "printer", query: string) {
@@ -120,7 +120,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   expect(createdProjectId).toEqual(expect.any(String));
   await expect(page.getByRole("heading", { name: projectName, exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "Settings", exact: true }).click(); await page .getByRole("switch", { name: "Technical details" }) .click(); await expect( page.getByRole("switch", { name: "Technical details" }) ).toBeVisible(); await page.getByRole("button", { name: /^Projects/u }).click(); await clickProjectAction(page, "New revision");
+  await page.getByRole("button", { name: "Settings", exact: true }).click(); await page .getByRole("switch", { name: "Technical details" }) .click(); await expect( page.getByRole("switch", { name: "Technical details" }) ).toBeVisible(); await page.getByRole("button", { name: /^Projects/u }).click(); await page.getByRole("button", { name: `Switch to project ${projectName}`, exact: true }).click(); await clickProjectAction(page, "New revision");
   const revisionDialog = page.getByRole("dialog", { name: `New revision for ${projectName}` });
   await expect(revisionDialog).toBeVisible();
   await revisionDialog.getByLabel("Revision name").fill("Exact setup capture");
@@ -226,7 +226,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
     filamentSelections: snapshot?.filamentSelections,
   });
 
-  await page.getByRole("tab", { name: "Files 0", exact: true }).click();
+  await page.getByRole("tab", { name: "Files", exact: true }).click();
   const beginUploadResponse = page.waitForResponse((response) => {
     const url = new URL(response.url());
     return ( response.request().method() === "POST"

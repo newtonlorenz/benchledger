@@ -17,7 +17,7 @@ export function MakerPlanningTools({ project, items, onRefresh, onUsedStock, onU
   const work = <WorkstreamPlanning key={`work:${project.id}`} project={project} onProjectRefresh={onRefresh} />;
   const stock = stockReservationsSupported ? <StockReservationPlanning key={`stock:${project.id}:${project.serverRevisionId}`} project={project} items={items} onRefresh={onRefresh} onUsedStock={onUsedStock} /> : null;
   return <div className="maker-planning-tools build-workspace">
-    <div className="workflow-page-heading"><span className="eyebrow">Build planning</span><h2>Parts, plates and workstreams</h2><p>Plan quantities and track each piece of work. Record actual stock use separately.</p></div>
+    <div className="workflow-page-heading"><h2>Parts, plates and task groups</h2><p>Plan quantities and track each piece of work. Record actual stock use separately.</p></div>
     {printed ? [plan, stock, work] : [work, stock, plan]}
   </div>;
 }

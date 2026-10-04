@@ -14,6 +14,7 @@ import "./home-experience.css";
 
 export interface WorkbenchHomeProps {
   projects: Project[]; items: InventoryItem[]; printers: InventoryItem[]; sampleMode: boolean; isPrinterUsable?: ((item: InventoryItem) => boolean) | undefined;
+  archivedCount?: number | undefined; onOpenArchive?: (() => void) | undefined;
   onOpen(id: string, tab?: "plan" | "files" | "offers" | "reconciliation"): void;
   onTask(task: HomeTask): void; onNewProject(event: React.MouseEvent<HTMLButtonElement>): void;
   onAddItem(): void; onImport?: (() => void) | undefined; onInventory(): void; onItem(id: string): void;
@@ -32,6 +33,8 @@ export function WorkbenchHome(props: WorkbenchHomeProps) {
   const [refreshError, setRefreshError] = useState(false);
   const [queueLimit, setQueueLimit] = useState(8);
   const rows = useMemo(() => deriveHomeProjects(projects, items), [projects, items]);
+  const archivedCount = props.archivedCount ?? projects.filter((project) => project.status === "archived").length;
+  const firstUse = rows.length === 0 && archivedCount === 0 && !refreshError && !refreshing;
   const filtered = filterHomeProjects(rows, query, preferences);
   const tasks = rows.flatMap((row) => row.tasks);
   const queue = tasks.filter((task) => taskKind === "all" || task.kind === taskKind);
@@ -67,14 +70,14 @@ export function WorkbenchHome(props: WorkbenchHomeProps) {
 
   return <div className="home-workspace home-experience">
     <header className="home-heading">
-      <div><h1>Workspace overview</h1><p>Choose a project or review your inventory.</p></div>
-      <div className="home-actions">
+      <div><h1>Projects</h1><p>{firstUse ? "Plan a build and check what you can reuse." : "Choose a project or review your inventory."}</p></div>
+      {!firstUse && <div className="home-actions">
         <Button variant="outline" type="button" className="button button-secondary" onClick={props.onInventory}><Icon name="box" size={16} />Open inventory</Button>
         <Button type="button" className="button button-primary" onClick={props.onNewProject}><Icon name="plus" size={16} />New project</Button>
-      </div>
+      </div>}
     </header>
 
-    {refreshError && <Alert asChild><p role="alert" className="home-read-error">The workspace could not refresh. The previous records remain visible. Retry before using stock.</p></Alert>}
+    {refreshError && <Alert asChild><p role="alert" className="home-read-error">{rows.length ? "The workspace could not refresh. The previous records remain visible. Retry before using stock." : "The workspace could not refresh. Try again to check for projects and stock."}</p></Alert>}
     {rows.some((row) => row.unknown && row.project.status !== "complete") && <p role="status" className="home-results-warning">Some stock results are unavailable. Check and sourcing counts exclude those projects. Refresh the workspace before using stock.</p>}
 
     {recent && <section className="home-resume" aria-label="Resume recent project">
@@ -82,11 +85,20 @@ export function WorkbenchHome(props: WorkbenchHomeProps) {
       <Button variant="ghost" type="button" className="home-resume-link" aria-label="Resume project" title="Last opened in this browser" onClick={() => props.onOpen(recent.project.id)}>{recent.project.name}<Icon name="arrow-right" size={15} /></Button>
     </section>}
 
-    {!rows.length ? <section className="home-onboarding">
-      <h2>What would you like to make?</h2>
-      <p>Create a project with a name and a goal. Add its parts, materials and tools, then check what you already own before sourcing anything else.</p>
-      <p>You can choose equipment and add design files as your idea develops.</p>
-      {refreshButton}
+    {firstUse ? <section className="home-onboarding" aria-label="Getting started">
+      <div className="home-first-project">
+        <h2>What would you like to make?</h2>
+        <p>Plan a printed bracket, a sensor box or a repair. Start with a name, then list the parts, materials and tools you need.</p>
+        <Button type="button" className="button button-primary" onClick={props.onNewProject}><Icon name="plus" size={16} />Start a project</Button>
+      </div>
+      <div className="home-first-inventory">
+        <div><h2>Start with what you own</h2><p>Add a spool of filament, screws or a tool so you can find and reuse it in a project.</p></div>
+        <Button variant="outline" type="button" className="button button-secondary" onClick={props.onAddItem}><Icon name="box" size={16} />Add inventory</Button>
+      </div>
+    </section> : !rows.length ? <section className="home-empty-projects" aria-label="Project register" aria-busy={refreshing}>
+      <h2>{refreshing ? "Checking projects…" : refreshError ? "Projects could not be checked" : "No active projects"}</h2>
+      <p>{refreshing ? "Refreshing the workspace." : refreshError ? "Refresh the workspace to see the current project list." : "Your archived projects are still available to review or restore."}</p>
+      <div className="home-actions">{archivedCount > 0 && props.onOpenArchive && <Button variant="outline" type="button" className="button button-secondary" onClick={props.onOpenArchive}><Icon name="archive" size={16} />View archived projects</Button>}{refreshButton}</div>
     </section> : <section className="home-projects" aria-label="Project register">
       <div className="home-section-title"><h2>Your projects</h2>{refreshButton}</div>
       <div className="home-project-toolbar">
@@ -97,7 +109,7 @@ export function WorkbenchHome(props: WorkbenchHomeProps) {
       <div className="home-register-columns" aria-hidden="true"><span /><span>Project</span><span>Stage</span><span>Stock readiness</span><span>Next action</span></div>
       <div className="home-project-list">{filtered.slice(0, limit).map((row) => <HomeProjectRow key={row.project.id} row={row} pinned={preferences.pins.includes(row.project.id)} onPin={() => pin(row.project.id)} onOpen={() => props.onOpen(row.project.id)} onTask={props.onTask} />)}</div>
       {!filtered.length && <div className="home-filter-empty"><Icon name="folder" size={24} /><strong>No projects match this view</strong><p>Change the view or clear the search.</p><Button variant="ghost" type="button" className="text-button" onClick={() => { setQuery(""); update({ filter: "all" }); }}>Show all projects</Button></div>}
-      <div className="home-list-footer"><span>{Math.min(limit, filtered.length)} of {filtered.length} matching loaded projects</span>{filtered.length > limit && <Button variant="ghost" type="button" className="text-button" onClick={() => setLimit((value) => value + 12)}>Show more projects</Button>}</div>
+      <div className="home-list-footer"><span>{Math.min(limit, filtered.length)} of {filtered.length} projects in this view</span>{filtered.length > limit && <Button variant="ghost" type="button" className="text-button" onClick={() => setLimit((value) => value + 12)}>Show more projects</Button>}</div>
     </section>}
 
     <div className="home-support">
@@ -109,22 +121,23 @@ export function WorkbenchHome(props: WorkbenchHomeProps) {
           {queue.length > queueLimit && <div className="home-queue-footer"><span>Showing {queueLimit} of {queue.length} tasks</span><Button variant="ghost" type="button" className="text-button" onClick={() => setQueueLimit((value) => value + 8)}>Show more tasks</Button></div>}
         </section></DisclosureContent>
       </Disclosure>}
-      <Disclosure className="home-disclosure home-tools-disclosure" defaultOpen={!rows.length}>
+      <Disclosure className="home-disclosure home-tools-disclosure">
         <DisclosureTrigger>Workspace tools</DisclosureTrigger>
         <DisclosureContent><div className="home-tools">
           <div className="home-entry-tools">
-            <Button variant="outline" type="button" className="button button-secondary" onClick={props.onAddItem}><Icon name="box" size={16} />Add inventory</Button>
+            {!firstUse && <Button variant="outline" type="button" className="button button-secondary" onClick={props.onAddItem}><Icon name="box" size={16} />Add inventory</Button>}
             {props.onImport && <Button variant="outline" type="button" className="button button-secondary" onClick={props.onImport}><Icon name="upload" size={16} />Import requirements</Button>}
+            {firstUse && refreshButton}
           </div>
           <section className="home-equipment" aria-label="Workshop equipment">
-            <h3>Workshop equipment</h3><p>Up to three printers from the loaded inventory.</p>
-            {props.printers.length ? props.printers.slice(0, 3).map((item) => <Button variant="ghost" type="button" className="home-equipment-item" key={item.id} onClick={() => props.onItem(item.id)}><Icon name="box" size={18} /><span><strong>{item.name}</strong><small>{props.isPrinterUsable?.(item) === false ? "Needs stock or product setup check" : item.catalogProduct?.buildVolumeMm ? `${item.catalogProduct.buildVolumeMm.x} × ${item.catalogProduct.buildVolumeMm.y} × ${item.catalogProduct.buildVolumeMm.z} mm build volume` : "Open recorded equipment details"}</small></span><Icon name="arrow-right" size={16} /></Button>) : <p>No printers in the loaded records. A printer is not needed for every build.</p>}
+            <h3>Workshop equipment</h3>
+            {props.printers.length ? <><p>Up to three printers from this inventory view.</p>{props.printers.slice(0, 3).map((item) => <Button variant="ghost" type="button" className="home-equipment-item" key={item.id} onClick={() => props.onItem(item.id)}><Icon name="box" size={18} /><span><strong>{item.name}</strong><small>{props.isPrinterUsable?.(item) === false ? "Needs stock or product setup check" : item.catalogProduct?.buildVolumeMm ? `${item.catalogProduct.buildVolumeMm.x} × ${item.catalogProduct.buildVolumeMm.y} × ${item.catalogProduct.buildVolumeMm.z} mm build volume` : "Open recorded equipment details"}</small></span><Icon name="arrow-right" size={16} /></Button>)}</> : <p>Add equipment in inventory when your project needs it.</p>}
             <Button variant="ghost" type="button" className="text-button" onClick={props.onInventory}>Manage inventory<Icon name="arrow-right" size={15} /></Button>
           </section>
         </div></DisclosureContent>
       </Disclosure>
     </div>
-    <p className="home-scope-note">Projects and task counts cover loaded records only. Pins and recent projects are saved in this browser. Stock readiness is separate from build validation.</p>
+    {rows.length > 0 && <p className="home-scope-note">Search and task counts cover the projects available in this view. Pins and recent projects stay in this browser. Stock readiness is separate from build validation.</p>}
   </div>;
 }
 

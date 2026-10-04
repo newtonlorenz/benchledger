@@ -104,4 +104,30 @@
 }
 
 .file-scope-identity code { font-family: var(--font-ui); white-space: normal; overflow-wrap: anywhere; }
+.project-start-options { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 4px 0 12px; }
+.project-start-options .setup-entry { justify-content: flex-start; text-align: left; }
+.inventory-first-use { max-width: 660px; padding: clamp(24px, 5vw, 64px) 0; }
+.inventory-first-use > svg { color: var(--primary); margin-bottom: 20px; }
+.inventory-first-use h2 { margin: 0 0 12px; font-size: 1.5rem; line-height: 1.25; }
+.inventory-first-use p { max-width: 58ch; color: var(--ink-soft); line-height: 1.6; margin: 0 0 24px; }
+.inventory-first-use .field-hint { margin: 16px 0 8px; font-size: .875rem; }
 @media (max-width:800px) { .files-header { flex-wrap: wrap; } }
+
+/* Keep the working requirements in the first phone viewport. Secondary project
+   actions remain available in Project tools, and the active stock tab stays visible. */
+.project-tools-mobile-actions { display: none; }
+@media (max-width: 800px) {
+  .project-heading { margin-bottom: 12px; }
+  .project-tools-mobile-actions { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; }
+  .project-tools-mobile-actions button { justify-content: flex-start; min-height: 44px; }
+  .project-stock-tab:not([data-state="active"]), .project-navigation > .design-tools-toggle, .requirements-import { display: none; }
+  .project-navigation { margin-bottom: 12px; }
+  .tab-list [data-slot="tabs-trigger"] { font-size: .75rem; padding-inline: 6px; }
+  .project-context-bar { gap: 0 12px; margin-bottom: 12px; padding-bottom: 8px; }
+  .project-next-step { gap: 0 8px; }
+  .project-next-copy { margin: 0; }
+  .project-next-step.next-approach .project-next-copy { display: none; }
+  .project-task-strip > span { min-height: 32px; }
+  .requirements-heading { gap: 8px; margin-bottom: 8px; }
+  .requirements-heading .eyebrow { display: none; }
+}

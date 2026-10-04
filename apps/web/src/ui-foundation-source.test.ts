@@ -10,6 +10,6 @@ it("keeps native control implementations inside the shared foundation", () => {
 });
 it("loads one token foundation with separately owned workspace styles", () => {
  const main=readFileSync(new URL("./main.tsx",import.meta.url),"utf8");
- expect(main.match(/import "\.\/[^\"]+\.css";/g)).toEqual(['import "./shadcn.css";', 'import "./workspace-layout.css";', 'import "./workspace-shell.css";', 'import "./project-workspace.css";']);
+ expect(main.match(/import "\.\/[^\"]+\.css";/g)).toEqual(['import "./shadcn.css";', 'import "./workspace-layout.css";', 'import "./workspace-shell.css";', 'import "./project-workspace.css";', 'import "./specialist-journey.css";']);
  const layout=readFileSync(new URL("./workspace-layout.css",import.meta.url),"utf8");expect(layout).not.toMatch(/--(?:background|foreground|primary|surface|ink|accent)\s*:/);
 });

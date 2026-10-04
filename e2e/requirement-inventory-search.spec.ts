@@ -5,7 +5,7 @@ test("requirement editing searches beyond the 200-item snapshot and restores tha
   await page.goto("/");
   await page.getByLabel("Workspace password").fill("demo-password-please-change");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
   const csrf = (await page.context().cookies()).find((cookie) => cookie.name === "forge_csrf")!.value;
   const created = await page.request.post("/api/v1/inventory", { headers: { "X-CSRF-Token": csrf }, data: { name: "Synthetic beyond-page connector", kind: "electronic", quantity: 4, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } } });
   expect(created.status()).toBe(201);
@@ -24,7 +24,7 @@ test("requirement editing searches beyond the 200-item snapshot and restores tha
   await clickProjectAction(page, "New project");
   await page.getByLabel("Project name", { exact: true }).fill("Synthetic remote stock journey");
   await page.getByRole("button", { name: "Create project", exact: true }).click();
-  await page.getByRole("region", { name: "Next project action" }).getByRole("button", { name: "Add first requirement", exact: true }).click();
+  await page.locator(".bom-section").getByRole("button", { name: "Add first requirement", exact: true }).click();
   await page.getByLabel("What do you need?", { exact: true }).fill("Connector for sensor");
   await page.getByRole("button", { name: "Add requirement", exact: true }).click();
   await page.getByRole("button", { name: "Edit requirement Connector for sensor", exact: true }).click();

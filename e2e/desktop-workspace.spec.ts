@@ -4,7 +4,7 @@ async function login(page: Page) {
   await page.goto("/");
   await page.getByLabel("Workspace password").fill("demo-password-please-change");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
 }
 
 test("desktop keeps navigation stable, opens a document and gives its work area more room", async ({ page }) => {
@@ -42,7 +42,7 @@ test("desktop keeps navigation stable, opens a document and gives its work area 
     await expect(page.getByRole("button", { name: "Project details", exact: true })).toHaveCount(0);
     expect(await workArea.evaluate((element) => element.clientWidth)).toBeGreaterThan(before + 200);
   }
-  await page.getByRole("tab", { name: /^Plan/u }).click();
+  await page.getByRole("tab", { name: /^Requirements/u }).click();
   await expect(page.getByRole("complementary", { name: "Project details" })).toBeVisible();
   await expect(details).toHaveAttribute("aria-expanded", "true");
   await page.getByRole("button", { name: "Inventory", exact: true }).click();

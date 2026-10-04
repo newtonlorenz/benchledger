@@ -8,7 +8,7 @@ test("canonical proposal copy and download include hidden selected quotes and un
   await page.goto("/");
   await page.getByLabel("Workspace password").fill("demo-password-please-change");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
   const csrf = (await page.context().cookies()).find(cookie => cookie.name === "forge_csrf")!.value;
   const headers = () => ({ "x-csrf-token": csrf, "idempotency-key": randomUUID() });
   const post = async (path: string, data: object) => {
