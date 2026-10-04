@@ -32,9 +32,9 @@ async function mcp<T = Record<string, unknown>>(request: APIRequestContext, name
   return body.result!.structuredContent!;
 }
 
-async function createProject(request: APIRequestContext, name: string) {
+async function createProject(request: APIRequestContext, name: string, description = "Synthetic maker project for the project-image regression.") {
   const id = `gallery-${randomUUID()}`, revision = `${id}-r1`;
-  await mcp(request, "create_project_with_initial_revision", { name, projectId: id, revisionId: revision, description: "Synthetic maker project for the project-image regression.", revisionSummary: "Initial design", fabricationRoute: "printed" });
+  await mcp(request, "create_project_with_initial_revision", { name, projectId: id, revisionId: revision, description, revisionSummary: "Initial design", fabricationRoute: "printed" });
   return { id, revision, name };
 }
 
@@ -193,6 +193,24 @@ test("a chosen project render survives reload and stays visible in gallery and c
   for (const name of [/^Build files/u, /^Build plan/u]) await expect(page.locator(".project-continue").getByRole("button", { name })).toBeInViewport({ ratio: 1 });
   await expect(page.locator(".project-overview-image img")).toHaveCSS("object-fit", "contain");
   await page.screenshot({ path: testInfo.outputPath("approved-project-overview-1536.png"), fullPage: false, animations: "disabled" });
+});
+
+test("project notes preserve long hashes and URLs without widening the phone overview", async ({ page, request }) => {
+  const hash = "abcdef0123456789".repeat(4);
+  const description = `Synthetic design notes.\nSHA-256 ${hash}\nhttps://example.invalid/designs/${hash}/assembly-reference`;
+  const project = await createProject(request, "Gallery detailed notes", description);
+  await signIn(page);
+  await page.getByRole("textbox", { name: "Find a project", exact: true }).fill(project.name);
+  await projectCard(page, project.name).getByRole("button", { name: `Open project ${project.name}`, exact: true }).click();
+  const notes = page.locator(".project-overview-notes > p");
+  await expect(notes).toHaveText(description);
+  for (const width of [390, 320, 1536]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.evaluate(() => document.fonts.ready);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    expect(await notes.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await expect(notes).toHaveText(description);
+  }
 });
 
 test("a later project revision never borrows the previous revision's render", async ({ page, request }) => {

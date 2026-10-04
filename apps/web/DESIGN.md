@@ -250,6 +250,8 @@ hierarchy without ornamental type.
 **The Readable Work Rule.** Use the body and control roles for doing the task.
 Keep metadata subordinate, retain 16px phone inputs, and let long names wrap
 without obscuring quantities, actions or evidence.
+Project notes wrap long hashes and URLs within the available width without
+truncating the stored text.
 
 ## Layout
 

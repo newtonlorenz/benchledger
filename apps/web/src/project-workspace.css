@@ -37,7 +37,7 @@
 .project-task-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; padding: 14px 0; border-block: 1px solid var(--border); color: var(--muted-foreground); font-size: .8125rem; }
 .project-task-strip button { padding: 0; min-height: 36px; color: var(--muted-foreground); }
 .project-task-strip strong { font-variant-numeric: tabular-nums; font-weight: 600; }
-.project-overview-notes { padding-top: 24px; }
+.project-overview-notes { padding-top: 24px; overflow-wrap: anywhere; }
 .project-overview-notes h2, .project-continue h2 { font-size: 1.125rem; margin: 0 0 10px; }
 .project-overview-notes p, .project-overview-notes li { color: var(--muted-foreground); font-size: .9375rem; line-height: 1.65; white-space: pre-line; }
 .project-overview-notes > button { padding-inline: 0; color: var(--primary); }
