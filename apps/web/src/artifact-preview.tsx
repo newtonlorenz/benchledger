@@ -13,12 +13,14 @@ class PreviewBoundary extends Component<{ children: ReactNode }, { failed: boole
   static getDerivedStateFromError() { return { failed: true }; }
   override render() { return this.state.failed ? <Alert asChild><p role="alert">This preview could not be displayed. Close it and retry, or download the file to view it locally.</p></Alert> : this.props.children; }
 }
-const imageTypes: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", avif: "image/avif", bmp: "image/bmp", svg: "image/svg+xml" };
+const imageTypes: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", avif: "image/avif", bmp: "image/bmp" };
 export function artifactPreviewKind(name: string): "image" | "markdown" | "text" | "stl" | undefined {
   const extension = name.split(".").pop()?.toLowerCase() ?? "";
   if (Object.hasOwn(imageTypes, extension)) return "image";
   if (["md", "markdown"].includes(extension)) return "markdown";
-  if (["txt", "csv", "tsv", "json", "yaml", "yml", "log", "gcode", "scad"].includes(extension)) return "text";
+  // A raw SVG Blob can become an active same-origin document when opened in a
+  // new tab. Keep its source escaped in <pre>; the original remains downloadable.
+  if (["txt", "csv", "tsv", "json", "yaml", "yml", "log", "gcode", "scad", "svg"].includes(extension)) return "text";
   if (extension === "stl") return "stl";
   return undefined;
 }
