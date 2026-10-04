@@ -39,7 +39,9 @@ reasonable opportunity to investigate before disclosure.
 - Both authenticated artifact download routes serve attachments with
   `Cache-Control: no-store`, `Referrer-Policy: no-referrer`,
   `X-Content-Type-Options: nosniff`, and
-  `Content-Security-Policy: sandbox; default-src 'none'`. Other excluded file
+  `Content-Security-Policy: sandbox allow-downloads; default-src 'none'`. The
+  download permission preserves ordinary attachment navigation without enabling
+  scripts or same-origin access. Other excluded file
   types remain excluded.
 - File operations accept logical identifiers, not arbitrary absolute paths.
 - Supplier URLs are recorded but not fetched by the server.

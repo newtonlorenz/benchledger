@@ -370,7 +370,8 @@ length/hash checks. ZIP files are stored opaquely for download without extractio
 or execution. SVG previews show escaped source through the verified 1 MiB text
 preview; they never embed SVG markup or create SVG image Blob URLs. Both
 authenticated download routes return the original as an attachment with
-`no-store`, `no-referrer`, `nosniff`, and `sandbox; default-src 'none'` CSP.
+`no-store`, `no-referrer`, `nosniff`, and `sandbox allow-downloads; default-src 'none'`
+CSP. Direct authenticated attachment navigation remains supported.
 Other excluded file types remain excluded.
 
 Typical roles include `source`, `cad`, `step`, `stl`, `three_mf`,

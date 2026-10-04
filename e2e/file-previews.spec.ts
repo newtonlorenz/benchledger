@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 
 test("project files preview safe content and preserve ZIP, SVG and JSON originals", async ({ page }) => {
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" onload="window.previewUnsafe=true"><script>window.previewUnsafe=true</script><image href="https://example.org/svg-preview-tracker"/></svg>';
@@ -52,12 +53,32 @@ test("project files preview safe content and preserve ZIP, SVG and JSON original
   await expect(page.getByRole("button", { name: "Preview preview-source.zip", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Download preview-source.zip", exact: true })).toBeVisible();
   for (const [name, source] of [["preview-drawing.svg", svg], ["preview-evidence.json", evidence]] as const) {
+    const responsePromise = page.waitForResponse(response => /\/artifacts\/[^/]+\/download$/u.test(new URL(response.url()).pathname));
     await page.getByRole("button", { name: `Preview ${name}`, exact: true }).click();
+    const response = await responsePromise;
     dialog = page.getByRole("dialog", { name, exact: true });
     await expect(dialog.locator("pre")).toHaveText(source);
     await expect(dialog.locator("svg, img, script, iframe, object, embed")).toHaveCount(0);
     await dialog.getByRole("button", { name: "Close preview" }).click();
+    await expect(dialog).toHaveCount(0);
     await expect(page.getByRole("button", { name: `Download ${name}`, exact: true })).toBeVisible();
+    // Ordinary authenticated navigation must download too, without the UI's
+    // fetch/blob path or a download attribute that could hide response-policy bugs.
+    await page.evaluate(url => {
+      const link = document.createElement("a");
+      link.id = "direct-artifact-download";
+      link.href = url;
+      link.textContent = "Direct artifact download";
+      Object.assign(link.style, { position: "fixed", top: "0", left: "400px", zIndex: "2147483647" });
+      document.body.append(link);
+    }, response.url());
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByRole("link", { name: "Direct artifact download", exact: true }).click(),
+    ]);
+    expect(download.suggestedFilename()).toBe(name);
+    expect(await readFile((await download.path())!)).toEqual(Buffer.from(source));
+    await page.locator("#direct-artifact-download").evaluate(element => element.remove());
   }
   expect(requests).toEqual([]);
   expect(await page.evaluate(() => Reflect.get(window, "previewUnsafe"))).toBeUndefined();

@@ -18,9 +18,10 @@ export const TRANSFER_RESPONSE_HEADERS = {
 
 // Originals may contain active SVG/XML or archive members. Treat every artifact
 // as an attachment, never an application document, even if its MIME is wrong.
+// Permit the attachment download itself without enabling scripts or same-origin access.
 export const ARTIFACT_DOWNLOAD_HEADERS = {
   ...TRANSFER_RESPONSE_HEADERS,
-  "content-security-policy": "sandbox; default-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+  "content-security-policy": "sandbox allow-downloads; default-src 'none'; base-uri 'none'; frame-ancestors 'none'",
 } as const;
 
 export type TransferAction = "upload_write" | "upload_finalize" | "artifact_download";

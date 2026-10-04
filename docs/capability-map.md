@@ -447,7 +447,9 @@ they do not create SVG image Blob URLs, inline markup, objects or iframes.
 Both authenticated artifact download routes serve attachments with
 `Cache-Control: no-store`, `Referrer-Policy: no-referrer`,
 `X-Content-Type-Options: nosniff`, and
-`Content-Security-Policy: sandbox; default-src 'none'`.
+`Content-Security-Policy: sandbox allow-downloads; default-src 'none'`, preserving
+direct authenticated attachment navigation without enabling scripts or
+same-origin access.
 Revision scope, authorisation, length/hash verification and the other file
 exclusions still apply.
 

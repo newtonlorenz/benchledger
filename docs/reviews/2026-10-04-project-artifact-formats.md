@@ -12,7 +12,7 @@ on `codex/project-artifact-formats`, based on main `3d496b2`.
   dependency import. SVG previews show escaped source through the existing
   verified 1 MiB text path. Original downloads preserve the uploaded bytes.
 - Both download routes use attachment disposition, no-store, no-referrer,
-  nosniff and a sandbox/default-src-none CSP. Raw SVG image Blob URLs are avoided
+  nosniff and a `sandbox allow-downloads; default-src 'none'` CSP. Raw SVG image Blob URLs are avoided
   because they can become active documents when opened in another tab.
 - The 100 MiB upload limit, quotas, exact revision ancestry, project token scope,
   SHA-256 and length checks, other excluded formats and generic MCP transfer
@@ -49,15 +49,33 @@ occurred during the failed interaction. The modal, stock code and affected test
 are unchanged. The original trace and screenshot were retained outside public
 source; no unrelated fix or retry setting was added.
 
-An independent implementation review found no actionable issues. A read-only
+An independent implementation review found no actionable issues. Subsequent PR
+review identified that the CSP should explicitly allow attachment downloads.
+The [HTML navigation algorithm](https://html.spec.whatwg.org/multipage/browsing-the-web.html#process-a-navigate-fetch)
+checks the target's sandboxed-downloads flag before handling an attachment.
+`allow-downloads` now permits that operation while retaining script, origin,
+resource and embedding restrictions. Both download-route assertions and the
+browser test cover the corrected policy and ordinary authenticated navigation,
+including filenames, exact bytes and inert SVG source. The browser test passes;
+the bare-policy comparison also passed in the installed Chromium, so a browser
+failure was not reproduced there. The policy correction follows the standard
+and the explicit route-level assertion guards against regression. Initial
+test-fixture placement failures were corrected before that comparison.
+An independent review found no blocking issue with this correction.
+The complete `npm run check` then passed on the corrected source: public/privacy
+checks, builds, typechecks, all 1,254 Vitest tests and all 172 browser tests
+(3.1 minutes), with no retries or failures in that run.
+
+A read-only
 integration readiness check returned HTTP 200, version 0.1.0, with database and
 artifact checks healthy. That endpoint does not establish deployed commit parity.
 The new formats have not been exercised against the live service.
 
 ## Release and rollback
 
-Local implementation only: no commit, publication, merge or deployment performed.
-Release the frontend and backend together after authorisation and required CI.
+Published for review in [PR #88](https://github.com/newtonlorenz/benchledger/pull/88).
+Merge only after the final commit passes required CI and review findings are
+resolved. Release the frontend and backend together after authorisation.
 Existing uploaded artifacts need no migration. Reverting the format allow-list
 will prevent new uploads of those types but retain stored bytes. Keep the escaped
 SVG preview and protected download handling if reverting upload support; rolling

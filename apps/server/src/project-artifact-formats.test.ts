@@ -91,7 +91,7 @@ function expectProtectedDownload(response: Response, input: BeginUpload, bytes: 
   expect(response.headers["x-content-type-options"]).toBe("nosniff");
   expect(response.headers["cache-control"]).toBe("no-store");
   expect(response.headers["referrer-policy"]).toBe("no-referrer");
-  expect(response.headers["content-security-policy"]).toBe("sandbox; default-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+  expect(response.headers["content-security-policy"]).toBe("sandbox allow-downloads; default-src 'none'; base-uri 'none'; frame-ancestors 'none'");
 }
 
 describe("persistent project artifact formats", () => {
