@@ -22,7 +22,7 @@ import {
   removeProjectSchema, projectSetupProposalSchema, commitProjectSetupSchema, commitProjectSetupBodySchema,
   inspectionObservationSchema, commitInspectionCompletionBodySchema
 } from "@benchledger/api-contract";
-import { ApplicationError, ApplicationService } from "@benchledger/application";
+import { ApplicationError, ApplicationService, hydrateProject } from "@benchledger/application";
 import type { ApplicationPorts, BuildConfigurationListOptions, CatalogProductListOptions, GapEvaluation, Mutation, Page, ProjectListOptions, RequestContext } from "@benchledger/application";
 import { createProductionRuntime } from "@benchledger/runtime";
 import { createApplicationMcpProtocol, createMcpHttpHandler } from "@benchledger/mcp";
@@ -1020,6 +1020,11 @@ function jsonOpenApi(version: string): Record<string, unknown> {
         }
       },
       "/workspace": { get: { responses: { "200": { description: "Authenticated aggregate workspace snapshot" } } } },
+      "/project-library": { get: { summary: "Read a bounded maker project library page", description: "Current revisions, requirements and readiness, exact project/workstream artifact ancestry, deliberate display covers. Project-scoped accounts see only their allow-listed projects. Default active includes completed projects. Iterate every nextCursor to read the complete library; no aggregate project cap.", parameters: [
+        { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 25 } },
+        { name: "cursor", in: "query", schema: { type: "string", minLength: 1, maxLength: 2048 } },
+        { name: "status", in: "query", schema: { type: "string", enum: ["active", "archived", "all"], default: "active" } }
+      ], responses: { "200": { description: "Project library page {data,limit,nextCursor?}; presentation is top-level on each project" }, "400": { description: "Invalid query or cursor" }, "403": { description: "Missing read authority" } } } },
       "/inventory": { get: { description: "Returns a bounded inventory page; categoryNodeId and unassigned=true are mutually exclusive.", parameters: inventoryQueryParameters, responses: { "200": { description: "Inventory page" } } }, post: { responses: { "201": { description: "Inventory item" } } } },
       "/inventory/categories": {
         get: { parameters: [
@@ -1312,26 +1317,8 @@ async function workspaceSnapshot(service: ApplicationService, projectIds?: Reado
     service.listOffers(undefined, 200)
   ]);
   const enrichedProjects = await Promise.all(projects.data.map(async (project): Promise<WorkspaceProject> => {
-    const [workItems, artifacts] = await Promise.all([
-      service.listWorkItems(project.id),
-      service.listArtifacts(project.id)
-    ]);
-    if (project.currentRevisionId === undefined) return { ...project, workItems, bom: [], artifacts };
-    const revision = await service.getProjectRevision(project.currentRevisionId);
-    const [bom, revisionArtifacts, gapEvaluation] = await Promise.all([
-      service.listBomLines(revision.id),
-      service.listArtifacts(project.id, { projectRevisionId: revision.id }),
-      service.evaluateBomGaps(revision.id),
-    ]);
-    const latestConfiguration = await service.getLatestBuildConfiguration(revision.id);
-    const currentRevision = {
-      ...revision,
-      bom,
-      artifacts: revisionArtifacts,
-      gapEvaluation,
-      ...(latestConfiguration === null ? {} : { buildConfigSnapshot: latestConfiguration })
-    };
-    return { ...project, workItems, bom, artifacts, currentRevision };
+    const { presentation: _presentation, ...hydrated } = await hydrateProject(service, project, false);
+    return hydrated;
   }));
   const hydratedInventory = await hydrateWorkspaceInventory(service, inventory.data);
   return {
@@ -1340,7 +1327,7 @@ async function workspaceSnapshot(service: ApplicationService, projectIds?: Reado
     offers: offers.data,
     source: "api",
     fetchedAt: new Date().toISOString(),
-    capabilities: [...(service.assemblies.supports() ? ["assembly.read", "assembly.write", "pcb.read"] : []), ...(service.inventoryImages.supports() ? ["inventory.images.read", "inventory.images.write"] : []), ...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : []), ...(service.makerWorkflows.supports() ? ["maker_workflows.read", "maker_workflows.write"] : [])],
+    capabilities: [...(service.assemblies.supports() ? ["assembly.read", "assembly.write", "pcb.read"] : []), ...(service.inventoryImages.supports() ? ["inventory.images.read", "inventory.images.write"] : []), ...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : []), ...(service.makerWorkflows.supports() ? ["maker_workflows.read", "maker_workflows.write", "project_library.read", "project_presentation.read", "project_presentation.write"] : [])],
     pagination: {
       inventory: { limit: inventory.limit, ...(inventory.total === undefined ? {} : { total: inventory.total }), ...(inventory.nextCursor === undefined ? {} : { nextCursor: inventory.nextCursor }) },
       projects: { limit: projects.limit, ...(projects.total === undefined ? {} : { total: projects.total }), ...(projects.nextCursor === undefined ? {} : { nextCursor: projects.nextCursor }) },
@@ -1606,7 +1593,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     name: "BenchLedger", version: service.getVersion(), protocol: "rest-v1", demo,
     authentication: { accessModes: ["lan_open", "password"], access: "/api/v1/auth/access", explicitLanSession: "/api/v1/auth/lan-session", bearerRequiredForMcp: true },
     vocabulary: { confirmed: "physically counted or commissioned stock", inspect_first: "recorded stock requiring a physical count", missing: "no confirmed or inspect-first candidate" },
-    actions: [...(service.assemblies.supports() ? ["assembly.read", "assembly.write", "pcb.read"] : []), ...(service.inventoryImages.supports() ? ["inventory.images.read", "inventory.images.write"] : []), "inventory.read", "inventory.write", "inventory.categories.read", "inventory.categories.write", "catalog.read", "catalog.write", "inventory.product_profile.read", "inventory.product_profile.write", "projects.read", "projects.write", "projects.remove", "projects.removed_history", "build_configurations.read", "build_configurations.create", "bom.evaluate", "artifacts.version", "offers.compare", "events.subscribe", ...(service.makerWorkflows.supports() ? ["project_setup.guided", "requirement_offers.read", "requirement_offers.write", "build_plan.read", "build_plan.write", "workstreams.read", "workstreams.write", "bom.import"] : []), ...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : [])],
+    actions: [...(service.assemblies.supports() ? ["assembly.read", "assembly.write", "pcb.read"] : []), ...(service.inventoryImages.supports() ? ["inventory.images.read", "inventory.images.write"] : []), "inventory.read", "inventory.write", "inventory.categories.read", "inventory.categories.write", "catalog.read", "catalog.write", "inventory.product_profile.read", "inventory.product_profile.write", "projects.read", "projects.write", "projects.remove", "projects.removed_history", "build_configurations.read", "build_configurations.create", "bom.evaluate", "artifacts.version", "offers.compare", "events.subscribe", ...(service.makerWorkflows.supports() ? ["project_library.read", "project_presentation.read", "project_presentation.write", "project_setup.guided", "requirement_offers.read", "requirement_offers.write", "build_plan.read", "build_plan.write", "workstreams.read", "workstreams.write", "bom.import"] : []), ...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : [])],
     approvalBoundaries: ["purchasing", "external publication", "permanent deletion", "credential changes", "printer control"]
   }));
   app.get(route("/openapi.json"), async () => jsonOpenApi(service.getVersion()));
@@ -1755,6 +1742,11 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   app.get(route("/auth/session"), async (request) => { const principal = requirePrincipal(request); return { authenticated: true, actor: principal.actor, source: principal.source, scopes: [...principal.scopes], projectIds: principal.projectIds ? [...principal.projectIds] : undefined, ...(principal.memberId ? { memberId: principal.memberId, memberVersion: principal.memberVersion } : {}), teamEnabled: teamState.enabled }; });
 
   app.get(route("/workspace"), async (request) => { const principal = requireScope(request, "read", auth); if (principal.via === "bearer") rejectScopedGlobalAccess(request); return workspaceSnapshot(service, principal.projectIds); });
+  app.get(route("/project-library"), async (request) => {
+    const principal = requireScope(request, "read", auth);
+    const query = request.query as Record<string, unknown>;
+    return service.makerWorkflows.projectLibrary({ ...query, ...(query.limit === undefined ? {} : { limit: Number(query.limit) }) }, principal.projectIds === undefined ? undefined : [...principal.projectIds]);
+  });
   app.get(route("/catalog/products"), async (request) => {
     requireScope(request, "read", auth);
     return service.listCatalogProducts(parseCatalogQuery(request.query));

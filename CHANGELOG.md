@@ -29,6 +29,11 @@ first public release; all current work is under **Unreleased**.
 
 ### Added
 
+- Visual project Gallery and a remembered compact List with thumbnails, retaining
+  search, pins, readiness and next actions.
+- Revision-scoped project image selection in Files, authenticated SHA-256-checked
+  previews, and paged HTTP/MCP project-library and presentation history operations.
+
 - Shadcn web foundation across forms, navigation, tables, tabs, dialogs, drawers,
   search pickers, menus, resizable inventory panels and notifications. One semantic
   light/dark theme replaces the competing visual layers; protected drafts and

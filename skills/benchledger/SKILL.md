@@ -35,6 +35,13 @@ project state. Commission physically checked orders/deliveries through
 `commission_inventory_item`; metadata edits cannot establish counted stock.
 A counted item can still require compatibility inspection.
 
+For a visual project overview, use advertised `list_project_library` pages and
+follow every returned cursor. To select a project image, read the current
+revision's presentation and save an eligible attached PNG/JPEG/WebP of up to
+20 MiB with its observed version. Label renders, references and build photos
+honestly; never select historical or unrelated files or treat a picture as
+physical validation. See [project images](../../docs/project-images.md).
+
 Explain required BOM lines as Ready, Check, Decide or Source. Resolve exact
 missing decisions before sourcing; keep plausible unconfirmed candidates Check,
 not reserved or consumed. Only required Source lines enter a shopping proposal.

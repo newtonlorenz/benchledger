@@ -531,3 +531,24 @@ contract. Invalid filters are rejected; no new permissions or writes are implied
 The tools `inspect_assembly_sources`, `read_project_assembly`, `save_project_assembly` and `read_assembly_history` work on any project fabrication route. Inspect existing hash-bound source files, read all part pages, and save the complete assembly with expectedVersion and a stable host command key. Inspection omits triangle buffers. No implicit file upload, physical validation or printer control occurs. See [the assembly contract](../../docs/assembly-explorer.md).
 
 Native `.kicad_pcb` sources use `inspect_assembly_sources` with `unit: "millimetre"` and `upAxis: "z"`. Returned part notes retain available reference/value/footprint metadata; warnings identify omitted geometry and missing component bodies. Inspection is read-only and never resolves external models. See [PCB viewer](../../docs/pcb-viewer.md).
+
+
+## Project preview images
+
+Use `list_project_library({ status: "all", limit: 100 })` and follow each
+`nextCursor` to read all permitted projects with current files and selected
+preview metadata. Read `read_project_presentation({ projectId,
+projectRevisionId })`; its result is `{ presentation: record | null }`. Select
+an authorised, already attached PNG/JPEG/WebP via `save_project_presentation`
+with `presentation: { expectedVersion, coverArtifactId, imageKind, caption }`
+and one stable command key. `imageKind` is `render`, `reference` or
+`built_photo`; `coverArtifactId: null` clears the selection.
+
+The image must belong to the current project revision or a current work-item
+revision in that project, be non-retired and at most 20 MiB. Saving checks
+project ancestry and retains the image hash; reading invalidates a cover whose
+revision, hash or availability changed. Use `read_project_presentation_history`
+for retained selections. The library read requires projects-read scope;
+selection requires projects-write scope. Project-scoped tokens see only their
+allowed projects. Preview images do not certify manufacturing or physical
+readiness, and these commands do not change stock or operate equipment.

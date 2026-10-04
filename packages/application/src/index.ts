@@ -7,3 +7,4 @@ export * from "./inventory-pagination.js";
 export * from "./inventory-bulk.js";
 export * from "./inspection.js";
 export * from "./maker-workflows.js";
+export * from "./project-library.js";

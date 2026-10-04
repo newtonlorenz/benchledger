@@ -76,8 +76,10 @@ to find, while keeping the meaning of stock evidence intact.
   document tabs. Notes are disclosed on demand. The optional right inspector
   holds build context and project settings; hide it for more working space.
   Assembly and PCB viewers use the full working width automatically.
-- The workbench uses a project register with named columns and a subordinate
-  attention queue. Summary counts are small shortcuts rather than headline cards.
+- Projects defaults to a visual gallery; a browser-local layout preference retains
+  a compact List with thumbnails and named columns. Each project keeps its title,
+  stock readiness and next useful action together. The attention queue remains
+  subordinate, and summary counts are small shortcuts rather than headline cards.
 - Inventory is a register with separate recorded and available balances, stock
   queues, stable server-side sorting, saved views and a persistent item inspector.
   On desktop the register and inspector scroll independently. A single click
@@ -164,9 +166,11 @@ the optional inspector. Stock-ready messaging covers required parts and never
 claims design or physical validation. Revision creation is secondary. Assembly
 and PCB tabs are disclosed by Design tools and remain visible when linked directly.
 
-Projects is the single register destination and leads with resuming work and
-project actions. Empty workspaces offer Start a project and Add inventory;
-archive-only and failed-load states remain distinct. Small registers disclose search/sort; equipment details
+Projects is the single project-library destination and leads with resuming work,
+recognisable images and project actions. Gallery and List share search, filters,
+sort and pins; active and archived views remain separate. Empty workspaces offer
+Start a project and Add inventory; archive-only and failed-load states remain
+distinct. Small registers disclose search/sort; equipment details
 are optional. Inventory keeps search and stock views visible, with filters and
 view configuration behind one disclosure. Applied filters remain visible and
 clearable. Phone inventory rows keep item identity, recorded/available quantities
@@ -178,6 +182,16 @@ Requirements and Build steps distinguish the materials list from execution
 planning. Empty stock shortcuts and removal history stay out of the first-use
 view, while recorded removed requirements remain recoverable. Disappearing
 first-use controls return keyboard focus to their persistent equivalent.
+
+Project images show the whole selected render or photo without cropping. The
+gallery labels design renders, reference images and built-product photos;
+descriptions provide image alternative text. An empty cover leads to Files,
+where Project image selects an eligible current-revision file. Loading,
+unavailable-image retry and saved-selection feedback stay local to the image.
+Authenticated downloads must pass the recorded SHA-256 check before rendering.
+Image choices use the shared draft guard and never imply build readiness. See
+[project images](../../docs/project-images.md) for file and revision limits.
+
 While editing item details, show the metadata form and retain other sections
 hidden, preserving their drafts. Protect changed project, requirement and item
 forms with the shared unsaved-work guard. Workbench printer tasks use the same

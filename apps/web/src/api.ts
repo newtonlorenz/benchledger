@@ -85,7 +85,7 @@ type ServerGapLine = { lineId: string; name?: string; optional?: boolean; status
 type ServerGapEvaluation = { lines: ServerGapLine[]; totals: { requiredLines: number; optionalLines: number; readyLines?: number; checkLines?: number; decideLines?: number; sourceLines?: number; partialLines: number; missingLines: number } };
 type ServerArtifact = { id: string; projectId: string; workItemId?: string; revisionId?: string; projectRevisionId?: string; workItemRevisionId?: string; role: string; filename: string; mediaType: string; byteSize: number; sha256: string; author?: string; source?: string; machineBinding?: Record<string, string>; currentCandidate: boolean; retired: boolean; createdAt: string; version: number };
 type ServerRevision = { id: string; projectId: string; number: number; name: string; notes?: string; status: string; fabricationRoute?: FabricationRoute; intendedPrinterItemId?: string | null; createdAt: string; version: number; workItemId?: string; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; gapEvaluation?: ServerGapEvaluation; inspections?: unknown[]; buildConfigSnapshot?: unknown; buildConfiguration?: unknown };
-type ServerProject = { id: string; name: string; description?: string; status: string; currentRevisionId?: string; createdAt: string; updatedAt: string; version: number; removedAt?: string; removedBy?: string; lastLifecycleStatus?: string; workItems?: ServerWorkItem[]; projectRevisions?: ServerRevision[]; revisions?: ServerRevision[]; workItemRevisions?: ServerRevision[]; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; currentRevision?: ServerRevision };
+type ServerProject = { id: string; name: string; description?: string; status: string; currentRevisionId?: string; createdAt: string; updatedAt: string; version: number; removedAt?: string; removedBy?: string; lastLifecycleStatus?: string; workItems?: ServerWorkItem[]; projectRevisions?: ServerRevision[]; revisions?: ServerRevision[]; workItemRevisions?: ServerRevision[]; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; currentRevision?: ServerRevision; presentation?: import("@benchledger/api-contract").ProjectPresentation | null };
 type ServerProjectTombstone = { id: string; name: string; removedAt: string; removedBy: string; lastLifecycleStatus: string; releasedReservationIds: string[]; version: number; auditId?: string };
 type ServerOffer = { id: string; itemId?: string; name: string; supplier: string; url: string; priceMinor: number; currency: CurrencyCode; packageQuantity?: number; observedAt: string; staleAfterDays?: number; version: number };
 type ServerWorkspace = { inventory: ServerInventoryItem[]; projects: ServerProject[]; offers: ServerOffer[]; source: "api"; fetchedAt: string; capabilities?: unknown };
@@ -1268,6 +1268,8 @@ function mapArtifact(artifact: ServerArtifact, revision?: ServerRevision, hint?:
     revision: revisionLabel,
     size: formatBytes(artifact.byteSize),
     hash: artifact.sha256,
+    mediaType: artifact.mediaType,
+    byteSize: artifact.byteSize,
     updated: artifact.createdAt.slice(0, 10),
     status: artifact.retired ? "superseded" : artifact.currentCandidate ? "candidate" : "validated",
     ...(machine ? { machine } : {}),
@@ -1435,6 +1437,7 @@ function mapProject(project: ServerProject): Project {
     ...(projectRevisions.length === 0 ? {} : { projectRevisions }),
     ...(workItems.length === 0 ? {} : { workItems }),
     ...(allArtifacts.length === 0 ? {} : { allArtifacts }),
+    ...(Object.hasOwn(project, "presentation") ? { projectLibraryAvailable: true, presentation: project.presentation ?? null } : {}),
     ...(gapEvaluation === undefined ? {} : { gapEvaluation }),
     ...(inspectionActions.length === 0 ? {} : { inspectionActions }),
     ...(revision?.fabricationRoute === undefined ? {} : { fabricationRoute: revision.fabricationRoute }),
@@ -1461,6 +1464,7 @@ function withoutRevisionScopedProjectState(project: Project): Project {
     fabricationRoute: _fabricationRoute,
     intendedPrinterItemId: _intendedPrinterItemId,
     buildConfigSnapshot: _buildConfigSnapshot,
+    presentation: _presentation,
     ...projectState
   } = project;
   return projectState as Project;
@@ -2789,6 +2793,13 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       return refreshed;
     } catch { return committed; }
   };
+  const retainLibraryLifecycleState = async (saved: Project, current: Project | undefined): Promise<Project> => {
+    // Lifecycle replies contain project metadata, not the hydrated library. Keep
+    // only the same revision's files and presentation, then re-evaluate stock:
+    // archiving releases reservations and restoring does not recreate them.
+    if (!librarySupported || !current || !current.serverRevisionId || saved.serverRevisionId !== current.serverRevisionId) return saved;
+    return refreshChangedBom({ ...current, name: saved.name, subtitle: saved.subtitle, description: saved.description, status: saved.status, version: saved.version!, updated: saved.updated, accent: saved.accent }, current.bom);
+  };
   const changeRequirement = async (projectId: string, lineId: string, expectedVersion: number, operation: "update" | "retire" | "restore", input?: BomUpdateInput): Promise<Project> => {
     const token = csrfToken ?? cookieValue("forge_csrf");
     const current = projectCache.get(projectId);
@@ -2815,6 +2826,24 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
     if (operation === "retire") retiredRequirementOwners.set(lineId, { projectId, revisionId: current.serverRevisionId, version: line.version });
     if (operation === "restore") retiredRequirementOwners.delete(lineId);
     return refreshChangedBom(latest, bom);
+  };
+  let librarySupported = false;
+  const readLibraryProjects = async (status: "active" | "archived"): Promise<ServerProject[]> => {
+    const rows: ServerProject[] = [], cursors = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      const params = new URLSearchParams({ status, limit: "100" });
+      if (cursor !== undefined) params.set("cursor", cursor);
+      const page = await request<{ data: ServerProject[]; nextCursor?: string }>(`/project-library?${params}`);
+      if (!Array.isArray(page.data)) throw new ApiError("The project library could not be confirmed. Retry loading the workspace.", { kind: "server", status: 502 });
+      rows.push(...page.data);
+      cursor = page.nextCursor;
+      if (cursor !== undefined) {
+        if (typeof cursor !== "string" || cursors.has(cursor)) throw new ApiError("Project paging did not advance. Retry loading the workspace.", { kind: "server", status: 502 });
+        cursors.add(cursor);
+      }
+    } while (cursor !== undefined);
+    return [...new Map(rows.map((project) => [project.id, project])).values()];
   };
   const adapter: WorkspaceAdapter = {
     clearAuthenticatedState() {
@@ -2961,15 +2990,15 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       const workspace = await request<ServerWorkspace>("/workspace");
       inventoryCache.clear();
       const mappedInventory = workspace.inventory.map((item) => { const mapped = mapInventoryItem(item); serverUnits.set(item.id, item.unit); inventoryCache.set(item.id, mapped); return mapped; });
-      const mappedProjects = workspace.projects.map(mapProject);
+      const capabilities = Array.isArray(workspace.capabilities) ? workspace.capabilities.filter((action): action is string => typeof action === "string") : [];
+      librarySupported = capabilities.includes("project_library.read");
+      const mappedProjects = (librarySupported ? await readLibraryProjects("active") : workspace.projects).map(mapProject);
       projectCache.clear();
       mappedProjects.forEach((project) => projectCache.set(project.id, project));
-      const capabilities = Array.isArray(workspace.capabilities) ? workspace.capabilities.filter((action): action is string => typeof action === "string") : [];
       return { inventory: mappedInventory, projects: mappedProjects, offers: workspace.offers.map(mapOffer), source: "api", fetchedAt: workspace.fetchedAt || new Date().toISOString(), health: currentHealth, capabilities, session: currentSession };
     },
     async listArchivedProjects() {
-      const payload = await request<unknown>("/projects?status=archived&limit=200");
-      const values = responseList(payload);
+      const values = librarySupported ? await readLibraryProjects("archived") : responseList(await request<unknown>("/projects?status=archived&limit=200"));
       const archived = values.map((value) => mapProject(value as ServerProject));
       archived.forEach((project) => projectCache.set(project.id, project));
       return archived;
@@ -3310,7 +3339,8 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         const project = mapProject({
           ...created.project,
           currentRevisionId: created.revision.id,
-          currentRevision: { ...created.revision, bom: [], artifacts: [] }
+          currentRevision: { ...created.revision, bom: [], artifacts: [] },
+          ...(librarySupported ? { presentation: null } : {})
         });
         projectCache.set(project.id, project);
         // A successful response resolves this logical command. The next
@@ -3359,8 +3389,9 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       const headers: Record<string, string> = { "Idempotency-Key": idempotencyKey("project-archive") };
       if (version !== undefined) headers["If-Match"] = String(version);
       const payload = await request<{ data?: ServerProject }>(`/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", headers, body: JSON.stringify({ status: "archived" }) }, token);
-      const archived = mapProject(mutationData(payload));
-      projectCache.delete(projectId);
+      const archived = await retainLibraryLifecycleState(mapProject(mutationData(payload)), current);
+      if (librarySupported) projectCache.set(projectId, archived);
+      else projectCache.delete(projectId);
       return archived;
     },
     async restoreProject(projectId, expectedVersion) {
@@ -3370,7 +3401,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       const headers: Record<string, string> = { "Idempotency-Key": idempotencyKey("project-restore") };
       if (version !== undefined) headers["If-Match"] = String(version);
       const payload = await request<{ data?: ServerProject }>(`/projects/${encodeURIComponent(projectId)}/restore`, { method: "POST", headers }, token);
-      const restored = mapProject(mutationData(payload));
+      const restored = await retainLibraryLifecycleState(mapProject(mutationData(payload)), projectCache.get(projectId));
       projectCache.set(restored.id, restored);
       return restored;
     },

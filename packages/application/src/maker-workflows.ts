@@ -1,11 +1,12 @@
 import { matchesInventorySearch } from "@benchledger/domain/inventory-search";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod/v3";
-import { idSchema, workflowPageSchema, sourcingPageSchema, createRequirementOfferSchema, requirementOfferSchema, chooseRequirementOfferSchema, offerChoiceSchema, buildPlanInputSchema, createWorkstreamSchema, workAssignmentInputSchema, bomImportInputSchema, bomImportCommitSchema, createBomLineSchema } from "@benchledger/api-contract";
-import type { WorkflowKind, WorkflowRecord, RequirementOffer, OfferChoice, RequirementOfferEstimate, BuildPlan, BuildPlanInput, WorkAssignment, BomImportPreview, BomLine, ProjectRevision } from "@benchledger/api-contract";
+import { idSchema, workflowPageSchema, sourcingPageSchema, projectLibraryQuerySchema, projectPresentationInputSchema, projectPresentationSchema, createRequirementOfferSchema, requirementOfferSchema, chooseRequirementOfferSchema, offerChoiceSchema, buildPlanInputSchema, createWorkstreamSchema, workAssignmentInputSchema, bomImportInputSchema, bomImportCommitSchema, createBomLineSchema } from "@benchledger/api-contract";
+import type { WorkflowKind, WorkflowRecord, RequirementOffer, OfferChoice, RequirementOfferEstimate, BuildPlan, BuildPlanInput, WorkAssignment, BomImportPreview, BomLine, ProjectRevision, ProjectPresentation } from "@benchledger/api-contract";
 import { ApplicationError } from "./errors.js";
 import type { ApplicationPorts, RequestContext, Mutation, AuditEvent } from "./ports.js";
 import type { ApplicationService } from "./service.js";
+import { projectLibraryPage } from "./project-library.js";
 
 export interface AuditedWorkflowWriter { <T>(ctx: RequestContext, action: string, entityType: string, id: string, operation: () => Promise<{ value: T; entityId: string; version?: number; withAudit?: (audit: AuditEvent) => T }>): Promise<Mutation<T>> }
 const hash = (data: unknown) => createHash("sha256").update(JSON.stringify(data)).digest("hex");
@@ -33,6 +34,64 @@ export class MakerWorkflowService {
     const rows: WorkflowRecord[] = []; let cursor: string | undefined;
     do { const page = await this.store().list(kind, projectId, { ...(revisionId ? { revisionId } : {}), limit: 100, ...(cursor ? { cursor } : {}) }); rows.push(...page.data); cursor = page.nextCursor; if (rows.length > 10_000) throw new ApplicationError("quota_exceeded", "This revision has too many records for an aggregate. Use bounded history pages."); } while (cursor);
     return rows;
+  }
+  async projectLibrary(options: unknown = {}, projectIds?: readonly string[]) {
+    const query = parse(projectLibraryQuerySchema, options);
+    return this.ports.unitOfWork.exclusive(() => projectLibraryPage(this.app, query, projectIds));
+  }
+  private async presentationCover(projectId: string, revisionId: string, artifactId: string) {
+    const file = await this.app.getArtifact(artifactId);
+    if (file.projectId !== projectId || file.retired) throw new ApplicationError("forbidden", "The cover must be an active image in this project.");
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.mediaType) || file.byteSize <= 0 || file.byteSize > 20 * 1024 * 1024) throw new ApplicationError("validation", "Use a PNG, JPEG or WebP cover no larger than 20 MiB.");
+    if (file.workItemId) {
+      const work = await this.app.getWorkItem(file.workItemId);
+      if (work.projectId !== projectId || !work.currentRevisionId || file.revisionId !== work.currentRevisionId) throw new ApplicationError("forbidden", "A workstream cover must belong to its current revision in this project.");
+      // Use the canonical listing check, including colliding revision identities.
+      const files = await this.app.listArtifacts(projectId, { workItemId: work.id, workItemRevisionId: work.currentRevisionId });
+      if (!files.some((entry) => entry.id === file.id)) throw new ApplicationError("forbidden", "The cover is not part of the selected workstream revision.");
+    } else if (file.revisionId !== revisionId) throw new ApplicationError("forbidden", "The cover must belong to the exact selected project revision.");
+    return file;
+  }
+  async saveProjectPresentation(projectId: string, revisionId: string, input: unknown, ctx: RequestContext) {
+    const body = parse(projectPresentationInputSchema, input), action = "project.presentation.save";
+    return this.audited(command(ctx, action, { projectId, revisionId, body }), action, "project", projectId, async () => {
+      await this.revision(projectId, revisionId, true);
+      if ((await this.app.getProject(projectId)).currentRevisionId !== revisionId) throw new ApplicationError("conflict", "Select the current project revision before changing its cover.");
+      const file = body.coverArtifactId === null ? null : await this.presentationCover(projectId, revisionId, body.coverArtifactId);
+      const { expectedVersion, ...content } = body;
+      const value: ProjectPresentation = { ...content, projectId, projectRevisionId: revisionId, version: expectedVersion + 1, ...(file === null ? {} : { coverSha256: file.sha256 }), updatedAt: now(), updatedBy: ctx.actor, warnings: ["Display image only: renders, references and build photos do not validate dimensions, manufacturing settings or physical readiness."] };
+      await this.put("project_presentation", revisionId, projectId, revisionId, value, expectedVersion);
+      return { value, entityId: projectId, version: value.version };
+    });
+  }
+  private retainedPresentation(record: WorkflowRecord, projectId: string, revisionId: string): ProjectPresentation {
+    if (record.kind !== "project_presentation" || record.id !== revisionId || record.projectId !== projectId || record.revisionId !== revisionId) throw new ApplicationError("integrity_error", "The presentation ancestry does not match this revision.");
+    const parsed = projectPresentationSchema.safeParse(record.payload);
+    if (!parsed.success || parsed.data.projectId !== projectId || parsed.data.projectRevisionId !== revisionId || parsed.data.version !== record.version) throw new ApplicationError("integrity_error", "The presentation identity or version does not match its retained record.");
+    return parsed.data;
+  }
+  async projectPresentation(projectId: string, revisionId: string): Promise<ProjectPresentation | null> {
+    return this.ports.unitOfWork.exclusive(async () => {
+      await this.revision(projectId, revisionId);
+      const record = await this.store().get("project_presentation", revisionId);
+      if (!record) return null;
+      const value = this.retainedPresentation(record, projectId, revisionId);
+      if (value.coverArtifactId === null) return value;
+      let warning: string | undefined;
+      try {
+        const file = await this.presentationCover(projectId, revisionId, value.coverArtifactId);
+        if (file.sha256 !== value.coverSha256) warning = "The selected cover hash has changed. Review and select the image again.";
+        else if ((await this.app.getProject(projectId)).currentRevisionId !== revisionId) warning = "This cover belongs to a historical project revision. Select a cover for the current revision.";
+      } catch (error) {
+        if (!(error instanceof ApplicationError) || !["not_found", "forbidden", "validation"].includes(error.code)) throw error;
+        warning = "The selected cover is retired, unavailable or outside the current project/workstream revision. Select an active image again.";
+      }
+      return warning === undefined ? value : { ...value, coverArtifactId: null, warnings: [...new Set([...value.warnings, warning])] };
+    });
+  }
+  async projectPresentationHistory(projectId: string, revisionId: string, options: unknown = {}) {
+    const page = parse(workflowPageSchema, options);
+    return this.ports.unitOfWork.exclusive(async () => { await this.revision(projectId, revisionId); const history = await this.store().history("project_presentation", revisionId, page.limit, page.cursor); return { ...history, data: history.data.map((record) => this.retainedPresentation(record, projectId, revisionId)) }; });
   }
   async recordOffer(projectId: string, revisionId: string, input: unknown, ctx: RequestContext) {
     const body = parse(createRequirementOfferSchema, input), action = "requirement.offer.record";
