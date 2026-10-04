@@ -153,3 +153,35 @@ test("a just-created item removed elsewhere does not block reconnection", async 
   await expect(page.getByLabel("Workspace password")).toHaveCount(0);
   expect(missingReads).toBe(1);
 });
+
+
+test("category recovery keeps nested drafts until one approved Settings navigation", async ({ page }) => {
+  await page.route("**/api/v1/inventory/categories?**", route => route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "Synthetic category service unavailable." } } }));
+  await page.goto("/"); await signIn(page);
+  await page.getByRole("button", { name: "Open project Synthetic H2D desk lamp", exact: true }).click();
+  await page.getByRole("button", { name: "Add a requirement", exact: true }).click();
+  const requirement = page.getByRole("dialog", { name: "Add a part, material, or tool", exact: true });
+  await requirement.getByLabel("What do you need?", { exact: true }).fill("Synthetic retained category-recovery connector");
+  await requirement.getByLabel("Quantity", { exact: true }).fill("3");
+  await requirement.getByRole("button", { name: "Add an owned item", exact: true }).click();
+  const capture = page.getByRole("dialog", { name: "Add to inventory", exact: true });
+  await capture.getByRole("button", { name: "Open Settings", exact: true }).click();
+  const guard = page.getByRole("alertdialog", { name: "Leave without saving?", exact: true });
+  await guard.getByRole("button", { name: "Keep editing", exact: true }).click();
+  await expect(capture).toBeVisible();
+  await capture.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(requirement.getByLabel("What do you need?", { exact: true })).toHaveValue("Synthetic retained category-recovery connector");
+  await expect(requirement.getByLabel("Quantity", { exact: true })).toHaveValue("3");
+  await requirement.getByRole("button", { name: "Add an owned item", exact: true }).click();
+  await capture.getByRole("button", { name: "Open Settings", exact: true }).click();
+  await guard.getByRole("button", { name: "Discard changes and leave", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(page.getByRole("main")).toBeFocused();
+  await page.getByRole("button", { name: "Projects", exact: true }).click();
+  await page.getByRole("button", { name: "Open project Synthetic H2D desk lamp", exact: true }).click();
+  await page.getByRole("button", { name: "Add a requirement", exact: true }).click();
+  await expect(requirement.getByLabel("What do you need?", { exact: true })).toHaveValue("");
+  await expect(requirement.getByLabel("Quantity", { exact: true })).toHaveValue("1");
+});

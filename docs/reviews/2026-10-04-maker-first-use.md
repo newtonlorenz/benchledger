@@ -77,9 +77,13 @@ retaining an ambiguous command identity across rejected retries, and recovering
 when a just-captured item is removed elsewhere. Both were corrected before the
 final gate. A full browser run then exposed the nested-modal sign-in defect;
 the suspended requirement now retains state without an active modal layer.
+GitHub review then identified a failed-category Settings detour that left the
+parent requirement covering the destination. Navigation now waits for one
+confirmed discard before closing the supporting dialogs; Keep editing preserves
+both drafts. A browser regression checks the destination, focus and reset draft.
 
 The final `npm run check` passed: public-source checks, all builds/typechecks,
-1,251 tests across 150 files and all 171 browser scenarios. Coverage was 88.09%
+1,251 tests across 150 files and all 172 browser scenarios. Coverage was 88.09%
 statements/lines, 82.84% branches and 82.71% functions. Updated browser tests follow
 the visible phone Project tools actions; assertions for drafts, focus, exact
 quantities, retry identity and capability boundaries remain in place. Release
