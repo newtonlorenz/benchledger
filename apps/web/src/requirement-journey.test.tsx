@@ -19,15 +19,15 @@ it("creates a named idea without a goal or equipment decision", async () => {
   await waitFor(() => expect(create).toHaveBeenCalledWith({ name: "Synthetic sensor", description: "", fabricationRoute: "undecided" }));
 });
 
-it("transfers the current idea to template/import setup", () => {
+it.each([["Start from a template", "template"], ["Import a parts list (CSV)", "import"]])("transfers the current idea with the selected %s path", (label, mode) => {
   const guided = vi.fn();
   render(<NewProjectDialog onClose={() => undefined} onCreate={async () => "created"} onGuided={guided} />);
   fireEvent.change(screen.getByLabelText("Project name"), { target: { value: "Synthetic lamp" } });
   fireEvent.change(screen.getByLabelText("Project goal"), { target: { value: "Light a desk" } });
   fireEvent.click(screen.getByRole("button", { name: "Planning details" }));
   fireEvent.click(screen.getByRole("radio", { name: /Electronics \/ assembly only/u }));
-  fireEvent.click(screen.getByRole("button", { name: "Use a template or import a BOM" }));
-  expect(guided).toHaveBeenCalledWith({ name: "Synthetic lamp", description: "Light a desk", fabricationRoute: "none" });
+  fireEvent.click(screen.getByRole("button", { name: label }));
+  expect(guided).toHaveBeenCalledWith({ name: "Synthetic lamp", description: "Light a desk", fabricationRoute: "none" }, mode);
 });
 
 const spool: InventoryItem = { ...inventory.find((item) => item.category === "Filament")!, id: "synthetic-spool", name: "Synthetic PETG", variant: "Blue", location: "Test shelf", quantity: 400, availableQuantity: 350, reserved: 50, evidence: "counted", serverEvidence: "physically_counted", unit: "g", tags: [] };
@@ -99,4 +99,23 @@ it("discloses confirmed stock detail while keeping the requirement edit action l
   expect(reason.closest("[hidden]")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Edit requirement Confirmed connector" }));
   expect(edit).toHaveBeenCalledWith(line.line);
+});
+
+
+it("restores focus only when returning from supporting inventory capture", async () => {
+  const onAddOwnedItem = vi.fn();
+  const props = { items: [], project: projects[0]!, expert: false, onClose: vi.fn(), onCreate: async () => true, onAddOwnedItem };
+  const view = render(<AddBomDialog {...props} />);
+  fireEvent.change(screen.getByLabelText("What do you need?"), { target: { value: "Synthetic connector" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add an owned item" }));
+  expect(onAddOwnedItem).toHaveBeenCalledWith("Synthetic connector");
+  view.rerender(<AddBomDialog {...props} suspended />);
+  expect(screen.queryByRole("dialog", { name: "Add a part, material, or tool", hidden: true })).toBeNull();
+  view.rerender(<AddBomDialog {...props} />);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Add requirement" })).toBe(document.activeElement));
+  const quantity = screen.getByLabelText("Quantity"); quantity.focus();
+  fireEvent.change(quantity, { target: { value: "3" } });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(quantity).toBe(document.activeElement);
+  expect(screen.getByLabelText("What do you need?")).toHaveProperty("value", "Synthetic connector");
 });

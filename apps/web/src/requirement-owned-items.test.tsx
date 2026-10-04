@@ -12,7 +12,7 @@ afterEach(cleanup);
 it("loads candidates beyond the workspace snapshot and truthfully scopes filtered server totals", async () => {
   const search = vi.fn<OwnedItemSearch>().mockResolvedValue({ items: [stock, { ...stock, id: "printer", category: "Printers", name: "Sensor printer" }], limit: 25, total: 40, nextCursor: "next" });
   render(<RequirementOwnedItems {...base} onSearch={search} />);
-  expect(screen.getByText(/Searching your inventory/u)).toBeTruthy();
+  expect(screen.getByText(/Searching all inventory/u)).toBeTruthy();
   expect(search).not.toHaveBeenCalled();
   expect(await screen.findByRole("button", { name: "Choose owned item Remote sensor" })).toBeTruthy();
   expect(search).toHaveBeenCalledWith("sensor", expect.any(AbortSignal));
@@ -51,7 +51,9 @@ it("keeps the explicit selection across search failure, retry and an unrelated r
   await screen.findByRole("alert");
   expect(screen.getByRole("button", { name: "Choose owned item Remote sensor" }).getAttribute("aria-pressed")).toBe("true");
   fireEvent.click(screen.getByRole("button", { name: "Retry inventory search" }));
-  await screen.findByText(/0 selectable items shown from 0 inventory matches/u);
+  await waitFor(() => expect(search).toHaveBeenCalledTimes(3));
+  await waitFor(() => expect(screen.queryByText(/Searching all inventory/u)).toBeNull());
+  expect(screen.queryByText(/0 selectable items shown from 0 inventory matches/u)).toBeNull();
   expect(screen.getByRole("button", { name: "Choose owned item Remote sensor" }).getAttribute("aria-pressed")).toBe("true");
   expect(screen.getByText(/Selection is a planning choice/u)).toBeTruthy();
 });

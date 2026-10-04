@@ -4,7 +4,7 @@ async function openInventory(page: Page, width: number) {
   await page.goto("/");
   await page.getByLabel("Workspace password").fill("demo-password-please-change");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
   if (width < 800) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
 }
@@ -70,7 +70,8 @@ for (const width of [390, 1440]) {
     await expect(review.getByRole("button", { name: "Back to item" })).toBeDisabled();
     await review.getByRole("button", { name: "Retry unchanged observation" }).click();
     await expect(review).toHaveCount(0);
-    await expect(drawer.getByLabel("Counted quantity")).toHaveValue("7");
+    await expect(drawer.getByLabel("Counted quantity")).toHaveCount(0);
+    await expect(drawer.getByRole("status")).toContainText("Physical count saved");
     await expect(drawer.getByRole("status")).toContainText("Confirmed 7");
     expect(writes).toHaveLength(4);
     expect(writes[1]!.key).toBeTruthy(); expect(writes[1]!.key).not.toBe(writes[0]!.key);

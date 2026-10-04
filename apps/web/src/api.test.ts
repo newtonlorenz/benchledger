@@ -1300,7 +1300,7 @@ describe("web data mappers", () => {
         accent: expected.accent,
         variant: index === 0 ? "Model variant" : index === 1 ? "SKU variant" : "",
         unit: index % 3 === 0 ? "g" : index % 3 === 1 ? "m" : "each",
-        description: index === 2 ? "No description recorded." : `Description ${index}`,
+        description: index === 2 ? "" : `Description ${index}`,
         location: index === 3 ? "Unassigned" : `Location ${index}`,
         tags: [`tag-${index}`],
         compatibility: []
@@ -2071,4 +2071,32 @@ for (const operation of ["count", "commission"] as const) {
     expect(commands[0]!.key).toBeTruthy(); expect(commands[1]).toEqual(commands[0]);
     expect(fetchMock.mock.calls[1]![1]?.signal).toBe(controllers[1]!.signal);
   });
+}
+
+for (const firstFailure of ["offline", "server"] as const) {
+  for (const rejection of [401, 403, 409]) {
+    it(`keeps the manual inventory create identity after ${firstFailure}, ${rejection}, session clearing and an explicit retry`, async () => {
+      vi.stubGlobal("document", { cookie: "forge_csrf=synthetic-inventory-recovery" });
+      const item = serverItem({ id: "synthetic-recovered-item", name: "Synthetic connector", kind: "electronic", quantity: 4, unit: "each", evidence: { state: "unknown" } });
+      const fetchMock = vi.spyOn(globalThis, "fetch");
+      if (firstFailure === "offline") fetchMock.mockRejectedValueOnce(new TypeError("Synthetic lost response"));
+      else fetchMock.mockResolvedValueOnce(jsonResponse({ error: { code: "unavailable", message: "Synthetic lost acknowledgement" } }, 503));
+      fetchMock.mockResolvedValueOnce(jsonResponse({ error: { code: rejection === 401 ? "unauthenticated" : rejection === 403 ? "csrf" : "version_conflict", message: "Synthetic retry rejection" } }, rejection));
+      fetchMock.mockResolvedValueOnce(jsonResponse({ data: item }));
+      fetchMock.mockResolvedValueOnce(jsonResponse({ data: { ...item, id: "synthetic-later-item" } }));
+      const adapter = createWorkspaceAdapter();
+      const input = { name: "Synthetic connector", category: "Electronics" as const, kind: "electronic" as const, quantity: 4, unit: "each" as const };
+      await expect(adapter.createInventoryItem(input)).rejects.toMatchObject({ kind: firstFailure });
+      await expect(adapter.createInventoryItem(input)).rejects.toMatchObject({ status: rejection });
+      adapter.clearAuthenticatedState();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await expect(adapter.createInventoryItem(input)).resolves.toMatchObject({ id: item.id, serverEvidence: "unknown" });
+      const attempts = fetchMock.mock.calls.slice(0, 3).map(([, init]) => ({ key: new Headers(init?.headers).get("idempotency-key"), body: init?.body }));
+      expect(attempts[0]!.key).toBeTruthy();
+      expect(attempts[1]).toEqual(attempts[0]);
+      expect(attempts[2]).toEqual(attempts[0]);
+      await adapter.createInventoryItem(input);
+      expect(new Headers(fetchMock.mock.calls[3]![1]?.headers).get("idempotency-key")).not.toBe(attempts[0]!.key);
+    });
+  }
 }

@@ -74,8 +74,16 @@ and never implies fit or changes units silently. Referenced stock details are
 loaded for the active project so reloads do not turn known selections into
 apparently missing stock.
 
-Inventory capture records what is known, including storage location. Catalogue
-identity can be completed later. Saving opens an explicit physical-count review;
-recording an item, confirming its quantity and confirming exact identity remain
-separate decisions. Keep drafts intact across supporting tasks such as adding a
-printer or uploading a missing design file.
+Projects opens the project register; a selected project opens its Requirements,
+Files, Shopping list and Build steps. A new workspace offers Start a project and
+Add inventory, without empty search/filter controls. Archived-only workspaces,
+failed reads and empty filtered results retain their own recovery actions.
+
+Inventory capture records what is known, including storage location and optional
+specifications. Catalogue identity can be completed later. A maker can explicitly
+choose to review a physical count using the quantity entered during capture.
+Creating the record and confirming that count remain separate writes and
+decisions. A successful count ends with a receipt and a useful continuation.
+Requirement entry can add an unlisted owned item without losing its draft;
+selection still does not establish compatibility. Supporting manual-capture and
+requirement drafts remain in memory across reconnection, not in browser storage.

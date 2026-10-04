@@ -6,7 +6,7 @@ import { WorkspaceModal } from "./components/workspace-modal";
 import { AlertDialogTitle } from "./components/ui/alert-dialog";
 import { Button } from "./components/ui/button";
 import { inventory } from "./mock-data";
-import { workflowRequest } from "./api";
+import { ApiError, workflowRequest } from "./api";
 import { UnsavedWorkContext, useNavigationGuard } from "./unsaved-work";
 
 vi.mock("./api", async importOriginal => ({ ...await importOriginal<typeof import("./api")>(), workflowRequest: vi.fn() }));
@@ -75,4 +75,50 @@ it("keeps a metadata draft through the existing leave guard and a failed version
   expect(screen.getByRole("button", { name: "Review physical count" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Close item details" }));
   expect(actions.onClose).toHaveBeenCalledOnce();
+});
+
+
+it("reviews explicit capture intent without writing, retains a failed count and finishes with a receipt", async () => {
+  const actions = props(), onCountIntentConsumed = vi.fn(), onAddAnother = vi.fn();
+  actions.onCount.mockRejectedValueOnce(new ApiError("Lost acknowledgement", { kind: "offline" })).mockResolvedValueOnce({ ...item, quantity: 8, evidence: "counted", serverEvidence: "physically_counted" });
+  render(<InventoryDrawer {...actions} sampleMode initialCountQuantity={8} onCountIntentConsumed={onCountIntentConsumed} onAddAnother={onAddAnother} />);
+  const review = screen.getByRole("alertdialog", { name: "Review physical count" });
+  expect(actions.onCount).not.toHaveBeenCalled();
+  expect(onCountIntentConsumed).toHaveBeenCalledOnce();
+  fireEvent.click(within(review).getByRole("button", { name: "Confirm physical count" }));
+  fireEvent.click(await within(review).findByRole("button", { name: "Retry unchanged observation" }));
+  const receipt = await screen.findByText("Physical count saved");
+  expect(actions.onCount.mock.calls).toEqual([[item.id, 8], [item.id, 8]]);
+  expect(screen.queryByRole("spinbutton", { name: "Counted quantity" })).toBeNull();
+  expect(receipt.closest('[role="status"]')).toBe(document.activeElement);
+  fireEvent.click(screen.getByRole("button", { name: "Add another item" }));
+  expect(onAddAnother).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  expect(actions.onClose).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole("button", { name: "Update count" }));
+  expect(screen.getByLabelText("Counted quantity")).toHaveProperty("value", "8");
+});
+
+it("returns to a requirement without asking to discard its parent draft and guards new item changes", () => {
+  const actions = props(); const parentRegistry = { set: vi.fn(), request: vi.fn(), hasDraft: () => true };
+  render(<UnsavedWorkContext.Provider value={parentRegistry}><InventoryDrawer {...actions} sampleMode nested doneLabel="Back to requirement" /></UnsavedWorkContext.Provider>);
+  fireEvent.click(screen.getByRole("button", { name: "Back to requirement" }));
+  expect(actions.onClose).toHaveBeenCalledOnce();
+  expect(parentRegistry.request).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText("Counted quantity"), { target: { value: "9" } });
+  fireEvent.click(screen.getByRole("button", { name: "Back to requirement" }));
+  expect(screen.getByRole("alertdialog", { name: "Discard this item draft?" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+  expect(screen.getByLabelText("Counted quantity")).toHaveProperty("value", "9");
+  expect(actions.onClose).toHaveBeenCalledOnce();
+});
+
+it("keeps a recorded count compact until an explicit update and edits missing descriptions as blank", () => {
+  const actions = props();
+  render(<InventoryDrawer {...actions} sampleMode item={{ ...item, evidence: "counted", description: "" }} />);
+  expect(screen.queryByRole("spinbutton", { name: "Counted quantity" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Update count" }));
+  expect(screen.getByLabelText("Counted quantity")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Edit item" }));
+  expect(screen.getByLabelText("Description")).toHaveProperty("value", "");
 });

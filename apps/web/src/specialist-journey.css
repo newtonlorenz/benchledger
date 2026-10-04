@@ -1,0 +1,67 @@
+/* Specialist forms share the workspace controls and give each task room to read. */
+.dialog[data-slot="dialog-content"]:has(.guided-setup) {
+  width: min(880px, calc(100% - 32px));
+  max-width: min(880px, calc(100% - 32px));
+  scroll-padding-block: 88px;
+}
+.dialog:has(.guided-setup) > .dialog-header {
+  position: sticky;
+  top: -24px;
+  z-index: 3;
+  margin-top: -24px;
+  padding-top: 24px;
+  background: var(--surface-strong);
+}
+.guided-setup .intake-row > .form-field,
+.guided-setup .intake-row > .form-row {
+  margin-block: 0;
+}
+.guided-setup .requirement-owned-options {
+  margin-block: 16px;
+}
+.guided-setup .intake-row input {
+  scroll-margin-block: 88px;
+}
+.inspection-panel .inspection-action {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px 16px;
+}
+.inspection-panel .inspection-action-icon {
+  display: flex;
+  align-items: center;
+  padding-block: 4px;
+}
+.inspection-panel .inspection-action-body {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+.inspection-panel .inspection-action-body > strong,
+.inspection-panel .inspection-action-body > span {
+  display: block;
+}
+.inspection-panel .inspection-action-button {
+  align-self: center;
+}
+.quote-form {
+  scroll-margin-block: 24px;
+}
+@media (max-width: 640px) {
+  .inspection-panel .inspection-action {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 12px;
+  }
+  .inspection-panel .inspection-action-button {
+    grid-column: 2;
+    justify-self: start;
+    max-width: 100%;
+    white-space: normal;
+  }
+}
+
+/* Radix dialog padding stays 24px at phone widths as well. Cover the full
+   scrolling edge so text cannot peek above the header or below the footer. */
+.dialog:has(.guided-setup) .dialog-actions { bottom: -24px; padding-bottom: 24px; }

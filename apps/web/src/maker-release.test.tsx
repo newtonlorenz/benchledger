@@ -23,14 +23,14 @@ it("renders repeated-plate planning and preserves evidence warnings", () => {
 });
 it("renders sourcing as an observation, with explicit prices and unknown shipping", () => {
   const line: BomLine = { id: "screw", revisionId: "revision", name: "Screw", requiredQuantity: 7, unit: "each", role: "consumed", optional: false, constraints: {}, alternatives: [], version: 1, createdAt: "2026-09-06T00:00:00.000Z", updatedAt: "2026-09-06T00:00:00.000Z" };
-  const html = renderToStaticMarkup(<QuoteForm line={line} root="/synthetic" onSaved={() => undefined} onCancel={() => undefined} />); expect(html).toContain("Save supplier observation"); expect(html).toContain("blank if unknown");
+  const html = renderToStaticMarkup(<QuoteForm line={line} root="/synthetic" onSaved={() => undefined} onCancel={() => undefined} />); expect(html).toContain("Save quote"); expect(html).toContain("blank if unknown");
 });
 it("keeps import and planning controls contextual and read-only for archived projects", () => {
-  expect(renderToStaticMarkup(<MakerPlanningTools project={project} items={inventory} onRefresh={async () => true} />)).toContain("Parts, plates and workstreams");
+  expect(renderToStaticMarkup(<MakerPlanningTools project={project} items={inventory} onRefresh={async () => true} />)).toContain("Parts, plates and task groups");
   expect(renderToStaticMarkup(<ExistingBomImport project={project} onRefresh={async () => true} />)).toContain("Append requirements from CSV");
   expect(renderToStaticMarkup(<ExistingBomImport project={{ ...project, status: "archived" }} onRefresh={async () => true} />)).toBe("");
-  expect(renderToStaticMarkup(<WorkstreamPlanning project={project} />)).toContain("Add workstream");
-  expect(renderToStaticMarkup(<WorkstreamPlanning project={project} readOnly />)).not.toContain("Add workstream");
+  expect(renderToStaticMarkup(<WorkstreamPlanning project={project} />)).toContain("Add task group");
+  expect(renderToStaticMarkup(<WorkstreamPlanning project={project} readOnly />)).not.toContain("Add task group");
   expect(renderToStaticMarkup(<ProjectQuoteTools project={project} />)).toContain("Supplier quotes for this project");
 });
 it("handles minor currency units without silently rounding excessive precision", () => {

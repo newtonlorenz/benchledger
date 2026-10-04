@@ -2,6 +2,12 @@
 
 ## Maker experience
 
+- Open the project register directly from Projects, with clearer Requirements and Build steps.
+- Start empty workspaces with two useful actions and hide unused filters and task counts.
+- Add an unlisted owned part from a requirement, retain the draft, and return with the item selected.
+- Capture component specifications immediately; review an explicitly requested count without entering the quantity twice.
+- Finish counts with a receipt and continuation; improve guided stock search, specialist focus and build draft protection.
+
 - Start projects with a name, review owned stock beside each requirement, and defer optional planning details.
 - Retain project/import drafts and guide captured inventory directly into physical-count review.
 - Set aside and release confirmed stock from Build planning before recording actual use.

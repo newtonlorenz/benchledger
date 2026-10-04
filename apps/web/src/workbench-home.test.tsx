@@ -11,6 +11,7 @@ const props = () => ({ projects: [fixture("Café fixture"), fixture("Sensor box"
 it("searches, pins and resumes accessible projects using local preferences", async () => {
   localStorage.setItem(homePreferenceKey(false), JSON.stringify({ recent: ["inaccessible-id", "Sensor box"] }));
   const data = props(); render(<WorkbenchHome {...data} />);
+  expect(screen.getByRole("heading", { level: 1, name: "Projects" })).toBeTruthy();
   expect(screen.getByLabelText("Resume recent project").textContent).toContain("Sensor box");
   fireEvent.click(screen.getByRole("button", { name: "Resume project" })); expect(data.onOpen).toHaveBeenCalledWith("Sensor box");
   fireEvent.change(screen.getByLabelText("Find a project"), { target: { value: "cafe" } }); expect(document.querySelectorAll(".home-project-row")).toHaveLength(1);
@@ -44,20 +45,54 @@ it("handles empty, unavailable and long project lists without invented totals", 
   fireEvent.change(screen.getByLabelText("Filter attention queue"), { target: { value: "all" } });
   fireEvent.change(screen.getByLabelText("Filter projects"), { target: { value: "attention" } });
   fireEvent.change(screen.getByLabelText("Filter projects"), { target: { value: "active" } });
+  fireEvent.click(screen.getByRole("button", { name: "Workspace tools" }));
   fireEvent.click(screen.getByRole("button", { name: "Manage inventory" })); expect(data.onInventory).toHaveBeenCalledOnce();
   data.onRefresh.mockRejectedValueOnce(new Error("offline")); fireEvent.click(screen.getByRole("button", { name: "Refresh workspace" })); await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("could not refresh"));
 });
 
-it("keeps an empty workshop focused on getting started without empty registers or task success claims", () => {
+it("gives an empty workshop two clear starting paths and keeps supporting tools optional", async () => {
   const data = props(); render(<WorkbenchHome {...data} projects={[]} />);
   expect(screen.queryByRole("region", { name: "Project register" })).toBeNull();
   expect(screen.queryByRole("region", { name: "Workspace attention queue" })).toBeNull();
   expect(screen.queryByText("No open planning checks")).toBeNull();
-  expect(screen.getByRole("button", { name: "Workspace tools" }).getAttribute("aria-expanded")).toBe("true");
-  expect(screen.getByRole("button", { name: "Add inventory" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Import requirements" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Workspace tools" }).getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByRole("button", { name: "New project" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Open inventory" })).toBeNull();
+  expect(screen.getAllByRole("button", { name: "Add inventory" })).toHaveLength(1);
+  expect(screen.queryByRole("button", { name: "Import requirements" })).toBeNull();
+  expect(screen.queryByRole("region", { name: "Workshop equipment" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Start a project" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add inventory" }));
+  expect(data.onNewProject).toHaveBeenCalledOnce();
+  expect(data.onAddItem).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole("button", { name: "Workspace tools" }));
+  expect(screen.getAllByRole("button", { name: "Add inventory" })).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Import requirements" }));
+  expect(data.onImport).toHaveBeenCalledOnce();
   fireEvent.click(screen.getByRole("button", { name: "Refresh workspace" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Refresh workspace" }).hasAttribute("disabled")).toBe(false));
   expect(data.onRefresh).toHaveBeenCalledOnce();
+});
+it("keeps archived-only and failed refresh states distinct from first use", async () => {
+  const data = props();
+  const onOpenArchive = vi.fn();
+  const view = render(<WorkbenchHome {...data} projects={[]} archivedCount={2} onOpenArchive={onOpenArchive} />);
+  expect(screen.getByRole("heading", { name: "No active projects" })).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "Getting started" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "View archived projects" }));
+  expect(onOpenArchive).toHaveBeenCalledOnce();
+  view.rerender(<WorkbenchHome {...data} projects={[]} />);
+  data.onRefresh.mockResolvedValueOnce(false);
+  fireEvent.click(screen.getByRole("button", { name: "Workspace tools" }));
+  fireEvent.click(screen.getByRole("button", { name: "Refresh workspace" }));
+  expect(screen.getByRole("heading", { name: "Checking projects…" })).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "Getting started" })).toBeNull();
+  await screen.findByRole("alert");
+  expect(screen.getByRole("heading", { name: "Projects could not be checked" })).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "Getting started" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Refresh workspace" }));
+  await screen.findByRole("region", { name: "Getting started" });
+  expect(screen.queryByRole("alert")).toBeNull();
 });
 it("keeps project search visible and discloses supporting tools without blocking next actions", () => {
   const data = props(); render(<WorkbenchHome {...data} />);
@@ -69,7 +104,7 @@ it("keeps project search visible and discloses supporting tools without blocking
   const projectRow = screen.getByRole("button", { name: "Open project Café fixture" }).closest("article")!;
   fireEvent.click(within(projectRow).getByRole("button", { name: /: Café fixture$/u }));
   expect(data.onTask).toHaveBeenCalledWith(expect.objectContaining({ projectId: "Café fixture" }));
-  expect(screen.getByText(/Projects and task counts cover loaded records only/u)).toBeTruthy();
+  expect(screen.getByText(/Search and task counts cover the projects available in this view/u)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Open inventory" }));
   expect(data.onInventory).toHaveBeenCalledOnce();
 });

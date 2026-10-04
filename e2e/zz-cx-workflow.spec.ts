@@ -5,7 +5,7 @@ async function startProject(page: Page, name: string) {
   await page.goto("/");
   await page.getByLabel("Workspace password").fill("demo-password-please-change");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
   if ((page.viewportSize()?.width ?? 1440) < 801) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
   await page.getByRole("button", { name: /^Projects/u }).click();
   await clickProjectAction(page, "New project");
@@ -141,11 +141,11 @@ test("large project filters help find parts without changing readiness or the pl
   await startProject(page, "CX larger project");
   for (const name of ["Stainless M3 screw", "Nylon M3 spacer", "Cable gland", "Rubber foot", "Steel washer", "Panel nut", "Plastic clip", "Board standoff"]) await addRequirement(page, name);
   await expect(page.locator(".bom-row")).toHaveCount(8);
-  await expect(page.getByRole("tab", { name: /^Plan/u })).toContainText("8");
+  await expect(page.getByRole("tab", { name: /^Requirements/u })).toContainText("8");
   await page.getByLabel("Search project requirements", { exact: true }).fill("M3 stainless");
   await expect(page.locator(".bom-row")).toHaveCount(1);
   await expect(page.locator(".bom-row")).toContainText("Stainless M3 screw");
-  await expect(page.getByRole("tab", { name: /^Plan/u })).toContainText("8");
+  await expect(page.getByRole("tab", { name: /^Requirements/u })).toContainText("8");
   await page.getByLabel("Filter project requirements", { exact: true }).selectOption("optional");
   await expect(page.locator(".bom-row")).toHaveCount(0);
   await expect(page.getByText("No requirements match these filters.", { exact: true })).toBeVisible();

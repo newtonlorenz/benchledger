@@ -484,11 +484,21 @@ Home Check/Decide actions open the selected project with that requirement filter
 Missing or unusable printer setup is also a home task for printed projects,
 using the same eligibility rules as project guidance.
 
-Build planning is a direct project route. Plan exposes add and reviewed CSV
+Projects opens the register. Requirements exposes add and reviewed CSV
 append actions together. Shopping shows project quotes first and retains older
 inventory-linked offers separately. Files supports scoped search and drop staging;
 the user must still confirm Add files. No new API, permission or stock semantics
 are introduced by these navigation changes.
+
+Build steps is the execution-planning route; task groups use the existing
+workstream contracts. Guided requirement rows share searchable inventory and
+explicit unit selection with ordinary requirement entry. An unlisted owned item
+can be captured while retaining the requirement draft. Manual inventory capture
+can carry an explicitly requested count into its separate preview/confirmation;
+record creation never itself confirms stock. Confirmed counts show a receipt,
+and draft cancellation/focus recovery remain part of the active task. Empty
+workspaces suppress unused controls while errors, filters and archive-only
+states retain recovery. These browser flows reuse existing APIs and evidence.
 
 Selected quote labels reflect the canonical estimate status. Historical offer
 prices describe recorded packages and copied drafts retain package/source/date

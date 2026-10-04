@@ -79,7 +79,7 @@ it.each(["delayed", "failed", "immediate"])("returns focus after saving with a %
   for (const [label, value] of [["Supplier", "Synthetic supplier"], ["Supplier source URL", "https://supplier.example/screws"], ["Pack price", "2.50"]]) {
     fireEvent.change(screen.getByLabelText(label!, { exact: true }), { target: { value } });
   }
-  fireEvent.click(screen.getByRole("button", { name: "Save supplier observation" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save quote" }));
   if (refreshMode !== "immediate") {
     await waitFor(() => expect(finishRefresh).toBeTypeOf("function"));
     expect((screen.getByRole("button", { name: "Record quote for Screws" }) as HTMLButtonElement).disabled).toBe(true);

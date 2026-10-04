@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { NewInventoryDialog, InventoryTable, SettingsPage } from "./App";
+import { AddBomDialog, NewInventoryDialog, InventoryTable, SettingsPage, type NewInventoryDraft } from "./App";
 import { DEFAULT_MANAGED_INVENTORY_CATEGORIES as categories } from "./category-ui";
-import { inventory, catalogProducts } from "./mock-data";
+import { inventory, catalogProducts, projects } from "./mock-data";
 import { UnsavedWorkContext } from "./unsaved-work";
+import { ApiError } from "./api";
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(async () => { cleanup(); vi.restoreAllMocks(); await new Promise(resolve => setTimeout(resolve, 0)); });
 const props = () => ({ expert: false, categories, categoriesLoading: false, catalogQuery: "", catalogProducts: [], onCatalogQuery: vi.fn(), onResetCatalog: vi.fn(), onSearchCatalog: vi.fn().mockResolvedValue([]), onSearchCatalogPage: vi.fn().mockResolvedValue({ products: [], nextCursor: undefined }), onCreateCatalogProduct: vi.fn().mockResolvedValue(undefined), onCreateExact: vi.fn().mockResolvedValue(false), onLinkExact: vi.fn().mockResolvedValue(false), onClose: vi.fn(), onGoSettings: vi.fn(), onCreate: vi.fn().mockResolvedValue(false) });
 function choose(kind: string) { fireEvent.change(screen.getByRole("combobox", { name: "What are you adding?" }), { target: { value: kind } }); fireEvent.click(screen.getByRole("button", { name: /Continue/ })); }
 
@@ -127,4 +128,57 @@ it("requires an explicit received quantity for an exact printer", async () => {
   fireEvent.click(await screen.findByRole("option", { name: /Bambu Lab/ }));
   expect(await screen.findByLabelText("Owned units")).toHaveProperty("value", "");
   expect(actions.onCreateExact).not.toHaveBeenCalled();
+});
+
+
+it("captures electronic specifications and asks separately to review an entered physical count", async () => {
+  const actions = props(); render(<NewInventoryDialog {...actions} />); choose("electronic");
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Synthetic sensor board" } });
+  fireEvent.change(screen.getByLabelText("Details and specifications (optional)"), { target: { value: "3.3 V, I2C, 2.54 mm header" } });
+  fireEvent.change(screen.getByLabelText("Recorded quantity"), { target: { value: "6" } });
+  fireEvent.click(screen.getByRole("checkbox", { name: "I have counted these" }));
+  expect(actions.onCreate).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Add item and review count" }));
+  await waitFor(() => expect(actions.onCreate).toHaveBeenCalledWith(expect.objectContaining({ description: "3.3 V, I2C, 2.54 mm header", quantity: 6 }), { reviewCount: true }));
+  expect(actions.onCreate.mock.calls[0]?.[0]).not.toHaveProperty("evidence");
+});
+
+it("retains and freezes an ambiguous item save for the same explicit retry after remount", async () => {
+  const actions = props(); let retained: NewInventoryDraft | undefined;
+  const remember = (draft: NewInventoryDraft) => { retained = draft; };
+  actions.onCreate.mockRejectedValueOnce(new ApiError("Lost acknowledgement", { kind: "offline" }));
+  const view = render(<NewInventoryDialog {...actions} onDraftChange={remember} requirementName="Synthetic connector" />); choose("electronic");
+  fireEvent.change(screen.getByLabelText("Recorded quantity"), { target: { value: "4" } });
+  fireEvent.click(screen.getByRole("checkbox", { name: "I have counted these" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add item and review count" }));
+  await screen.findByRole("button", { name: "Retry unchanged item" });
+  expect(screen.getByLabelText("Name").matches(":disabled")).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
+  expect(actions.onClose).not.toHaveBeenCalled();
+  await waitFor(() => expect(retained?.uncertain).toBe(true));
+  view.unmount();
+  render(<NewInventoryDialog {...actions} initialDraft={retained} onDraftChange={remember} requirementName="Synthetic connector" />);
+  expect(screen.getByLabelText("Name")).toHaveProperty("value", "Synthetic connector");
+  expect(screen.getByLabelText("Recorded quantity")).toHaveProperty("value", "4");
+  expect(actions.onCreate).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("button", { name: "Retry unchanged item" }));
+  await waitFor(() => expect(actions.onCreate).toHaveBeenCalledTimes(2));
+  expect(actions.onCreate.mock.calls[1]).toEqual(actions.onCreate.mock.calls[0]);
+});
+
+
+it("restores supporting inventory capture without a suspended requirement's modal hiding it", async () => {
+  const actions = props();
+  const draft: NewInventoryDraft = { itemType: "electronic", categoryNodeId: "category-electronics", selectionConfirmed: true, manualDetails: false, name: "Synthetic resumed connector", manufacturer: "", model: "", sku: "", location: "", description: "2 pins", quantity: "5", unit: "each", counted: true, uncertain: true };
+  render(<>
+    <AddBomDialog items={[]} project={projects[0]!} expert={false} suspended onClose={vi.fn()} onCreate={async () => true} />
+    <NewInventoryDialog {...actions} requirementName="Synthetic resumed connector" initialDraft={draft} />
+  </>);
+  const capture = await screen.findByRole("dialog", { name: "Add an inventory item" });
+  expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  expect(capture.getAttribute("aria-hidden")).not.toBe("true");
+  expect(screen.getByLabelText("Recorded quantity")).toHaveProperty("value", "5");
+  expect(actions.onCreate).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Retry unchanged item" }));
+  await waitFor(() => expect(actions.onCreate).toHaveBeenCalledOnce());
 });

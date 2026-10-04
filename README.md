@@ -32,11 +32,11 @@ BenchLedger keeps that context together, from the first requirement to the stock
 | In your project | What you can do today |
 | --- | --- |
 | **Inventory & equipment** | Search electronics, filament, fasteners, tools and printers. Organise categories, images and locations; track exact product variants and separate ordered, delivered and counted stock. |
-| **BOM & readiness** | Start from a template or review a CSV import. See **Ready / Check / Decide / Source** requirements, inspect alternatives and reserve confirmed parts. |
+| **Requirements & readiness** | Start from a template or review a CSV import. See **Ready / Check / Decide / Source** requirements, inspect alternatives and reserve confirmed parts. |
 | **CAD & assembly guides** | Inspect STEP, GLB and STL, select or isolate parts, explore exploded views, and save placements, requirement links and build steps. |
 | **PCB inspection** | Open native KiCad boards or STEP/GLB exports within the project. Inspect top/bottom views, supported copper, drills and footprint outlines. |
 | **Files & revisions** | Keep CAD, firmware, drawings and slicer files with exact project or workstream revisions. Preview supported files and download originals with integrity checks. |
-| **Build planning** | Record repeated parts, plates, run counts, materials, nozzle side and time estimates. Track workstreams and retain planning snapshots. |
+| **Build steps** | Record repeated parts, plates, run counts, materials, nozzle side and time estimates. Track task groups and retain build plans. |
 | **Sourcing & close-out** | Compare dated supplier quotes with pack sizes, currencies and missing costs visible. Review actual usage, returns and leftovers before updating stock. |
 | **HTTP API & MCP** | Read gaps, inspect geometry and prepare plans through shared application rules, scoped access, version checks and audit history. |
 

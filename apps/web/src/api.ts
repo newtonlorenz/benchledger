@@ -960,7 +960,7 @@ export function mapInventoryItem(item: ServerInventoryItem): InventoryItem {
     id: item.id, name: item.name, kind: item.kind, category, ...(item.categoryNodeId ? { categoryNodeId: item.categoryNodeId } : {}),
     variant: item.model ?? item.sku ?? "",
     ...(item.model ? { model: item.model } : {}),
-    description: item.description?.trim() || "No description recorded.", quantity: item.quantity, availableQuantity: item.availableQuantity, unit: mapUnit(item.unit),
+    description: item.description?.trim() || "", quantity: item.quantity, availableQuantity: item.availableQuantity, unit: mapUnit(item.unit),
     reserved: confirmed ? Math.max(item.quantity - item.availableQuantity, 0) : 0,
     state, evidence: mapEvidence(item.evidence.state), serverEvidence: mapServerEvidence(item.evidence.state), location: item.location?.trim() || "Unassigned",
     ...(dimensions ? { dimensions } : {}), ...(item.manufacturer ? { manufacturer: item.manufacturer } : {}), ...(item.sku ? { sku: item.sku } : {}),
@@ -2452,7 +2452,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     },
     async createInventoryItem(input) {
       const kind = input.kind ?? serverItemKind(input.category);
-      const item: InventoryItem = { id: `sample-item-${Date.now()}`, name: input.name, kind, category: mapCategory(kind), ...(input.categoryNodeId ? { categoryNodeId: input.categoryNodeId } : {}), variant: input.model?.trim() || "Variant not recorded", ...(input.model?.trim() ? { model: input.model.trim() } : {}), description: input.description?.trim() || "No description recorded.", quantity: input.quantity, availableQuantity: 0, unit: input.unit, reserved: 0, state: "inspect-first", evidence: "delivered", serverEvidence: "unknown", provenance: { source: "sample workspace" }, location: input.location?.trim() || "Unassigned", ...(input.manufacturer?.trim() ? { manufacturer: input.manufacturer.trim() } : {}), ...(input.sku?.trim() ? { sku: input.sku.trim() } : {}), tags: [input.category.toLowerCase()], compatibility: [], accent: mapAccent(input.category), version: 1 };
+      const item: InventoryItem = { id: `sample-item-${Date.now()}`, name: input.name, kind, category: mapCategory(kind), ...(input.categoryNodeId ? { categoryNodeId: input.categoryNodeId } : {}), variant: input.model?.trim() || "Variant not recorded", ...(input.model?.trim() ? { model: input.model.trim() } : {}), description: input.description?.trim() || "", quantity: input.quantity, availableQuantity: 0, unit: input.unit, reserved: 0, state: "inspect-first", evidence: "delivered", serverEvidence: "unknown", provenance: { source: "sample workspace" }, location: input.location?.trim() || "Unassigned", ...(input.manufacturer?.trim() ? { manufacturer: input.manufacturer.trim() } : {}), ...(input.sku?.trim() ? { sku: input.sku.trim() } : {}), tags: [input.category.toLowerCase()], compatibility: [], accent: mapAccent(input.category), version: 1 };
       state.inventory = [item, ...state.inventory];
       return item;
     },
@@ -3155,7 +3155,9 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         if (pendingInventoryCommands.get(commandId)?.key === command.key) pendingInventoryCommands.delete(commandId);
         return mapped;
       } catch (error: unknown) {
-        if (!mutationFailureIsAmbiguous(error) && pendingInventoryCommands.get(commandId)?.key === command.key) pendingInventoryCommands.delete(commandId);
+        // A rejected replay cannot prove that an earlier ambiguous request did
+        // not commit. Retain its identity across sign-in and later retries.
+        if (pending === undefined && !mutationFailureIsAmbiguous(error) && pendingInventoryCommands.get(commandId)?.key === command.key) pendingInventoryCommands.delete(commandId);
         throw error;
       }
     },

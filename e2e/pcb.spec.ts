@@ -4,7 +4,7 @@ import AxeBuilder from "@axe-core/playwright";
 test("PCB viewer imports a native board, preserves the file, and remains usable on desktop and phone", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/"); await page.getByLabel("Workspace password").fill("demo-password-please-change"); await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await page.getByRole("button", { name: /^Projects/u }).click(); await page.getByRole("tab", { name: /^Files/u }).click();
+  await page.getByRole("button", { name: "Switch to project Synthetic H2D desk lamp", exact: true }).click(); await page.getByRole("tab", { name: /^Files/u }).click();
   const bytes = await readFile("packages/artifacts/testfiles/synthetic-board.kicad_pcb");
   await page.getByLabel("Choose files to upload").setInputFiles({ name: "synthetic-board.kicad_pcb", mimeType: "application/x-kicad-pcb", buffer: bytes });
   await page.getByRole("button", { name: "Add 1 file", exact: true }).click(); await expect(page.getByRole("button", { name: "Download synthetic-board.kicad_pcb", exact: true })).toBeVisible();

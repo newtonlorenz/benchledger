@@ -92,6 +92,8 @@ test.describe("restore confirmation", () => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open navigation" }).click();
     await page.getByRole("button", { name: /^Projects(?: \d+)?$/u }).click();
+    await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "View archived projects", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Retained Archive E2E", exact: true })).toBeVisible();
 
     await openProjectDetails(page);
@@ -123,6 +125,8 @@ test("deletes an archived project after a single confirmation and hides it from 
   const harness = await mockRemovalWorkspace(page);
   await page.goto("/");
   await page.getByRole("button", { name: /^Projects(?: \d+)?$/u }).click();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "View archived projects", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Retained Archive E2E", exact: true })).toBeVisible();
 
   await openProjectDetails(page);
@@ -143,15 +147,20 @@ test("deletes an archived project after a single confirmation and hides it from 
 
   expect(harness.deleteRequest()).toMatchObject({ body: { name: "Retained Archive E2E" }, ifMatch: "4" });
   expect(harness.deleteRequest()?.idempotencyKey).toBeTruthy();
-  await expect(page.getByRole("heading", { name: "No projects yet", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Archived (0)", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "No archived projects", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
+  await expect.poll(() => new URL(page.url()).hash).toBe("#/");
+  await expect(page.getByRole("region", { name: "Getting started", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Project navigator", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "View archived projects", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Switch to project Retained Archive E2E", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.goBack();
-  await expect(page.getByRole("heading", { name: "No projects yet", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Active projects", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Getting started", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Switch to project Retained Archive E2E", exact: true })).toHaveCount(0);
   await page.goForward();
-  await expect(page.getByRole("heading", { name: "No archived projects", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Archived (0)", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(() => new URL(page.url()).hash).toBe("#/settings");
+  await expect(page.getByRole("region", { name: "Project navigator", exact: true })).toHaveCount(0);
 });
 
 test("restores the active or archived project named by browser history", async ({ page }) => {
