@@ -1020,11 +1020,11 @@ function jsonOpenApi(version: string): Record<string, unknown> {
         }
       },
       "/workspace": { get: { responses: { "200": { description: "Authenticated aggregate workspace snapshot" } } } },
-      "/project-library": { get: { summary: "Read a bounded maker project library page", description: "Current revisions, requirements and readiness, exact project/workstream artifact ancestry, deliberate display covers. Project-scoped accounts see only their allow-listed projects. Default active includes completed projects. Iterate every nextCursor to read the complete library; no aggregate project cap.", parameters: [
+      "/project-library": { get: { summary: "Read a bounded maker project library page", description: "Current revisions, requirements and readiness, exact project/workstream artifact ancestry, deliberate display covers and build plans. Project-scoped accounts see only their allow-listed projects. Default active includes completed projects. Iterate every nextCursor to read the complete library; no aggregate project cap.", parameters: [
         { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 25 } },
         { name: "cursor", in: "query", schema: { type: "string", minLength: 1, maxLength: 2048 } },
         { name: "status", in: "query", schema: { type: "string", enum: ["active", "archived", "all"], default: "active" } }
-      ], responses: { "200": { description: "Project library page {data,limit,nextCursor?}; presentation is top-level on each project" }, "400": { description: "Invalid query or cursor" }, "403": { description: "Missing read authority" } } } },
+      ], responses: { "200": { description: "Project library page {data,limit,nextCursor?}; presentation and buildPlan are top-level on each project" }, "400": { description: "Invalid query or cursor" }, "403": { description: "Missing read authority" } } } },
       "/inventory": { get: { description: "Returns a bounded inventory page; categoryNodeId and unassigned=true are mutually exclusive.", parameters: inventoryQueryParameters, responses: { "200": { description: "Inventory page" } } }, post: { responses: { "201": { description: "Inventory item" } } } },
       "/inventory/categories": {
         get: { parameters: [
@@ -1317,7 +1317,7 @@ async function workspaceSnapshot(service: ApplicationService, projectIds?: Reado
     service.listOffers(undefined, 200)
   ]);
   const enrichedProjects = await Promise.all(projects.data.map(async (project): Promise<WorkspaceProject> => {
-    const { presentation: _presentation, ...hydrated } = await hydrateProject(service, project, false);
+    const { presentation: _presentation, buildPlan: _buildPlan, ...hydrated } = await hydrateProject(service, project, false);
     return hydrated;
   }));
   const hydratedInventory = await hydrateWorkspaceInventory(service, inventory.data);

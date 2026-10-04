@@ -28,7 +28,7 @@ it("opens concrete tasks, provides quick entry and preserves refresh failures", 
   expect(data.onNewProject).toHaveBeenCalledOnce(); expect(data.onAddItem).toHaveBeenCalledOnce(); expect(data.onImport).toHaveBeenCalledOnce();
   fireEvent.click(screen.getByRole("button", { name: "All next actions" }));
   fireEvent.click(document.querySelector<HTMLButtonElement>(".home-task")!); expect(data.onTask).toHaveBeenCalledOnce();
-  fireEvent.click(screen.getByRole("button", { name: "Refresh workspace" })); await screen.findByRole("alert"); expect(document.querySelectorAll(".home-project-row")).toHaveLength(2);
+  fireEvent.click(screen.getByRole("button", { name: "Refresh workspace" })); await screen.findByRole("alert"); expect(document.querySelectorAll(".home-project-row")).toHaveLength(3);
 });
 it("handles empty, unavailable and long project lists without invented totals", async () => {
   const data = props(); const view = render(<WorkbenchHome {...data} projects={[]} />);
@@ -131,9 +131,22 @@ it("remembers gallery and list layouts while preserving image selection and proj
   fireEvent.click(screen.getByRole("button", { name: "Choose image for Café fixture" }));
   expect(data.onOpen).toHaveBeenCalledWith("Café fixture", "files");
   fireEvent.click(screen.getByRole("button", { name: "List" }));
-  expect(document.querySelectorAll(".project-image-row")).toHaveLength(2);
+  expect(document.querySelectorAll(".project-image-row")).toHaveLength(3);
   view.unmount(); render(<WorkbenchHome {...data} />);
   expect(screen.getByRole("button", { name: "List" }).getAttribute("aria-pressed")).toBe("true");
   fireEvent.click(screen.getByRole("button", { name: "Open project Café fixture" }));
   expect(data.onOpen).toHaveBeenLastCalledWith("Café fixture");
+});
+
+it("includes archived projects in All and opens the current build from its gallery card", () => {
+  const data = props();
+  const current = { ...fixture("Current build"), projectLibraryAvailable: true, serverRevisionId: "current", artifacts: [], allArtifacts: [] };
+  render(<WorkbenchHome {...data} projects={[current, fixture("Archived build", "archived")]} />);
+  expect(document.querySelectorAll(".project-gallery-card")).toHaveLength(2);
+  fireEvent.click(screen.getByRole("button", { name: "Start build: Current build" }));
+  expect(data.onOpen).toHaveBeenCalledWith("Current build", "build");
+  fireEvent.change(screen.getByLabelText("Filter projects"), { target: { value: "archived" } });
+  expect(document.querySelectorAll(".project-gallery-card")).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Open project Archived build" }));
+  expect(data.onOpen).toHaveBeenLastCalledWith("Archived build");
 });

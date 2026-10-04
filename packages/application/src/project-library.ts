@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod/v3";
-import type { Artifact, BomLine, BuildConfigurationSnapshot, Project, ProjectLibraryQuery, ProjectPresentation, ProjectRevision, WorkItem } from "@benchledger/api-contract";
+import type { Artifact, BomLine, BuildConfigurationSnapshot, BuildPlan, Project, ProjectLibraryQuery, ProjectPresentation, ProjectRevision, WorkItem } from "@benchledger/api-contract";
 import { ApplicationError } from "./errors.js";
 import type { GapEvaluation, Page } from "./ports.js";
 import type { ApplicationService } from "./service.js";
@@ -11,19 +11,21 @@ export interface ProjectLibraryProject extends Project {
   artifacts: readonly Artifact[];
   currentRevision?: ProjectRevision & { bom: readonly BomLine[]; artifacts: readonly Artifact[]; gapEvaluation: GapEvaluation; buildConfigSnapshot?: BuildConfigurationSnapshot };
   presentation: ProjectPresentation | null;
+  buildPlan: BuildPlan | null;
 }
 
 /** Shared hydration for the browser workspace and bounded HTTP/MCP library. */
-export async function hydrateProject(service: ApplicationService, project: Project, includePresentation = true): Promise<ProjectLibraryProject> {
+export async function hydrateProject(service: ApplicationService, project: Project, includePlanning = true): Promise<ProjectLibraryProject> {
   const [workItems, artifacts] = await Promise.all([service.listWorkItems(project.id), service.listArtifacts(project.id)]);
-  if (project.currentRevisionId === undefined) return { ...project, workItems, artifacts, bom: [], presentation: null };
+  if (project.currentRevisionId === undefined) return { ...project, workItems, artifacts, bom: [], presentation: null, buildPlan: null };
   const revision = await service.getProjectRevision(project.currentRevisionId);
   if (revision.projectId !== project.id) throw new ApplicationError("integrity_error", "The current revision does not belong to this project.");
-  const [bom, revisionArtifacts, gapEvaluation, latestConfiguration, presentation] = await Promise.all([
+  const [bom, revisionArtifacts, gapEvaluation, latestConfiguration, presentation, buildPlan] = await Promise.all([
     service.listBomLines(revision.id), service.listArtifacts(project.id, { projectRevisionId: revision.id }), service.evaluateBomGaps(revision.id), service.getLatestBuildConfiguration(revision.id),
-    includePresentation && service.makerWorkflows.supports() ? service.makerWorkflows.projectPresentation(project.id, revision.id) : null
+    includePlanning && service.makerWorkflows.supports() ? service.makerWorkflows.projectPresentation(project.id, revision.id) : null,
+    includePlanning && service.makerWorkflows.supports() ? service.makerWorkflows.buildPlan(project.id, revision.id) : null
   ]);
-  return { ...project, workItems, artifacts, bom, currentRevision: { ...revision, bom, artifacts: revisionArtifacts, gapEvaluation, ...(latestConfiguration === null ? {} : { buildConfigSnapshot: latestConfiguration }) }, presentation };
+  return { ...project, workItems, artifacts, bom, currentRevision: { ...revision, bom, artifacts: revisionArtifacts, gapEvaluation, ...(latestConfiguration === null ? {} : { buildConfigSnapshot: latestConfiguration }) }, presentation, buildPlan };
 }
 
 const cursorSchema = z.object({ version: z.literal(1), status: z.enum(["active", "archived", "all"]), scope: z.string().length(64), phase: z.enum(["active", "archived", "scoped"]), cursor: z.string().max(1024).optional() }).strict();

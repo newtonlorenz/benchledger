@@ -114,8 +114,11 @@ describe("project library HTTP/MCP parity and paging", () => {
     const file = await attachImage(service, runtime.ports, projectId, { projectRevisionId: revisionId });
     const work = await service.makerWorkflows.createWorkstream(projectId, { name: "Gallery workstream", kind: "part" }, context());
     const workFile = await attachImage(service, runtime.ports, projectId, { workItemId: work.data.item.id, workItemRevisionId: work.data.revision.id });
+    expect((await service.makerWorkflows.projectLibrary()).data[0]).toMatchObject({ id: projectId, buildPlan: null });
+    const plan = (await service.makerWorkflows.saveBuildPlan(projectId, revisionId, { expectedVersion: 0, name: "Synthetic gallery build", parts: [{ id: "part-one", name: "Housing", quantity: 1 }], plates: [] }, context())).data;
     const writerToken = randomBytes(32).toString("hex");
-    const app = await createApp({ runtime, demo: true, logger: false, auth: { sessionSecret: randomBytes(48).toString("hex"), bearerTokens: [bearerRecord(writerToken, ["read", "write"], [projectId]), bearerRecord("library-reader", ["read"], [projectId]), bearerRecord("library-wrong", ["read", "write"], ["other-project"])] } });
+    const workspaceReaderToken = randomBytes(32).toString("hex");
+    const app = await createApp({ runtime, demo: true, logger: false, auth: { sessionSecret: randomBytes(48).toString("hex"), bearerTokens: [bearerRecord(writerToken, ["read", "write"], [projectId]), bearerRecord(workspaceReaderToken, ["read"]), bearerRecord("library-reader", ["read"], [projectId]), bearerRecord("library-wrong", ["read", "write"], ["other-project"])] } });
     const path = `/api/v1/projects/${projectId}/revisions/${revisionId}/presentation`;
     const headers = (token = writerToken, key = `library-http-${++serial}`) => ({ authorization: `Bearer ${token}`, "idempotency-key": key });
     const rpc = async (name: string, args: object, token = writerToken) => (await app.inject({ method: "POST", url: "/api/v1/mcp", headers: headers(token), payload: { jsonrpc: "2.0", id: "library", method: "tools/call", params: { name, arguments: args } } })).json().result;
@@ -140,9 +143,13 @@ describe("project library HTTP/MCP parity and paging", () => {
       const httpPage = await app.inject({ method: "GET", url: "/api/v1/project-library?limit=1", headers: headers() });
       expect(httpPage.statusCode, httpPage.body).toBe(200);
       const page = httpPage.json();
-      expect(page.data[0]).toMatchObject({ id: projectId, presentation: changed.structuredContent.data, currentRevision: { id: revisionId, bom: expect.any(Array), gapEvaluation: expect.any(Object) }, artifacts: expect.arrayContaining([expect.objectContaining({ id: file.id, revisionId }), expect.objectContaining({ id: workFile.id, workItemId: work.data.item.id, revisionId: work.data.revision.id })]), workItems: expect.any(Array) });
+      expect(page.data[0]).toMatchObject({ id: projectId, presentation: changed.structuredContent.data, currentRevision: { id: revisionId, bom: expect.any(Array), gapEvaluation: expect.any(Object) }, artifacts: expect.arrayContaining([expect.objectContaining({ id: file.id, revisionId }), expect.objectContaining({ id: workFile.id, workItemId: work.data.item.id, revisionId: work.data.revision.id })]), workItems: expect.any(Array), buildPlan: plan });
       expect((await rpc("list_project_library", { limit: 1 })).structuredContent).toEqual(page);
       expect(page).not.toHaveProperty("inventory");
+      const workspace = await app.inject({ method: "GET", url: "/api/v1/workspace", headers: headers(workspaceReaderToken) });
+      expect(workspace.statusCode, workspace.body).toBe(200);
+      expect(workspace.json().projects[0]).not.toHaveProperty("presentation");
+      expect(workspace.json().projects[0]).not.toHaveProperty("buildPlan");
       expect((await app.inject({ method: "GET", url: "/api/v1/project-library", headers: headers("library-wrong") })).json().data).toEqual([]);
       for (const query of ["limit=101", "limit=0", "status=complete", "cursor=invalid", "unknown=true"]) expect((await app.inject({ method: "GET", url: `/api/v1/project-library?${query}`, headers: headers() })).statusCode).toBe(400);
       const capabilities = (await app.inject({ method: "GET", url: "/api/v1/capabilities" })).json();

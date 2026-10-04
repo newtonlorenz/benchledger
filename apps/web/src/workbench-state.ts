@@ -5,14 +5,14 @@ import { matchesInventorySearch } from "@benchledger/domain/inventory-search";
 export type HomeTaskKind = "setup" | "requirements" | "decide" | "check" | "source" | "files" | "refresh" | "review";
 export interface HomeTask { id: string; projectId: string; projectName: string; kind: HomeTaskKind; label: string; detail: string; count: number }
 export interface HomeProject { project: Project; tasks: HomeTask[]; ready: number; required: number; unknown: boolean }
-export type HomeFilter = "active" | "attention" | "pinned" | "complete" | "all";
+export type HomeFilter = "active" | "attention" | "pinned" | "complete" | "archived" | "all";
 export interface HomePreferences { view: "gallery" | "list"; pins: string[]; recent: string[]; filter: HomeFilter; sort: "recent" | "name" | "attention" }
-export const defaultHomePreferences: HomePreferences = { view: "gallery", pins: [], recent: [], filter: "active", sort: "recent" };
+export const defaultHomePreferences: HomePreferences = { view: "gallery", pins: [], recent: [], filter: "all", sort: "recent" };
 const ids = (value: unknown): string[] => Array.isArray(value) ? [...new Set(value.filter((id): id is string => typeof id === "string" && id.length > 0 && id.length <= 240))].slice(0, 100) : [];
 export function parseHomePreferences(raw: string | null): HomePreferences {
   try { const data: unknown = JSON.parse(raw ?? "null"); if (!data || typeof data !== "object" || Array.isArray(data)) return { ...defaultHomePreferences };
     const value = data as Record<string, unknown>;
-    return { view: value.view === "list" ? "list" : "gallery", pins: ids(value.pins), recent: ids(value.recent).slice(0, 12), filter: ["active", "attention", "pinned", "complete", "all"].includes(String(value.filter)) ? value.filter as HomeFilter : "active", sort: ["recent", "name", "attention"].includes(String(value.sort)) ? value.sort as HomePreferences["sort"] : "recent" };
+    return { view: value.view === "list" ? "list" : "gallery", pins: ids(value.pins), recent: ids(value.recent).slice(0, 12), filter: ["active", "attention", "pinned", "complete", "archived", "all"].includes(String(value.filter)) ? value.filter as HomeFilter : "all", sort: ["recent", "name", "attention"].includes(String(value.sort)) ? value.sort as HomePreferences["sort"] : "recent" };
   } catch { return { ...defaultHomePreferences }; }
 }
 export function homePreferenceKey(sample: boolean): string { return `benchledger.home.v1.${sample ? "sample" : "workspace"}`; }
@@ -20,7 +20,7 @@ export function readHomePreferences(sample = false): HomePreferences { try { ret
 export function writeHomePreferences(value: HomePreferences, sample = false): void { try { localStorage.setItem(homePreferenceKey(sample), JSON.stringify(value)); } catch { /* Local controls still work when storage is blocked. */ } }
 export function recordOpenedProject(id: string, sample = false): void { const old = readHomePreferences(sample); writeHomePreferences({ ...old, recent: [id, ...old.recent.filter((entry) => entry !== id)].slice(0, 12) }, sample); }
 export function deriveHomeProjects(projects: readonly Project[], items: InventoryItem[]): HomeProject[] {
-  return projects.filter((project) => project.status !== "archived").map((project) => {
+  return projects.map((project) => {
     const summary = calculateProjectSummary(project, items);
     const lines = summary.lineStatuses.filter((line) => !line.line.optional);
     const unknown = project.readinessUnavailable === true || summary.readinessUnavailable;
@@ -30,7 +30,7 @@ export function deriveHomeProjects(projects: readonly Project[], items: Inventor
     const printer = items.find((item) => item.id === printerId);
     const tasks: HomeTask[] = [];
     const add = (kind: HomeTaskKind, label: string, detail: string, count = 1) => tasks.push({ id: `${project.id}:${kind}`, projectId: project.id, projectName: project.name, kind, label, detail, count });
-    if (project.status !== "complete") {
+    if (project.status !== "complete" && project.status !== "archived") {
       if (!project.bom.length) add("requirements", "Add requirements", "Start with one part, material or tool. Choose how to build it later.");
       if (unknown) add("refresh", "Refresh stock results", "The current stock result is unavailable.");
       if (!unknown) for (const kind of ["decide", "check", "source"] as const) {
@@ -47,7 +47,7 @@ export function deriveHomeProjects(projects: readonly Project[], items: Inventor
   });
 }
 export function filterHomeProjects(rows: readonly HomeProject[], query: string, preferences: HomePreferences): HomeProject[] {
-  const filtered = rows.filter(({ project, tasks }) => matchesInventorySearch([project.name, project.description, project.currentRevision], query) && (preferences.filter === "all" || preferences.filter === "pinned" && preferences.pins.includes(project.id) || preferences.filter === "complete" && project.status === "complete" || preferences.filter === "active" && project.status !== "complete" || preferences.filter === "attention" && tasks.length > 0));
+  const filtered = rows.filter(({ project, tasks }) => matchesInventorySearch([project.name, project.description, project.currentRevision], query) && (preferences.filter === "all" || preferences.filter === "pinned" && preferences.pins.includes(project.id) || preferences.filter === "complete" && project.status === "complete" || preferences.filter === "archived" && project.status === "archived" || preferences.filter === "active" && project.status !== "complete" && project.status !== "archived" || preferences.filter === "attention" && tasks.length > 0));
   const compareDate = (value: string) => { const date = Date.parse(value); return Number.isFinite(date) ? date : 0; };
   return [...filtered].sort((a, b) => {
     const pin = Number(preferences.pins.includes(b.project.id)) - Number(preferences.pins.includes(a.project.id));

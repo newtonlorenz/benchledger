@@ -13,17 +13,19 @@ import type { HomeFilter, HomePreferences, HomeProject, HomeTask } from "./workb
 import "./home-experience.css";
 import "./project-library.css";
 import { ProductImage } from "./project-product-image";
+import { BuildFileDownload } from "./project-build-handoff";
+import { buildFileGroup, currentBuildFiles, preferredPrintFile } from "./project-library";
 
 export interface WorkbenchHomeProps {
   projects: Project[]; items: InventoryItem[]; printers: InventoryItem[]; sampleMode: boolean; isPrinterUsable?: ((item: InventoryItem) => boolean) | undefined;
   archivedCount?: number | undefined; onOpenArchive?: (() => void) | undefined;
-  onOpen(id: string, tab?: "plan" | "files" | "offers" | "reconciliation"): void;
+  onOpen(id: string, tab?: "build" | "plan" | "files" | "offers" | "reconciliation"): void;
   onTask(task: HomeTask): void; onNewProject(event: React.MouseEvent<HTMLButtonElement>): void;
   onAddItem(): void; onImport?: (() => void) | undefined; onInventory(): void; onItem(id: string): void;
   onRefresh?: (() => Promise<boolean>) | undefined;
 }
 
-const projectFilters: [HomeFilter, string][] = [["active", "Active projects"], ["attention", "Needs attention"], ["pinned", "Pinned projects"], ["complete", "Complete projects"], ["all", "All projects"]];
+const projectFilters: [HomeFilter, string][] = [["active", "Active projects"], ["attention", "Needs attention"], ["pinned", "Pinned projects"], ["complete", "Complete projects"], ["archived", "Archived projects"], ["all", "All projects"]];
 
 export function WorkbenchHome(props: WorkbenchHomeProps) {
   const { projects, items, sampleMode } = props;
@@ -40,10 +42,11 @@ export function WorkbenchHome(props: WorkbenchHomeProps) {
   const filtered = filterHomeProjects(rows, query, preferences);
   const tasks = rows.flatMap((row) => row.tasks);
   const queue = tasks.filter((task) => taskKind === "all" || task.kind === taskKind);
-  const recent = preferences.recent.map((id) => rows.find((row) => row.project.id === id)).find((row) => row && row.project.status !== "complete");
+  const recent = preferences.recent.map((id) => rows.find((row) => row.project.id === id)).find((row) => row && row.project.status !== "complete" && row.project.status !== "archived");
   const counts: Record<HomeFilter, number> = {
     all: rows.length,
-    active: rows.filter((row) => row.project.status !== "complete").length,
+    active: rows.filter((row) => row.project.status !== "complete" && row.project.status !== "archived").length,
+    archived: rows.filter((row) => row.project.status === "archived").length,
     attention: rows.filter((row) => row.tasks.length).length,
     complete: rows.filter((row) => row.project.status === "complete").length,
     pinned: rows.filter((row) => preferences.pins.includes(row.project.id)).length,
@@ -80,7 +83,7 @@ export function WorkbenchHome(props: WorkbenchHomeProps) {
     </header>
 
     {refreshError && <Alert asChild><p role="alert" className="home-read-error">{rows.length ? "The workspace could not refresh. The previous records remain visible. Retry before using stock." : "The workspace could not refresh. Try again to check for projects and stock."}</p></Alert>}
-    {rows.some((row) => row.unknown && row.project.status !== "complete") && <p role="status" className="home-results-warning">Some stock results are unavailable. Check and sourcing counts exclude those projects. Refresh the workspace before using stock.</p>}
+    {rows.some((row) => row.unknown && row.project.status !== "complete" && row.project.status !== "archived") && <p role="status" className="home-results-warning">Some stock results are unavailable. Check and sourcing counts exclude those projects. Refresh the workspace before using stock.</p>}
 
     {recent && <section className="home-resume" aria-label="Resume recent project">
       <Icon name="clock" size={16} /><span>Recently opened</span>
@@ -109,7 +112,7 @@ export function WorkbenchHome(props: WorkbenchHomeProps) {
         <Label className="home-sort"><span>Sort</span><NativeSelect aria-label="Sort projects" value={preferences.sort} onChange={(event) => update({ sort: event.target.value as HomePreferences["sort"] })}><NativeSelectOption value="recent">Recent first</NativeSelectOption><NativeSelectOption value="name">Name</NativeSelectOption><NativeSelectOption value="attention">Open checks</NativeSelectOption></NativeSelect></Label>
       </div>
       {preferences.view === "list" && <div className="home-register-columns has-project-images" aria-hidden="true"><span /><span /><span>Project</span><span>Stage</span><span>Stock readiness</span><span>Next action</span></div>}
-      <div className={preferences.view === "gallery" ? "project-gallery" : "home-project-list has-project-images"}>{filtered.slice(0, limit).map((row) => <HomeProjectRow key={row.project.id} view={preferences.view} onImage={() => props.onOpen(row.project.id, "files")} row={row} pinned={preferences.pins.includes(row.project.id)} onPin={() => pin(row.project.id)} onOpen={() => props.onOpen(row.project.id)} onTask={props.onTask} />)}</div>
+      <div className={preferences.view === "gallery" ? "project-gallery" : "home-project-list has-project-images"}>{filtered.slice(0, limit).map((row) => <HomeProjectRow key={row.project.id} view={preferences.view} onImage={() => props.onOpen(row.project.id, "files")} row={row} pinned={preferences.pins.includes(row.project.id)} onPin={() => pin(row.project.id)} onOpen={() => props.onOpen(row.project.id)} onBuild={row.project.projectLibraryAvailable && row.project.serverRevisionId ? () => props.onOpen(row.project.id, "build") : undefined} onTask={props.onTask} />)}</div>
       {!filtered.length && <div className="home-filter-empty"><Icon name="folder" size={24} /><strong>No projects match this view</strong><p>Change the view or clear the search.</p><Button variant="ghost" type="button" className="text-button" onClick={() => { setQuery(""); update({ filter: "all" }); }}>Show all projects</Button></div>}
       <div className="home-list-footer"><span>{Math.min(limit, filtered.length)} of {filtered.length} projects in this view</span>{filtered.length > limit && <Button variant="ghost" type="button" className="text-button" onClick={() => setLimit((value) => value + 12)}>Show more projects</Button>}</div>
     </section>}
@@ -143,16 +146,20 @@ export function WorkbenchHome(props: WorkbenchHomeProps) {
   </div>;
 }
 
-function HomeProjectRow({ row, pinned, onPin, onOpen, onTask, view, onImage }: { view: HomePreferences["view"]; onImage(): void; row: HomeProject; pinned: boolean; onPin(): void; onOpen(): void; onTask(task: HomeTask): void }) {
+function HomeProjectRow({ row, pinned, onPin, onOpen, onTask, view, onImage, onBuild }: { view: HomePreferences["view"]; onImage(): void; onBuild?: (() => void) | undefined; row: HomeProject; pinned: boolean; onPin(): void; onOpen(): void; onTask(task: HomeTask): void }) {
   const { project, tasks } = row;
   const task = tasks[0];
+  const files = currentBuildFiles(project).filter((file) => buildFileGroup(file));
+  const printFile = preferredPrintFile(project);
   return <article className={`home-project-row ${view === "gallery" ? "project-gallery-card" : "project-image-row"}`}>
-    <ProductImage project={project} compact={view === "list"} onOpen={onOpen} onChoose={project.projectLibraryAvailable ? onImage : undefined} />
+    <ProductImage project={project} compact={view === "list"} onOpen={onOpen} onChoose={project.projectLibraryAvailable && project.status !== "archived" ? onImage : undefined} />
     <Button variant="ghost" type="button" className={`home-pin ${pinned ? "is-pinned" : ""}`} aria-label={`${pinned ? "Unpin" : "Pin"} project ${project.name}`} aria-pressed={pinned} onClick={onPin} title={pinned ? "Unpin project" : "Pin project"}><Icon name="pin" size={17} /></Button>
     <Button variant="ghost" type="button" className="home-project-name" onClick={onOpen} aria-label={`Open project ${project.name}`}><strong>{project.name}</strong><small>{project.currentRevision} · {project.bom.length} {project.bom.length === 1 ? "requirement" : "requirements"}</small></Button>
     {view === "gallery" && project.description && <p className="project-gallery-description">{project.description}</p>}
     <Badge variant="outline" className="home-project-stage">{project.status}</Badge>
     <span className={`home-stock-state${row.unknown ? " is-unavailable" : ""}`}>{row.unknown ? "Stock results unavailable" : row.required ? `${row.ready} / ${row.required} stock-ready` : "No required parts"}</span>
+    {view === "gallery" && onBuild && <p className="project-gallery-build-details">{files.length} current build {files.length === 1 ? "file" : "files"}{project.buildPlan ? ` · Plan v${project.buildPlan.version}` : " · No build plan"}</p>}
     <Button variant="ghost" type="button" className="home-project-next" onClick={() => task ? onTask(task) : onOpen()} aria-label={`${task?.label ?? "Open project"}: ${project.name}`}>{task?.label ?? (project.status === "complete" ? "View project" : "Review project")}<Icon name="arrow-right" size={15} /></Button>
+    {view === "gallery" && onBuild && <div className="project-gallery-actions"><Button aria-label={`Start build: ${project.name}`} onClick={onBuild}>Start build<Icon name="arrow-right" size={15} /></Button>{printFile && <BuildFileDownload file={printFile} compact />}</div>}
   </article>;
 }

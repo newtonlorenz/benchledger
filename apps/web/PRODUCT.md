@@ -74,8 +74,11 @@ and never implies fit or changes units silently. Referenced stock details are
 loaded for the active project so reloads do not turn known selections into
 apparently missing stock.
 
-Projects opens the project register; a selected project opens its Requirements,
-Files, Shopping list and Build steps. A new workspace offers Start a project and
+Projects opens the image gallery, with a remembered List option. All projects
+includes completed and archived builds; filters narrow the view. Start build
+opens current print, PCB, component/firmware and instruction files, with direct
+3MF downloads for a slicer. A selected project opens its Requirements, Files,
+Shopping list and Build steps. A new workspace offers Start a project and
 Add inventory, without empty search/filter controls. Archived-only workspaces,
 failed reads and empty filtered results retain their own recovery actions.
 

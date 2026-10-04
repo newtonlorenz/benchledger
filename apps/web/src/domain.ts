@@ -3,7 +3,7 @@
 import { resolveBomSpecification } from "@benchledger/domain/specification";
 import { resolveBomAlternativeQuantity } from "@benchledger/domain/quantity-conversion";
 import type { InspectionAction } from "./inspection-ui";
-import type { ProjectPresentation } from "@benchledger/api-contract";
+import type { BuildPlan, ProjectPresentation } from "@benchledger/api-contract";
 
 export type StockState =
   | "available"
@@ -456,6 +456,7 @@ export interface Project {
   /** Connected library metadata; absence preserves compatibility with older services. */
   projectLibraryAvailable?: boolean;
   presentation?: ProjectPresentation | null;
+  buildPlan?: BuildPlan | null;
   /** Canonical application-service readiness returned by the workspace API. */
   gapEvaluation?: ProjectGapEvaluation;
   /** Connected readiness was invalidated and could not be reloaded. Source

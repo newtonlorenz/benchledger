@@ -19,20 +19,24 @@ add API or MCP operations or change stock evidence.
 ## Visual project library
 
 Projects defaults to Gallery, with a remembered List option that retains image
-thumbnails. Both layouts keep search, pins, readiness and next actions. Active
-and archived projects remain separate. **Files → Project image** selects a
+thumbnails. Both layouts keep search, pins, readiness and next actions. The
+default All projects filter includes completed and archived projects; dedicated
+filters narrow the gallery without losing archive review and restore. **Files → Project image** selects a
 current-revision PNG, JPEG or WebP of up to 20 MiB and labels it as a design
 render, reference image or built-product photo. The browser verifies the
 authenticated artifact download against its saved SHA-256 before display.
 
 `GET /api/v1/project-library` and MCP `list_project_library` return bounded
 project pages with current revisions, requirements/readiness, artifact metadata
-and selected presentation metadata. Follow every `nextCursor`; status defaults
+and selected presentation and build-plan metadata. Follow every `nextCursor`; status defaults
 to `active` (including completed projects) and also accepts `archived` or `all`.
 Project allow-lists apply before pagination. These reads return no global
 inventory or offer collection. Presentation reads, saves and retained history
 share the revision-scoped application service. See [project images](project-images.md)
-for exact routes, fields and image ancestry rules.
+for exact routes, fields and image ancestry rules. Gallery **Start build** opens
+current files grouped for printing, PCB fabrication, components/firmware and
+instructions. Direct 3MF downloads and handoff downloads verify SHA-256; they
+never operate equipment. See [build handoff](project-library.md).
 
 ## Inventory workstation
 
@@ -397,7 +401,8 @@ profiles when present.
 | Add an exact printer or spool | Exact-product guided add; reported printers remain inspect-first until explicitly commissioned | catalog search/read → `create_inventory_with_product_profile` |
 | Start a project | Guided project setup | `create_project_with_initial_revision` → `create_work_item`; optional stable `projectId`/`revisionId` identify records; use `create_project_revision` for later planning baselines |
 | Recognise a project visually | Projects Gallery or List; Files → Project image | `list_project_library` → `read_project_presentation` → `save_project_presentation`; `read_project_presentation_history` retains prior selections, while artifact bytes use authenticated host transfer |
-| Archive or restore a project | Project Archive action and explicit Archived view | `archive_project` / `restore_project`; archive hides default lists, releases active reservations with evidence, retains history, and restore never recreates reservations |
+| Retrieve current build files | Gallery → Start build; direct Download 3MF; Build steps handoff | `list_project_library` → `read_build_plan`; `save_build_plan` prepares plan metadata, with artifact bytes retrieved through authenticated host transfer and SHA-256 verification |
+| Archive or restore a project | Project Archive action and explicit Archived view | `archive_project` / `restore_project`; archive moves the project out of active lists, releases active reservations with evidence, retains history, and restore never recreates reservations |
 | Understand a build gap | BOM editor and gap panel | `list_bom_lines` → `calculate_bom_gaps`; Decide before supplier lookup, inspect candidate diagnostics and conversion capacity/overage reasons in Check results, and shop only Source lines |
 | Resolve a physical project check | Project Plan Checks panel below the requirements; beginner shows three concrete questions and View all, expert reveals canonical traceability; confirmed compatibility and conversion collect explicit values/evidence, and completion is preview-first with exact before/after line alternatives/conversions plus explicit confirmation | HTTP: `GET /api/v1/project-revisions/{revisionId}/inspections` → `GET .../{inspectionId}` → `POST .../{inspectionId}/completion-preview` → explicit `POST .../{inspectionId}/completion-commit`; MCP: `list_inspections` → `read_inspection` → `preview_inspection_completion` → `commit_inspection_completion`, with nested REST `each` ↔ MCP `piece` unit/conversion mapping, affected line/item plus relevant reservation staleness basis, before/after items/gaps/lines, affected and reevaluated gaps, refreshed inspections/evidence, and project-scoped fail-closed authorization |
 | Hold confirmed parts | Reservation panel | `create_reservation` → `list_reservations` / `read_reservation` → read BOM/gaps again |

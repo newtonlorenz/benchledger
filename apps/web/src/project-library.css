@@ -3,7 +3,7 @@
 .project-view-toggle button { min-height: 32px; padding-inline: 12px; font-size: .8125rem; }
 .project-view-toggle button[aria-pressed="true"] { background: var(--surface-muted); color: var(--ink); }
 .project-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 24px; }
-.project-gallery .project-gallery-card { display: grid; grid-template-columns: minmax(0, 1fr) 44px; grid-template-rows: auto auto 1fr auto auto auto; gap: 0; padding: 0 0 12px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; min-width: 0; background: var(--surface-strong); }
+.project-gallery .project-gallery-card { display: grid; grid-template-columns: minmax(0, 1fr) 44px; grid-template-rows: auto auto 1fr auto auto auto auto auto; gap: 0; padding: 0 0 12px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; min-width: 0; background: var(--surface-strong); }
 .product-image { position: relative; width: 100%; aspect-ratio: 4 / 3; background: var(--surface-soft); overflow: hidden; }
 .product-image img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .product-image-open { display: block; border: 0; width: 100%; height: 100%; padding: 0; cursor: pointer; background: transparent; }
@@ -18,7 +18,7 @@
 .project-gallery-description { grid-column: 1 / -1; grid-row: 3; font-size: .8125rem; line-height: 1.6; color: var(--ink-soft); margin: 0 16px 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .project-gallery-card > .home-project-stage { grid-column: 1 / -1; grid-row: 4; margin: 0 16px 8px; }
 .project-gallery-card > .home-stock-state { grid-column: 1 / -1; grid-row: 5; margin: 0 16px 12px; }
-.project-gallery-card > .home-project-next { grid-column: 1 / -1; grid-row: 6; margin: 0 16px; padding: 8px 0 0; border-top: 1px solid var(--line); border-radius: 0; }
+.project-gallery-card > .home-project-next { grid-column: 1 / -1; grid-row: 7; margin: 0 16px; padding: 8px 0 0; border-top: 1px solid var(--line); border-radius: 0; }
 .home-register-columns.has-project-images, .has-project-images .project-image-row { grid-template-columns: 36px 88px minmax(160px, 1fr) 90px 130px minmax(130px, 170px); }
 .project-image-row > .home-pin { grid-column: 1; grid-row: 1; }
 .project-image-row > .product-image { grid-column: 2; grid-row: 1; border: 1px solid var(--line); border-radius: 6px; }
@@ -52,4 +52,29 @@
   .project-image-row > .home-project-next { grid-column: 2 / -1; grid-row: 4; }
   .product-image.is-compact .product-image-placeholder > svg { display: none; }
   .product-image.is-compact .product-image-placeholder button { min-height: 44px; }
+}
+
+.project-gallery-build-details { grid-column: 1 / -1; grid-row: 6; margin: 0 16px 12px; font-size: .75rem; color: var(--ink-soft); }
+.project-gallery-actions { grid-column: 1 / -1; grid-row: 8; display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 16px 0; }
+.project-gallery-actions > button, .project-gallery-actions .build-file-download { flex: 1 1 auto; }
+.project-gallery-actions > button, .project-gallery-actions .build-file-download > button { height: 36px; min-height: 36px; }
+.project-gallery-actions .build-file-download > button { width: 100%; white-space: nowrap; }
+.project-build-handoff { border-bottom: 1px solid var(--line); padding-bottom: 24px; margin-bottom: 24px; }
+.project-build-handoff h2 { font-size: 1.125rem; }
+.project-build-handoff h3 { font-size: 1rem; margin-bottom: 8px; }
+.project-build-handoff p { color: var(--ink-soft); max-width: 70ch; font-size: .875rem; margin-block: 8px 12px; }
+.handoff-file-group { margin-top: 24px; }
+.handoff-files { display: flex; flex-wrap: wrap; gap: 16px; }
+.build-file-download { display: flex; flex-direction: column; gap: 4px; min-width: 0; max-width: 100%; }
+.build-file-download > button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; height: auto; min-height: 36px; text-align: left; }
+.build-file-download > small { font-size: .75rem; color: var(--ink-soft); }
+.handoff-checks { margin-top: 16px; }
+.handoff-checks li { font-size: .875rem; margin-top: 6px; }
+.handoff-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+.project-build-handoff .handoff-boundary { font-size: .8125rem; margin-top: 16px; }
+
+@media (max-width: 1000px) {
+  .project-gallery-actions > button, .project-gallery-actions .build-file-download > button, .build-file-download > button { min-height: 44px; }
+  .project-gallery-actions > button, .project-gallery-actions .build-file-download > button { height: 44px; }
+  .project-build-handoff .home-section-title { flex-wrap: wrap; }
 }
