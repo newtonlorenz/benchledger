@@ -29,8 +29,20 @@ reasonable opportunity to investigate before disclosure.
   structured token configuration can also enforce expiry.
 - Tokens are stored hashed server-side; plaintext belongs in a client secret
   store such as macOS Keychain.
-- Uploaded files are size- and quota-limited, hash-checked, and stored as opaque
-  data. BenchLedger does not execute, unpack, render, or slice them.
+- Uploaded files are size- and quota-limited, hash-checked, and bound to an
+  authorised project or work-item revision. Browser Files and the supported host
+  helper share the 100 MiB limit and format policy, including JSON, ZIP and SVG.
+- ZIP archives are stored opaquely for download and are never extracted or
+  executed. SVG previews display verified, escaped source through the 1 MiB text
+  preview, never SVG image Blob URLs, inline markup, objects or iframes.
+  Supported CAD and image previews do not execute uploaded code or slice files.
+- Both authenticated artifact download routes serve attachments with
+  `Cache-Control: no-store`, `Referrer-Policy: no-referrer`,
+  `X-Content-Type-Options: nosniff`, and
+  `Content-Security-Policy: sandbox allow-downloads; default-src 'none'`. The
+  download permission preserves ordinary attachment navigation without enabling
+  scripts or same-origin access. Other excluded file
+  types remain excluded.
 - File operations accept logical identifiers, not arbitrary absolute paths.
 - Supplier URLs are recorded but not fetched by the server.
 - Every state mutation is attributable and audited.

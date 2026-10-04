@@ -460,6 +460,21 @@ retain short-lived, action-, actor-, project-, byte-length-, and SHA-256-bound
 header capabilities. Download capabilities are one-use after a successful
 read.
 
+Browser Files and the supported host helper accept JSON (`application/json`),
+ZIP (`application/zip` or `application/x-zip-compressed`), and SVG
+(`image/svg+xml`) through the same upload policy, with a 100 MiB file limit.
+ZIP archives remain opaque, download-only files: no extraction or execution.
+SVG previews show escaped source in the verified, 1 MiB text-preview path;
+they do not create SVG image Blob URLs, inline markup, objects or iframes.
+Both authenticated artifact download routes serve attachments with
+`Cache-Control: no-store`, `Referrer-Policy: no-referrer`,
+`X-Content-Type-Options: nosniff`, and
+`Content-Security-Policy: sandbox allow-downloads; default-src 'none'`, preserving
+direct authenticated attachment navigation without enabling scripts or
+same-origin access.
+Revision scope, authorisation, length/hash verification and the other file
+exclusions still apply.
+
 The trusted host helper `scripts/artifact-transfer.mjs` provides single-file
 upload and download over the same authenticated HTTP application routes.
 Credentials and base origin come from the host environment, never MCP or CLI

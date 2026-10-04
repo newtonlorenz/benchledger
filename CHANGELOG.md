@@ -33,6 +33,9 @@ first public release; all current work is under **Unreleased**.
   search, pins, readiness and next actions.
 - Revision-scoped project image selection in Files, authenticated SHA-256-checked
   previews, and paged HTTP/MCP project-library and presentation history operations.
+- JSON, ZIP and SVG project artifacts through browser Files and the supported
+  host helper, retaining the 100 MiB limit, exact revision scope and hash checks.
+  ZIP stays opaque and download-only; SVG uses a verified, escaped source preview.
 
 - Shadcn web foundation across forms, navigation, tables, tabs, dialogs, drawers,
   search pickers, menus, resizable inventory panels and notifications. One semantic
@@ -70,6 +73,9 @@ first public release; all current work is under **Unreleased**.
 - LAN deployment, backup/restore, privacy scanning, and public-project community files
 
 ### Changed
+
+- Serve both authenticated artifact downloads as attachments with no-store,
+  no-referrer, nosniff and a sandbox/default-src-none Content Security Policy.
 
 - Load Assembly, PCB and Markdown views only when opened. Viewer failures stay
   inside their panel, with safe recovery guidance and local graphics retries

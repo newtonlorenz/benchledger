@@ -1168,8 +1168,18 @@ describe("ApplicationService", () => {
     const retired = await service.retireArtifact(artifact.id, 1, context);
     expect(retired).toMatchObject({ data: { retired: true }, audit: { action: "artifact.retire" } });
     await expect(service.listArtifacts("bad/id")).rejects.toMatchObject({ code: "validation" });
-    await expect(service.beginArtifactUpload({ projectId: "project-1", projectRevisionId: "rev-1", role: "other", filename: "archive.svg", mediaType: "image/svg+xml", byteSize: 1, sha256: "c".repeat(64) }, context)).rejects.toMatchObject({ code: "unsupported_media" });
-    await expect(service.beginArtifactUpload({ projectId: "project-1", projectRevisionId: "rev-1", role: "other", filename: "archive.zip", mediaType: "application/octet-stream", byteSize: 1, sha256: "c".repeat(64) }, context)).rejects.toMatchObject({ code: "unsupported_media" });
+    for (const [filename, mediaType] of [
+      ["source.zip", "application/zip"], ["source.ZIP", "application/x-zip-compressed"],
+      ["source.zip", "application/octet-stream"], ["drawing.svg", "image/svg+xml"],
+      ["evidence.json", "application/json"], ["circuit.kicad_pro", "application/json"],
+    ] as const) {
+      await expect(service.beginArtifactUpload({ projectId: "project-1", projectRevisionId: "rev-1", role: "source", filename, mediaType, byteSize: 1, sha256: "c".repeat(64) }, context)).resolves.toMatchObject({ data: { status: "pending" } });
+      expect(begunFilename).toBe(filename);
+    }
+    for (const filename of ["source.html", "source.htm", "source.js", "source.mjs", "source.cjs", "archive.zip.EXE", "source.sh", "source.tar", "source.gz"]) {
+      await expect(service.beginArtifactUpload({ projectId: "project-1", projectRevisionId: "rev-1", role: "other", filename, mediaType: "application/octet-stream", byteSize: 1, sha256: "c".repeat(64) }, context)).rejects.toMatchObject({ code: "unsupported_media" });
+    }
+    await expect(service.beginArtifactUpload({ projectId: "project-1", projectRevisionId: "rev-1", role: "other", filename: "source.dat", mediaType: "application/x-unsupported", byteSize: 1, sha256: "c".repeat(64) }, context)).rejects.toMatchObject({ code: "unsupported_media" });
     await expect(service.beginArtifactUpload({ projectId: "project-1", projectRevisionId: "rev-1", role: "other", filename: "part.step", mediaType: "model/step", byteSize: 0, sha256: "c".repeat(64) }, context)).rejects.toMatchObject({ code: "validation" });
     await expect(service.beginArtifactUpload({ projectId: "project-1", projectRevisionId: "rev-1", role: "other", filename: "part.step", mediaType: "model/step", byteSize: 100 * 1024 * 1024 + 1, sha256: "c".repeat(64) }, context)).rejects.toMatchObject({ code: "validation" });
   });
