@@ -1,10 +1,10 @@
+import "./specialist-journey.css";
 import { useEffect, useRef, useState } from "react";
 import type { Reservation } from "@benchledger/api-contract";
 import type { InventoryItem, Project, BomLine } from "./domain";
 import { ApiError, workflowCommandKey } from "./api";
 import { readStockReservations, setAsideStock, releaseSetAsideStock } from "./stock-reservation-api";
 import { useUnsavedWork } from "./unsaved-work";
-import { Card } from "./components/ui/card";
 import { Alert } from "./components/ui/alert";
 import { Button } from "./components/ui/button";
 import { Label } from "./components/ui/label";
@@ -112,24 +112,25 @@ export function StockReservationPlanning({ project, items, onRefresh, onUsedStoc
   };
   if (!revisionId) return null;
   const active = state?.reservations.filter((entry) => entry.status === "active") ?? [];
-  return <Card asChild><section className="surface stock-reservation-planning" aria-label="Stock for this build">
-    <h2>Stock for this build</h2><p>Set aside confirmed parts and materials before using them. This keeps them for this project without recording consumption.</p>
+  return <section className="surface stock-reservation-planning" aria-label="Stock for this build">
+    <h2>Stock for this build</h2><p>Reserve confirmed stock for this project. The physical amount on hand stays unchanged.</p>
     {loading && <p role="status">Loading stock set aside…</p>}{loadError && <Alert asChild><p role="alert">{loadError}</p></Alert>}
     {receipt && <p role="status" tabIndex={-1} ref={savedNotice}>{receipt}</p>}{refreshNeeded && <Alert asChild><p role="alert">The workspace could not refresh. The confirmed stock change is saved. Refresh before making another change.</p></Alert>}
     {state?.closed && <p>This revision's stock review is complete. Create a new project revision before setting aside more stock.</p>}
-    {review ? <section aria-label="Review stock set aside"><h3 tabIndex={-1} ref={reviewHeading}>{review.kind === "reserve" ? "Set this stock aside?" : "Release this stock?"}</h3>
+    {review ? <section className="workflow-review" aria-label="Review stock set aside"><h3 tabIndex={-1} ref={reviewHeading}>{review.kind === "reserve" ? "Set this stock aside?" : "Release this stock?"}</h3>
       <p>{review.kind === "reserve" ? `${review.quantity} ${review.candidate.item.unit} of ${review.candidate.item.name} for ${review.candidate.line.label}.` : `${review.reservation.quantity} ${review.unit} of ${review.name} will become available to other projects.`}</p>
+      {review.kind === "reserve" && <dl className="stock-review-facts"><div><dt>Stock item</dt><dd>{review.candidate.item.name}{review.candidate.item.location ? ` · ${review.candidate.item.location}` : ""}</dd></div><div><dt>Set aside</dt><dd>{review.quantity} {review.candidate.item.unit}</dd></div><div><dt>Available after</dt><dd>{Math.max(0, (review.candidate.item.availableQuantity ?? 0) - review.quantity)} {review.candidate.item.unit}</dd></div><div><dt>On hand</dt><dd>{review.candidate.item.quantity} {review.candidate.item.unit} · unchanged</dd></div></dl>}
       <p>{review.kind === "reserve" ? "The service checks current stock and requirement details before saving. Recorded stock on hand stays unchanged." : "This releases the amount set aside. It does not record use, loss or a physical return."}</p>
       <Button variant="ghost" disabled={busy || uncertain} onClick={() => { setReview(undefined); setError(undefined); }}>Back to stock selection</Button>
       <Button disabled={busy} onClick={() => { void confirm(); }}>{busy ? "Saving…" : uncertain ? "Retry unchanged stock change" : review.kind === "reserve" ? "Confirm set aside" : "Confirm release"}</Button>
     </section> : <>
-      {active.length > 0 && <ul>{active.map((reservation) => { const item = items.find((entry) => entry.id === reservation.itemId); return <li key={reservation.id}><strong>{item?.name ?? "Stock item"}</strong> · {reservation.quantity} {item?.unit ?? "stock units"} for {project.bom.find((line) => line.id === reservation.lineId)?.label ?? "requirement"} <Button variant="ghost" disabled={blocked} onClick={() => { setError(undefined); setReview({ kind: "release", reservation, name: item?.name ?? "Stock item", unit: item?.unit ?? "stock units" }); }}>Release stock</Button></li>; })}</ul>}
+      {active.length > 0 && <ul className="reserved-stock-list">{active.map((reservation) => { const item = items.find((entry) => entry.id === reservation.itemId); return <li key={reservation.id}><strong>{item?.name ?? "Stock item"}</strong> · {reservation.quantity} {item?.unit ?? "stock units"} for {project.bom.find((line) => line.id === reservation.lineId)?.label ?? "requirement"} <Button variant="ghost" disabled={blocked} onClick={() => { setError(undefined); setReview({ kind: "release", reservation, name: item?.name ?? "Stock item", unit: item?.unit ?? "stock units" }); }}>Release stock</Button></li>; })}</ul>}
       {!state?.closed && <fieldset className="correction-fields" disabled={blocked}><Label className="form-field"><span>Requirement and confirmed stock</span><NativeSelect value={selection} onChange={(event) => { setSelection(event.target.value); setQuantity(""); setError(undefined); }}><NativeSelectOption value="">Choose stock to set aside</NativeSelectOption>{candidates.map((candidate) => <NativeSelectOption key={`${candidate.line.id}:${candidate.item.id}`} value={`${candidate.line.id}:${candidate.item.id}`}>{candidate.line.label} — {candidate.item.name}</NativeSelectOption>)}</NativeSelect></Label>
         {selected && <><p>Up to {selected.maximum} {selected.item.unit} can be set aside.{selected.wholeSets ? ` Each set covers ${selected.coverage} ${selected.line.unit} of the requirement.` : ""}</p><Label className="form-field"><span>Quantity to set aside ({selected.item.unit})</span><Input type="number" min={selected.wholeSets ? 1 : 0.000001} step={selected.wholeSets ? 1 : "any"} max={selected.maximum} value={quantity} onChange={(event) => setQuantity(event.target.value)} /></Label><Button variant="outline" type="button" onClick={reviewReservation}>Review stock to set aside</Button></>}
-        {!candidates.length && !loading && !loadError && <p>No additional confirmed stock is ready to set aside. Match stock to a requirement, resolve its details and confirm the physical quantity in Plan. Reusable tools do not need consumption reservations.</p>}
+        {!candidates.length && !loading && !loadError && <p>No additional confirmed stock is ready to set aside. Match stock to a requirement, resolve its details and confirm the physical quantity in Parts. Reusable tools do not need consumption reservations.</p>}
       </fieldset>}
     </>}
     {error && <Alert asChild><p role="alert">{error}</p></Alert>}
     <div className="dialog-actions"><Button variant="ghost" disabled={busy || uncertain || Boolean(review)} onClick={() => { void refresh(); }}>Refresh stock for this build</Button>{onUsedStock && <Button variant="outline" disabled={busy || uncertain || Boolean(review)} onClick={onUsedStock}>Record actual stock use</Button>}</div>
-  </section></Card>;
+  </section>;
 }

@@ -114,12 +114,62 @@ it("returns to a requirement without asking to discard its parent draft and guar
   expect(actions.onClose).toHaveBeenCalledOnce();
 });
 
+it("keeps the receiving handoff after a count and retains Done when that requirement is unavailable", () => {
+  const actions = props(), onReturn = vi.fn();
+  const nextStep = <section aria-label="Continue receiving stock"><button onClick={onReturn}>Return to enclosure screws</button></section>;
+  const view = render(<InventoryDrawer {...actions} sampleMode countReceipt="Confirmed 8 pieces as the on-hand quantity." nextStep={nextStep} nextStepHasAction />);
+  expect(screen.getByRole("status").textContent).toContain("Physical count saved");
+  expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Return to enclosure screws" }));
+  expect(onReturn).toHaveBeenCalledOnce();
+  expect(actions.onCount).not.toHaveBeenCalled();
+  view.rerender(<InventoryDrawer {...actions} sampleMode countReceipt="Confirmed 8 pieces as the on-hand quantity." nextStep={<p>The original requirement is no longer active.</p>} />);
+  expect(screen.getByText("The original requirement is no longer active.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+});
+
 it("keeps a recorded count compact until an explicit update and edits missing descriptions as blank", () => {
   const actions = props();
   render(<InventoryDrawer {...actions} sampleMode item={{ ...item, evidence: "counted", description: "" }} />);
   expect(screen.queryByRole("spinbutton", { name: "Counted quantity" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Update count" }));
+  fireEvent.click(screen.getByRole("button", { name: "Count stock" }));
   expect(screen.getByLabelText("Counted quantity")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Edit item" }));
   expect(screen.getByLabelText("Description")).toHaveProperty("value", "");
+});
+
+it("shows confirmed on-hand stock separately from reservations and availability", () => {
+  const actions = props();
+  const view = render(<InventoryDrawer {...actions} sampleMode item={{ ...item, evidence: "counted", serverEvidence: "physically_counted", quantity: 12, unit: "each", reserved: 2, availableQuantity: 10 }} />);
+  const stock = screen.getByRole("region", { name: "Stock on hand" });
+  expect(within(stock).getByText("12 pieces on hand.")).toBeTruthy();
+  expect(within(stock).getByText("2 pieces reserved; 10 pieces currently available for reuse.")).toBeTruthy();
+  expect(within(stock).getByText("Physically counted")).toBeTruthy();
+  expect(actions.onCount).not.toHaveBeenCalled();
+
+  const { availableQuantity: _availableQuantity, ...unreported } = item;
+  view.rerender(<InventoryDrawer {...actions} sampleMode item={{ ...unreported, quantity: 12, unit: "each", reserved: 2 }} />);
+  expect(screen.getByText("Recorded quantity: 12 pieces.")).toBeTruthy();
+  expect(screen.getByText("2 pieces reserved; availability not reported.")).toBeTruthy();
+  expect(screen.queryByText("12 pieces on hand.")).toBeNull();
+});
+
+it("opens a deliberate count with no guessed amount and reviews identity, location and condition", async () => {
+  const actions = props();
+  render(<InventoryDrawer {...actions} item={{ ...item, evidence: "counted", serverEvidence: "physically_counted", quantity: 20, condition: "needs_repair", location: "Drawer A3", sku: "M3-8" }} sampleMode initialCountExpanded doneLabel="Return to enclosure screws" />);
+  expect(screen.getByLabelText("Counted quantity")).toHaveProperty("value", "");
+  fireEvent.change(screen.getByLabelText("Counted quantity"), { target: { value: "12" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review physical count" }));
+  const review = screen.getByRole("alertdialog", { name: "Review physical count" });
+  expect(review.textContent).toContain("Drawer A3");
+  expect(review.textContent).toContain("M3-8");
+  expect(review.textContent).toContain(item.id);
+  expect(review.textContent).toContain("needs repair");
+  expect(review.textContent).toContain("Reservations and recorded condition stay unchanged");
+  expect(review.textContent).toContain("This count does not confirm that the item fits a project");
+  expect(actions.onCount).not.toHaveBeenCalled();
+  fireEvent.click(within(review).getByRole("button", { name: "Confirm physical count" }));
+  await screen.findByText("Physical count saved");
+  expect(screen.getAllByRole("button", { name: "Return to enclosure screws" })).toHaveLength(1);
+  expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
 });

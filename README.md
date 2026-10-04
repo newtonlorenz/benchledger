@@ -37,13 +37,16 @@ BenchLedger keeps that context together, from the first requirement to the stock
 | **CAD & assembly guides** | Inspect STEP, GLB and STL, select or isolate parts, explore exploded views, and save placements, requirement links and build steps. |
 | **PCB inspection** | Open native KiCad boards or STEP/GLB exports within the project. Inspect top/bottom views, supported copper, drills and footprint outlines. |
 | **Files & revisions** | Keep CAD, firmware, drawings and slicer files with exact project or workstream revisions. Preview supported files and download originals with integrity checks. |
-| **Build steps** | Record repeated parts, plates, run counts, materials, nozzle side and time estimates. Track task groups and retain build plans. |
+| **Build** | Follow parts, files, assembly, verification notes and actual-use review. Open detailed plate plans, reservations and task groups when needed. |
 | **Sourcing & close-out** | Compare dated supplier quotes with pack sizes, currencies and missing costs visible. Review actual usage, returns and leftovers before updating stock. |
 | **HTTP API & MCP** | Read gaps, inspect geometry and prepare plans through shared application rules, scoped access, version checks and audit history. |
 
 [Full capability map](docs/capability-map.md) · [Maker workflows](docs/maker-workflows.md)
 
 ## See it in action
+
+These retained showcase captures illustrate earlier interface revisions. They
+do not establish the current layout or verification status.
 
 ### Pull the assembly apart. Keep the build together.
 
@@ -64,13 +67,13 @@ Select a part, isolate it, search by name, or move between assembled and explode
 
 ### The PCB is part of the project
 
-Open a board from **Files → PCB** without leaving its build context. Rotate it, switch between top and bottom, show or hide copper and footprint outlines, then search for a reference or value to inspect a component.
+Upload a board in **Files**, then open **Build → PCB** without leaving its build context. Rotate it, switch between top and bottom, show or hide copper and footprint outlines, then search for a reference or value to inspect a component.
 
 ![Native KiCad PCB in BenchLedger with source copper, drill openings, selectable footprint outlines and project navigation](docs/assets/showcase/pcb-top.png)
 
 The native reader uses the board's declared dimensions, supported outer copper, drills and footprint drawings. **Footprint outlines are not component bodies.** Missing models and unsupported geometry are reported; use a self-contained STEP/GLB export when detailed bodies or filled zones matter. This is inspection, not PCB editing or DRC.
 
-The same source can join enclosure geometry in **Assembly**. MCP agents inspect the same revision and file hash through `inspect_assembly_sources`.
+The same source can join enclosure geometry in **Build → Assembly**. MCP agents inspect the same revision and file hash through `inspect_assembly_sources`.
 
 [PCB support and limits](docs/pcb-viewer.md) · [Download the synthetic KiCad board](docs/assets/showcase/synthetic-controller.kicad_pcb)
 
@@ -78,7 +81,17 @@ The same source can join enclosure geometry in **Assembly**. MCP agents inspect 
 
 Projects brings your builds and next actions together. Gallery shows a prominent project image; List keeps a smaller thumbnail beside the project details. Choose an uploaded PNG, JPEG or WebP in **Files → Project image**. [Project image setup and limits](docs/project-images.md).
 
-Open a project to review its requirements: ready to use, needs a physical check, needs a decision, or needs sourcing. Uncertain stock stays uncertain until evidence changes it.
+Open a project to **Overview**, then use **Parts**, **Files** and **Build**.
+Overview keeps the selected image, notes and next action together. Parts brings
+requirements, owned-stock matching and To source into one section. Files groups
+current records by 3D print, Electronics, CAD & firmware and Instructions. Build
+keeps planning tools alongside preparation, assembly and reviewed actual use.
+Uncertain stock stays uncertain until evidence changes it.
+
+Projects and Inventory are the main workspace destinations. Settings holds
+Light, Dark and System appearance and local row-spacing preferences. Project
+actions apply to the selected project; create a new project from the library.
+See the [workspace guide](docs/ui-design.md) for navigation and recovery.
 
 ![Fresh BenchLedger workbench capture with synthetic projects, workshop equipment and next actions](docs/assets/showcase/workbench.png)
 
@@ -132,8 +145,8 @@ This starts a **synthetic, in-memory demo**. Its data resets when the server res
 
 Try the two examples in a demo project:
 
-1. **Exploded CAD:** upload [synthetic-enclosure.glb](docs/assets/showcase/synthetic-enclosure.glb) in **Files**, then open **Assembly**. In **Coordinates**, select **metre** and **Z up**. Choose **Open assembly → Exploded**.
-2. **Native PCB:** upload [synthetic-controller.kicad_pcb](docs/assets/showcase/synthetic-controller.kicad_pcb) in **Files**, open **PCB**, select the board and choose **Open PCB**. Units and orientation are handled automatically.
+1. **Exploded CAD:** upload [synthetic-enclosure.glb](docs/assets/showcase/synthetic-enclosure.glb) in **Files**, then open **Build → Assembly**. In **Coordinates**, select **metre** and **Z up**. Choose **Open assembly → Exploded**.
+2. **Native PCB:** upload [synthetic-controller.kicad_pcb](docs/assets/showcase/synthetic-controller.kicad_pcb) in **Files**, open **Build → PCB**, select the board and choose **Open PCB**. Units and orientation are handled automatically.
 
 These are illustrative viewing examples, not validated designs. Stock close-out is available in persistent installations; the lightweight demo does not advertise it.
 

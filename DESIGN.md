@@ -1,28 +1,88 @@
 # BenchLedger interface
 
-BenchLedger uses a precise workshop register: one navigation rail, one working document and details available on request. Inventory and projects are peer destinations. The interface privileges the current task and its records over dashboard summaries.
+BenchLedger is a visual project workspace with a direct route from a project to
+its parts, files and build. Projects and Inventory are peer destinations. Working
+screens put the task and its relevant records first; exact technical detail
+remains available when needed.
+
+The [web design system](apps/web/DESIGN.md) is the token-bearing record, with its
+component previews and extended tokens in `apps/web/.impeccable/design.json`.
+This overview describes composition and ownership; keep the two records aligned.
 
 ## Appearance
 
-The app serves IBM Plex Sans locally. Root type is 16px; ordinary interface text is 14px, supporting metadata at least 12px, prominent phone item names 15px, and page titles 26px. IBM Plex Mono is reserved for identifiers, code and technical values. Never shrink the root to make the workspace appear dense.
+The app serves IBM Plex Sans locally. Keep the root at 16px. Body and form text
+remain readable on phones; page titles have clear scale without competing with
+working content. IBM Plex Mono is reserved for identifiers, code and technical
+values. Ordinary quantities use tabular numerals.
 
-Light mode uses a near-white working surface, a pale neutral navigation rail and graphite text. Dark mode retains the same hierarchy with dark surfaces. Forest green identifies primary actions and selection; stock states also use explicit text. Warning and error colours retain their existing meaning. Colour never implies that stock, compatibility or a physical build has been validated.
+Light mode uses warm-white surfaces, graphite text and restrained cobalt actions
+and selection. Dark mode retains the hierarchy with dark surfaces. Status
+colours accompany explicit text. Neither colour nor a project image establishes
+stock, compatibility or physical-build validation. Settings holds Light, Dark
+and System appearance and Standard or Compact row spacing, saved locally.
 
-Use 28px desktop workspace gutters, a 56px utility bar and a 216px navigation rail. The existing brand mark retains 1px internal bar corners. Controls have a 6px radius, with 36–40px pointer targets and at least 44px touch targets. Floating dialogs and popovers use a restrained shadow. Registers use aligned rows and single rules; avoid nested cards and decorative metrics.
+The desktop header contains Projects, Inventory, search and Settings. Phone
+navigation keeps the two workspace destinations at the bottom. Within a project,
+Overview / Parts / Files / Build stay in one compact row. Content, forms and
+contextual sheets adapt to narrow widths without a second competing navigation
+rail. Touch actions retain at least 44px targets.
+
+Use aligned rows, readable space and single rules. Dialogs and sheets have a
+clear boundary; working content should not become nested cards or a wall of
+counters. Keep primary actions distinct from optional tools and destructive
+operations.
 
 ## Composition
 
-- Workbench: one project register with visible search, view and sort. New project is the primary action; Open inventory is its peer destination. Recent work is a compact link. All next actions and workshop tools are disclosed below the register.
-- Inventory: stock views, then one search/filter/options toolbar. Filters open in place. View options holds sorting, saved views and optional columns. The register starts full width; selection reveals its inspector. Recorded and available quantities remain distinct, with uncertainty explicit. Narrow registers stack labelled values, with recorded and available quantities side by side.
-- Projects: title, revision and stage; Project tools holds management actions, and Project details opens supporting setup. Tabs precede the working content. The Plan contains a concise next action and stock shortcuts. Requirement rows align name, quantity, stock and Edit; ready-stock explanations can be disclosed while unresolved stock reasons stay visible.
-- Files, shopping, build planning, settings and specialist viewers share the same controls, type and surfaces. Keep task-specific evidence and approval boundaries explicit.
+- Projects: recognisable images, names, revision, stage and next action; one
+  search and compact view controls. New project belongs here. Gallery and List
+  are remembered in the browser.
+- Overview: selected product image, project notes and a specific next action.
+  Images distinguish render, reference and built-product photo. Missing images
+  remain useful placeholders rather than invented previews.
+- Parts: requirements, quantities, compatible stock and sourcing. First use has
+  one primary add action and a quiet CSV alternative. Technical specifications,
+  alternatives and evidence expand when needed.
+- Inventory: searchable stock rows and an item detail sheet, with Available,
+  Needs checking and Reserved views. Recorded, available and reserved amounts
+  remain distinct. Arrival, count and consumption are separate operations.
+- Files: 3D print, Electronics, CAD & firmware and Instructions. Keep filenames,
+  scope and revision visible; show genuine preview/download actions. Opening a
+  downloaded file in a slicer and physical fabrication remain outside the app.
+- Build: check parts, prepare files, assemble, verify the build and record actual
+  use. Reservations, parts/plates and task groups remain disclosed in Build tools.
+  Assembly, PCB and actual-stock-use tools remain secondary routes under Build.
+- Stock review: show the exact affected item, proposed quantity and balances
+  supplied by the service before confirmation. A saved result is a receipt;
+  revisiting it must not perform the write again.
+
+Project actions contain actions for the selected project. New project and routine
+refresh are not competing rows in that menu. Keep history, revisions, build
+approach, archive/restore and deletion reachable with their existing guards.
 
 ## Ownership
 
-`shadcn.css` owns semantic tokens. `workspace-shell.css` owns typography, common controls and app chrome. `project-workspace.css`, `home-experience.css` and `inventory-experience.css` own their respective primary workspaces. `workspace-layout.css` retains specialist forms and workflows. Add a style to its owner rather than appending a competing skin.
+`apps/web/src/shadcn.css` owns semantic tokens. `workspace-shell.css` retains the
+shared control and shell foundation; `approved-interface.css` owns the current
+header, global working rhythm and responsive sheet treatment. Project, library,
+home and inventory styles own their respective compositions.
+`specialist-journey.css` owns Build and supporting reviews; assembly and PCB retain
+local styles. Avoid introducing another competing global layer.
 
-React and Radix primitives retain keyboard, focus and interaction semantics. The framework does not determine the visual composition. Local appearance, pins and saved views do not change business records.
+React and Radix primitives retain keyboard, focus and interaction semantics.
+Local appearance, pins and views do not change business records. Keep protected
+drafts mounted through supported detours; never save private form values to
+browser storage to implement recovery.
 
-## Finish requirements
+## Verification boundaries
 
-Review desktop, tablet and phone composition in both themes; inspect keyboard navigation, visible focus, empty and error states, long content and draft continuity. Run the repository gates and review the public diff separately. Dated findings and release evidence belong in `docs/reviews/2026-10-03-professional-workspace-overhaul.md` and the release record. There are no shipping raster images in this design.
+Check desktop and phone layouts, themes, keyboard focus, zoom, long names, empty
+states, errors and draft continuity. Follow the repository gates and inspect the
+public diff. A design mockup, source change, passing test, merged commit and
+verified deployment are separate evidence. Existing showcase screenshots may
+illustrate an earlier layout; they do not verify this interface revision.
+
+See [the UI guide](docs/ui-design.md) for interaction details and
+[capability map](docs/capability-map.md) for transport boundaries. Dated findings
+belong in task or review records, not permanent instructions.

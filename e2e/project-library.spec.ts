@@ -1,3 +1,4 @@
+import { navigateWorkspace } from "./workspace-controls";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -63,6 +64,21 @@ function projectCard(page: Page, name: string) {
   return page.locator(".home-project-row").filter({ has: page.getByRole("button", { name: `Open project ${name}`, exact: true }) });
 }
 
+async function expectProjectImageEditor(page: Page) {
+  await expect(page.getByRole("tab", { name: "Files", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("button", { name: "Project image", exact: true })).toHaveAttribute("aria-expanded", "true");
+  const editor = page.getByRole("region", { name: "Project image", exact: true });
+  await expect(editor).toBeVisible();
+  return editor;
+}
+
+async function openProjectImageEditor(page: Page) {
+  const disclosure = page.getByRole("button", { name: "Project image", exact: true });
+  await expect(disclosure).toBeVisible();
+  if (await disclosure.getAttribute("aria-expanded") !== "true") await disclosure.click();
+  return expectProjectImageEditor(page);
+}
+
 async function expectDecodedImage(image: Locator) {
   await expect(image).toBeVisible();
   await expect.poll(() => image.evaluate((element) => (element as HTMLImageElement).naturalWidth)).toBe(720);
@@ -97,7 +113,7 @@ async function syntheticProductImage(page: Page): Promise<Buffer> {
   return bytes;
 }
 
-test("a chosen project render survives reload and stays visible in gallery and compact list", async ({ page, request }) => {
+test("a chosen project render survives reload and stays visible in gallery and compact list", async ({ page, request }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   const project = await createProject(request, "Gallery chosen enclosure");
   const cover = await uploadImage(request, project, await syntheticProductImage(page));
@@ -108,7 +124,8 @@ test("a chosen project render survives reload and stays visible in gallery and c
   const card = projectCard(page, project.name);
   await card.getByRole("button", { name: `Choose image for ${project.name}`, exact: true }).click();
   await expect(page).toHaveURL(`${origin}/#/projects/${project.id}/files`);
-  const editor = page.getByRole("region", { name: "Project image", exact: true });
+  const editor = await expectProjectImageEditor(page);
+  await expect(page.getByRole("button", { name: "Project image", exact: true })).toBeFocused();
   await editor.getByRole("button", { name: "Choose project image", exact: true }).click();
   await editor.getByRole("combobox", { name: "Project image file", exact: true }).selectOption(cover.id);
   await editor.getByRole("combobox", { name: "Image represents", exact: true }).selectOption("render");
@@ -121,13 +138,24 @@ test("a chosen project render survives reload and stays visible in gallery and c
   await editor.getByRole("button", { name: "Save project image", exact: true }).click();
   await expect(editor).toContainText("Project image saved.");
   await page.reload();
+  await openProjectImageEditor(page);
   await expect(editor).toContainText("Design render · synthetic-enclosure-render.png");
-  await page.getByRole("button", { name: /^Projects/u }).click();
+  await navigateWorkspace(page, "Projects");
   await page.getByRole("textbox", { name: "Find a project", exact: true }).fill(project.name);
   await expectDecodedImage(card.getByRole("img", { name: "Synthetic enclosure design render", exact: true }));
   await expect(card).toContainText("Design render");
   await page.screenshot({ path: join(tmpdir(), "benchledger-project-gallery-desktop.png"), fullPage: true });
   expect((await new AxeBuilder({ page }).include(".home-projects").withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze()).violations).toEqual([]);
+
+  await page.setViewportSize({ width: 1536, height: 1024 });
+  await page.getByRole("textbox", { name: "Find a project", exact: true }).fill("");
+  await expectDecodedImage(card.getByRole("img", { name: "Synthetic enclosure design render", exact: true }));
+  await expect(page.locator(".project-gallery .product-image-placeholder").filter({ hasText: "Add a project image" }).first()).toBeVisible();
+  await page.evaluate(async () => { await document.fonts.ready; window.scrollTo(0, 0); });
+  await expect(card).toBeInViewport();
+  await page.screenshot({ path: testInfo.outputPath("approved-projects-gallery-1536.png"), fullPage: false, animations: "disabled" });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole("textbox", { name: "Find a project", exact: true }).fill(project.name);
 
   await layout.getByRole("button", { name: "List", exact: true }).focus();
   await page.keyboard.press("Space");
@@ -153,7 +181,18 @@ test("a chosen project render survives reload and stays visible in gallery and c
   await card.locator(".product-image-open").focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { name: project.name, exact: true })).toBeVisible();
-  await expect(page.getByRole("tab", { name: /^Requirements/u })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Overview", exact: true })).toHaveAttribute("aria-selected", "true");
+  await page.setViewportSize({ width: 1536, height: 1024 });
+  await expectDecodedImage(page.locator(".project-overview").getByRole("img", { name: "Synthetic enclosure design render", exact: true }));
+  const nextAction = page.getByRole("region", { name: "Next project action", exact: true });
+  await expect(nextAction.getByRole("heading", { name: "Add what this build needs", exact: true })).toBeVisible();
+  await expect(nextAction.getByRole("button", { name: "Add first part", exact: true })).toBeVisible();
+  await page.evaluate(async () => { await document.fonts.ready; window.scrollTo(0, 0); });
+  await expect(page.locator(".project-overview-image .product-image")).toBeInViewport({ ratio: 1 });
+  await expect(nextAction).toBeInViewport({ ratio: 1 });
+  for (const name of [/^Build files/u, /^Build plan/u]) await expect(page.locator(".project-continue").getByRole("button", { name })).toBeInViewport({ ratio: 1 });
+  await expect(page.locator(".project-overview-image img")).toHaveCSS("object-fit", "contain");
+  await page.screenshot({ path: testInfo.outputPath("approved-project-overview-1536.png"), fullPage: false, animations: "disabled" });
 });
 
 test("a later project revision never borrows the previous revision's render", async ({ page, request }) => {
@@ -167,10 +206,10 @@ test("a later project revision never borrows the previous revision's render", as
   await mcp(request, "create_project_revision", { projectId: project.id, summary: "New design without a render" });
   await page.reload();
   await page.getByRole("textbox", { name: "Find a project", exact: true }).fill(project.name);
-  await expect(card).toContainText("Show what you’re making");
+  await expect(card).toContainText("Add a project image");
   await expect(card.getByRole("img")).toHaveCount(0);
   await card.getByRole("button", { name: `Choose image for ${project.name}`, exact: true }).click();
-  const editor = page.getByRole("region", { name: "Project image", exact: true });
+  const editor = await expectProjectImageEditor(page);
   await expect(editor).toContainText("No image selected for this revision.");
   await editor.getByRole("button", { name: "Choose project image", exact: true }).click();
   await expect(editor.getByRole("combobox", { name: "Project image file" }).locator("option")).toHaveText(["No project image"]);
@@ -201,13 +240,13 @@ test("new image uploads are selectable immediately and a rejected save preserves
   await signIn(page);
   await page.getByRole("textbox", { name: "Find a project", exact: true }).fill(project.name);
   await projectCard(page, project.name).getByRole("button", { name: `Choose image for ${project.name}`, exact: true }).click();
-  const editor = page.getByRole("region", { name: "Project image", exact: true });
+  const editor = await expectProjectImageEditor(page);
   await editor.getByRole("button", { name: "Choose project image", exact: true }).click();
   await expect(editor).toContainText("Upload a PNG, JPEG or WebP in Files first");
   await editor.getByRole("button", { name: "Cancel image selection", exact: true }).click();
   await page.getByLabel("Choose files to upload").setInputFiles({ name: "uploaded-project-image.png", mimeType: "image/png", buffer: bytes });
   await page.getByRole("button", { name: "Add 1 file", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Download uploaded-project-image.png", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Details for uploaded-project-image.png", exact: true })).toBeVisible();
   await editor.getByRole("button", { name: "Choose project image", exact: true }).click();
   await editor.getByRole("combobox", { name: "Project image file", exact: true }).selectOption({ label: "uploaded-project-image.png" });
   await editor.getByRole("combobox", { name: "Image represents", exact: true }).selectOption("built_photo");

@@ -27,6 +27,7 @@ it("imports with explicit units, edits shared parts/steps and replays an uncerta
   expect((screen.getByLabelText("Coordinate units for enclosure.glb") as HTMLSelectElement).value).toBe("metre"); expect((screen.getByLabelText("Up axis for enclosure.glb") as HTMLSelectElement).value).toBe("y");
   click("Open assembly"); await screen.findByRole("button", { name: "Cover" }); click("Cover"); click("Edit assembly");
   fireEvent.change(screen.getByLabelText("Fixing notes"), { target: { value: "Fit after wiring." } });
+  click("Placement and separation");
   fireEvent.change(screen.getByLabelText("Separation (mm) Z"), { target: { value: "35" } });
   vi.stubGlobal("crypto", undefined);
   click("Use this separation for group"); click("Add another placement"); click("Build order"); click("Add build step");

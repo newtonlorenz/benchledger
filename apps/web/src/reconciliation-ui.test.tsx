@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { renderToStaticMarkup } from "./test-render-markup";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   ReconciliationUI,
   reconciliationCanCommit,
@@ -8,6 +8,7 @@ import {
   reconciliationCommitErrorMessage,
   summarizeReconciliationLine
 } from "./reconciliation-ui";
+import { render as renderDom, fireEvent, screen, within, waitFor, cleanup } from "@testing-library/react";
 import type { ReconciliationViewModel } from "./reconciliation-ui";
 
 describe("finish build flow", () => {
@@ -258,4 +259,61 @@ describe("finish build flow", () => {
     expect(markup).toContain("The recorded total is greater than the amount set aside. Reduce a result quantity before you review the changes.");
     expect(markup).not.toContain("over-accounted");
   });
+});
+
+it("shows affected stock at final confirmation and accepts a repeated submit only once", async () => {
+  const model: ReconciliationViewModel = {
+    projectId: "synthetic-project", projectName: "Test enclosure", projectRevisionId: "synthetic-revision", status: "draft",
+    lines: [{ id: "line", bomLineId: "line", name: "Cover screws", itemLabel: "M3 screws", plannedQuantity: 2, plannedUnit: "each", reservedQuantity: 2, unit: "each", outcomes: [{ id: "used", kind: "consumed", quantity: 2, unit: "each", evidence: { state: "physically_counted" } }] }],
+    preview: { lines: [], reservationChanges: [], createdAssets: [], stockChanges: [{ itemId: "screws", itemLabel: "M3 screws", kind: "release", quantity: 2, unit: "each", beforeOnHand: 12, afterOnHand: 12, afterAvailable: 10, eventKey: "synthetic-release" }, { itemId: "screws", itemLabel: "M3 screws", kind: "consume", quantity: 2, unit: "each", beforeOnHand: 12, afterOnHand: 10, afterAvailable: 8, eventKey: "synthetic-event" }] }
+  };
+  let finish!: () => void;
+  const commit = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+  const view = renderDom(<ReconciliationUI model={model} onChange={() => undefined} onRequestPreview={() => undefined} onConfirmCommit={commit} />);
+  fireEvent.click(screen.getByRole("button", { name: "Apply stock changes" }));
+  const dialog = screen.getByRole("dialog", { name: "Apply these changes?" });
+  const effect = within(dialog).getByRole("region", { name: "Final stock effect" });
+  expect(effect.textContent).toContain("M3 screwsUsed 2 eachOn hand10 eachAvailable8 each");
+  expect(effect.textContent).toContain("2 each released from set-aside stock");
+  expect(within(dialog).queryByRole("table", { name: "Proposed stock quantities" })).toBeNull();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Review 2 separate stock entries" }));
+  const quantities = within(dialog).getByRole("region", { name: "Proposed stock quantities" });
+  expect(within(quantities).getAllByText("On hand now: 12 each")).toHaveLength(2);
+  expect(within(quantities).getAllByRole("row")).toHaveLength(3);
+  expect(quantities.textContent).toContain("Released2 each12 each");
+  expect(quantities.textContent).toContain("Used2 each10 each");
+  expect(quantities.tabIndex).toBe(0);
+  quantities.focus();
+  expect(document.activeElement).toBe(quantities);
+  expect(within(quantities).getByRole("table", { name: "Proposed stock quantities" })).toBeTruthy();
+  expect(quantities.querySelectorAll('[tabindex="0"]')).toHaveLength(0);
+  expect(commit).not.toHaveBeenCalled();
+  fireEvent.submit(dialog); fireEvent.submit(dialog);
+  expect(commit).toHaveBeenCalledOnce();
+  finish(); await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  view.rerender(<ReconciliationUI model={{ ...model, status: "committed" }} onChange={() => undefined} onRequestPreview={() => undefined} onConfirmCommit={commit} />);
+  expect(screen.getByText("Stock update saved")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Apply stock changes" })).toBeNull();
+  expect(commit).toHaveBeenCalledOnce();
+  cleanup();
+});
+
+it("summarises each stock item's final server balance without treating releases as use or inventing absent balances", () => {
+  const model: ReconciliationViewModel = {
+    projectId: "synthetic-project", projectName: "Test enclosure", projectRevisionId: "synthetic-revision", status: "draft", lines: [],
+    preview: { lines: [], reservationChanges: [], createdAssets: [], stockChanges: [
+      { itemId: "screws", itemLabel: "M3 screws", kind: "release", quantity: 6, unit: "each", afterOnHand: 20, afterAvailable: 18, eventKey: "release" },
+      { itemId: "screws", itemLabel: "M3 screws", kind: "consume", quantity: 2, unit: "each", afterOnHand: 18, afterAvailable: 16, eventKey: "used-one" },
+      { itemId: "screws", itemLabel: "M3 screws", kind: "consume", quantity: 3, unit: "each", afterOnHand: 15, afterAvailable: 13, eventKey: "used-two" },
+      { itemId: "screws", itemLabel: "M3 screws", kind: "loss", quantity: 1, unit: "each", afterOnHand: 14, afterAvailable: 12, eventKey: "loss" },
+      { itemId: "wire", itemLabel: "Bench wire", kind: "release", quantity: 2, unit: "metre", eventKey: "wire-release" },
+    ] }
+  };
+  renderDom(<ReconciliationUI model={model} confirmationOpen onChange={() => undefined} onRequestPreview={() => undefined} onConfirmCommit={() => undefined} />);
+  const effect = within(screen.getByRole("dialog", { name: "Apply these changes?" })).getByRole("region", { name: "Final stock effect" });
+  const items = within(effect).getAllByRole("listitem");
+  expect(items[0]!.textContent).toContain("Used 5 each · Lost 1 eachOn hand14 eachAvailable12 each");
+  expect(items[1]!.textContent).toContain("Used 0 metreOn handNot providedAvailableNot provided");
+  expect(items[1]!.textContent).toContain("Physical quantity unchanged.");
+  cleanup();
 });

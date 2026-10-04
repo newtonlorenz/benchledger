@@ -20,3 +20,16 @@ export function AppearanceControl({ value, onChange }: { value: Appearance; onCh
     <p>Compact rows apply to pointer devices. Touch controls keep their size.</p>
   </PopoverContent></Popover>;
 }
+
+export function AppearanceSettings({ value, onChange }: { value: Appearance; onChange(patch: Partial<Appearance>): void }) {
+  return <section className="surface settings-section settings-appearance" aria-labelledby="appearance-heading">
+    <div><h2 id="appearance-heading">Appearance</h2><p>Choose the theme and spacing for this device.</p></div>
+    <fieldset><legend>Colour theme</legend><RadioGroup className="segmented-options" aria-label="Colour theme" value={value.colourMode} onValueChange={next => onChange({ colourMode: next as ColourMode })}>
+      {(["light", "dark", "system"] as ColourMode[]).map(mode => <Label key={mode}><RadioGroupItem value={mode} /><span>{mode === "system" ? "System" : mode === "light" ? "Light" : "Dark"}</span></Label>)}
+    </RadioGroup></fieldset>
+    <fieldset><legend>Row spacing</legend><RadioGroup className="segmented-options" aria-label="Row spacing" value={value.density} onValueChange={next => onChange({ density: next as Density })}>
+      {(["comfortable", "compact"] as Density[]).map(density => <Label key={density}><RadioGroupItem value={density} /><span>{density === "comfortable" ? "Standard" : "Compact"}</span></Label>)}
+    </RadioGroup></fieldset>
+    <p>Compact rows apply to pointer devices. Touch controls keep their size.</p>
+  </section>;
+}

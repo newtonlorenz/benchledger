@@ -37,7 +37,7 @@ it("explains missing category data without hiding all-inventory access", () => {
   fireEvent.change(screen.getByLabelText("Find an inventory category"), { target: { value: "wire" } }); expect(screen.getByText("No matching categories.")).toBeTruthy();
 });
 it("validates and bounds layout preferences, without mixing sample and workspace settings", () => {
-  expect(parseInventoryLayout("broken")).toMatchObject({ inspectorOpen: false, inspectorWidth: 300 });
+  expect(parseInventoryLayout("broken")).toMatchObject({ inspectorOpen: false, inspectorWidth: 420 });
   expect(parseInventoryLayout("null").columns).toEqual(["location"]);
   const value = parseInventoryLayout(JSON.stringify({ inspectorOpen: false, inspectorWidth: 900, columns: ["sku", "invented", "sku", "category"] }));
   expect(value).toEqual({ inspectorOpen: false, inspectorWidth: 480, columns: ["category", "sku"] });
@@ -46,7 +46,7 @@ it("validates and bounds layout preferences, without mixing sample and workspace
   vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("denied"); });
   expect(writeInventoryLayout(value, false)).toBe(false);
   vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("denied"); });
-  expect(readInventoryLayout(true).inspectorWidth).toBe(300);
+  expect(readInventoryLayout(true).inspectorWidth).toBe(420);
 });
 it("preserves inventory and inspector content when the workspace is narrow", () => {
   vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));

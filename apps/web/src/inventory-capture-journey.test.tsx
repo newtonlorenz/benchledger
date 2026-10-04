@@ -134,6 +134,7 @@ it("requires an explicit received quantity for an exact printer", async () => {
 it("captures electronic specifications and asks separately to review an entered physical count", async () => {
   const actions = props(); render(<NewInventoryDialog {...actions} />); choose("electronic");
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Synthetic sensor board" } });
+  fireEvent.click(screen.getByRole("button", { name: "Specifications & identity" }));
   fireEvent.change(screen.getByLabelText("Details and specifications (optional)"), { target: { value: "3.3 V, I2C, 2.54 mm header" } });
   fireEvent.change(screen.getByLabelText("Recorded quantity"), { target: { value: "6" } });
   fireEvent.click(screen.getByRole("checkbox", { name: "I have counted these" }));
@@ -181,4 +182,44 @@ it("restores supporting inventory capture without a suspended requirement's moda
   expect(actions.onCreate).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Retry unchanged item" }));
   await waitFor(() => expect(actions.onCreate).toHaveBeenCalledOnce());
+});
+
+it("keeps optional item identity out of the first fields and preserves it through failed capture", async () => {
+  const actions = props();
+  render(<NewInventoryDialog {...actions} />);
+  choose("electronic");
+  expect(screen.queryByRole("textbox", { name: "Details and specifications (optional)" })).toBeNull();
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Synthetic interface board" } });
+  fireEvent.click(screen.getByRole("button", { name: "Specifications & identity" }));
+  fireEvent.change(screen.getByLabelText("Brand or manufacturer (if known)"), { target: { value: "Synthetic maker" } });
+  fireEvent.change(screen.getByLabelText("Model (if known)"), { target: { value: "Board V2" } });
+  fireEvent.change(screen.getByLabelText("Product code (optional)"), { target: { value: "SYNTH-BOARD-2" } });
+  fireEvent.click(screen.getByRole("button", { name: "Specifications & identity" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add item" }));
+  await screen.findByText(/The item was not added/);
+  expect(actions.onCreate).toHaveBeenCalledWith(expect.objectContaining({ name: "Synthetic interface board", manufacturer: "Synthetic maker", model: "Board V2", sku: "SYNTH-BOARD-2" }));
+  fireEvent.click(screen.getByRole("button", { name: "Specifications & identity" }));
+  expect(screen.getByLabelText("Product code (optional)")).toHaveProperty("value", "SYNTH-BOARD-2");
+});
+
+it("keeps exact-product capture focused and retains secondary physical details after failure", async () => {
+  const actions = props(), product = catalogProducts.find(candidate => candidate.kind === "filament")!;
+  render(<NewInventoryDialog {...actions} catalogProducts={[product]} />);
+  choose("filament");
+  await waitFor(() => expect(screen.queryByRole("status", { name: "Searching" })).toBeNull());
+  fireEvent.change(screen.getByRole("combobox", { name: "Exact filament product" }), { target: { value: product.manufacturer } });
+  fireEvent.click(await screen.findByRole("option"));
+  expect(screen.queryByRole("combobox", { name: "Exact filament product" })).toBeNull();
+  expect(screen.queryByRole("textbox", { name: "Lot / batch (optional)" })).toBeNull();
+  fireEvent.change(screen.getByLabelText("Current mass (g)"), { target: { value: "450" } });
+  fireEvent.change(screen.getByLabelText("Current placement (optional)"), { target: { value: "Shelf B" } });
+  fireEvent.click(screen.getByRole("button", { name: "Batch & spool details" }));
+  fireEvent.change(screen.getByLabelText("Lot / batch (optional)"), { target: { value: "SYNTH-LOT" } });
+  fireEvent.click(screen.getByRole("button", { name: "Batch & spool details" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add filament spool" }));
+  await screen.findByText(/The exact inventory record.*was not saved/);
+  expect(actions.onCreateExact).toHaveBeenCalledWith(expect.objectContaining({ product, quantity: 450, linkState: "reported", filament: expect.objectContaining({ lotBatch: "SYNTH-LOT", placement: "Shelf B" }) }));
+  expect(screen.getByText("Product identity and physical stock are separate checks. This form does not record a physical count.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Batch & spool details" }));
+  expect(screen.getByLabelText("Lot / batch (optional)")).toHaveProperty("value", "SYNTH-LOT");
 });

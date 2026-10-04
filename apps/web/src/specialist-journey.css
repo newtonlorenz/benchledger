@@ -1,67 +1,190 @@
-/* Specialist forms share the workspace controls and give each task room to read. */
-.dialog[data-slot="dialog-content"]:has(.guided-setup) {
-  width: min(880px, calc(100% - 32px));
-  max-width: min(880px, calc(100% - 32px));
-  scroll-padding-block: 88px;
+/* Task-first Build flow and its supporting review screens. */
+.specialist-journey { min-width: 0; }
+.specialist-journey .workflow-page-heading { padding: 0 0 18px; }
+.specialist-journey .workflow-page-heading h2 { margin: 0; font-size: clamp(1.35rem, 2.2vw, 1.8rem); letter-spacing: -.025em; }
+.specialist-journey .workflow-page-heading p { margin: 6px 0 0; font-size: .95rem; line-height: 1.5; }
+.build-journey { margin: 0; padding: 0; list-style: none; counter-reset: build-step; }
+.build-journey > li { position: relative; counter-increment: build-step; padding: 0 0 12px 44px; min-width: 0; }
+.build-journey > li:not(:last-child)::after { content: ""; position: absolute; left: 14px; top: 32px; bottom: 4px; width: 1px; background: var(--line); }
+.build-journey > li::before { content: counter(build-step); position: absolute; left: 0; top: 0; display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--ink-soft); font-size: .95rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.build-journey-step { padding: 2px 0 0; }
+.build-journey-step h3 { margin: 0; font-size: 1rem; font-weight: 650; letter-spacing: -.015em; }
+.build-journey-step p { max-width: 70ch; margin: 4px 0; color: var(--ink-soft); font-size: .85rem; line-height: 1.4; }
+.build-journey-step > button { margin-top: 2px; }
+.maker-planning-tools .build-journey-step > button { min-height: 32px; height: auto; font-size: .85rem; }
+.maker-planning-tools .build-journey-step > button[data-variant="ghost"] { padding-inline: 0; color: var(--primary); }
+.build-step-tools { margin-top: 12px; border-top: 1px solid var(--line); }
+.build-step-tools > [data-disclosure=trigger] { min-height: 44px; font-size: .9rem; color: var(--ink-soft); }
+.build-workspace .build-planning, .build-workspace .workstream-planning, .build-workspace .stock-reservation-planning { padding: 16px 0 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.build-workspace .surface > h2 { margin: 0; font-size: 1rem; }
+.build-workspace .surface > p { font-size: .9rem; line-height: 1.55; max-width: 70ch; }
+.build-planning, .stock-reservation-planning, .workstream-planning { min-width: 0; }
+.build-planning .workflow-form, .workstream-planning .workflow-form { margin-top: 20px; max-width: 760px; }
+.build-planning .correction-fields, .workstream-planning .correction-fields, .stock-reservation-planning .correction-fields { display: grid; gap: 14px; }
+.build-planning .intake-row { display: grid; grid-template-columns: minmax(0, 1fr) 120px; align-items: end; gap: 12px; padding: 18px 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
+.build-planning .intake-row > :nth-child(3) { grid-column: 1; }
+.build-planning .intake-row > button { justify-self: end; white-space: normal; }
+.build-planning .plate-editor { margin: 14px 0; border-top: 1px solid var(--line); }
+.build-planning .material-editor { display: grid; grid-template-columns: minmax(0, 1fr) minmax(100px, .6fr); gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.build-planning .workflow-extra-fields { width: 100%; margin: 10px 0; }
+.build-planning .workflow-extra-fields [data-disclosure=content], .workstream-planning .workflow-extra-fields [data-disclosure=content] { padding: 10px 0; }
+.build-planning .workflow-extra-fields [data-disclosure=content][hidden], .workstream-planning .workflow-extra-fields [data-disclosure=content][hidden] { display: none; }
+.workstream-planning .workstream-row { margin: 10px 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 4px 0 12px; }
+.workstream-row > [data-disclosure=trigger] { font-size: 1rem; }
+.workstream-row form { max-width: 620px; }
+.workstream-row form > button { margin-top: 12px; }
+.workstream-planning .workflow-pagination { justify-content: flex-start; margin: 14px 0; }
+.stock-reservation-planning .correction-fields { max-width: 660px; }
+.reserved-stock-list { list-style: none; padding: 0; margin: 16px 0; }
+.reserved-stock-list li { padding: 12px 0; border-bottom: 1px solid var(--line); font-size: .9rem; line-height: 1.7; }
+.reserved-stock-list button { margin-left: 8px; }
+.stock-review-facts { display: grid; gap: 0; margin: 16px 0; }
+.stock-review-facts > div { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.stock-review-facts dt { color: var(--ink-soft); }
+.stock-review-facts dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.reconciliation-shell .reconciliation-header { padding: 0 0 22px; background: transparent; border: 0; }
+.reconciliation-shell .reconciliation-header h2, .reconciliation-shell .reconciliation-header h1 { font-size: clamp(1.4rem, 2.2vw, 1.8rem); letter-spacing: -.025em; }
+.reconciliation-shell .reconciliation-header p { max-width: 68ch; font-size: .95rem; }
+.reconciliation-workspace { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(320px, 1fr); gap: 28px; align-items: start; }
+.reconciliation-entry, .reconciliation-review-pane { min-width: 0; }
+.reconciliation-review-pane { padding: 20px; border: 1px solid var(--line); border-radius: 12px; }
+.reconciliation-shell .reconciliation-preview { margin: 0; border: 0; padding: 0; background: transparent; box-shadow: none; }
+.reconciliation-shell .reconciliation-section-heading { padding: 0 0 16px; flex-wrap: wrap; gap: 12px; }
+.reconciliation-shell .reconciliation-section-heading h2 { font-size: 1.2rem; }
+.reconciliation-shell .reconciliation-footer { padding: 18px 0 0; margin-top: 20px; border: 0; border-top: 1px solid var(--line); background: transparent; display: grid; gap: 16px; }
+.reconciliation-shell .reconciliation-footer-actions { align-items: flex-start; flex-direction: column; }
+.reconciliation-shell .reconciliation-footer-actions > button { width: 100%; }
+.reconciliation-shell .reconciliation-progress { display: flex; margin: 0 0 18px; padding: 0 0 16px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; flex-wrap: wrap; }
+.reconciliation-shell .reconciliation-progress-track { display: none; }
+.reconciliation-shell .reconciliation-line { padding: 0; border: 0; border-radius: 0; background: transparent; }
+.reconciliation-shell .reconciliation-line-heading h2 { font-size: 1.2rem; }
+.reconciliation-shell .reconciliation-quantity-strip { border-radius: 0; background: transparent; border: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.reconciliation-shell .reconciliation-quantity-strip strong { font-size: 1.1rem; font-variant-numeric: tabular-nums; }
+.reconciliation-shell .reconciliation-outcome { border-radius: 0; border: 0; border-bottom: 1px solid var(--line); box-shadow: none; padding: 16px 0; background: transparent; }
+.reconciliation-shell .reconciliation-outcomes-heading { padding: 18px 0 8px; }
+.reconciliation-review-scope { margin: 0 0 16px; color: var(--ink-soft); font-size: .9rem; line-height: 1.6; }
+.reconciliation-review-scope small { display: block; margin-top: 4px; }
+.stock-change-table { min-width: 0; overflow-x: auto; }
+/* This named, focusable region owns scrolling; the shared table wrapper does not. */
+.stock-change-table > [data-slot="table-container"] { overflow: visible; }
+.stock-change-table:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; border-radius: 4px; }
+.stock-change-table table { width: 100%; font-size: .85rem; }
+.stock-change-table th { padding: 12px 10px; color: var(--ink-soft); background: var(--surface-soft); font-weight: 500; white-space: normal; }
+.stock-change-table td { padding: 14px 10px; vertical-align: top; white-space: normal; min-width: 85px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.stock-change-table td:first-child { min-width: 120px; overflow-wrap: anywhere; }
+.stock-change-table strong { display: block; font-weight: 600; }
+.stock-change-table small { display: block; margin-top: 5px; color: var(--ink-soft); font-size: .75rem; line-height: 1.5; }
+.reconciliation-confirm { max-width: 640px; }
+.reconciliation-confirm .stock-change-table { margin: 18px 0; }
+.inspection-dialog .inspection-dialog-icon { display: none; }
+.inspection-dialog .inspection-dialog-question { font-size: 1rem; line-height: 1.6; }
+.inspection-dialog .inspection-dialog-candidate { margin: 12px 0 20px; padding: 12px 0; border: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
+.inspection-dialog .inspection-observation-details { margin: 12px 0; border-top: 1px solid var(--line); }
+.inspection-dialog .inspection-observation-details > [data-disclosure=trigger] { min-height: 44px; }
+.inspection-dialog .inspection-server-preview { border-radius: 0; border: 0; border-top: 1px solid var(--line); padding: 18px 0 0; background: transparent; }
+.inspection-panel .inspection-action { border-radius: 0; border: 0; border-bottom: 1px solid var(--line); background: transparent; padding: 16px 0; }
+.inspection-panel .inspection-action-icon { display: none; }
+.inspection-panel .inspection-panel-heading p { font-size: .9rem; }
+@media (max-width: 1100px) {
+  .reconciliation-workspace { grid-template-columns: minmax(0, 1fr); }
+  .reconciliation-review-pane { padding: 20px 0 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; }
 }
-.dialog:has(.guided-setup) > .dialog-header {
-  position: sticky;
-  top: -24px;
-  z-index: 3;
-  margin-top: -24px;
-  padding-top: 24px;
-  background: var(--surface-strong);
-}
-.guided-setup .intake-row > .form-field,
-.guided-setup .intake-row > .form-row {
-  margin-block: 0;
-}
-.guided-setup .requirement-owned-options {
-  margin-block: 16px;
-}
-.guided-setup .intake-row input {
-  scroll-margin-block: 88px;
-}
-.inspection-panel .inspection-action {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 12px 16px;
-}
-.inspection-panel .inspection-action-icon {
-  display: flex;
-  align-items: center;
-  padding-block: 4px;
-}
-.inspection-panel .inspection-action-body {
-  min-width: 0;
-  display: grid;
-  gap: 4px;
-  overflow-wrap: anywhere;
-}
-.inspection-panel .inspection-action-body > strong,
-.inspection-panel .inspection-action-body > span {
-  display: block;
-}
-.inspection-panel .inspection-action-button {
-  align-self: center;
-}
-.quote-form {
-  scroll-margin-block: 24px;
-}
-@media (max-width: 640px) {
-  .inspection-panel .inspection-action {
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: 12px;
-  }
-  .inspection-panel .inspection-action-button {
-    grid-column: 2;
-    justify-self: start;
-    max-width: 100%;
-    white-space: normal;
-  }
+@media (max-width: 600px) {
+  .build-journey > li { padding-left: 42px; padding-bottom: 12px; }
+  .build-journey > li::before { width: 30px; height: 30px; font-size: .85rem; }
+  .build-journey > li:not(:last-child)::after { left: 14px; top: 34px; }
+  .build-journey-step { padding-top: 2px; }
+  .build-journey-step p { font-size: .9rem; }
+  .build-planning .intake-row, .build-planning .material-editor { grid-template-columns: minmax(0, 1fr); }
+  .build-planning .intake-row > button { justify-self: start; }
+  .build-workspace input, .build-workspace textarea, .build-workspace select, .inspection-dialog input, .inspection-dialog select, .reconciliation-shell input, .reconciliation-shell textarea, .reconciliation-shell select { font-size: 1rem; }
+  .stock-review-facts > div { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .reconciliation-shell .reconciliation-quantity-strip > div { padding: 10px 6px; }
+  .reconciliation-shell .reconciliation-quantity-strip strong { font-size: 1rem; }
+  .stock-change-table th, .stock-change-table td { padding: 10px 6px; }
 }
 
-/* Radix dialog padding stays 24px at phone widths as well. Cover the full
-   scrolling edge so text cannot peek above the header or below the footer. */
+.reconciliation-shell .reconciliation-line-nav { align-items: end; gap: 10px; }
+.reconciliation-line-picker { display: grid; flex: 1; min-width: 0; gap: 6px; font-size: .8rem; color: var(--ink-soft); }
+.reconciliation-line-picker [data-slot=native-select-wrapper] { width: 100%; min-width: 0; }
+.reconciliation-line-picker select { width: 100%; min-width: 0; }
+.reconciliation-shell .reconciliation-line-nav .button { min-height: 44px; }
+.reconciliation-shell .reconciliation-progress-copy { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; }
+.reconciliation-shell .reconciliation-progress-copy strong { font-size: .95rem; }
+.reconciliation-shell .reconciliation-progress-copy > span:last-child { font-size: .85rem; }
+/* Keep the existing setup-dialog and quote-form layout contracts. */
+.dialog[data-slot="dialog-content"]:has(.guided-setup) { width: min(880px, calc(100% - 32px)); max-width: min(880px, calc(100% - 32px)); scroll-padding-block: 88px; }
+.dialog:has(.guided-setup) > .dialog-header { position: sticky; top: -24px; z-index: 3; margin-top: -24px; padding-top: 24px; background: var(--surface-strong); }
+.guided-setup .intake-row > .form-field, .guided-setup .intake-row > .form-row { margin-block: 0; }
+.guided-setup .requirement-owned-options { margin-block: 16px; }
+.guided-setup .intake-row input { scroll-margin-block: 88px; }
 .dialog:has(.guided-setup) .dialog-actions { bottom: -24px; padding-bottom: 24px; }
+.quote-form { scroll-margin-block: 24px; }
+.inspection-panel .inspection-action { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px 16px; }
+.inspection-panel .inspection-action-body { min-width: 0; display: grid; gap: 5px; overflow-wrap: anywhere; }
+.inspection-panel .inspection-action-body > strong, .inspection-panel .inspection-action-body > span { display: block; }
+.inspection-panel .inspection-action-button { align-self: center; max-width: 100%; white-space: normal; }
+@media (max-width: 640px) {
+  .inspection-panel .inspection-action { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .inspection-panel .inspection-action-button { grid-column: 1; justify-self: start; }
+}
+
+/* Keep the same ordered journey in view while reviewing actual stock use. */
+.maker-planning-tools.build-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 32px; align-items: start; }
+.build-journey-panel { min-width: 0; }
+.build-journey > li[aria-current="step"]::before { color: var(--primary-foreground); border-color: var(--primary); background: var(--primary); }
+.build-current-action { display: block; padding-block: 6px; color: var(--primary); font-size: .85rem; font-weight: 600; }
+.build-physical-note { max-width: 58ch; margin: 8px 0 0; color: var(--ink-soft); font-size: .8rem; line-height: 1.5; }
+.build-advanced-tools { min-width: 0; padding-left: 28px; border-left: 1px solid var(--line); }
+.build-advanced-tools > h2 { margin: 0 0 16px; font-size: 1.2rem; letter-spacing: -.015em; }
+.maker-planning-tools.build-review-layout { grid-template-columns: minmax(260px, 300px) minmax(0, 1fr); gap: 28px; }
+.build-review-layout > .build-advanced-tools { grid-column: 1 / -1; padding: 20px 0 0; border-left: 0; border-top: 1px solid var(--line); }
+.build-review-layout > .reconciliation-page-surface { min-width: 0; }
+.build-review-layout .reconciliation-shell .reconciliation-header { padding: 0 0 16px; margin: 0 0 16px; border: 0; background: transparent; align-items: start; gap: 16px; }
+.build-review-layout .reconciliation-header h2 { margin-top: 0; }
+.build-review-layout .reconciliation-header p { margin-top: 6px; }
+.build-review-layout .reconciliation-workspace { grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr); gap: 22px; }
+.build-review-layout .reconciliation-review-pane { padding: 16px; }
+.build-review-layout .reconciliation-preview-details { padding: 0; }
+.build-review-layout .reconciliation-review-scope { margin-bottom: 12px; }
+.build-review-layout .reconciliation-footer { margin-top: 12px; padding-top: 14px; gap: 8px; }
+.build-review-layout .reconciliation-footer p { margin-top: 4px; }
+.build-review-layout .reconciliation-line-nav { gap: 4px; }
+.build-review-layout .reconciliation-line-nav > button { padding-inline: 6px; font-size: .75rem; }
+.build-review-layout .stock-change-table th, .build-review-layout .stock-change-table td { padding: 10px 6px; }
+/* A short summary stays next to Apply; the distinct ledger rows remain available. */
+.reconciliation-confirm[data-slot="dialog-content"] { display: block; width: min(580px, calc(100vw - 32px)); max-width: min(580px, calc(100vw - 32px)); }
+.reconciliation-confirm-heading { display: flex; align-items: center; gap: 12px; }
+.reconciliation-confirm-heading > svg { flex-shrink: 0; color: var(--amber-ink); }
+.reconciliation-confirm-heading h2 { margin: 0; }
+.reconciliation-ledger-details { margin-top: 14px; }
+.reconciliation-ledger-details > [data-disclosure="trigger"] { min-height: 44px; font-size: .85rem; }
+.reconciliation-confirm-footer { position: sticky; bottom: -25px; margin: 12px -25px -25px; padding: 14px 25px 25px; border-top: 1px solid var(--line); background: var(--surface-strong); }
+.reconciliation-final-effect h3 { margin: 0 0 10px; font-size: 1rem; }
+.reconciliation-final-effect ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 16px; }
+.reconciliation-final-effect li > strong { display: block; font-size: .85rem; }
+.reconciliation-final-effect li > p { margin: 5px 0 10px; font-size: .85rem; }
+.reconciliation-final-effect dl { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0; }
+.reconciliation-final-effect dt { color: var(--ink-soft); font-size: .8rem; }
+.reconciliation-final-effect dd { margin: 3px 0 0; font-size: 1.15rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+.reconciliation-final-effect small { display: block; margin-top: 8px; font-size: .75rem; color: var(--ink-soft); }
+.reconciliation-confirm .reconciliation-confirm-footer .dialog-actions { position: static; margin-top: 16px; padding: 0; border: 0; }
+@media (max-width: 1250px) {
+  .build-review-layout .reconciliation-workspace { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 900px) {
+  .maker-planning-tools.build-workspace, .maker-planning-tools.build-review-layout { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .build-advanced-tools { padding: 20px 0 0; border-left: 0; border-top: 1px solid var(--line); }
+  .build-review-layout .build-journey { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; }
+  .build-review-layout .build-journey > li { padding-left: 38px; }
+  .build-review-layout .build-journey > li::after { display: none; }
+  .build-review-layout .build-journey > li:last-child { grid-column: 1 / -1; }
+  .build-review-layout .build-journey-step > p { display: none; }
+  .build-review-layout .build-journey-step h3 { font-size: .9rem; }
+  .build-review-layout .build-journey-step > button { text-align: left; white-space: normal; justify-content: start; }
+}
+@media (max-width: 600px) {
+  .maker-planning-tools .build-journey-step > button { min-height: 44px; }
+  .build-review-layout .reconciliation-review-pane { padding: 16px 0 0; }
+  .reconciliation-confirm-footer { bottom: -18px; margin-inline: -18px; margin-bottom: -18px; padding: 14px 18px 18px; }
+}

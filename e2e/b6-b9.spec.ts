@@ -1,3 +1,4 @@
+import { navigateWorkspace, openProjectSection, openProject } from "./workspace-controls";
 import { expect, test, type Page } from "@playwright/test";
 
 const demoPassword = "demo-password-please-change";
@@ -10,12 +11,7 @@ async function signIn(page: Page): Promise<void> {
 }
 
 async function openInventory(page: Page): Promise<void> {
-  if (await page.getByRole("button", { name: "Open navigation" }).count()) {
-    await page.getByRole("button", { name: "Open navigation" }).click();
-    await page.getByRole("dialog", { name: "Primary navigation" }).getByRole("button", { name: "Inventory", exact: true }).click();
-  } else {
-    await page.getByRole("button", { name: "Inventory", exact: true }).click();
-  }
+  await navigateWorkspace(page, "Inventory");
   await expect(page.getByRole("heading", { name: "Inventory" })).toBeVisible();
 }
 
@@ -165,11 +161,8 @@ test("keeps inventory and shopping actions usable at 390px without horizontal ov
   expect(selectionBox?.height ?? 0).toBeGreaterThanOrEqual(44);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 
-  await page.getByRole("button", { name: "Open navigation" }).click();
-  await page.getByRole("dialog", { name: "Primary navigation" }).getByRole("button", { name: /^Projects/ }).click();
-  await page.getByRole("button", { name: "Open navigation", exact: true }).click();
-  await page.getByRole("dialog", { name: "Primary navigation" }).getByRole("button", { name: "Switch to project Synthetic H2D desk lamp", exact: true }).click();
-  await page.getByRole("tab", { name: /^Shopping list/ }).click();
+  await openProject(page, "Synthetic H2D desk lamp");
+  await openProjectSection(page, "To source");
   await page.getByText("Inventory-linked supplier records", { exact: true }).click(); await expect(page.locator(".shopping-section")).toBeVisible();
   const shoppingControls = page.locator(".shopping-actions .button, .shopping-section .offer-row, .shopping-section .expert-detail > [data-disclosure='trigger']");
   for (const control of await shoppingControls.all()) {

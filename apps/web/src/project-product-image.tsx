@@ -29,7 +29,7 @@ export function ProductImage({ project, compact = false, onOpen, onChoose }: { p
   }, []);
   return <div className={`product-image${compact ? " is-compact" : ""}`} ref={holder}>
     {file && visible ? <VerifiedProductImage key={`${file.id}:${file.hash}`} file={file} onOpen={onOpen} alt={project.presentation?.caption || `${project.name} — ${imageKindLabels[project.presentation!.imageKind]}`} />
-      : <div className="product-image-placeholder"><Icon name="layers" size={compact ? 20 : 32} />{!compact && <><span>{file ? "Loading project image…" : "Show what you’re making"}</span><small>{file ? "Checking the recorded file" : "Choose a render or photo in Files"}</small></>}{!file && onChoose && <Button variant="ghost" className="project-image-choose" aria-label={`Choose image for ${project.name}`} onClick={onChoose}>{compact ? "Add" : "Choose image"}</Button>}</div>}
+      : <div className="product-image-placeholder"><Icon name="layers" size={compact ? 20 : 32} />{!compact && <><span>{file ? "Loading project image…" : project.status === "archived" ? "No project image" : "Add a project image"}</span><small>{file ? "Checking the recorded file" : project.status === "archived" ? "No image selected for this revision" : "Render, sketch or finished photo"}</small></>}{!file && onChoose && <Button variant="ghost" className="project-image-choose" aria-label={`Choose image for ${project.name}`} onClick={onChoose}>{compact ? "Add" : "Add image"}</Button>}</div>}
     {file && !compact && <span className="product-image-kind">{imageKindLabels[project.presentation!.imageKind]}</span>}
   </div>;
 }

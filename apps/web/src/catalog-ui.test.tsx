@@ -172,7 +172,7 @@ describe("catalog selection UI", () => {
     const formMarkup = renderToStaticMarkup(
       <CatalogProductCreateForm kind="filament" onCreate={async () => undefined} />
     );
-    expect(formMarkup).toContain("No exact match");
+    expect(formMarkup).toContain("Stock is recorded in the next step.");
     expect(formMarkup).toContain("Add product");
     expect(formMarkup).toContain("Manufacturer");
     expect(formMarkup).toContain("Colour");

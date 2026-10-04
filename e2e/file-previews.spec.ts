@@ -1,3 +1,4 @@
+import { openFileDetails, openProject } from "./workspace-controls";
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 
@@ -9,7 +10,7 @@ test("project files preview safe content and preserve ZIP, SVG and JSON original
   await page.goto("/");
   await page.getByLabel("Workspace password").fill("demo-password-please-change");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await page.getByRole("button", { name: "Switch to project Synthetic H2D desk lamp", exact: true }).click();
+  await openProject(page, "Synthetic H2D desk lamp");
   await page.getByRole("tab", { name: /^Files/u }).click();
   const files = [
     { name: "preview-instructions.md", mimeType: "text/markdown", buffer: Buffer.from("# Assembly preview\n\n**Read first**\n\n<script>window.previewUnsafe = true</script>\n\n![remote](https://example.org/tracker)") },
@@ -61,7 +62,8 @@ test("project files preview safe content and preserve ZIP, SVG and JSON original
     await expect(dialog.locator("svg, img, script, iframe, object, embed")).toHaveCount(0);
     await dialog.getByRole("button", { name: "Close preview" }).click();
     await expect(dialog).toHaveCount(0);
-    await expect(page.getByRole("button", { name: `Download ${name}`, exact: true })).toBeVisible();
+    const details = await openFileDetails(page, name);
+    await expect(details.getByRole("button", { name: "Download file", exact: true })).toBeVisible();
     // Ordinary authenticated navigation must download too, without the UI's
     // fetch/blob path or a download attribute that could hide response-policy bugs.
     await page.evaluate(url => {

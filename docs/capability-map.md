@@ -7,14 +7,17 @@ an end-to-end project decision.
 
 ## Browser workspace
 
-The desktop browser has a persistent project navigator, a fixed workspace
-toolbar and a separately scrolling working area. Inventory and Projects remain
-equal navigation destinations. The navigator filters loaded project names and
-switches between active and archived records. Project details can be hidden to
-give requirements and files more space. Assembly and PCB viewers use the full
-working width. On narrow screens, open the
-navigation drawer to switch projects or archive views. These changes do not
-add API or MCP operations or change stock evidence.
+The desktop header exposes Projects and Inventory as peer destinations, with
+search and Settings alongside them. Phones retain Projects and Inventory in
+bottom navigation. A project opens Overview, Parts, Files and Build. Sourcing
+is within Parts; Assembly, PCB and actual-stock-use review remain secondary
+Build routes when supported. Existing subroutes map to these sections.
+
+Overview shows the selected image, notes and next action. The project menu holds
+project-specific revision/history, build-approach and lifecycle actions. New
+project belongs in the library. Settings contains browser-local appearance and
+row spacing, plus agent access. Navigation and presentation do not add API/MCP
+operations or alter stock evidence.
 
 ## Visual project library
 
@@ -36,20 +39,19 @@ for exact routes, fields and image ancestry rules.
 
 ## Inventory workstation
 
-Inventory has a sortable register, a persistent inspector, explicit recorded and
-available balances, stock queues, and up to 12 browser-local saved views. The
-inspector exposes identity, storage, condition, reservations and stock provenance.
-The sidebar provides searchable managed categories and exact subcategory filters.
-A single click selects; double-click, Enter, F2 or **Open item** opens the editor.
-Arrow keys move the inspected row. Bulk checkboxes remain
-separate from inspection and apply only to loaded records with observed versions.
-The desktop register and inspector scroll independently; narrow screens disclose
-filters and place the inspector below the horizontally scrollable register.
-**Columns** controls optional category, location, reserved and SKU columns and
-provides **Reset layout**. Inspector visibility, width and column choices are
-remembered in this browser, separately for sample and private workspaces. The
-divider supports pointer dragging and keyboard resizing. Item and Location
-headers provide the existing server-side sorting options.
+Inventory has a searchable collection, contextual item details, explicit
+recorded/available/reserved balances, stock queues and up to 12 browser-local
+saved views. The detail surface exposes identity, storage, condition, reservations
+and provenance. On wide screens its inspector can be resized; phones use a
+sheet. Select a record to inspect it; Open item and supported keyboard controls
+retain access to editing. Managed-category filters remain exact, including
+subcategories.
+
+View options holds sorting and optional columns. Inspector visibility, width
+and column choices remain browser-local, separately for sample and private
+workspaces. Bulk selection remains distinct from inspection and applies only to
+loaded records with observed versions. Order recording, arrival, count review
+and actual use remain separate operations.
 
 **Copy for AI** copies only the inspected or explicitly selected loaded records,
 with canonical units, evidence, versions, scope and compatibility caveats. It does
@@ -86,11 +88,11 @@ limits, HTTP routes, host encoding, retention and backup semantics.
 
 ## Deleting records
 
-Open **Project details → Project settings → Delete project** for active and
+Open **Project actions → Delete project** for active and
 archived projects.
 One confirmation shows the consequences; users do not need to type the name.
 The browser still sends the selected name and version to the existing removal
-API. Archive remains available in Project settings when restoration is wanted.
+API. Archive remains available in Project actions when restoration is wanted.
 
 Inventory details expose **Delete item** (or **Delete printer**) beside Edit item.
 After one confirmation, `DELETE /inventory/{id}` with `If-Match` and a stable
@@ -371,7 +373,7 @@ identity search.
 The web interface uses shadcn primitives throughout forms, navigation, tables,
 search, dialogs, menus and notifications, with one semantic light/dark theme.
 Radix provides interaction boundaries; domain guards retain final dismissal authority.
-The View popover changes browser-local appearance and row spacing only. This
+Settings → Appearance changes browser-local theme and row spacing only. This
 redesign adds no HTTP or MCP operations and changes no stock, authentication,
 confirmation, concurrency or evidence rules.
 
@@ -399,13 +401,13 @@ profiles when present.
 | Recognise a project visually | Projects Gallery or List; Files → Project image | `list_project_library` → `read_project_presentation` → `save_project_presentation`; `read_project_presentation_history` retains prior selections, while artifact bytes use authenticated host transfer |
 | Archive or restore a project | Project Archive action and explicit Archived view | `archive_project` / `restore_project`; archive hides default lists, releases active reservations with evidence, retains history, and restore never recreates reservations |
 | Understand a build gap | BOM editor and gap panel | `list_bom_lines` → `calculate_bom_gaps`; Decide before supplier lookup, inspect candidate diagnostics and conversion capacity/overage reasons in Check results, and shop only Source lines |
-| Resolve a physical project check | Project Plan Checks panel below the requirements; beginner shows three concrete questions and View all, expert reveals canonical traceability; confirmed compatibility and conversion collect explicit values/evidence, and completion is preview-first with exact before/after line alternatives/conversions plus explicit confirmation | HTTP: `GET /api/v1/project-revisions/{revisionId}/inspections` → `GET .../{inspectionId}` → `POST .../{inspectionId}/completion-preview` → explicit `POST .../{inspectionId}/completion-commit`; MCP: `list_inspections` → `read_inspection` → `preview_inspection_completion` → `commit_inspection_completion`, with nested REST `each` ↔ MCP `piece` unit/conversion mapping, affected line/item plus relevant reservation staleness basis, before/after items/gaps/lines, affected and reevaluated gaps, refreshed inspections/evidence, and project-scoped fail-closed authorization |
-| Hold confirmed parts | Reservation panel | `create_reservation` → `list_reservations` / `read_reservation` → read BOM/gaps again |
+| Resolve a physical project check | Parts → Stock checks below the requirements; beginner shows three concrete questions and View all, expert reveals canonical traceability; confirmed compatibility and conversion collect explicit values/evidence, and completion is preview-first with exact before/after line alternatives/conversions plus explicit confirmation | HTTP: `GET /api/v1/project-revisions/{revisionId}/inspections` → `GET .../{inspectionId}` → `POST .../{inspectionId}/completion-preview` → explicit `POST .../{inspectionId}/completion-commit`; MCP: `list_inspections` → `read_inspection` → `preview_inspection_completion` → `commit_inspection_completion`, with nested REST `each` ↔ MCP `piece` unit/conversion mapping, affected line/item plus relevant reservation staleness basis, before/after items/gaps/lines, affected and reevaluated gaps, refreshed inspections/evidence, and project-scoped fail-closed authorization |
+| Hold confirmed parts | Build → Check parts → Set aside stock | `create_reservation` → `list_reservations` / `read_reservation` → read BOM/gaps again |
 | Preview a project file | Files: images, formatted Markdown, plain text and interactive STL; unsupported formats stay download-only. Optional code loads on demand; viewer failures remain local, and lost graphics connections support local retry | Existing authenticated artifact download with SHA-256 verification; browser-only rendering and recovery, no MCP/API schema change; see preview limits in [agent quickstart](agent-quickstart.md) |
 | Add a CAD revision | Files scope selector defaults to the exact project revision and offers named work-item revisions; All files is read-only; upload status shows the file role | Authenticated browser/HTTP upload through the existing begin → write → finalize flow; raw MCP transfer commands remain fail-closed |
 | Record exact build setup | Project build-configuration form | catalog/profile reads → `create_build_configuration` |
-| Compare buying options | Offers and shopping-list view | `list_offers` → `record_offer_snapshot` (observation only) |
-| Close and learn from a build | Project **Close out** review | `read_reconciliation` → `save_reconciliation_draft` → explicit `commit_reconciliation` |
+| Compare buying options | Parts → To source and supporting combined proposal | `list_offers` → `record_offer_snapshot` (observation only) |
+| Close and learn from a build | Build → Record actual stock use review and receipt | `read_reconciliation` → `save_reconciliation_draft` → explicit `commit_reconciliation` |
 
 All UI actions in the table are application-service operations. The frontend
 does not silently invent compatibility, current counts, or purchase outcomes.
@@ -521,14 +523,17 @@ Home Check/Decide actions open the selected project with that requirement filter
 Missing or unusable printer setup is also a home task for printed projects,
 using the same eligibility rules as project guidance.
 
-Projects opens the selected Gallery or List layout. Requirements exposes add and reviewed CSV
-append actions together. Shopping shows project quotes first and retains older
-inventory-linked offers separately. Files supports scoped search and drop staging;
-the user must still confirm Add files. No new API, permission or stock semantics
+Projects opens the selected Gallery or List layout and projects land on Overview.
+Parts exposes add and reviewed CSV append actions; its To source route shows
+project quotes first and retains inventory-linked offers separately. Files
+supports scoped search and drop staging, grouped by 3D print, Electronics, CAD &
+firmware and Instructions; the user must still confirm Add files. No new API, permission or stock semantics
 are introduced by these navigation changes.
 
-Build steps is the execution-planning route; task groups use the existing
-workstream contracts. Guided requirement rows share searchable inventory and
+Build follows Check parts, Prepare files, Assemble, Verify the build and Record
+actual use. Reservations, plate plans and task groups appear under their relevant
+steps, using existing contracts. Verification opens task-group notes; it does not
+create a physical-verification certificate. Guided requirement rows share searchable inventory and
 explicit unit selection with ordinary requirement entry. An unlisted owned item
 can be captured while retaining the requirement draft. Manual inventory capture
 can carry an explicitly requested count into its separate preview/confirmation;
@@ -569,33 +574,34 @@ Browser acceptance tests use separate durable workspaces for stock close-out;
 the simplified demo server does not advertise that capability. Official MCP
 client tests exercise the same saved preview, explicit approval and idempotent
 replay, and compare the resulting stock quantity. UI changes do not grant new
-agent scopes or change the existing MCP tool contracts. The in-project Refresh
-control reads externally saved agent work without silently replacing local drafts.
+agent scopes or change the existing MCP tool contracts. The project refresh operation reads externally saved agent work without silently
+replacing local drafts; it is not a routine row in Project actions.
 
 ## Assembly explorer
 
-The shared Assembly tab supports all fabrication routes. `inspect_assembly_sources`, `read_project_assembly`, `save_project_assembly` and `read_assembly_history` expose the same hash-bound placements, part groups, BOM links and build steps to agents. Read tools require project read scope; saving requires project write scope, an observed version and a stable command key. No physical effects. See [Assembly explorer](assembly-explorer.md) for limits and HTTP parity.
+The shared Build → Assembly route supports all fabrication routes. `inspect_assembly_sources`, `read_project_assembly`, `save_project_assembly` and `read_assembly_history` expose the same hash-bound placements, part groups, BOM links and build steps to agents. Read tools require project read scope; saving requires project write scope, an observed version and a stable command key. No physical effects. See [Assembly explorer](assembly-explorer.md) for limits and HTTP parity.
 
 ### PCB inspection
 
-The `pcb.read` capability exposes a read-only project PCB tab over the existing assembly inspection service. Native KiCad PCB files preserve source thickness, supported drill/copper/footprint geometry and exact file hashes. STEP/GLB exports retain their node geometry. Top/bottom views, layer visibility and source-derived component selection are available where the source permits; missing bodies and unsupported geometry are reported explicitly. The same inspection is available through MCP. See [PCB viewer](pcb-viewer.md).
+The `pcb.read` capability exposes a read-only Build → PCB route over the existing assembly inspection service. Native KiCad PCB files preserve source thickness, supported drill/copper/footprint geometry and exact file hashes. STEP/GLB exports retain their node geometry. Top/bottom views, layer visibility and source-derived component selection are available where the source permits; missing bodies and unsupported geometry are reported explicitly. The same inspection is available through MCP. See [PCB viewer](pcb-viewer.md).
 
 ## Maker experience navigation
 
-The web workspace exposes the next project action above its tabs. Design tools
-reveals Assembly and PCB viewers; existing direct links remain valid. Inventory
-Filters reveals detailed filters, sorting and saved views, while applied filters
-remain visible. Stock quantities and status stay together on phone screens.
-Supporting evidence remains in the item inspector; stock counting is first in
-the item drawer. These navigation changes do not alter HTTP/MCP capabilities,
-authorisation, stock evidence or physical-operation boundaries.
+The project has one compact header and Overview / Parts / Files / Build.
+Overview owns the large image and next action; working sections keep their useful
+actions first. Advanced build tools use secondary navigation. Inventory Filters
+and View options retain detailed controls; phone item details use a contextual
+sheet. Readiness, authentication, concurrency and stock semantics are unchanged.
 
-See the [review and implementation plan](reviews/2026-10-02-maker-experience.md).
+Files group selected-scope records by task. File details and previews come from
+the selected artifact; unsupported previews stay download-only. There is no
+browser action that starts printing or launches a local slicer. Download a 3MF,
+open it in the chosen slicer and check its settings and toolpaths there.
 
 ### Browser stock set-aside and closeout
 
 Persistent browser workspaces expose reviewed reservation creation and release
-in Build planning, followed by the existing actual-use review. These actions use
+under Build → Check parts, followed by the existing actual-use review. These actions use
 the canonical reservation endpoints and evidence/availability rules. Release
 retains optimistic concurrency. No reservation consumes stock. New reservations
 are rejected after that revision's stock reconciliation is committed. Demo
@@ -610,7 +616,7 @@ reload without walking the complete inventory.
 
 ### Maker flow continuity
 
-Plan search/filter and Files scope/search survive tab changes within the current
+Parts search/filter and Files scope/search survive tab changes within the current
 project revision. New revisions reset these views. Shopping offers owned-stock
 matching before a quote is selected. Copy proposal and Download proposal text
 read the full canonical revision, separating readiness context from required
@@ -626,3 +632,23 @@ responses and browser session renewal. The complete reviewed observation resumes
 after sign-in, with explicit retry and no unauthenticated inventory display.
 Initial authentication rejection does not make a draft permanently ambiguous;
 a subsequent definitive conflict permits editing and a fresh review.
+
+### Stock-use confirmation display
+
+The browser review shows each affected stock item, proposed used/released/lost
+quantity, on-hand balance after and available balance after when returned by the
+service. Missing balances are labelled, not calculated from an unrelated stock
+snapshot. Final confirmation repeats these affected items and quantities. Pending
+submissions share a synchronous guard; ambiguous results retain the exact review
+for unchanged retry. A saved review is a receipt and exposes no repeat commit
+action. These safeguards preserve the existing atomic reconciliation contract.
+
+### Contextual stock checks
+
+Parts → Check stock opens the exact selected item and retains the requirement
+editor in memory behind the supporting stock flow. After a reviewed count,
+Return to the named part resumes its draft. Add owned item can return a new
+explicit item selection without replacing the other typed values. Counts and
+matches remain separate writes; a physical quantity does not prove compatibility.
+Settings → Appearance and For agents are browser entry points over existing
+preferences and capability discovery, not new permissions.

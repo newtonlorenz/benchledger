@@ -85,7 +85,7 @@ describe("shopping proposal surface", () => {
 
     expect(markup).toContain("No supplier offer is recorded.");
     expect(markup).toContain("Copy the draft list and source this item outside BenchLedger.");
-    expect(markup).toContain("Back to plan");
+    expect(markup).toContain("Back to parts");
     expect(markup).not.toContain('disabled=""');
     expect(markup).not.toContain("Nothing is ready to source");
     expect(markup).not.toContain("<a ");

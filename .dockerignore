@@ -24,3 +24,4 @@ test-results
 
 # Local design-tool cache; never source or container input.
 .impeccable/hook.cache.json
+.impeccable/build/

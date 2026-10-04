@@ -1,3 +1,4 @@
+import { navigateWorkspace } from "./workspace-controls";
 import { expect, test, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
@@ -24,7 +25,7 @@ test("inventory inspector supports keyboard review, explicit editing and clipboa
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.addInitScript(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined }));
   await login(page); await fixtureInventory(page);
-  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await navigateWorkspace(page, "Inventory");
   const inspector = page.getByRole("complementary", { name: "Inventory inspector" });
   await expect(inspector).toHaveCount(0);
   await page.locator(".inventory-table .table-item").filter({ hasText: "Inspector part 00" }).click();
@@ -51,12 +52,12 @@ test("inventory inspector supports keyboard review, explicit editing and clipboa
 test("stock views sort before paging, clear bulk selections, and persist saved filters through reload", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await login(page); await fixtureInventory(page);
-  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await navigateWorkspace(page, "Inventory");
   await expect(page.locator(".inventory-page-status")).toHaveText("Showing 25 of 32 items");
   await page.getByRole("button", { name: "Load more", exact: true }).click();
   await expect(page.locator(".inventory-page-status")).toHaveText("Showing 32 of 32 items");
   await page.getByRole("checkbox", { name: /^Select Inspector part 00/u }).check();
-  await page.getByRole("button", { name: "Available stock", exact: true }).click();
+  await page.getByRole("navigation", { name: "Inventory stock views", exact: true }).getByRole("button", { name: "Available", exact: true }).click();
   await expect(page.locator(".inventory-page-status")).toHaveText("Showing 4 of 4 items");
   await expect(page.getByRole("button", { name: "Bulk edit", exact: true })).toHaveCount(0);
   await expect(page.getByText("Selection cleared because the search or filters changed.")).toBeVisible();
@@ -89,13 +90,23 @@ test("inventory register and inspector remain accessible in light, dark and narr
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await login(page); await fixtureInventory(page);
-  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await navigateWorkspace(page, "Inventory");
   await expect(page.locator(".inventory-page-status")).toHaveText("Showing 25 of 32 items");
+  // These evidence columns remain available on demand in the compact register.
+  // Enable them explicitly so the narrow-layout checks cover every stock field.
+  await page.getByRole("button", { name: "View options", exact: true }).click();
+  const columns = page.getByRole("group", { name: "Additional columns" });
+  await columns.getByRole("checkbox", { name: "Recorded", exact: true }).check();
+  await columns.getByRole("checkbox", { name: "Status", exact: true }).check();
+  await page.keyboard.press("Escape");
+  await page.locator(".inventory-table .table-item").filter({ hasText: "Inspector part 00" }).click();
+  await expect(page.getByRole("complementary", { name: "Inventory inspector" })).toBeVisible();
   for (const theme of ["light", "dark"]) {
     await page.evaluate((value) => document.documentElement.dataset.theme = value, theme);
-    const results = await new AxeBuilder({ page }).include(".inventory-workstation").include(".inventory-navigator").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
+    const results = await new AxeBuilder({ page }).include(".inventory-workstation").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
     expect(results.violations).toEqual([]);
   }
+  await page.getByRole("button", { name: "Hide item inspector", exact: true }).click();
   for (const width of [768, 390, 320]) {
     await page.setViewportSize({ width, height: 900 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -125,18 +136,23 @@ test("inventory register and inspector remain accessible in light, dark and narr
   }
 });
 
-test("inventory uses its own navigator and restores configurable desktop layout", async ({ page }) => {
+test("inventory keeps categories in local filters and restores configurable desktop layout", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await login(page); await fixtureInventory(page);
-  await page.getByRole("button", { name: "Inventory", exact: true }).click();
-  await expect(page.getByRole("region", { name: "Inventory navigator" })).toBeVisible();
+  await navigateWorkspace(page, "Inventory");
+  await expect(page.getByRole("region", { name: "Inventory navigator" })).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Project navigator" })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Search inventory", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("navigation", { name: "Inventory stock views", exact: true }).getByRole("button")).toHaveText(["All", "Available", "Needs checking", "Reserved"]);
   await page.getByRole("button", { name: "Filters", exact: true }).click();
-  await page.getByRole("button", { name: "Filter inventory category Electronics", exact: true }).click();
+  await page.getByLabel("Filter inventory by category").selectOption("category-electronics");
   await expect(page.getByLabel("Filter inventory by category")).toHaveValue("category-electronics");
   await expect(page).toHaveURL(/categoryNodeId=category-electronics/);
-  await page.getByRole("button", { name: "All categories", exact: true }).click();
+  await expect(page.locator(".inventory-active-filters")).toContainText("Electronics");
+  await page.getByLabel("Filter inventory by category").selectOption("");
   await expect(page.getByLabel("Filter inventory by category")).toHaveValue("");
+  await expect(page).not.toHaveURL(/categoryNodeId=/);
+  await page.getByRole("button", { name: "Filters", exact: true }).click();
   const item = page.locator(".inventory-table .table-item").filter({ hasText: "Inspector part 02" });
   await item.click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
@@ -179,17 +195,20 @@ test("inventory uses its own navigator and restores configurable desktop layout"
   await page.getByRole("button", { name: "View options", exact: true }).click(); await page.getByRole("button", { name: "Reset layout" }).click();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("complementary", { name: "Inventory inspector" })).toHaveCount(0);
+  await page.getByRole("button", { name: "View options", exact: true }).click();
   await page.getByRole("button", { name: "Inspector", exact: true }).click();
-  await expect.poll(async () => Math.abs((await panel.boundingBox())!.width - 300)).toBeLessThan(2);
+  await page.keyboard.press("Escape");
+  await expect.poll(async () => Math.abs((await panel.boundingBox())!.width - 420)).toBeLessThan(2);
   await expect(page.getByRole("columnheader", { name: "Location", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: /^Projects/u }).click();
-  await expect(page.getByRole("region", { name: "Project navigator" })).toBeVisible();
+  await navigateWorkspace(page, "Projects");
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Project views", exact: true })).toBeVisible();
 });
 
 
 test("filters disclose secondary controls and keep active conditions clear when closed", async ({ page }) => {
   await login(page); await fixtureInventory(page);
-  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await navigateWorkspace(page, "Inventory");
   await expect(page.locator(".inventory-page-status")).toHaveText("Showing 25 of 32 items");
   const filters = page.getByRole("button", { name: "Filters", exact: true });
   for (const width of [1440, 390]) {
@@ -215,7 +234,7 @@ test("filters disclose secondary controls and keep active conditions clear when 
 test("empty inventory offers its first item while an empty search offers filter recovery", async ({ page }) => {
   await login(page);
   await page.route("**/api/v1/inventory?**", route => route.fulfill({ json: { data: [], total: 0, limit: 25 } }));
-  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await navigateWorkspace(page, "Inventory");
   await expect(page.getByRole("heading", { name: "Start with what you have", exact: true })).toBeVisible();
   await expect(page.getByLabel("Search inventory", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Add first item", exact: true }).click();

@@ -1,6 +1,6 @@
 # Assembly explorer
 
-Every project fabrication route can use the **Assembly** tab. It presents one
+Every project fabrication route can use the **Build → Assembly** route. It presents one
 revision-bound assembly with a model viewport, assembled/exploded controls,
 separation slider, selectable parts and an optional build guide. No viewer code
 is specific to a project. Source files remain unchanged.
@@ -9,7 +9,7 @@ is specific to a project. Source files remain unchanged.
 
 1. Upload model files in **Files**, attached to the selected project revision or
    an exact workstream revision within that project.
-2. Open **Assembly**, select sources (or **Select all files**), and choose
+2. Open **Build → Assembly**, select sources (or **Select all files**), and choose
    **Open assembly**. Per-file **Coordinates** holds unit and up-axis overrides.
    Imports open an unsaved draft in viewing mode; **Save assembly** persists it.
 3. Inspect the assembled dimensions. **Exploded** suggests radial spacing;
@@ -17,7 +17,8 @@ is specific to a project. Source files remain unchanged.
    assembled. Use **Find a part** to search names or groups, then select, hide
    or isolate parts. The list scrolls independently of the selected-part controls.
 4. **Edit assembly** exposes names, colours, materials, fixing notes, requirement
-   links and position/rotation/separation adjustments. Position and separation
+   links, with **Placement and separation** disclosing position/rotation/separation
+   adjustments. Position and separation
    are millimetres; XYZ rotations are degrees around the part's bounding centre.
    **Add another placement** reuses a source mesh without duplicating CAD.
    **Done editing** returns to viewing without saving or discarding edits.

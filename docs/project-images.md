@@ -25,7 +25,10 @@ A reference or render remains distinguishable from a photograph of a build.
 None of these images establishes dimensions, manufacturing settings, usable
 stock or physical readiness.
 
-Gallery preserves the whole image within its frame. Downloads use the existing
+Gallery preserves the whole image within its frame. Opening the project lands
+on Overview, where the same selected image appears with the project notes and
+next action. Parts and Build keep their working content first; a file preview
+always uses the selected artifact, not this cover. Downloads use the existing
 authenticated artifact route, verify SHA-256 and stay within the 20 MiB limit
 before displaying bytes. An unavailable image offers **Retry image**; missing
 covers offer **Choose image**. No image is sent to a third-party viewer.

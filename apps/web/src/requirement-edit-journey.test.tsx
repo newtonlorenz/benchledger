@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { RequirementEditForm } from "./project-editing";
 import { UnsavedWorkContext, useNavigationGuard } from "./unsaved-work";
@@ -17,7 +17,7 @@ it("opens stock matching at the candidate search and saves only the explicit ite
   const save = vi.fn(async () => undefined);
   render(<RequirementEditForm {...props} initialFocus="stock" onSave={save} />);
   expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Search matching inventory" }));
-  expect(screen.queryByRole("textbox", { name: "Requirement name" })).toBeNull();
+  expect(screen.getByRole("textbox", { name: "Requirement name" })).toHaveProperty("value", line.label);
   fireEvent.click(screen.getByRole("button", { name: "Choose owned item Synthetic screw" }));
   fireEvent.click(screen.getByRole("button", { name: "Save requirement" }));
   await waitFor(() => expect(save).toHaveBeenCalledWith({ itemId: stock.id }));
@@ -70,7 +70,7 @@ it("retains the exact original patch through ambiguous and failed retries", asyn
 it("updates the stock-mode summary when a different requirement unit is explicitly chosen", () => {
   render(<RequirementEditForm {...props} line={{ ...line, itemId: stock.id }} items={[{ ...stock, unit: "g" }]} initialFocus="stock" />);
   fireEvent.click(screen.getByRole("button", { name: "Use grams for this requirement" }));
-  expect(screen.getByText("Synthetic screw · 4 g required. Review an owned item before sourcing.")).toBeTruthy();
+  expect(screen.getByText("Synthetic screw · 4 g needed")).toBeTruthy();
 });
 
 it("closes a normalised no-op correction without claiming unsaved changes", () => {
@@ -98,4 +98,31 @@ it("reviews a received item without saving a match until explicitly confirmed", 
   expect(screen.getByRole("button", { name: "Clear owned item selection" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Save requirement" }));
   await waitFor(() => expect(save).toHaveBeenCalledWith({ itemId: stock.id }));
+});
+
+it("retains the exact draft when the adjacent inspector becomes a phone sheet and back", () => {
+  let wide = true;
+  const listeners = new Set<() => void>();
+  const media = vi.spyOn(window, "matchMedia").mockImplementation(() => ({ get matches() { return wide; }, addEventListener: (_event: string, listener: () => void) => listeners.add(listener), removeEventListener: (_event: string, listener: () => void) => listeners.delete(listener) }) as unknown as MediaQueryList);
+  const host = document.createElement("div"); document.body.append(host);
+  const close = vi.fn();
+  const view = render(<RequirementEditForm {...props} items={[{ ...stock, unit: "g" }]} line={{ ...line, itemId: stock.id }} onClose={close} onCheckStock={vi.fn()} presentation={{ host, suspended: false, context: "Synthetic project · r01" }} />);
+  try {
+    expect(screen.getByRole("dialog", { name: "Part details" }).getAttribute("aria-modal")).toBe("false");
+    expect(host.contains(screen.getByRole("dialog"))).toBe(true);
+    fireEvent.change(screen.getByLabelText("Requirement name"), { target: { value: "Exact mounting screw" } });
+    fireEvent.change(screen.getByLabelText("Required quantity"), { target: { value: "7" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Specification and notes" }), { target: { value: "Check head clearance before use." } });
+    for (const nextWide of [false, true]) {
+      act(() => { wide = nextWide; listeners.forEach(listener => listener()); });
+      expect(screen.getByRole("dialog", { name: "Part details" }).getAttribute("aria-modal")).toBe(String(!nextWide));
+      expect(screen.getByLabelText("Requirement name")).toHaveProperty("value", "Exact mounting screw");
+      expect(screen.getByLabelText("Required quantity")).toHaveProperty("value", "7");
+      expect(screen.getByRole("textbox", { name: "Specification and notes" })).toHaveProperty("value", "Check head clearance before use.");
+      expect(screen.getByRole("region", { name: "Selected stock candidate" }).textContent).toContain("not confirmation of fit");
+      expect(screen.getByRole("region", { name: "Selected stock candidate" }).textContent).toContain("Stock is recorded in grams; your requirement uses pieces. No conversion is inferred.");
+    }
+    fireEvent.keyDown(screen.getByLabelText("Requirement name"), { key: "Escape" });
+    expect(close).toHaveBeenCalledOnce();
+  } finally { view.unmount(); host.remove(); media.mockRestore(); }
 });

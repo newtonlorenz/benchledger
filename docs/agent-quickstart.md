@@ -38,6 +38,20 @@ repository. Store those details in private operator notes or runtime
 configuration, not in public docs or examples. For the full operator sequence,
 see [`development-workflow.md`](development-workflow.md).
 
+## Browser orientation
+
+Projects and Inventory are the two workspace destinations. Open a project to
+Overview, then use Parts, Files and Build. Parts includes stock matching, checks
+and To source; Build retains Assembly, PCB and actual-stock-use tools when the
+service advertises them. Settings contains Appearance and **For agents**.
+
+A requirement's **Check stock** action opens the selected inventory item while
+keeping the part draft in memory. Review the physical count and confirm it, then
+use **Return to [part name]** to resume that same draft. Adding an owned item from
+the requirement follows the same draft-preserving return. Counted quantity does
+not establish compatibility, and returning does not save the requirement match.
+Unsaved private form values are not stored in browser preferences.
+
 ## Minute 0–1: discover
 
 Connect to the authenticated MCP endpoint configured by the host application:
@@ -89,12 +103,12 @@ to use `kind`. If the add form has no active categories, choose **Open Settings*
 from that form, create one, and return to Inventory. Existing legacy items may
 be unassigned until edited.
 
-Inventory's sidebar browses these categories directly. Each entry filters its
-own assigned items; selecting a parent does not include its subcategories.
-Click a record to inspect it, then double-click, press Enter/F2 or choose
-**Open item** to edit. **Columns** controls optional fields and resets the layout;
-inspector visibility and width are also remembered locally. These display
-preferences do not change agent queries or stock evidence.
+Inventory category filters select exact assigned categories; selecting a parent
+does not include its subcategories. Click a record to inspect it, then use
+**Open item** or the supported keyboard editing controls. **View options** holds
+sorting and optional columns. Inspector visibility and width are remembered
+locally; on phones the item details use a sheet. These display preferences do
+not change agent queries or stock evidence.
 
 For paged inventory reads, pass `categoryNodeId` to filter by an exact managed
 node or `unassigned: true` to select legacy items without an assignment. These
@@ -313,6 +327,11 @@ browser-computed byte length and SHA-256. Keep source, STEP, STL, 3MF, slicer,
 drawing, and validation revisions separate; do not overwrite an accepted
 artifact.
 
+Files groups scoped records into **3D print**, **Electronics**, **CAD & firmware**
+and **Instructions**. File details remain tied to the selected artifact. The
+history/all-files view is read-only. An empty file group offers file addition
+without implying that it is required for every project.
+
 In a project's Files tab, Preview opens supported images (PNG, JPEG, GIF,
 WebP, AVIF, BMP), Markdown, text/source (TXT, CSV, TSV, JSON, YAML, LOG, GCODE,
 SCAD, SVG), and STL meshes. Markdown is formatted; code and data stay plain text.
@@ -320,7 +339,9 @@ The STL viewer supports rotate, zoom, and reset. It does not certify dimensions,
 printability, or physical fit. Text/Markdown previews are limited to 1 MiB;
 images/STL to 20 MiB, with STL limited to 250,000 triangles. Larger files and
 unsupported preview formats, including ZIP, STEP, 3MF, native CAD, PDF, and HTML,
-remain available to download when already stored. ZIP archives are opaque and
+remain available to download when already stored. Download a 3MF and open it
+in the chosen slicer to review its machine/material settings and toolpaths;
+BenchLedger does not launch a slicer or start a print. ZIP archives are opaque and
 download-only; BenchLedger does not extract or execute them. Existing upload
 format restrictions still apply; preview support does not broaden the upload
 allowlist. Sample records have no downloadable preview bytes.
@@ -422,10 +443,10 @@ physical execution authority. Named-account activation remains gated off.
 
 ## Removing records from the workspace
 
-Use **Project details → Project settings → Delete project** from the Plan tab,
+Use **Project actions → Delete project** from the selected project,
 or open an inventory item or printer and choose **Delete item** or **Delete printer**. Confirm once. History remains
 retained, but these actions cannot be undone. Archive a project from Project
-settings if you may need to restore it. Release allocated stock before deleting
+actions if you may need to restore it. Release allocated stock before deleting
 an inventory item; do not change its physical count to bypass this safeguard.
 Inventory deletion is a browser/HTTP action, not an advertised MCP tool.
 
@@ -450,7 +471,7 @@ with its original command key. Only a confirmed expired session permits starting
 a fresh upload; session reads do not renew the fifteen-minute expiry.
 
 
-The browser Shopping list can copy or download a dated full-revision proposal.
+The browser **Parts → To source** route can copy or download a dated full-revision proposal.
 The export keeps selected quote sources, observation dates, package quantities,
 unresolved gaps and currency totals even when the visible list is filtered.
 It is not a live supplier check or purchase instruction. Received stock uses an

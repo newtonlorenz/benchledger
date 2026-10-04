@@ -37,7 +37,7 @@ it("starts with the full register and opens details when a maker selects an item
   const { item, onSelectItem } = renderInventory();
   const row = await screen.findByRole("button", { name: new RegExp("^" + item.name) });
   expect(screen.queryByRole("complementary", { name: "Inventory inspector" })).toBeNull();
-  expect(screen.getByRole("button", { name: "Inspector" }).getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByRole("button", { name: "Inspector" })).toBeNull();
   fireEvent.click(row);
   expect(screen.getByRole("complementary", { name: "Inventory inspector" })).toBeTruthy();
   expect(onSelectItem).not.toHaveBeenCalled();
@@ -73,4 +73,17 @@ it("keeps filters together and reveals saved views, sorting and columns only on 
   fireEvent.change(screen.getByRole("textbox", { name: "Inventory view name" }), { target: { value: "Parts by name" } });
   fireEvent.click(screen.getByRole("button", { name: "Save view" }));
   expect((screen.getByRole("combobox", { name: "Saved inventory view" }) as HTMLSelectElement).value).toBe("Parts by name");
+});
+
+it("keeps four common views beside one search and retains the out-of-stock filter", async () => {
+  const { listInventory } = renderInventory();
+  expect(screen.getAllByRole("textbox", { name: "Search inventory" })).toHaveLength(1);
+  expect(screen.getByRole("button", { name: "All" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Available" }));
+  await waitFor(() => expect(listInventory).toHaveBeenLastCalledWith(expect.objectContaining({ stockView: "available" })));
+  expect(screen.queryByRole("button", { name: "Out of stock" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+  fireEvent.change(screen.getByRole("combobox", { name: "Filter inventory by stock view" }), { target: { value: "depleted" } });
+  await waitFor(() => expect(listInventory).toHaveBeenLastCalledWith(expect.objectContaining({ stockView: "depleted" })));
+  expect(screen.getByRole("combobox", { name: "Filter inventory by category" })).toBeTruthy();
 });

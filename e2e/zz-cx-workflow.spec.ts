@@ -1,4 +1,4 @@
-import { clickProjectAction } from "./workspace-controls";
+import { openPartFilters, clickProjectAction, navigateWorkspace, openProjectSection } from "./workspace-controls";
 import { expect, test, type Page } from "@playwright/test";
 
 async function startProject(page: Page, name: string) {
@@ -6,8 +6,7 @@ async function startProject(page: Page, name: string) {
   await page.getByLabel("Workspace password").fill("demo-password-please-change");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
-  if ((page.viewportSize()?.width ?? 1440) < 801) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
-  await page.getByRole("button", { name: /^Projects/u }).click();
+  await navigateWorkspace(page, "Projects");
   await clickProjectAction(page, "New project");
   await page.getByLabel("Project name", { exact: true }).fill(name);
   await page.getByLabel("Project goal", { exact: true }).fill("Synthetic maker workflow acceptance.");
@@ -17,9 +16,10 @@ async function startProject(page: Page, name: string) {
   await expect(page.locator(".dossier-column .build-approach-card")).toHaveCount(0);
 }
 async function addRequirement(page: Page, name: string) {
-  await page.locator(".bom-section").getByRole("button", { name: /Add first requirement|Add a requirement/u }).click();
-  await page.getByLabel("What do you need?", { exact: true }).fill(name);
-  await page.getByRole("button", { name: "Add requirement", exact: true }).click();
+  await openProjectSection(page, "Parts");
+  await page.locator(".bom-section").getByRole("button", { name: /Add first part|Add part/u }).click();
+  await page.getByLabel("Part name", { exact: true }).fill(name);
+  await page.getByRole("button", { name: "Add part", exact: true }).click();
 }
 
 for (const width of [1440, 320]) test(`maker can correct, remove, restore and hand off a project at ${width}px`, async ({ page }) => {
@@ -30,8 +30,7 @@ for (const width of [1440, 320]) test(`maker can correct, remove, restore and ha
   await page.getByRole("button", { name: "Edit requirement Enclosure screws", exact: true }).click();
   await page.getByLabel("Requirement name", { exact: true }).fill("M3 enclosure screws");
   await page.getByLabel("Required quantity", { exact: true }).fill("8");
-  await page.getByRole("button", { name: /^More requirement details/u }).click();
-  await page.getByLabel("Requirement note", { exact: true }).fill("Check length against the drawing.");
+  await page.getByLabel("Specification and notes", { exact: true }).fill("Check length against the drawing.");
   await page.getByRole("button", { name: "Save requirement", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.reload();
@@ -82,7 +81,8 @@ test("a committed requirement stays saved when readiness refresh fails", async (
   await addRequirement(page, "Saved despite refresh outage");
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.locator(".bom-row").filter({ hasText: "Saved despite refresh outage" })).toHaveCount(1);
-  await expect(page.getByRole("alert")).toContainText("was saved");
+  await expect(page.getByRole("alert").filter({ hasText: "Saved despite refresh outage was saved" })).toBeVisible();
+  await expect(page.locator(".project-readiness-error")).toContainText("Stock results are unavailable");
   failGaps = false;
   await page.reload();
   await expect(page.locator(".bom-row").filter({ hasText: "Saved despite refresh outage" })).toHaveCount(1);
@@ -99,8 +99,8 @@ test("an unacknowledged create retries the same command without duplicating the 
   });
   await addRequirement(page, "Exactly one support bracket");
   await expect(page.getByRole("dialog")).toBeVisible();
-  await expect(page.getByLabel("What do you need?", { exact: true })).toHaveValue("Exactly one support bracket");
-  await page.getByRole("button", { name: "Add requirement", exact: true }).click();
+  await expect(page.getByLabel("Part name", { exact: true })).toHaveValue("Exactly one support bracket");
+  await page.getByRole("button", { name: "Try saving again", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   expect(keys).toHaveLength(2); expect(keys[0]).toBe(keys[1]);
   await page.reload();
@@ -130,7 +130,7 @@ test("an incomplete acknowledgement is not presented as a confirmed save", async
   });
   await addRequirement(page, "Acknowledged only once");
   await expect(page.getByRole("dialog").getByRole("alert")).toContainText("did not confirm");
-  await page.getByRole("button", { name: "Add requirement", exact: true }).click();
+  await page.getByRole("button", { name: "Try saving again", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   expect(keys[0]).toBe(keys[1]); await page.reload();
   await expect(page.locator(".bom-row").filter({ hasText: "Acknowledged only once" })).toHaveCount(1);
@@ -141,14 +141,15 @@ test("large project filters help find parts without changing readiness or the pl
   await startProject(page, "CX larger project");
   for (const name of ["Stainless M3 screw", "Nylon M3 spacer", "Cable gland", "Rubber foot", "Steel washer", "Panel nut", "Plastic clip", "Board standoff"]) await addRequirement(page, name);
   await expect(page.locator(".bom-row")).toHaveCount(8);
-  await expect(page.getByRole("tab", { name: /^Requirements/u })).toContainText("8");
+
   await page.getByLabel("Search project requirements", { exact: true }).fill("M3 stainless");
   await expect(page.locator(".bom-row")).toHaveCount(1);
   await expect(page.locator(".bom-row")).toContainText("Stainless M3 screw");
-  await expect(page.getByRole("tab", { name: /^Requirements/u })).toContainText("8");
+  await expect(page.locator(".parts-filter-result").getByRole("status")).toContainText("Showing 1 of 8 requirements");
+  await openPartFilters(page);
   await page.getByLabel("Filter project requirements", { exact: true }).selectOption("optional");
   await expect(page.locator(".bom-row")).toHaveCount(0);
-  await expect(page.getByText("No requirements match these filters.", { exact: true })).toBeVisible();
+  await expect(page.getByText("No parts match these filters.", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Clear requirement filters", exact: true }).click();
   await expect(page.locator(".bom-row")).toHaveCount(8);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

@@ -1,3 +1,4 @@
+import { workspaceNavigation, openProjectSection } from "./workspace-controls";
 import { expect, test, type Page } from "@playwright/test";
 
 async function signIn(page: Page) {
@@ -8,9 +9,9 @@ async function signIn(page: Page) {
 }
 
 for (const width of [1440, 390]) {
-  test(`an empty project register gives a clear first project path at ${width}px`, async ({ page }) => {
+  test(`an empty project register gives a clear first project path at ${width}px`, async ({ page }, info) => {
     const name = `Synthetic first-use bracket ${width}`;
-    await page.setViewportSize({ width, height: 900 });
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
     await page.route("**/api/v1/workspace", async (route) => {
       const response = await route.fetch();
       const body = await response.json() as { inventory: unknown[]; projects: Array<{ name: string }>; offers: unknown[] };
@@ -45,13 +46,17 @@ for (const width of [1440, 390]) {
     await create.getByLabel("Project name", { exact: true }).fill(name);
     await create.getByRole("button", { name: "Create project", exact: true }).click();
     await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
-    await expect(page.getByRole("tab", { name: /^Requirements\b/u })).toHaveAttribute("aria-selected", "true");
-    await expect(page).toHaveURL(/\/plan$/u);
-    await expect(page.locator(".bom-section").getByRole("button", { name: "Add first requirement", exact: true })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Overview", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page).toHaveURL(/\/overview$/u);
+    await expect(page.getByRole("region", { name: "Next project action" }).getByRole("button", { name: "Add first part", exact: true })).toBeVisible();
+    await expect(page.getByRole("tablist", { name: "Project workspace" }).getByRole("tab")).toHaveText(["Overview", "Parts", "Files", "Build"]);
+    await openProjectSection(page, "Parts");
+    await expect(page.locator(".bom-section").getByRole("button", { name: "Add first part", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Removed requirements", exact: true })).toHaveCount(0);
+    await expect(page.locator(".bom-section").getByRole("button", { name: "Add first part", exact: true })).toBeInViewport();
+    await page.screenshot({ path: info.outputPath("empty-parts.png"), fullPage: false, animations: "disabled" });
 
-    if (width < 801) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
-    const navigation = page.getByLabel("Primary navigation", { exact: true });
+    const navigation = workspaceNavigation(page);
     await expect(navigation.getByRole("button", { name: /^Projects(?: \d+)?$/u })).toHaveCount(1);
     await expect(navigation.getByRole("button", { name: "Workbench", exact: true })).toHaveCount(0);
     await navigation.getByRole("button", { name: /^Projects(?: \d+)?$/u }).click();

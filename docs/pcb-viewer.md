@@ -1,8 +1,8 @@
 # PCB viewer
 
-The project **PCB** tab is a read-only view of exact revisioned files. Upload a
+The project **Build → PCB** route is a read-only view of exact revisioned files. Upload a
 `.kicad_pcb` source or self-contained STEP/GLB export in **Files**, select it in
-**PCB**, then choose **Open PCB**. Files remain downloadable, unchanged, through
+**Build → PCB**, then choose **Open PCB**. Files remain downloadable, unchanged, through
 **Files & downloads**. No generated view replaces an editable design.
 Uploads accept KiCad’s `application/x-kicad-pcb` media type and the existing
 `application/octet-stream` fallback.
@@ -12,14 +12,14 @@ source. The native viewer offers board, copper and component-outline visibility,
 individual part visibility, reference/value search, selection and isolation.
 **Component outlines are footprint drawings, not invented component bodies.**
 Select a pad or footprint to see its reference, value and footprint identifier.
-For export files, part selection and visibility use the exported node identities;
+For export files, **Coordinate settings** holds units and up-axis controls. Part selection and visibility use the exported node identities;
 the viewer does not guess which meshes are copper or components.
 
 Every open uses the existing Assembly inspection service with the selected
 project revision, artifact ID and SHA-256. Changing the file, its hash, revision
 or coordinate choice clears the previous view. Late responses cannot replace a
 newer selection. The source panel displays exact provenance and omissions.
-The tab is advertised by `pcb.read`; an older server does not expose it.
+The route is advertised by `pcb.read`; an older server does not expose it.
 
 ## Native KiCad support and limits
 

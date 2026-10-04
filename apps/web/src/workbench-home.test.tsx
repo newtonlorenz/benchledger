@@ -15,11 +15,12 @@ it("searches, pins and resumes accessible projects using local preferences", asy
   expect(screen.getByLabelText("Resume recent project").textContent).toContain("Sensor box");
   fireEvent.click(screen.getByRole("button", { name: "Resume project" })); expect(data.onOpen).toHaveBeenCalledWith("Sensor box");
   fireEvent.change(screen.getByLabelText("Find a project"), { target: { value: "cafe" } }); expect(document.querySelectorAll(".home-project-row")).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Filters and view options" }));
   fireEvent.click(screen.getByRole("button", { name: "Pin project Café fixture" }));
   fireEvent.change(screen.getByLabelText("Find a project"), { target: { value: "" } }); fireEvent.change(screen.getByLabelText("Filter projects"), { target: { value: "pinned" } });
   expect(document.querySelectorAll(".home-project-row")).toHaveLength(1); expect(localStorage.getItem(homePreferenceKey(false))).toContain("Café fixture");
   fireEvent.click(screen.getByRole("button", { name: "Unpin project Café fixture" })); expect(screen.getByText("No projects match this view")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Show all projects" })); expect(document.querySelectorAll(".home-project-row")).toHaveLength(3);
+  fireEvent.click(screen.getByRole("button", { name: "Clear filters" })); expect(document.querySelectorAll(".home-project-row")).toHaveLength(3);
   fireEvent.change(screen.getByLabelText("Sort projects"), { target: { value: "name" } }); expect(document.querySelector(".home-project-name")?.textContent).toContain("Café fixture");
 });
 it("opens concrete tasks, provides quick entry and preserves refresh failures", async () => {
@@ -28,6 +29,7 @@ it("opens concrete tasks, provides quick entry and preserves refresh failures", 
   expect(data.onNewProject).toHaveBeenCalledOnce(); expect(data.onAddItem).toHaveBeenCalledOnce(); expect(data.onImport).toHaveBeenCalledOnce();
   fireEvent.click(screen.getByRole("button", { name: "All next actions" }));
   fireEvent.click(document.querySelector<HTMLButtonElement>(".home-task")!); expect(data.onTask).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole("button", { name: "Filters and view options" }));
   fireEvent.click(screen.getByRole("button", { name: "Refresh workspace" })); await screen.findByRole("alert"); expect(document.querySelectorAll(".home-project-row")).toHaveLength(2);
 });
 it("handles empty, unavailable and long project lists without invented totals", async () => {
@@ -43,6 +45,7 @@ it("handles empty, unavailable and long project lists without invented totals", 
   expect((screen.getByLabelText("Filter attention queue") as HTMLSelectElement).value).toBe("check");
   fireEvent.change(screen.getByLabelText("Filter attention queue"), { target: { value: "source" } });
   fireEvent.change(screen.getByLabelText("Filter attention queue"), { target: { value: "all" } });
+  fireEvent.click(screen.getByRole("button", { name: "Filters and view options" }));
   fireEvent.change(screen.getByLabelText("Filter projects"), { target: { value: "attention" } });
   fireEvent.change(screen.getByLabelText("Filter projects"), { target: { value: "active" } });
   fireEvent.click(screen.getByRole("button", { name: "Workspace tools" }));
@@ -105,7 +108,9 @@ it("keeps project search visible and discloses supporting tools without blocking
   fireEvent.click(within(projectRow).getByRole("button", { name: /: Café fixture$/u }));
   expect(data.onTask).toHaveBeenCalledWith(expect.objectContaining({ projectId: "Café fixture" }));
   expect(screen.getByText(/Search and task counts cover the projects available in this view/u)).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Open inventory" }));
+  expect(screen.queryByRole("button", { name: "Open inventory" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Workspace tools" }));
+  fireEvent.click(screen.getByRole("button", { name: "Manage inventory" }));
   expect(data.onInventory).toHaveBeenCalledOnce();
 });
 it("expands a filtered task queue and opens equipment without implying usability", () => {
@@ -129,11 +134,66 @@ it("remembers gallery and list layouts while preserving image selection and proj
   const view = render(<WorkbenchHome {...data} />);
   expect(screen.getByRole("button", { name: "Gallery" }).getAttribute("aria-pressed")).toBe("true");
   fireEvent.click(screen.getByRole("button", { name: "Choose image for Café fixture" }));
-  expect(data.onOpen).toHaveBeenCalledWith("Café fixture", "files");
+  expect(data.onOpen).toHaveBeenCalledWith("Café fixture", "files", { showImages: true });
   fireEvent.click(screen.getByRole("button", { name: "List" }));
   expect(document.querySelectorAll(".project-image-row")).toHaveLength(2);
   view.unmount(); render(<WorkbenchHome {...data} />);
   expect(screen.getByRole("button", { name: "List" }).getAttribute("aria-pressed")).toBe("true");
   fireEvent.click(screen.getByRole("button", { name: "Open project Café fixture" }));
   expect(data.onOpen).toHaveBeenLastCalledWith("Café fixture");
+});
+
+it("keeps lifecycle views and layout visible while disclosing secondary controls", () => {
+  const data = props(); render(<WorkbenchHome {...data} archivedProjects={[]} />);
+  expect(screen.queryByRole("heading", { name: "Your projects" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Open inventory" })).toBeNull();
+  expect(screen.getAllByRole("textbox", { name: "Find a project" })).toHaveLength(1);
+  expect(screen.queryByRole("combobox", { name: "Sort projects" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Pin project Café fixture" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Active" }).getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "Completed" }));
+  expect(document.querySelectorAll(".home-project-row")).toHaveLength(1);
+  expect(screen.getByRole("button", { name: "Open project Finished jig" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Completed" }).getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "Active" }));
+  expect(document.querySelectorAll(".home-project-row")).toHaveLength(2);
+  fireEvent.click(screen.getByRole("button", { name: "Filters and view options" }));
+  expect(screen.getByRole("combobox", { name: "Sort projects" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Pin project Café fixture" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Filters and view options" }));
+  expect(screen.queryByRole("combobox", { name: "Sort projects" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Pin project Café fixture" })).toBeNull();
+});
+it("browses archived projects in both layouts without stock readiness or build actions", () => {
+  const data = props();
+  const archived = { ...fixture("Archived enclosure", "archived"), readinessUnavailable: true, projectLibraryAvailable: true };
+  const onOpenArchive = vi.fn();
+  const view = render(<WorkbenchHome {...data} archivedProjects={[archived]} onOpenArchive={onOpenArchive} />);
+  fireEvent.click(screen.getByRole("button", { name: "Archived" }));
+  expect(onOpenArchive).not.toHaveBeenCalled();
+  expect(document.querySelectorAll(".project-gallery-card")).toHaveLength(1);
+  const card = screen.getByRole("button", { name: "Open project Archived enclosure" }).closest("article")!;
+  expect(within(card).getByText("Archived", { exact: true })).toBeTruthy();
+  expect(card.querySelector(".home-stock-state")).toBeNull();
+  expect(card.querySelector(".home-project-next")).toBeNull();
+  expect(within(card).queryByRole("button", { name: "Choose image for Archived enclosure" })).toBeNull();
+  fireEvent.click(within(card).getByRole("button", { name: "Open Archived enclosure" }));
+  expect(data.onOpen).toHaveBeenCalledWith("Archived enclosure");
+  fireEvent.click(screen.getByRole("button", { name: "List" }));
+  expect(document.querySelectorAll(".project-image-row")).toHaveLength(1);
+  expect(document.querySelector(".home-stock-state")).toBeNull();
+  expect(document.querySelector(".home-project-next")).toBeNull();
+  view.unmount();
+  render(<WorkbenchHome {...data} projects={[]} archivedProjects={[archived]} />);
+  expect(screen.getByRole("button", { name: "Archived" }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.queryByRole("region", { name: "Getting started" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Open project Archived enclosure" })).toBeTruthy();
+});
+it("keeps stock uncertainty visible on image cards without presenting readiness counts", () => {
+  const data = props(); render(<WorkbenchHome {...data} projects={[{ ...fixture("Unknown stock"), readinessUnavailable: true }]} />);
+  const card = screen.getByRole("button", { name: "Open project Unknown stock" }).closest("article")!;
+  expect(within(card).getByText("Stock results unavailable")).toBeTruthy();
+  expect(card.textContent).not.toContain("stock-ready");
+  fireEvent.click(within(card).getByRole("button", { name: "Refresh stock results: Unknown stock" }));
+  expect(data.onTask).toHaveBeenCalledWith(expect.objectContaining({ projectId: "Unknown stock", kind: "refresh" }));
 });

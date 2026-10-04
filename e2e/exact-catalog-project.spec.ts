@@ -1,4 +1,4 @@
-import { clickProjectAction, openProjectDetails } from "./workspace-controls";
+import { clickProjectAction, openProjectDetails, navigateWorkspace, openProject } from "./workspace-controls";
 import { expect, test, type Page, type Response } from "@playwright/test";
 
 const demoPassword = "demo-password-please-change";
@@ -53,7 +53,15 @@ async function addExactInventory(
   await productOption.click();
 
   await page.getByLabel(category === "Filament" ? "Current mass (g)" : "Owned units").fill(quantity);
-  await page.getByLabel("Product identity").selectOption("confirmed"); if (category === "Printers") await page.getByLabel("Setup date").fill("2026-09-04"); const createResponse = page.waitForResponse(mutationResponse("/api/v1/inventory/with-product-profile"));
+  await page.getByLabel("Product identity").selectOption("confirmed");
+  if (category === "Printers") {
+    const details = page.getByRole("button", { name: "Printer details", exact: true });
+    await expect(details).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByLabel("Setup date")).toBeHidden();
+    await details.click();
+    await page.getByLabel("Setup date").fill("2026-09-04");
+  }
+  const createResponse = page.waitForResponse(mutationResponse("/api/v1/inventory/with-product-profile"));
   await page.getByRole("button", {
     name: category === "Filament" ? "Add filament spool" : "Add printer",
     exact: true,
@@ -72,7 +80,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   });
 
   await signIn(page);
-  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await navigateWorkspace(page, "Inventory");
   await expect(page.getByRole("heading", { name: "Inventory" })).toBeVisible();
 
   const printerResponse = await addExactInventory(
@@ -107,7 +115,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   expect(filamentResponse.request().postDataJSON().item).toMatchObject({ kind: "filament", categoryNodeId: "category-filament" });
   expect(filamentResponse.request().postDataJSON().profile).not.toHaveProperty("itemId");
 
-  await page.getByRole("button", { name: /^Projects/u }).click();
+  await navigateWorkspace(page, "Projects");
   await clickProjectAction(page, "New project");
   await page.getByLabel("Project name").fill(projectName);
   await page.getByLabel("Project goal").fill("A small exact-catalog test enclosure for the maker workflow.");
@@ -120,7 +128,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   expect(createdProjectId).toEqual(expect.any(String));
   await expect(page.getByRole("heading", { name: projectName, exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "Settings", exact: true }).click(); await page .getByRole("switch", { name: "Technical details" }) .click(); await expect( page.getByRole("switch", { name: "Technical details" }) ).toBeVisible(); await page.getByRole("button", { name: /^Projects/u }).click(); await page.getByRole("button", { name: `Switch to project ${projectName}`, exact: true }).click(); await clickProjectAction(page, "New revision");
+  await navigateWorkspace(page, "Settings"); await page .getByRole("switch", { name: "Technical details" }) .click(); await expect( page.getByRole("switch", { name: "Technical details" }) ).toBeVisible(); await navigateWorkspace(page, "Projects"); await openProject(page, projectName); await clickProjectAction(page, "New revision");
   const revisionDialog = page.getByRole("dialog", { name: `New revision for ${projectName}` });
   await expect(revisionDialog).toBeVisible();
   await revisionDialog.getByLabel("Revision name").fill("Exact setup capture");
@@ -190,17 +198,17 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.reload();
   await expect(page.getByRole("heading", { name: projectName, exact: true })).toBeVisible();
-  await page.getByRole("button", { name: `Switch to project ${projectName}`, exact: true }).click();
+  await openProject(page, projectName);
   await expect(page.getByRole("heading", { name: projectName, exact: true })).toBeVisible();
 
   await openProjectDetails(page);
   const buildApproach = page.getByRole("region", { name: "Build approach" });
   await expect(buildApproach).toContainText("Bambu Lab H2D");
   await expect( page.getByRole("region", { name: "Build setup summary" }) ).toBeVisible();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await navigateWorkspace(page, "Settings");
   await expect( page.getByRole("switch", { name: "Technical details" })).toBeVisible();
 
-  await page.getByRole("button", { name: /^Projects/u }).click(); await page.getByRole("button", { name: `Switch to project ${projectName}`, exact: true }).click(); await openProjectDetails(page); const expertSummary = page.getByRole("region", { name: "Build setup summary" }); await expect(expertSummary).toContainText( "Use Bambu Lab · H2D with Bambu Lab · PETG · PETG HF." );
+  await navigateWorkspace(page, "Projects"); await openProject(page, projectName); await openProjectDetails(page); const expertSummary = page.getByRole("region", { name: "Build setup summary" }); await expect(expertSummary).toContainText( "Use Bambu Lab · H2D with Bambu Lab · PETG · PETG HF." );
   await expect(expertSummary).toContainText( "Print setup: 0.4 mm nozzle · hardened steel · Textured PEI." ); await expect(expertSummary).toContainText( "Software: Bambu Studio 1.10.0 0.20 mm Standard." ); await expect(expertSummary).toContainText("Calibration: flow checked."); await expect( expertSummary.getByText("Show IDs, versions, evidence & unknowns", { exact: true })).toBeVisible();
   await expertSummary .getByText("Show IDs, versions, evidence & unknowns", { exact: true }).click();
   await expect(expertSummary).toContainText("Revision ID");
@@ -227,6 +235,14 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   });
 
   await page.getByRole("tab", { name: "Files", exact: true }).click();
+  const fileChooser = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "Add files", exact: true }).click();
+  await (await fileChooser).setFiles({
+    name: "e2e-bound-setup.step",
+    mimeType: "model/step",
+    buffer: Buffer.from("ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\nENDSEC;\nEND-ISO-10303-21;\n"),
+  });
+  await expect(page.getByRole("button", { name: "Add 1 file", exact: true })).toBeEnabled();
   const beginUploadResponse = page.waitForResponse((response) => {
     const url = new URL(response.url());
     return ( response.request().method() === "POST"
@@ -239,13 +255,8 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
       && response.status() === 200
       && /\/api\/v1\/artifacts\/uploads\/[^/]+\/finalize$/u.test(url.pathname) );
   });
-  const fileChooser = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "Choose files", exact: true }).click();
-  await (await fileChooser).setFiles({
-    name: "e2e-bound-setup.step",
-    mimeType: "model/step",
-    buffer: Buffer.from("ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\nENDSEC;\nEND-ISO-10303-21;\n"),
-  }); await page.getByRole("button", { name: "Add 1 file", exact: true }).click(); const [beginUpload, finalizeUpload] = await Promise.all([beginUploadResponse, finalizeUploadResponse]);
+  await page.getByRole("button", { name: "Add 1 file", exact: true }).click();
+  const [beginUpload, finalizeUpload] = await Promise.all([beginUploadResponse, finalizeUploadResponse]);
   const beginUploadBody = beginUpload.request().postDataJSON() as Record<string, unknown>;
   expect(beginUploadBody).toMatchObject({
     projectId: createdProjectId,
@@ -260,8 +271,8 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
     filename: "e2e-bound-setup.step",
   });
   await expect(page.getByRole("status").filter({ hasText: "1 of 1 file uploaded" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Files 1", exact: true })).toBeVisible();
-  await expect(page.locator(".file-name").filter({ hasText: /e2e-bound-setup\.step/u })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Files", exact: true })).toBeVisible();
+  await expect(page.locator(".project-file-name").filter({ hasText: /e2e-bound-setup\.step/u })).toBeVisible();
 
   const persistedAfterUpload = await readPersistedSnapshot();
   expect(persistedAfterUpload.status).toBe(200);
@@ -277,8 +288,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
 test("keeps the starter catalog facet path accessible and honest at 390px", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await signIn(page);
-  await page.getByRole("button", { name: "Open navigation" }).click();
-  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await navigateWorkspace(page, "Inventory");
   await page.getByRole("button", { name: "Add item", exact: true }).click();
   const selectionDialog = page.getByRole("dialog", { name: "Add to inventory" });
   const completeCatalog = page.waitForResponse((response) => {
@@ -311,5 +321,13 @@ test("keeps the starter catalog facet path accessible and honest at 390px", asyn
   await expect(addDialog).toContainText("Catalog entries describe products only");
   await expect(addDialog).not.toContainText(/(?:In stock|Available now|Owned product)/u);
   const dialogBox = await addDialog.boundingBox();
-  expect(dialogBox?.width).toBeLessThanOrEqual(358);
+  const viewport = page.viewportSize()!;
+  expect(dialogBox).not.toBeNull();
+  expect(dialogBox!.x).toBeGreaterThanOrEqual(0);
+  expect(dialogBox!.y).toBeGreaterThanOrEqual(0);
+  expect(dialogBox!.width).toBeCloseTo(viewport.width, 0);
+  expect(dialogBox!.x + dialogBox!.width).toBeLessThanOrEqual(viewport.width + 1);
+  expect(dialogBox!.y + dialogBox!.height).toBeLessThanOrEqual(viewport.height + 1);
+  expect(await addDialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

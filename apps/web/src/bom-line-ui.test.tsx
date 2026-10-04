@@ -11,15 +11,15 @@ describe("BOM line version and expert context", () => {
     const project = projects[0]!;
     const markup = renderToStaticMarkup(<AddBomDialog items={inventory} project={project} expert={false} onClose={() => undefined} onCreate={async () => true} />);
 
-    expect(markup).toContain("Add a part, material, or tool");
-    expect(markup).toContain("What do you need?");
+    expect(markup).toContain("Add a part");
+    expect(markup).toContain("Part name");
     expect(markup).toContain("How will you use it?");
     expect(markup).toContain('value="consumed"');
     expect(markup).toContain("Part or material (used up or built in)");
     expect(markup).toContain('value="reusable"');
     expect(markup).toContain("Reusable tool or equipment");
     expect(markup).toContain("Search matching inventory");
-    expect(markup).not.toContain(project.currentRevision);
+    expect(markup).toContain(project.currentRevision);
     expect(markup).not.toContain(project.serverRevisionId!);
   });
 
@@ -27,7 +27,7 @@ describe("BOM line version and expert context", () => {
     const project = projects[0]!;
     const markup = renderToStaticMarkup(<AddBomDialog items={inventory} project={project} expert onClose={() => undefined} onCreate={async () => true} />);
 
-    expect(markup).toContain(`Add a requirement to ${project.currentRevision}`);
+    expect(markup).toContain("Add a part");
     expect(markup).toContain("Search matching inventory");
     expect(markup).toContain(project.currentRevision);
     expect(markup).toContain(project.serverRevisionId!);
@@ -138,6 +138,20 @@ describe("BOM line version and expert context", () => {
 
     const resolvedMarkup = renderToStaticMarkup(<BomLineRow line={{ ...status, line: { ...status.line, role: "consumed" } }} expert={false} onOpenItem={() => undefined} onResolveRole={() => undefined} />);
     expect(resolvedMarkup).not.toContain("How will you use this?");
+  });
+
+  it("distinguishes unavailable referenced stock details from a canonical gap result", () => {
+    const status: BomLineStatus = {
+      line: { id: "unloaded-reference", version: 1, label: "Connector", itemId: "unloaded-stock", required: 1, unit: "each", role: "consumed" },
+      supplied: 1, remaining: 0, state: "ready", decision: "ready",
+      gap: { lineId: "unloaded-reference", status: "supplied", decision: "ready", suppliedQuantity: 1, inspectQuantity: 0, missingQuantity: 0, matchedItemIds: ["unloaded-stock"], reasons: ["Physically confirmed stock covers this requirement."] },
+    };
+    const markup = renderToStaticMarkup(<BomLineRow line={status} expert={false} onOpenItem={() => undefined}/>);
+    expect(markup).toContain("Referenced stock details unavailable");
+    expect(markup).not.toContain("No matching stock");
+    expect(markup).toContain("Physically confirmed stock covers this requirement.");
+    expect(markup).toContain("Ready");
+    expect(markup).toContain("1 piece");
   });
 
   it("shows an explicit correction blocker only for semantic inventory unit errors", () => {

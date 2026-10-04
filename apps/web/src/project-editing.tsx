@@ -9,7 +9,12 @@ import { Textarea } from "./components/ui/textarea";
 import { Input } from "./components/ui/input";
 import { UnsavedWorkContext, useUnsavedWork } from "./unsaved-work";
 import { Icon } from "./icons";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, useId, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { WorkspaceModal } from "./components/workspace-modal";
+import { DialogTitle } from "./components/ui/dialog";
+import { inventoryCandidateText } from "./inventory-identity";
+import { requirementCandidateStock } from "./requirement-journey";
 import type { BomLine, BomLineStatus, InventoryItem, Project } from "./domain";
 import { ApiError } from "./api";
 import type { BomUpdateInput, ProjectEditInput } from "./api";
@@ -20,6 +25,7 @@ import { saveProjectHandoff } from "./project-handoff";
 
 export const ProjectEditingContext = createContext<{
   project: Project;
+  selectedLineId?: string | undefined;
   editRequirement(line: BomLine, focus?: "stock"): void;
   editProject(): void;
   refreshProject?: (() => Promise<boolean>) | undefined;
@@ -28,6 +34,7 @@ export const ProjectEditingContext = createContext<{
 } | null>(null);
 
 const ambiguous = (error: unknown) => error instanceof ApiError && (error.kind === "offline" || error.kind === "server");
+const partUnitNames: Record<BomLine["unit"], string> = { each: "pieces", g: "grams", m: "metres", millimetre: "millimetres", millilitre: "millilitres", set: "sets" };
 function correctionError(error: unknown): string {
   if (ambiguous(error)) return "The save was not confirmed. Your draft is kept. Retry unchanged to check the same request, or reload the project before making a different change.";
   return error instanceof Error ? error.message : "The change was not saved. Review the project and retry.";
@@ -36,10 +43,10 @@ function correctionError(error: unknown): string {
 export function RequirementEditAction({ line, compact = false }: { line: BomLine; compact?: boolean }) {
   const actions = useContext(ProjectEditingContext);
   if (!actions || actions.project.status === "archived") return null;
-  return <Button variant="ghost" type="button" className="text-button requirement-edit-action" aria-label={`Edit requirement ${line.label}`} onClick={() => actions.editRequirement(line)}>{compact ? "Edit" : "Edit requirement"}</Button>;
+  return <Button variant="ghost" type="button" className="text-button requirement-edit-action" aria-label={`Edit requirement ${line.label}`} onClick={() => actions.editRequirement(line)}>{compact ? <Icon name="chevron-right" size={18}/> : "Edit requirement"}</Button>;
 }
 
-export function ProjectManagementBar() {
+export function ProjectManagementBar({ compact = false, onAction, focusReturnId }: { compact?: boolean; onAction?: (() => void) | undefined; focusReturnId?: string | undefined }) {
   const actions = useContext(ProjectEditingContext);
   const [error, setError] = useState<string>();
   const navigation = useContext(UnsavedWorkContext);
@@ -56,10 +63,10 @@ export function ProjectManagementBar() {
   const { project } = actions;
   const download = (format: "json" | "csv") => { try { saveProjectHandoff(project, format); setError(undefined); } catch { setError("The export could not be created. Retry in this browser."); } };
   return <section className="project-management-bar" aria-label="Project management">
-    <span className="project-stage">Stage: <strong>{project.status.charAt(0).toUpperCase() + project.status.slice(1)}</strong></span>
-    {actions.refreshProject && <Button variant="ghost" type="button" className="button button-quiet" disabled={refreshing} onClick={() => navigation ? navigation.request(() => { void refresh(); }) : void refresh()} aria-label="Refresh project"><Icon name="refresh" size={15} />{refreshing ? "Refreshing…" : "Refresh"}</Button>}
-    {project.status !== "archived" && <Button variant="ghost" type="button" className="button button-quiet" onClick={actions.editProject}>Edit project</Button>}
-    <DropdownMenu><DropdownMenuTrigger asChild><Button variant="outline">Export project</Button></DropdownMenuTrigger><DropdownMenuContent align="end" className="max-w-xs"><DropdownMenuLabel>Review before sharing</DropdownMenuLabel><p className="px-2 py-1 text-xs text-muted-foreground">Includes project names, notes and identifiers. These are snapshots, not backups.</p><DropdownMenuSeparator/><DropdownMenuItem onSelect={() => download("csv")}>Download requirements CSV</DropdownMenuItem><DropdownMenuItem onSelect={() => download("json")}>Download project brief JSON</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
+    {!compact && <span className="project-stage">Stage: <strong>{project.status.charAt(0).toUpperCase() + project.status.slice(1)}</strong></span>}
+    {actions.refreshProject && (!compact || error) && <Button variant="ghost" type="button" className="button button-quiet" disabled={refreshing} onClick={() => navigation ? navigation.request(() => { void refresh(); }) : void refresh()} aria-label="Refresh project"><Icon name="refresh" size={15} />{refreshing ? "Refreshing…" : "Retry refresh"}</Button>}
+    {project.status !== "archived" && <Button variant="ghost" type="button" className="button button-quiet" data-focus-return={focusReturnId} onClick={() => { onAction?.(); actions.editProject(); }}><Icon name="clipboard" size={18}/>Edit project</Button>}
+    <DropdownMenu><DropdownMenuTrigger asChild><Button variant={compact ? "ghost" : "outline"}><Icon name="download" size={18}/>Export project</Button></DropdownMenuTrigger><DropdownMenuContent align="end" className="max-w-xs"><DropdownMenuLabel>Review before sharing</DropdownMenuLabel><p className="px-2 py-1 text-xs text-muted-foreground">Includes project names, notes and identifiers. These are snapshots, not backups.</p><DropdownMenuSeparator/><DropdownMenuItem onSelect={() => download("csv")}>Download requirements CSV</DropdownMenuItem><DropdownMenuItem onSelect={() => download("json")}>Download project brief JSON</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
     {error && <Alert asChild><p role="alert" className="form-error">{error}</p></Alert>}
     {refreshed && !refreshing && !error && <p role="status" className="project-refresh-status">Project refreshed from the workspace.</p>}
   </section>;
@@ -93,10 +100,26 @@ export function RemovedRequirements({ hideWhenEmpty = false }: { hideWhenEmpty?:
   </DisclosureContent></Disclosure>;
 }
 
-export function RequirementEditForm({ line, items, initialFocus, initialItemId, onSave, onRetire, onClose, onBusy, onSearchOwnedItems }: { onSearchOwnedItems?: OwnedItemSearch | undefined; line: BomLine; items: InventoryItem[]; initialFocus?: "stock" | undefined; initialItemId?: string | undefined; onSave(input: BomUpdateInput): Promise<void>; onRetire(): Promise<void>; onClose(): void; onBusy(value: boolean): void }) {
+interface PartInspectorPresentation { host: HTMLElement | null; suspended: boolean; context: string }
+function PartInspectorFrame({ presentation, onClose, children }: { presentation: PartInspectorPresentation; onClose(): void; children: ReactNode }) {
+  const [wide, setWide] = useState(() => window.matchMedia?.("(min-width: 1101px)").matches ?? false);
+  const frame = useRef<HTMLElement>(null), previous = useRef(document.activeElement as HTMLElement | null), titleId = useId();
+  useEffect(() => { const media = window.matchMedia?.("(min-width: 1101px)"); if (!media) return; const update = () => setWide(media.matches); media.addEventListener?.("change", update); return () => media.removeEventListener?.("change", update); }, []);
+  useLayoutEffect(() => { if (wide && presentation.host && !presentation.suspended) (frame.current?.querySelector<HTMLElement>('[data-autofocus]') ?? frame.current?.querySelector<HTMLElement>('input:not([disabled]), button:not([disabled])'))?.focus({ preventScroll: true }); }, [wide, presentation.host]);
+  useEffect(() => () => { window.setTimeout(() => { const target = previous.current; if (target?.isConnected && !target.closest("[inert]") && (!document.activeElement || document.activeElement === document.body)) target.focus({ preventScroll: true }); }, 0); }, []);
+  if (wide && !presentation.host) return null;
+  const header = <div className="part-inspector-header"><div><h2 id={titleId}>Part details</h2><p>{presentation.context}</p></div><Button type="button" variant="ghost" size="icon" aria-label="Close part details" onClick={onClose}><Icon name="close" size={18}/></Button></div>;
+  if (wide && presentation.host) return createPortal(<aside ref={frame} className="part-inspector" role="dialog" aria-modal="false" aria-labelledby={titleId} aria-hidden={presentation.suspended || undefined} inert={presentation.suspended || undefined} onKeyDown={event => { if (event.key === "Escape" && !presentation.suspended) { event.preventDefault(); event.stopPropagation(); onClose(); } }}>{header}{children}</aside>, presentation.host);
+  return <WorkspaceModal active={!presentation.suspended} onClose={onClose}><section className="dialog part-detail-dialog" role="dialog" aria-labelledby={titleId} aria-hidden={presentation.suspended || undefined} inert={presentation.suspended || undefined}><div className="dialog-header"><DialogTitle id={titleId}>Part details</DialogTitle><Button type="button" variant="ghost" size="icon" aria-label="Close dialog" onClick={onClose}><Icon name="close" size={18}/></Button></div>{children}</section></WorkspaceModal>;
+}
+
+export function RequirementEditForm({ presentation, line, items, initialFocus, initialItemId, onSave, onRetire, onClose, onBusy, onSearchOwnedItems, onCheckStock, onAddOwnedItem }: { presentation?: PartInspectorPresentation; onCheckStock?: ((itemId: string) => void) | undefined; onAddOwnedItem?: ((name: string) => void) | undefined; onSearchOwnedItems?: OwnedItemSearch | undefined; line: BomLine; items: InventoryItem[]; initialFocus?: "stock" | undefined; initialItemId?: string | undefined; onSave(input: BomUpdateInput): Promise<void>; onRetire(): Promise<void>; onClose(): void; onBusy(value: boolean): void }) {
   const [name, setName] = useState(line.label), [quantity, setQuantity] = useState(String(line.required));
   const [unit, setUnit] = useState(line.unit), [role, setRole] = useState(line.role ?? "");
   const [itemId, setItemId] = useState(initialItemId ?? line.itemId ?? ""), [query, setQuery] = useState<string>();
+  const [resolvedCandidate, setResolvedCandidate] = useState<InventoryItem>();
+  // Returning from Add owned item selects that exact item without replacing this draft.
+  useEffect(() => { if (initialItemId) setItemId(initialItemId); }, [initialItemId]);
   const [optional, setOptional] = useState(line.optional ?? false), [note, setNote] = useState(line.note ?? "");
   const [busy, setBusy] = useState(false), [confirmRemove, setConfirmRemove] = useState(false), [error, setError] = useState<string>();
   const [uncertainOperation, setUncertainOperation] = useState<"save" | "remove">();
@@ -129,27 +152,32 @@ export function RequirementEditForm({ line, items, initialFocus, initialItemId, 
     void run("save", () => onSave(input));
   };
   const disabled = busy || uncertainOperation !== undefined;
-  const ownedItems = <RequirementOwnedItems onSearch={onSearchOwnedItems} items={items} requirementName={name} selectedId={itemId} onSelect={setItemId} unit={unit} onUnitChange={setUnit} queryOverride={query} onQueryChange={setQuery} disabled={disabled} focusSearch={initialFocus === "stock"} />;
-  return <form onSubmit={(event) => { event.preventDefault(); save(); }} className="correction-form">
-    <p className="dialog-intro">{initialFocus === "stock" ? `${name || line.label} · ${Number.isFinite(Number(quantity)) ? formatQuantity(Number(quantity), unit) : "Review quantity"} required. Review an owned item before sourcing.` : "Update this requirement and review any owned stock you plan to use."}</p>
+  const candidate = items.find(item => item.id === itemId) ?? (resolvedCandidate?.id === itemId ? resolvedCandidate : undefined);
+  const ownedItems = <RequirementOwnedItems onResolvedSelection={setResolvedCandidate} onSearch={onSearchOwnedItems} items={items} requirementName={name} selectedId={itemId} onSelect={setItemId} unit={unit} onUnitChange={setUnit} queryOverride={query} onQueryChange={setQuery} disabled={disabled} focusSearch={initialFocus === "stock" && (!presentation || !itemId)} onAddOwnedItem={onAddOwnedItem ? () => onAddOwnedItem(name) : undefined} />;
+  const form = <form onSubmit={(event) => { event.preventDefault(); save(); }} className="correction-form part-detail-form">
+    <p className="dialog-intro">{`${name || line.label} · ${Number.isFinite(Number(quantity)) ? formatQuantity(Number(quantity), unit) : "Review quantity"} needed`}</p>
     <fieldset disabled={disabled} className="correction-fields">
-      {initialFocus === "stock" && ownedItems}
-      <Disclosure defaultOpen={initialFocus !== "stock"}><DisclosureTrigger>Requirement details</DisclosureTrigger><DisclosureContent>
         <Label className="form-field"><span>Requirement name</span><Input autoFocus={initialFocus !== "stock"} required maxLength={240} value={name} onChange={(event) => setName(event.target.value)} /></Label>
         <div className="form-row requirement-quantity-row"><Label className="form-field"><span>Required quantity</span><Input type="number" required min="0.000001" step="any" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></Label><Label className="form-field"><span>Requirement unit</span><NativeSelect aria-label="Requirement unit" value={unit} onChange={(event) => setUnit(event.target.value as BomLine["unit"])}>{[["each", "pieces"], ["g", "grams"], ["m", "metres"], ["millimetre", "millimetres"], ["millilitre", "millilitres"], ["set", "sets"]].map(([value, label]) => <NativeSelectOption key={value} value={value}>{label}</NativeSelectOption>)}</NativeSelect></Label></div>
+        <Label className="form-field"><span>Specification and notes</span><Textarea rows={2} maxLength={2000} value={note} onChange={(event) => setNote(event.target.value)} /></Label>
+      {presentation && itemId ? <section className="part-selected-stock" aria-label="Selected stock candidate"><h3>Match from your stock</h3><div className="part-candidate-summary"><strong>{candidate ? inventoryCandidateText(candidate, items) : "Selected stock details unavailable"}</strong>{candidate && <span>{requirementCandidateStock(candidate)}</span>}<p>Selection is a planning choice, not confirmation of fit or usable stock.</p>{candidate && candidate.unit !== unit && <p>Stock is recorded in {partUnitNames[candidate.unit]}; your requirement uses {partUnitNames[unit]}. No conversion is inferred.</p>}</div></section> : null}
+      {itemId && onCheckStock && <div className="part-check-stock"><Button type="button" data-autofocus={initialFocus === "stock" || undefined} onClick={() => onCheckStock(itemId)}>Check this stock<Icon name="arrow-right" size={16}/></Button><p className="form-hint">You’ll return to this part with your edits kept. A count alone does not confirm fit.</p></div>}
+      {presentation ? <Disclosure className="part-stock-options" defaultOpen={!itemId}><DisclosureTrigger>{itemId ? "Choose another owned item" : "Match from your stock"}</DisclosureTrigger><DisclosureContent>{ownedItems}</DisclosureContent></Disclosure> : ownedItems}
+      <Disclosure className="requirement-details"><DisclosureTrigger>Compatibility and evidence</DisclosureTrigger><DisclosureContent>
         <Label className="form-field"><span>How it is used</span><NativeSelect aria-label="How it is used" value={role} onChange={(event) => setRole(event.target.value)}><NativeSelectOption value="" disabled>Review use</NativeSelectOption><NativeSelectOption value="consumed">Part or material, used up or built in</NativeSelectOption><NativeSelectOption value="reusable">Reusable tool or equipment</NativeSelectOption></NativeSelect></Label>
-      </DisclosureContent></Disclosure>
-      {initialFocus !== "stock" && ownedItems}
-      <Disclosure className="requirement-details"><DisclosureTrigger>More requirement details{optional ? " · optional" : ""}{note ? " · has a note" : ""}</DisclosureTrigger><DisclosureContent>
-        <Label className="form-field"><span>Requirement note</span><Textarea rows={3} maxLength={2000} value={note} onChange={(event) => setNote(event.target.value)} /></Label>
         <Label className="check-field"><Checkbox checked={optional} onCheckedChange={(checked) => setOptional(checked === true)} /><span>Optional requirement</span></Label>
+        <p className="form-hint">Selecting an item is a planning choice, not proof of compatibility or available stock. Other recorded alternatives and specifications are retained. Reserved stock must be released before planning details change.</p>
+        {line.constraints && <dl className="part-specification-record">{Object.entries(line.constraints).map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{typeof value === "object" ? JSON.stringify(value) : String(value)}</dd></div>)}</dl>}
+        {line.alternatives?.length ? <ul>{line.alternatives.map(alternative => <li key={alternative.itemId}>{alternative.itemId}: {alternative.reason || "Recorded alternative; review compatibility."}</li>)}</ul> : null}
       </DisclosureContent></Disclosure>
     </fieldset>
-    <p className="form-hint">Selecting an item is a planning choice, not proof of compatibility or available stock. Other recorded alternatives and specifications are retained. Reserved stock must be released before planning details change.</p>
     {error && <Alert asChild><p className="form-error" role="alert">{error}</p></Alert>}
     <Disclosure className="requirement-removal"><DisclosureTrigger>Remove requirement</DisclosureTrigger><DisclosureContent><p>This hides the requirement from the active plan, not its history. Restore it from Removed requirements. Reserved stock is never silently released.</p><Label className="check-field"><Checkbox checked={confirmRemove} onCheckedChange={(checked) => setConfirmRemove(checked === true)} disabled={disabled} /><span>I want to remove this requirement from the plan</span></Label><Button variant="destructive" type="button" className="button button-danger" disabled={disabled || !confirmRemove} onClick={() => { void run("remove", onRetire); }}>Remove from plan</Button></DisclosureContent></Disclosure>
     <div className="dialog-actions"><Button variant="ghost" type="button" className="button button-quiet" disabled={busy} onClick={onClose}>Cancel</Button><Button variant="default" type="submit" className="button button-primary" disabled={busy} aria-busy={busy}>{busy ? "Saving…" : uncertainOperation === "remove" ? "Retry unchanged removal" : uncertainOperation === "save" ? "Retry unchanged save" : "Save requirement"}</Button></div>
   </form>;
+  // The draft belongs above the responsive frame, so changing between the
+  // desktop inspector and phone sheet cannot reset edits or the save retry.
+  return presentation ? <PartInspectorFrame presentation={presentation} onClose={onClose}>{form}</PartInspectorFrame> : form;
 }
 
 export function ProjectEditForm({ project, onSave, onClose, onBusy, onDraftChange }: { project: Project; onDraftChange?: (state: { dirty: boolean; unresolved: boolean }) => void; onSave(input: ProjectEditInput): Promise<void>; onClose(): void; onBusy(value: boolean): void }) {

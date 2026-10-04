@@ -9,6 +9,7 @@ import "./workspace-layout.css";
 import "./workspace-shell.css";
 import "./project-workspace.css";
 import "./specialist-journey.css";
+import "./approved-interface.css";
 import { applyAppearance, readAppearance } from "./appearance";
 
 applyAppearance(readAppearance());
