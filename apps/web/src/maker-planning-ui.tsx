@@ -8,8 +8,9 @@ import { BuildPlanning } from "./build-plan-ui";
 import { WorkstreamPlanning } from "./workstream-ui";
 import type { StockReceiptContext } from "./stock-receipt";
 import { RequirementSourcing } from "./requirement-sourcing";
+import { ProjectBuildHandoff } from "./project-build-handoff";
 
-export function MakerPlanningTools({ project, items, onRefresh, onUsedStock, onUpload, onApproach, stockReservationsSupported = false }: { project: Project; items: InventoryItem[]; onRefresh(): Promise<boolean>; onUsedStock?: (() => void) | undefined; onUpload?: BuildFileUpload | undefined; onApproach?: (() => void) | undefined; stockReservationsSupported?: boolean }) {
+export function MakerPlanningTools({ project, items, onRefresh, onUsedStock, onUpload, onApproach, onFiles, stockReservationsSupported = false }: { project: Project; items: InventoryItem[]; onRefresh(): Promise<boolean>; onUsedStock?: (() => void) | undefined; onUpload?: BuildFileUpload | undefined; onApproach?: (() => void) | undefined; onFiles?: (() => void) | undefined; stockReservationsSupported?: boolean }) {
   const printed = projectFabricationRoute(project) === "printed";
   const [planOpen, setPlanOpen] = useState(printed);
   useEffect(() => { if (printed) setPlanOpen(true); }, [printed]);
@@ -17,6 +18,7 @@ export function MakerPlanningTools({ project, items, onRefresh, onUsedStock, onU
   const work = <WorkstreamPlanning key={`work:${project.id}`} project={project} onProjectRefresh={onRefresh} />;
   const stock = stockReservationsSupported ? <StockReservationPlanning key={`stock:${project.id}:${project.serverRevisionId}`} project={project} items={items} onRefresh={onRefresh} onUsedStock={onUsedStock} /> : null;
   return <div className="maker-planning-tools build-workspace">
+    {project.projectLibraryAvailable && <ProjectBuildHandoff project={project} onFiles={onFiles} onRefresh={onRefresh} />}
     <div className="workflow-page-heading"><h2>Parts, plates and task groups</h2><p>Plan quantities and track each piece of work. Record actual stock use separately.</p></div>
     {printed ? [plan, stock, work] : [work, stock, plan]}
   </div>;

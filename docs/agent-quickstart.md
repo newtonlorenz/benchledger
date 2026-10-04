@@ -128,7 +128,12 @@ version and a stable command key. Select an already attached PNG, JPEG or WebP
 of up to 20 MiB from the current project or workstream revision, with an honest
 `render`, `reference` or `built_photo` label. Browser users choose the same file
 in **Files → Project image**. See [project images](project-images.md) for the
-contract and history; a picture does not establish physical readiness.
+contract and history; a picture does not establish physical readiness. The
+library also includes the current `buildPlan`. Prepare it with `save_build_plan`
+and attach authorised files to the current project or workstream revisions.
+Gallery **Start build** opens **Build steps** with grouped current files; direct
+3MF downloads and named handoff downloads verify SHA-256. See
+[build handoff](project-library.md).
 
 ## Minute 2–4: beginner path
 

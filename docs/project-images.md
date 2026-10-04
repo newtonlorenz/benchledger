@@ -3,8 +3,11 @@
 Projects opens in **Gallery** so a render or photo can identify each build.
 Choose **List** for compact rows with thumbnails; the layout is remembered in
 this browser, separately for sample and private workspaces. Search, filters,
-sort, pins and next actions work in both layouts. Archived projects remain in
-their separate view.
+sort, pins and next actions work in both layouts. **All projects** includes
+active, completed and archived projects; use **Archived projects** to narrow
+the gallery. The separate archive view still supports review and restore.
+Use **Start build** for current print, PCB, component and instruction files; see
+[build handoff](project-library.md).
 
 ## Choose an image
 
@@ -62,7 +65,8 @@ The library accepts `status: active | archived | all`, defaults to `active`,
 and includes completed projects in that active set. `limit` defaults to 25 and
 is bounded to 1–100. Follow every returned `nextCursor` with the same status and
 account scope. Results include only allowed projects with their current
-revision, requirements/readiness, artifact metadata and presentation; they
+revision, requirements/readiness, artifact metadata, presentation and current
+build plan; they
 contain neither image bytes nor global inventory or offers.
 
 Presentation input contains `expectedVersion` (0 for the first selection),

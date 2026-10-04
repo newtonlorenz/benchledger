@@ -168,7 +168,8 @@ and PCB tabs are disclosed by Design tools and remain visible when linked direct
 
 Projects is the single project-library destination and leads with resuming work,
 recognisable images and project actions. Gallery and List share search, filters,
-sort and pins; active and archived views remain separate. Empty workspaces offer
+sort and pins. All projects includes completed and archived projects, with
+explicit filters and the existing archive review/restore view. Empty workspaces offer
 Start a project and Add inventory; archive-only and failed-load states remain
 distinct. Small registers disclose search/sort; equipment details
 are optional. Inventory keeps search and stock views visible, with filters and
@@ -191,6 +192,12 @@ unavailable-image retry and saved-selection feedback stay local to the image.
 Authenticated downloads must pass the recorded SHA-256 check before rendering.
 Image choices use the shared draft guard and never imply build readiness. See
 [project images](../../docs/project-images.md) for file and revision limits.
+Gallery Start build opens Build steps with current files first, then plan notes
+and unresolved checks. Print, PCB/fabrication, component/firmware and instruction
+groups share authenticated, hash-verified downloads. A direct 3MF action remains
+secondary to Start build and requires review in the slicer. Archive and complete
+projects do not enter active task queues. See
+[build handoff](../../docs/project-library.md).
 
 While editing item details, show the metadata form and retain other sections
 hidden, preserving their drafts. Protect changed project, requirement and item

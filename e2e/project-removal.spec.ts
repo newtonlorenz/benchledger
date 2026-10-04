@@ -93,7 +93,8 @@ test.describe("restore confirmation", () => {
     await page.getByRole("button", { name: "Open navigation" }).click();
     await page.getByRole("button", { name: /^Projects(?: \d+)?$/u }).click();
     await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "View archived projects", exact: true }).click();
+    await page.getByRole("combobox", { name: "Filter projects", exact: true }).selectOption("archived");
+    await page.getByRole("button", { name: "Open project Retained Archive E2E", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Retained Archive E2E", exact: true })).toBeVisible();
 
     await openProjectDetails(page);
@@ -126,7 +127,8 @@ test("deletes an archived project after a single confirmation and hides it from 
   await page.goto("/");
   await page.getByRole("button", { name: /^Projects(?: \d+)?$/u }).click();
   await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "View archived projects", exact: true }).click();
+  await page.getByRole("combobox", { name: "Filter projects", exact: true }).selectOption("archived");
+  await page.getByRole("button", { name: "Open project Retained Archive E2E", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Retained Archive E2E", exact: true })).toBeVisible();
 
   await openProjectDetails(page);

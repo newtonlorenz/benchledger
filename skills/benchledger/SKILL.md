@@ -40,7 +40,13 @@ follow every returned cursor. To select a project image, read the current
 revision's presentation and save an eligible attached PNG/JPEG/WebP of up to
 20 MiB with its observed version. Label renders, references and build photos
 honestly; never select historical or unrelated files or treat a picture as
-physical validation. See [project images](../../docs/project-images.md).
+physical validation. The library includes the current build plan. Prepare parts,
+file IDs, plates and unresolved checks through `save_build_plan`; attach files to
+exact current project/work-item revisions. Refresh Projects so **Start build**
+can hand off print, PCB, component/firmware and instruction files. Downloads
+verify SHA-256 and do not operate equipment. See
+[project images](../../docs/project-images.md) and
+[build handoff](../../docs/project-library.md).
 
 Explain required BOM lines as Ready, Check, Decide or Source. Resolve exact
 missing decisions before sourcing; keep plausible unconfirmed candidates Check,

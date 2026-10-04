@@ -76,7 +76,7 @@ The same source can join enclosure geometry in **Assembly**. MCP agents inspect 
 
 ### Know what you have. See what is missing.
 
-Projects brings your builds and next actions together. Gallery shows a prominent project image; List keeps a smaller thumbnail beside the project details. Choose an uploaded PNG, JPEG or WebP in **Files → Project image**. [Project image setup and limits](docs/project-images.md).
+Projects brings your builds and next actions together. Gallery shows a prominent project image; List keeps a smaller thumbnail beside the project details. Choose an uploaded PNG, JPEG or WebP in **Files → Project image**. [Project image setup and limits](docs/project-images.md). **All projects** includes completed and archived projects. **Start build** opens current print, PCB, component/firmware and instruction files, with direct 3MF downloads for your slicer. [Build handoff and MCP preparation](docs/project-library.md).
 
 Open a project to review its requirements: ready to use, needs a physical check, needs a decision, or needs sourcing. Uncertain stock stays uncertain until evidence changes it.
 

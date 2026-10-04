@@ -85,7 +85,7 @@ type ServerGapLine = { lineId: string; name?: string; optional?: boolean; status
 type ServerGapEvaluation = { lines: ServerGapLine[]; totals: { requiredLines: number; optionalLines: number; readyLines?: number; checkLines?: number; decideLines?: number; sourceLines?: number; partialLines: number; missingLines: number } };
 type ServerArtifact = { id: string; projectId: string; workItemId?: string; revisionId?: string; projectRevisionId?: string; workItemRevisionId?: string; role: string; filename: string; mediaType: string; byteSize: number; sha256: string; author?: string; source?: string; machineBinding?: Record<string, string>; currentCandidate: boolean; retired: boolean; createdAt: string; version: number };
 type ServerRevision = { id: string; projectId: string; number: number; name: string; notes?: string; status: string; fabricationRoute?: FabricationRoute; intendedPrinterItemId?: string | null; createdAt: string; version: number; workItemId?: string; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; gapEvaluation?: ServerGapEvaluation; inspections?: unknown[]; buildConfigSnapshot?: unknown; buildConfiguration?: unknown };
-type ServerProject = { id: string; name: string; description?: string; status: string; currentRevisionId?: string; createdAt: string; updatedAt: string; version: number; removedAt?: string; removedBy?: string; lastLifecycleStatus?: string; workItems?: ServerWorkItem[]; projectRevisions?: ServerRevision[]; revisions?: ServerRevision[]; workItemRevisions?: ServerRevision[]; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; currentRevision?: ServerRevision; presentation?: import("@benchledger/api-contract").ProjectPresentation | null };
+type ServerProject = { id: string; name: string; description?: string; status: string; currentRevisionId?: string; createdAt: string; updatedAt: string; version: number; removedAt?: string; removedBy?: string; lastLifecycleStatus?: string; workItems?: ServerWorkItem[]; projectRevisions?: ServerRevision[]; revisions?: ServerRevision[]; workItemRevisions?: ServerRevision[]; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; currentRevision?: ServerRevision; presentation?: import("@benchledger/api-contract").ProjectPresentation | null; buildPlan?: import("@benchledger/api-contract").BuildPlan | null };
 type ServerProjectTombstone = { id: string; name: string; removedAt: string; removedBy: string; lastLifecycleStatus: string; releasedReservationIds: string[]; version: number; auditId?: string };
 type ServerOffer = { id: string; itemId?: string; name: string; supplier: string; url: string; priceMinor: number; currency: CurrencyCode; packageQuantity?: number; observedAt: string; staleAfterDays?: number; version: number };
 type ServerWorkspace = { inventory: ServerInventoryItem[]; projects: ServerProject[]; offers: ServerOffer[]; source: "api"; fetchedAt: string; capabilities?: unknown };
@@ -1437,7 +1437,7 @@ function mapProject(project: ServerProject): Project {
     ...(projectRevisions.length === 0 ? {} : { projectRevisions }),
     ...(workItems.length === 0 ? {} : { workItems }),
     ...(allArtifacts.length === 0 ? {} : { allArtifacts }),
-    ...(Object.hasOwn(project, "presentation") ? { projectLibraryAvailable: true, presentation: project.presentation ?? null } : {}),
+    ...(Object.hasOwn(project, "presentation") ? { projectLibraryAvailable: true, presentation: project.presentation ?? null, buildPlan: project.buildPlan ?? null } : {}),
     ...(gapEvaluation === undefined ? {} : { gapEvaluation }),
     ...(inspectionActions.length === 0 ? {} : { inspectionActions }),
     ...(revision?.fabricationRoute === undefined ? {} : { fabricationRoute: revision.fabricationRoute }),
@@ -1465,6 +1465,7 @@ function withoutRevisionScopedProjectState(project: Project): Project {
     intendedPrinterItemId: _intendedPrinterItemId,
     buildConfigSnapshot: _buildConfigSnapshot,
     presentation: _presentation,
+    buildPlan: _buildPlan,
     ...projectState
   } = project;
   return projectState as Project;
@@ -3340,7 +3341,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
           ...created.project,
           currentRevisionId: created.revision.id,
           currentRevision: { ...created.revision, bom: [], artifacts: [] },
-          ...(librarySupported ? { presentation: null } : {})
+          ...(librarySupported ? { presentation: null, buildPlan: null } : {})
         });
         projectCache.set(project.id, project);
         // A successful response resolves this logical command. The next

@@ -567,5 +567,11 @@ project ancestry and retains the image hash; reading invalidates a cover whose
 revision, hash or availability changed. Use `read_project_presentation_history`
 for retained selections. The library read requires projects-read scope;
 selection requires projects-write scope. Project-scoped tokens see only their
-allowed projects. Preview images do not certify manufacturing or physical
+allowed projects. The library also returns the current `buildPlan`; prepare exact parts, attached
+file IDs, print plates and unresolved checks through `save_build_plan`. Refresh
+Projects after the MCP work. **Start build** opens the current print, PCB,
+component/firmware and instruction files; 3MF and named downloads check SHA-256.
+See [build handoff](../../docs/project-library.md).
+
+Preview images do not certify manufacturing or physical
 readiness, and these commands do not change stock or operate equipment.

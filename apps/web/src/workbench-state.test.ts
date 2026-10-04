@@ -8,7 +8,8 @@ describe("workbench task model", () => {
     const completed = project("finished", { status: "complete" });
     const empty = project("empty", { bom: [], fabricationRoute: "none" });
     const rows = deriveHomeProjects([unknown, completed, empty, project("archived", { status: "archived" })], inventory);
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(4);
+    expect(rows[3]!.tasks).toEqual([]);
     expect(rows[0]!.tasks.some((task) => task.kind === "refresh")).toBe(true);
     expect(rows[0]!.tasks.some((task) => ["check", "source", "decide"].includes(task.kind))).toBe(false);
     expect(rows[1]!.tasks).toEqual([]);
@@ -37,8 +38,11 @@ describe("workbench task model", () => {
     expect(kinds).not.toContain("setup"); expect(kinds).not.toContain("files");
   });
   it("filters and sorts projects without mutating source records", () => {
-    const rows = deriveHomeProjects([project("z", { name: "Café fixture", status: "planned" }), project("a", { name: "Sensor box", status: "complete" })], inventory);
+    const rows = deriveHomeProjects([project("z", { name: "Café fixture", status: "planned" }), project("a", { name: "Sensor box", status: "complete" }), project("archive", { status: "archived" })], inventory);
     const before = JSON.stringify(rows);
+    expect(filterHomeProjects(rows, "", defaultHomePreferences)).toHaveLength(3);
+    expect(filterHomeProjects(rows, "", { ...defaultHomePreferences, filter: "active" }).map((row) => row.project.id)).toEqual(["z"]);
+    expect(filterHomeProjects(rows, "", { ...defaultHomePreferences, filter: "archived" }).map((row) => row.project.id)).toEqual(["archive"]);
     expect(filterHomeProjects(rows, "cafe", { ...defaultHomePreferences, filter: "all" }).map((row) => row.project.id)).toEqual(["z"]);
     expect(filterHomeProjects(rows, "", { ...defaultHomePreferences, filter: "complete" }).map((row) => row.project.id)).toEqual(["a"]);
     expect(filterHomeProjects(rows, "", { ...defaultHomePreferences, filter: "pinned", pins: ["a", "hidden-id"] }).map((row) => row.project.id)).toEqual(["a"]);
@@ -63,7 +67,7 @@ describe("workbench task model", () => {
   });
   it("validates browser preferences and keeps only bounded record identifiers", () => {
     for (const raw of [null, "wrong", "null", "[]", "5"]) expect(parseHomePreferences(raw)).toEqual(defaultHomePreferences);
-    expect(parseHomePreferences('{"pins":["one","one",5,""],"recent":["two"],"sort":"weird","filter":"bad"}')).toEqual({ view: "gallery", pins: ["one"], recent: ["two"], filter: "active", sort: "recent" });
+    expect(parseHomePreferences('{"pins":["one","one",5,""],"recent":["two"],"sort":"weird","filter":"bad"}')).toEqual({ view: "gallery", pins: ["one"], recent: ["two"], filter: "all", sort: "recent" });
     const raw = JSON.stringify({ pins: Array.from({ length: 150 }, (_, i) => String(i)), recent: Array.from({ length: 30 }, (_, i) => String(i)) });
     expect(parseHomePreferences(raw).pins).toHaveLength(100); expect(parseHomePreferences(raw).recent).toHaveLength(12);
     expect(homePreferenceKey(true)).not.toBe(homePreferenceKey(false));
