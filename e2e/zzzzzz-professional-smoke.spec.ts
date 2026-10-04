@@ -1,4 +1,4 @@
-import { clickProjectAction, openProjectDetails } from "./workspace-controls";
+import { openBuildTool, clickProjectAction, openProjectDetails, openProjectSection } from "./workspace-controls";
 import { expect, test, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { randomUUID } from "node:crypto";
@@ -13,17 +13,17 @@ async function seed(page: Page, name: string, count = 0) {
   for (let i = 0; i < count; i++) await post(`/project-revisions/${revision}/bom`, { name: i === count - 1 ? "Café rear-panel connector" : `Ordinary part ${i}`, requiredQuantity: 1, unit: "each", role: "consumed", optional: false, constraints: {}, alternatives: [] });
   await page.goto(`/#/projects/${id}/plan`); await page.reload(); await expect(page.getByRole("heading", { name, exact: true })).toBeVisible(); return { id, revision };
 }
-const tab = (page: Page, name: string) => page.getByRole("tab", { name: new RegExp(`^${name}`, "u") }).click();
+const tab = openProjectSection;
 test("an unavailable project link never opens an unrelated project", async ({ page }) => {
   await login(page); await page.goto("/#/projects/missing-project/plan"); await expect(page.getByRole("heading", { name: "Project unavailable", exact: true })).toBeVisible(); expect(page.url()).toContain("missing-project");
   await page.getByRole("button", { name: "Retry project lookup", exact: true }).click(); await expect(page.getByRole("heading", { name: "Project unavailable", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Open project register", exact: true }).click(); await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
 });
 test("build draft navigation keeps edits until a deliberate discard", async ({ page }) => {
-  await login(page); await seed(page, "Smoke guarded build"); await tab(page, "Build steps"); await page.getByRole("button", { name: "Create build plan", exact: true }).click(); await page.getByLabel("Build plan name").fill("Keep this build draft");
+  await login(page); await seed(page, "Smoke guarded build"); await tab(page, "Build steps"); await openBuildTool(page, "print"); await page.getByRole("button", { name: "Create build plan", exact: true }).click(); await page.getByLabel("Build plan name").fill("Keep this build draft");
   await expect(page.getByRole("button", { name: "Refresh build plan", exact: true })).toBeDisabled(); await tab(page, "Files"); await expect(page.getByRole("alertdialog")).toBeVisible();
   await page.getByRole("button", { name: "Keep editing", exact: true }).click(); await expect(page.getByLabel("Build plan name")).toHaveValue("Keep this build draft");
-  await tab(page, "Files"); await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click(); await expect(page.getByRole("heading", { name: "Build files", exact: true })).toBeVisible();
+  await tab(page, "Files"); await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click(); await expect(page.getByRole("heading", { name: "Files", exact: true })).toBeVisible();
 });
 
 test("cancelling a build draft keeps meaningful edits until discard is confirmed", async ({ page }) => {
@@ -34,7 +34,7 @@ test("cancelling a build draft keeps meaningful edits until discard is confirmed
     if (request.method() === "PUT" && new URL(request.url()).pathname.endsWith("/build-plan")) saves += 1;
   });
   await tab(page, "Build steps");
-  await page.getByRole("button", { name: "Create build plan", exact: true }).click();
+  await openBuildTool(page, "print"); await page.getByRole("button", { name: "Create build plan", exact: true }).click();
   await page.getByLabel("Build plan name", { exact: true }).fill("Keep the bracket plan");
   await page.getByRole("button", { name: "Add build part", exact: true }).click();
   await page.getByLabel("Build part 1 name", { exact: true }).fill("Synthetic bracket");
@@ -56,7 +56,7 @@ test("cancelling a build draft keeps meaningful edits until discard is confirmed
 });
 
 test("browser Back does not silently discard a workstream draft", async ({ page }) => {
-  await login(page); await seed(page, "Smoke browser history"); await tab(page, "Build steps"); await page.getByRole("button", { name: "Add task group", exact: true }).click(); await page.getByLabel("Task group type").selectOption("firmware"); await tab(page, "Files"); await page.getByRole("button", { name: "Keep editing", exact: true }).click(); await expect(page.getByLabel("Task group type")).toHaveValue("firmware"); await page.getByLabel("Task group name").fill("Do not lose this task");
+  await login(page); await seed(page, "Smoke browser history"); await tab(page, "Build steps"); await openBuildTool(page, "tasks"); await page.getByRole("button", { name: "Add task group", exact: true }).click(); await page.getByLabel("Task group type").selectOption("firmware"); await tab(page, "Files"); await page.getByRole("button", { name: "Keep editing", exact: true }).click(); await expect(page.getByLabel("Task group type")).toHaveValue("firmware"); await page.getByLabel("Task group name").fill("Do not lose this task");
   await page.goBack(); await expect(page.getByRole("alertdialog")).toBeVisible(); await page.getByRole("button", { name: "Keep editing", exact: true }).click(); await expect(page.getByLabel("Task group name")).toHaveValue("Do not lose this task"); expect(page.url()).toMatch(/\/build$/u);
   await tab(page, "Requirements"); await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click(); await expect(page.locator(".bom-section")).toBeVisible();
 });
@@ -69,7 +69,7 @@ test("supplier search finds requirements beyond the first page and protects quot
   await page.getByRole("button", { name: "Cancel quote", exact: true }).click(); await tab(page, "Requirements"); await expect(page.getByRole("alertdialog")).toHaveCount(0);
 });
 test("new workstream appears in file scope without a browser reload", async ({ page }) => {
-  await login(page); await seed(page, "Smoke workstream context"); await tab(page, "Build steps"); await page.getByRole("button", { name: "Add task group", exact: true }).click(); await page.getByLabel("Task group name").fill("Fixture firmware"); await page.getByRole("button", { name: "Create task group", exact: true }).click();
+  await login(page); await seed(page, "Smoke workstream context"); await tab(page, "Build steps"); await openBuildTool(page, "tasks"); await page.getByRole("button", { name: "Add task group", exact: true }).click(); await page.getByLabel("Task group name").fill("Fixture firmware"); await page.getByRole("button", { name: "Create task group", exact: true }).click();
   await expect(page.getByText("Task group created.", { exact: true })).toBeVisible(); await expect(page.locator(".workstream-row")).toHaveCount(1);
   await tab(page, "Files"); await expect(page.getByLabel("Choose file scope").locator("option").filter({ hasText: "Fixture firmware" })).toHaveCount(1);
 });
@@ -77,20 +77,20 @@ test("staged files require a decision before switching revision scope", async ({
   await login(page); await seed(page, "Smoke staged file"); await tab(page, "Files");
   await page.getByLabel("Choose files to upload").setInputFiles({ name: "draft-file.md", mimeType: "text/markdown", buffer: Buffer.from("Synthetic staged file") });
   await page.getByLabel("Choose file scope").selectOption("all"); await expect(page.getByRole("alertdialog")).toBeVisible(); await page.getByRole("button", { name: "Keep editing", exact: true }).click(); await expect(page.getByRole("button", { name: "Add 1 file", exact: true })).toBeEnabled();
-  await tab(page, "Requirements"); await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click(); await tab(page, "Files"); await expect(page.getByRole("button", { name: "Add files", exact: true })).toBeDisabled();
+  await tab(page, "Requirements"); await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click(); await tab(page, "Files"); await expect(page.getByRole("button", { name: "Add 1 file", exact: true })).toHaveCount(0); await expect(page.getByRole("button", { name: "Add files", exact: true })).toBeEnabled();
 });
 test("mobile task area precedes setup context and remains within the viewport", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 800 }); await login(page); await seed(page, "Smoke mobile hierarchy", 3);
-  await expect(page.getByRole("complementary", { name: "Project details" })).toBeHidden();
+  await expect(page.getByRole("complementary", { name: "Project details" })).toHaveCount(0);
   await openProjectDetails(page);
-  const order = await page.evaluate(() => { const workspace = document.querySelector(".dossier-workspace")!.getBoundingClientRect(), context = document.querySelector(".dossier-column")!.getBoundingClientRect(); return { workspace: workspace.top, context: context.top, width: document.documentElement.scrollWidth }; });
+  const order = await page.evaluate(() => { const tabs = document.querySelector(".project-navigation")!.getBoundingClientRect(), context = document.querySelector(".build-approach-card")!.getBoundingClientRect(); return { workspace: tabs.top, context: context.top, width: document.documentElement.scrollWidth }; });
   expect(order.workspace).toBeLessThan(order.context); expect(order.width).toBeLessThanOrEqual(320);
   await tab(page, "Shopping list"); await expect(page.locator(".sourcing-requirement")).toHaveCount(3);
 });
 test("build loading errors do not claim that no plan exists", async ({ page }) => {
   await login(page); await seed(page, "Smoke failed plan read");
   await page.route("**/build-plan", (route) => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: { code: "unavailable", message: "Synthetic read failure" } }) }));
-  await tab(page, "Build steps"); await expect(page.locator(".build-planning").getByRole("alert")).toBeVisible(); await expect(page.getByText("No multi-plate plan recorded for this revision.", { exact: true })).toHaveCount(0); await expect(page.getByRole("button", { name: "Create build plan", exact: true })).toBeDisabled();
+  await tab(page, "Build steps"); await openBuildTool(page, "print"); await expect(page.locator(".build-planning").getByRole("alert")).toBeVisible(); await expect(page.getByText("No multi-plate plan recorded for this revision.", { exact: true })).toHaveCount(0); await expect(page.getByRole("button", { name: "Create build plan", exact: true })).toBeDisabled();
 });
 for (const dark of [false, true]) test(`rendered pages and dialogs pass accessibility checks in ${dark ? "dark" : "light"} mode`, async ({ page }) => {
   await page.emulateMedia({ colorScheme: dark ? "dark" : "light", reducedMotion: "reduce" }); await login(page); const { id } = await seed(page, `Smoke accessibility ${dark ? "dark" : "light"}`, 3);
@@ -102,7 +102,7 @@ for (const dark of [false, true]) test(`rendered pages and dialogs pass accessib
   await page.setViewportSize({ width: 320, height: 800 }); await audit();
 });
 test("an unconfirmed plan save stays protected until an unchanged retry resolves it", async ({ page }) => {
-  await login(page); await seed(page, "Smoke unresolved plan"); await tab(page, "Build steps"); await page.getByRole("button", { name: "Create build plan", exact: true }).click(); await page.getByRole("button", { name: "Add build part", exact: true }).click(); await page.getByLabel("Build part 1 name", { exact: true }).fill("Bracket"); await page.getByRole("button", { name: "Review build plan", exact: true }).click();
+  await login(page); await seed(page, "Smoke unresolved plan"); await tab(page, "Build steps"); await openBuildTool(page, "print"); await page.getByRole("button", { name: "Create build plan", exact: true }).click(); await page.getByRole("button", { name: "Add build part", exact: true }).click(); await page.getByLabel("Build part 1 name", { exact: true }).fill("Bracket"); await page.getByRole("button", { name: "Review build plan", exact: true }).click();
   let first = true; const keys: string[] = [];
   await page.route("**/build-plan", async (route) => { if (route.request().method() !== "PUT") { await route.continue(); return; } keys.push(route.request().headers()["idempotency-key"]!); if (first) { first = false; await route.fetch(); await route.abort("failed"); } else await route.continue(); });
   await page.getByRole("button", { name: "Save build plan", exact: true }).click(); await expect(page.getByRole("button", { name: "Retry unchanged plan", exact: true })).toBeVisible();
@@ -110,26 +110,26 @@ test("an unconfirmed plan save stays protected until an unchanged retry resolves
   await page.getByRole("button", { name: "Retry unchanged plan", exact: true }).click(); await expect(page.getByRole("button", { name: "Revise build plan", exact: true })).toBeVisible(); expect(keys).toHaveLength(2); expect(keys[0]).toBe(keys[1]); await tab(page, "Files"); await expect(page.getByRole("alertdialog")).toHaveCount(0);
 });
 test("a committed workstream remains reported saved when its list refresh fails", async ({ page }) => {
-  await login(page); await seed(page, "Smoke saved workstream outage"); await tab(page, "Build steps"); await page.getByRole("button", { name: "Add task group", exact: true }).click(); await page.getByLabel("Task group name").fill("Saved task");
+  await login(page); await seed(page, "Smoke saved workstream outage"); await tab(page, "Build steps"); await openBuildTool(page, "tasks"); await page.getByRole("button", { name: "Add task group", exact: true }).click(); await page.getByLabel("Task group name").fill("Saved task");
   let created = false;
   await page.route("**/workstreams*", async (route) => { if (route.request().method() === "POST") { const response = await route.fetch(); created = true; await route.fulfill({ response }); } else if (created) await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: { code: "unavailable", message: "Synthetic read outage" } }) }); else await route.continue(); });
   await page.getByRole("button", { name: "Create task group", exact: true }).click(); await expect(page.getByText("Task group created.", { exact: true })).toBeVisible(); await expect(page.locator(".workstream-planning").getByRole("alert")).toBeVisible(); await expect(page.getByText("No task groups recorded. Add a task group, such as firmware or assembly.", { exact: true })).toHaveCount(0);
   await page.unroute("**/workstreams*"); await page.getByRole("button", { name: "Refresh task groups", exact: true }).click(); await expect(page.locator(".workstream-row")).toHaveCount(1); await expect(page.locator(".workstream-row")).toContainText("Saved task");
 });
 test("cancelled Back retains the destination for repeated Back and Forward", async ({ page }) => {
-  await login(page); const { id } = await seed(page, "Smoke retained history"); await tab(page, "Files"); await tab(page, "Build steps"); await page.getByRole("button", { name: "Add task group", exact: true }).click(); await page.getByLabel("Task group name").fill("Keep history intact");
+  await login(page); const { id } = await seed(page, "Smoke retained history"); await tab(page, "Files"); await tab(page, "Build steps"); await openBuildTool(page, "tasks"); await page.getByRole("button", { name: "Add task group", exact: true }).click(); await page.getByLabel("Task group name").fill("Keep history intact");
   for (let i = 0; i < 2; i++) { await page.goBack(); await expect(page.getByRole("alertdialog")).toBeVisible(); await page.getByRole("button", { name: "Keep editing", exact: true }).click(); expect(page.url()).toContain(`/${id}/build`); }
-  await page.goBack(); await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click(); await expect(page.getByRole("heading", { name: "Build files", exact: true })).toBeVisible(); expect(page.url()).toContain(`/${id}/files`);
-  await page.goBack(); await expect(page.locator(".bom-section")).toBeVisible(); expect(page.url()).toContain(`/${id}/plan`); await page.goForward(); await expect(page.getByRole("heading", { name: "Build files", exact: true })).toBeVisible();
+  await page.goBack(); await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click(); await expect(page.getByRole("heading", { name: "Files", exact: true })).toBeVisible(); expect(page.url()).toContain(`/${id}/files`);
+  await page.goBack(); await expect(page.locator(".bom-section")).toBeVisible(); expect(page.url()).toContain(`/${id}/plan`); await page.goForward(); await expect(page.getByRole("heading", { name: "Files", exact: true })).toBeVisible();
   await page.getByLabel("Choose files to upload").setInputFiles({ name: "forward-draft.txt", mimeType: "text/plain", buffer: Buffer.from("Synthetic forward test") });
   await page.goForward(); await page.getByRole("button", { name: "Keep editing", exact: true }).click(); expect(page.url()).toContain(`/${id}/files`);
-  await page.goForward(); await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click(); await expect(page.getByRole("heading", { name: "Parts and build plates", exact: true })).toBeVisible();
+  await page.goForward(); await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click(); await expect(page.getByRole("heading", { name: "Build plan", exact: true })).toBeVisible();
 });
 test("multi-entry traversal restores the original history position when cancelled", async ({ page }) => {
-  await login(page); const { id } = await seed(page, "Smoke multi-step history"); await tab(page, "Files"); await tab(page, "Build steps"); await page.getByRole("button", { name: "Add task group", exact: true }).click(); await page.getByLabel("Task group name").fill("Retain multi-step history");
+  await login(page); const { id } = await seed(page, "Smoke multi-step history"); await tab(page, "Files"); await tab(page, "Build steps"); await openBuildTool(page, "tasks"); await page.getByRole("button", { name: "Add task group", exact: true }).click(); await page.getByLabel("Task group name").fill("Retain multi-step history");
   await page.evaluate(() => window.history.go(-2)); await expect(page.getByRole("alertdialog")).toBeVisible(); await page.getByRole("button", { name: "Keep editing", exact: true }).click(); expect(page.url()).toContain(`/${id}/build`);
   await page.evaluate(() => window.history.go(-2)); await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click(); await expect(page.locator(".bom-section")).toBeVisible(); expect(page.url()).toContain(`/${id}/plan`);
-  await page.goForward(); await expect(page.getByRole("heading", { name: "Build files", exact: true })).toBeVisible();
+  await page.goForward(); await expect(page.getByRole("heading", { name: "Files", exact: true })).toBeVisible();
 });
 test("changing only the observation date protects the quote provenance draft", async ({ page }) => {
   await login(page); await seed(page, "Smoke observation-only draft", 1); await tab(page, "Shopping list"); await page.getByRole("button", { name: "Record quote for Café rear-panel connector", exact: true }).click(); await page.getByLabel("Observation date", { exact: true }).fill("2026-01-02");

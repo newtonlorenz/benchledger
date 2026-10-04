@@ -5,14 +5,14 @@ import { matchesInventorySearch } from "@benchledger/domain/inventory-search";
 export type HomeTaskKind = "setup" | "requirements" | "decide" | "check" | "source" | "files" | "refresh" | "review";
 export interface HomeTask { id: string; projectId: string; projectName: string; kind: HomeTaskKind; label: string; detail: string; count: number }
 export interface HomeProject { project: Project; tasks: HomeTask[]; ready: number; required: number; unknown: boolean }
-export type HomeFilter = "active" | "attention" | "pinned" | "complete" | "all";
+export type HomeFilter = "active" | "attention" | "pinned" | "complete" | "archived" | "all";
 export interface HomePreferences { view: "gallery" | "list"; pins: string[]; recent: string[]; filter: HomeFilter; sort: "recent" | "name" | "attention" }
 export const defaultHomePreferences: HomePreferences = { view: "gallery", pins: [], recent: [], filter: "active", sort: "recent" };
 const ids = (value: unknown): string[] => Array.isArray(value) ? [...new Set(value.filter((id): id is string => typeof id === "string" && id.length > 0 && id.length <= 240))].slice(0, 100) : [];
 export function parseHomePreferences(raw: string | null): HomePreferences {
   try { const data: unknown = JSON.parse(raw ?? "null"); if (!data || typeof data !== "object" || Array.isArray(data)) return { ...defaultHomePreferences };
     const value = data as Record<string, unknown>;
-    return { view: value.view === "list" ? "list" : "gallery", pins: ids(value.pins), recent: ids(value.recent).slice(0, 12), filter: ["active", "attention", "pinned", "complete", "all"].includes(String(value.filter)) ? value.filter as HomeFilter : "active", sort: ["recent", "name", "attention"].includes(String(value.sort)) ? value.sort as HomePreferences["sort"] : "recent" };
+    return { view: value.view === "list" ? "list" : "gallery", pins: ids(value.pins), recent: ids(value.recent).slice(0, 12), filter: ["active", "attention", "pinned", "complete", "archived", "all"].includes(String(value.filter)) ? value.filter as HomeFilter : "active", sort: ["recent", "name", "attention"].includes(String(value.sort)) ? value.sort as HomePreferences["sort"] : "recent" };
   } catch { return { ...defaultHomePreferences }; }
 }
 export function homePreferenceKey(sample: boolean): string { return `benchledger.home.v1.${sample ? "sample" : "workspace"}`; }
@@ -47,7 +47,7 @@ export function deriveHomeProjects(projects: readonly Project[], items: Inventor
   });
 }
 export function filterHomeProjects(rows: readonly HomeProject[], query: string, preferences: HomePreferences): HomeProject[] {
-  const filtered = rows.filter(({ project, tasks }) => matchesInventorySearch([project.name, project.description, project.currentRevision], query) && (preferences.filter === "all" || preferences.filter === "pinned" && preferences.pins.includes(project.id) || preferences.filter === "complete" && project.status === "complete" || preferences.filter === "active" && project.status !== "complete" || preferences.filter === "attention" && tasks.length > 0));
+  const filtered = rows.filter(({ project, tasks }) => matchesInventorySearch([project.name, project.description, project.currentRevision], query) && (preferences.filter === "all" || preferences.filter === "pinned" && preferences.pins.includes(project.id) || preferences.filter === "complete" && project.status === "complete" || preferences.filter === "archived" && project.status === "archived" || preferences.filter === "active" && project.status !== "complete" && project.status !== "archived" || preferences.filter === "attention" && tasks.length > 0));
   const compareDate = (value: string) => { const date = Date.parse(value); return Number.isFinite(date) ? date : 0; };
   return [...filtered].sort((a, b) => {
     const pin = Number(preferences.pins.includes(b.project.id)) - Number(preferences.pins.includes(a.project.id));

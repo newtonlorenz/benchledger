@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, it, expect, vi } from "vitest";
-import { render, fireEvent, screen, waitFor, cleanup } from "@testing-library/react";
+import { render, fireEvent, screen, waitFor, cleanup, within } from "@testing-library/react";
 import { MakerPlanningTools } from "./maker-planning-ui";
 import { PlanSummary } from "./build-plan-ui";
 import { BuildPlanning, BuildEditor } from "./build-plan-ui";
@@ -40,7 +40,7 @@ it("edits a repeated plate draft, reviews it and confirms its saved identity", a
   render(<BuildEditor project={project} items={inventory} initial={null} root="/project" onCancel={() => undefined} onSaved={saved} />);
   change("Build plan name", "Reviewed plate batch"); click("Add build part"); change("Build part 1 name", "Spacer"); change("Build part 1 quantity", "5");
   click("Add plate layout"); change("Plate 1 name", "Spacer layout"); change("Plate 1 runs", "2"); change("Plate 1 quantity Spacer", "3");
-  click("Add material estimate"); change("Plate 1 material 1", inventory.find((item) => item.category === "Filament")!.id); change("Grams per run", "12"); change("Plate 1 material role 1", "support"); change("Plate 1 material side 1", "left"); change("Minutes per run, optional", "40"); change("Build planning notes", "Check the slicer before printing.");
+  click("Material and time estimates"); click("Add material estimate"); change("Plate 1 material 1", inventory.find((item) => item.category === "Filament")!.id); change("Grams per run", "12"); change("Plate 1 material role 1", "support"); change("Plate 1 material side 1", "left"); change("Minutes per run, optional", "40"); change("Build planning notes", "Check the slicer before printing.");
   click("Review build plan"); expect(screen.getByText(/2 runs, with 3 × Spacer/u)).toBeTruthy(); click("Back to build draft"); click("Review build plan"); click("Save build plan");
   await waitFor(() => expect(saved).toHaveBeenCalledOnce()); const body = vi.mocked(workflowRequest).mock.calls[0]![2] as { plates: { copies: number }[] }; expect(body.plates[0]!.copies).toBe(2);
 });
@@ -75,7 +75,7 @@ it("keeps guided drafts editable and validates the mapped proposal before previe
 it("updates workstream status, notes and due date through an observed version", async () => {
   const row = { item: { id: "work", name: "Assembly", kind: "assembly", currentRevisionId: "rev" }, revision: { number: 1, name: "Initial" }, assignment: { version: 1, status: "todo" } };
   vi.mocked(workflowRequest).mockImplementation(async (path, method) => method === "PUT" ? { data: { id: "work", workItemId: "work", version: 2, status: "in_progress", notes: "Fit check first", dueDate: "2027-01-02" } } : path === "/team/directory" ? { members: [] } : { data: [row], total: 1 });
-  render(<WorkstreamPlanning project={project} />); await screen.findByText("Assembly · To do"); click("Assembly · To do"); change("Status for Assembly", "in_progress"); change("Due date", "2027-01-02"); change("Task group notes", "Fit check first"); click("Save task group progress");
+  render(<WorkstreamPlanning project={project} />); await screen.findByText("Assembly · To do"); click("Assembly · To do"); change("Status for Assembly", "in_progress"); click("Assignment and due date"); change("Due date", "2027-01-02"); change("Task group notes", "Fit check first"); click("Save task group progress");
   await waitFor(() => expect(vi.mocked(workflowRequest).mock.calls.some((call) => call[1] === "PUT")).toBe(true)); expect(vi.mocked(workflowRequest).mock.calls.find((call) => call[1] === "PUT")![2]).toMatchObject({ expectedVersion: 1, status: "in_progress", notes: "Fit check first", dueDate: "2027-01-02" });
 });
 
@@ -100,6 +100,7 @@ it("uploads a missing file without leaving or losing the current build draft", a
   const view = render(<BuildEditor {...props} />);
   click("Add build part"); change("Build part 1 name", "Enclosure lid"); change("Build part 1 quantity", "3");
   const file = new File(["synthetic"], "lid.stl");
+  click("Add a missing build file");
   fireEvent.change(screen.getByLabelText("Add a missing build file"), { target: { files: [file] } });
   await screen.findByText("File uploaded. Select it under Design file for the matching part.");
   expect(onUpload).toHaveBeenCalledWith(file, "STL", { kind: "project", projectRevisionId: project.serverRevisionId });
@@ -119,6 +120,7 @@ it("keeps build warnings visible and technical evidence collapsed", () => {
 it("leads non-print projects to workstreams while print details remain optional", async () => {
   vi.mocked(workflowRequest).mockImplementation(async (path) => path === "/team/directory" ? { members: [] } : path.endsWith("/build-plan") ? null : { data: [], total: 0 });
   render(<MakerPlanningTools project={{ ...project, fabricationRoute: "none" }} items={inventory} onRefresh={async () => true} />);
+  click("Task groups and progress");
   await waitFor(() => expect(screen.getByRole("button", { name: "Add task group" })).toHaveProperty("disabled", false));
   expect(screen.queryByRole("button", { name: "Create build plan" })).toBeNull();
   click("Parts and print plates, optional"); expect(screen.getByRole("button", { name: "Create build plan" })).toBeTruthy();
@@ -142,6 +144,7 @@ it("freezes an ambiguous upload and retries the same file until confirmed", asyn
   render(<BuildEditor project={project} items={inventory} initial={null} root="/project" onCancel={() => undefined} onSaved={() => undefined} onUpload={onUpload} />);
   click("Add build part"); change("Build part 1 name", "Retained lid");
   const file = new File(["synthetic"], "lid.stl");
+  click("Add a missing build file");
   fireEvent.change(screen.getByLabelText("Add a missing build file"), { target: { files: [file] } });
   await screen.findByRole("button", { name: "Retry unchanged file upload" });
   expect(screen.getByLabelText("Add a missing build file").matches(":disabled")).toBe(true);
@@ -182,4 +185,57 @@ it("keeps a meaningful build draft until discard is explicitly chosen", async ()
   click("Cancel build draft"); click("Discard draft");
   expect(screen.queryByLabelText("Build part 1 name")).toBeNull();
   expect(document.activeElement).toBe(screen.getByRole("button", { name: "Create build plan" }));
+});
+
+it("offers the ordered Build journey without treating file presence as physical verification", async () => {
+  vi.mocked(workflowRequest).mockImplementation(async (path) => path === "/team/directory" ? { members: [] } : path.endsWith("/build-plan") ? null : { data: [], total: 0 });
+  const onParts = vi.fn(), onFiles = vi.fn(), onAssembly = vi.fn(), onUsedStock = vi.fn();
+  const { gapEvaluation: _gaps, ...withoutEvaluation } = project;
+  render(<MakerPlanningTools project={{ ...withoutEvaluation, bom: [], artifacts: [] }} items={inventory} onRefresh={async () => true} onParts={onParts} onFiles={onFiles} onAssembly={onAssembly} onUsedStock={onUsedStock} />);
+  const sequence = screen.getByRole("list", { name: "Build sequence" });
+  expect(within(sequence).getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent)).toEqual(["Check parts", "Prepare files", "Assemble", "Verify the build", "Record actual use"]);
+  expect(screen.queryByRole("button", { name: "Create build plan" })).toBeNull();
+  expect(screen.getByText(/File checks do not confirm a physical build/)).toBeTruthy();
+  expect(screen.getByText("Add the parts this build needs.")).toBeTruthy();
+  click("Review parts"); click("Review build files"); click("Open assembly guide"); click("Record actual stock use");
+  [onParts, onFiles, onAssembly, onUsedStock].forEach((action) => expect(action).toHaveBeenCalledOnce());
+  click("Record verification notes");
+  await waitFor(() => expect(screen.getByRole("button", { name: "Add task group" })).toHaveProperty("disabled", false));
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Task groups" })));
+});
+
+it("keeps the five-step journey and optional tools present beside actual stock review without claiming physical completion", () => {
+  vi.mocked(workflowRequest).mockImplementation(async (path) => path === "/team/directory" ? { members: [] } : path.endsWith("/build-plan") ? null : { data: [], total: 0 });
+  render(<MakerPlanningTools project={project} items={inventory} onRefresh={async () => true} review={<section aria-label="Actual use review">Review pending</section>} />);
+  const sequence = screen.getByRole("list", { name: "Build sequence" });
+  expect(within(sequence).getAllByRole("heading", { level: 3 })).toHaveLength(5);
+  expect(sequence.querySelector('[aria-current="step"]')?.textContent).toContain("Record actual use");
+  expect(sequence.querySelectorAll('[aria-current="step"]')).toHaveLength(1);
+  expect(screen.getByRole("region", { name: "Actual use review" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Task groups and progress" }).getAttribute("aria-expanded")).toBe("false");
+  expect(screen.getByText(/File checks do not confirm a physical build/)).toBeTruthy();
+  expect(screen.queryByText(/physically verified/i)).toBeNull();
+});
+
+it("loads task groups on first opening and retains assignment drafts across collapsed Build views", async () => {
+  let created = false;
+  vi.mocked(workflowRequest).mockImplementation(async (path) => {
+    if (path === "/team/directory") return { members: [] };
+    if (path.endsWith("/build-plan")) return null;
+    return { data: created ? [{ item: { id: "synthetic-assembly", name: "New assembly task", kind: "assembly" }, revision: null, assignment: null }] : [], total: created ? 1 : 0 };
+  });
+  const props = { project, items: inventory, onRefresh: async () => true };
+  const view = render(<MakerPlanningTools {...props} review={<p>Stock review</p>} />);
+  expect(vi.mocked(workflowRequest).mock.calls.filter(([path]) => path.includes("/workstreams"))).toHaveLength(0);
+  created = true;
+  view.rerender(<MakerPlanningTools {...props} />);
+  click("Task groups and progress");
+  await screen.findByRole("button", { name: "New assembly task · To do" });
+  click("New assembly task · To do");
+  change("Task group notes", "Keep this assignment");
+  click("Task groups and progress");
+  view.rerender(<MakerPlanningTools {...props} review={<p>Stock review</p>} />);
+  click("Task groups and progress");
+  expect(screen.getByLabelText("Task group notes")).toHaveProperty("value", "Keep this assignment");
+  expect(vi.mocked(workflowRequest).mock.calls.filter(([path]) => path.includes("/workstreams"))).toHaveLength(1);
 });

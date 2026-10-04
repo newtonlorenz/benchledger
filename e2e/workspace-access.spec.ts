@@ -1,3 +1,4 @@
+import { navigateWorkspace } from "./workspace-controls";
 import { expect, test, type Page } from "@playwright/test";
 
 const LAN_WARNING = "Anyone who can reach this BenchLedger address can view inventory, change records, and change workspace security settings. Use LAN-open mode only on a trusted network. Enable a password before using guest Wi-Fi, port forwarding, internet exposure, or a public reverse proxy.";
@@ -193,7 +194,7 @@ test("completes the LAN-open to password and back access journey without exposin
   await expect(page.getByText("LAN open", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await navigateWorkspace(page, "Inventory");
   await page.getByRole("button", { name: "Add item", exact: true }).click();
   await page.getByLabel("What are you adding?").selectOption("tool");
   await expect(page.getByLabel("Category (required)")).toHaveCount(0);

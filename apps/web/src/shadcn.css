@@ -26,22 +26,22 @@
 /* Shared shadcn tokens are also the source for the existing domain components.
    Keep layout and evidence semantics in their respective component stylesheets. */
 :root {
-  --background: #fbfcfa; --foreground: #202622;
-  --card: #fff; --card-foreground: #202622;
-  --popover: #fff; --popover-foreground: #202622;
-  --primary: #21634e; --primary-foreground: #fff;
-  --secondary: #f1f1f3; --secondary-foreground: #27272a;
-  --muted: #f0f3ef; --muted-foreground: #5f6b63;
-  --ui-accent: #e8eee8; --accent-foreground: #202622;
-  --destructive: #b42332; --destructive-foreground: #fff; --border: #dce2dc; --input: #b8c4bb; --ring: #27775e;
-  --radius: .625rem;
+  --background: #fcfcfa; --foreground: #152033;
+  --card: #fff; --card-foreground: #152033;
+  --popover: #fff; --popover-foreground: #152033;
+  --primary: #1558e8; --primary-foreground: #fff;
+  --secondary: #f1f3f6; --secondary-foreground: #243146;
+  --muted: #f1f3f6; --muted-foreground: #536276;
+  --ui-accent: #eaf0fa; --accent-foreground: #152033;
+  --destructive: #b42332; --destructive-foreground: #fff; --border: #dce1e8; --input: #bcc7d5; --ring: #1558e8;
+  --radius: .5rem;
   --surface: var(--background); --surface-strong: var(--card); --surface-soft: var(--muted);
-  --surface-muted: var(--ui-accent); --surface-hover: #f0f4ef;
-  --ink: var(--foreground); --ink-soft: #47544c; --ink-muted: var(--muted-foreground);
+  --surface-muted: var(--ui-accent); --surface-hover: #f2f5fa;
+  --ink: var(--foreground); --ink-soft: #42516a; --ink-muted: var(--muted-foreground);
   --line: var(--border); --line-strong: var(--input);
-  --accent: var(--primary); --accent-hover: #184e3d; --accent-soft: #edf5f0; --accent-line: #b4d0c0; --on-accent: var(--primary-foreground);
-  --focus: var(--ring); --nav-bg: #f0f3ef; --nav-ink: var(--foreground); --nav-muted: var(--muted-foreground);
-  --nav-line: var(--border); --nav-hover: #e7ede7; --nav-selected: #e1e9e1;
+  --accent: var(--primary); --accent-hover: #1044b8; --accent-soft: #edf3ff; --accent-line: #becff4; --on-accent: var(--primary-foreground);
+  --focus: var(--ring); --nav-bg: #edf2fa; --nav-ink: var(--foreground); --nav-muted: var(--muted-foreground);
+  --nav-line: var(--border); --nav-hover: #edf2fc; --nav-selected: #e6efff;
   --shadow: 0 12px 32px rgb(24 24 27 / 12%);
   --moss: #246c50; --moss-dark: #20563f; --moss-soft: #edf6ef;
   --slate: #375d99; --slate-soft: #edf2fa;
@@ -49,19 +49,19 @@
   --red: #b42332; --red-soft: #fceff0;
 }
 :root[data-theme="dark"] {
-  --background: #191d1a; --foreground: #f0f3ef;
-  --card: #202622; --card-foreground: #f0f3ef;
-  --popover: #272e29; --popover-foreground: #f0f3ef;
-  --primary: #9dd5b8; --primary-foreground: #162c21;
-  --secondary: #2b332d; --secondary-foreground: #f0f3ef;
-  --muted: #242b26; --muted-foreground: #abb6ae;
-  --ui-accent: #303a32; --accent-foreground: #fbfcfa;
-  --destructive: #ffadb4; --destructive-foreground: #38121a; --border: #3b443e; --input: #566259; --ring: #9dd5b8;
-  --surface-hover: #2d352f; --ink-soft: #c6d0c9;
-  --accent-hover: #b4e4cb; --accent-soft: #263c30; --accent-line: #507c62;
-  --nav-bg: #141815; --nav-selected: #303a32; --nav-hover: #28302a;
+  --background: #141a24; --foreground: #edf2fa;
+  --card: #152033; --card-foreground: #edf2fa;
+  --popover: #252e3c; --popover-foreground: #edf2fa;
+  --primary: #9fbeff; --primary-foreground: #102245;
+  --secondary: #273346; --secondary-foreground: #edf2fa;
+  --muted: #202a39; --muted-foreground: #b3c0d2;
+  --ui-accent: #2d3c53; --accent-foreground: #fcfcfa;
+  --destructive: #ffadb4; --destructive-foreground: #38121a; --border: #3a4b62; --input: #596d88; --ring: #9fbeff;
+  --surface-hover: #29364b; --ink-soft: #c9d3e3;
+  --accent-hover: #b7ceff; --accent-soft: #233853; --accent-line: #4b6994;
+  --nav-bg: #101722; --nav-selected: #2d3c53; --nav-hover: #26354b;
   --shadow: 0 12px 32px rgb(0 0 0 / 32%);
-  --moss: #9dd5b8; --moss-dark: #afe1bf; --moss-soft: #21382c;
+  --moss: #94d8b3; --moss-dark: #afe1bf; --moss-soft: #21382c;
   --slate: #a9c7f3; --slate-soft: #243249;
   --amber: #e9c275; --amber-ink: #f0cd8b; --amber-soft: #392f20;
   --red: #ffadb4; --red-soft: #3c252b;
@@ -70,6 +70,6 @@
 :root { color-scheme: light; --font-ui: "IBM Plex Sans Variable", system-ui, sans-serif; --font-data: "IBM Plex Mono", monospace; font-family: var(--font-ui); --overlay: rgb(0 0 0 / .5); --success-line: #8bbca9; --info-line: #a4bcd9; --warning-line: #d7b477; --danger-line: #dc9ca2; --sidebar: var(--nav-bg); --sidebar-foreground: var(--foreground); --sidebar-primary: var(--primary); --sidebar-primary-foreground: var(--primary-foreground); --sidebar-accent: var(--ui-accent); --sidebar-accent-foreground: var(--foreground); --sidebar-border: var(--border); --sidebar-ring: var(--ring); }
 :root[data-theme="dark"] { color-scheme: dark; --success-line: #396d59; --info-line: #4b6c94; --warning-line: #816c40; --danger-line: #8b4c56; }
 @layer base {
-  button { background: transparent; border: 0; font: inherit; cursor: pointer; }
+  button { background: transparent; border: 0; color: inherit; font: inherit; cursor: pointer; }
   input, textarea, select { font: inherit; }
 }

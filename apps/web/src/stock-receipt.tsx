@@ -36,6 +36,6 @@ export function ReceivedStockNextStep({ context, item, project, onReview }: { co
   return <section className="stock-receipt-next-step" aria-label="Continue receiving stock">
     <h3>Continue with {context.lineName}</h3>
     <p>{item.evidence === "counted" || item.evidence === "commissioned" ? "Physical quantity recorded. Review this item against the project requirement before saving the match." : "The item is recorded. Confirm its physical count above, then review the requirement match. Unconfirmed stock will still need checking."}</p>
-    {line ? <Button variant="outline" onClick={onReview}>Review this item for the requirement</Button> : <p>The original requirement is no longer active in this revision. Your inventory item is saved; open the current project plan to choose where it belongs.</p>}
+    {line ? <Button onClick={onReview}>Return to {context.lineName}</Button> : <p>The original requirement is no longer active in this revision. Your inventory item is saved; open the current project plan to choose where it belongs.</p>}
   </section>;
 }

@@ -10,10 +10,11 @@ import { Disclosure, DisclosureTrigger, DisclosureContent } from "./components/u
 import "./requirement-journey.css";
 const inventoryUnitLabels: Record<QuantityDisplayUnit, string> = { each: "pieces", g: "grams", m: "metres", set: "sets", millimetre: "millimetres", millilitre: "millilitres" };
 export type OwnedItemSearch = (query: string, signal: AbortSignal) => Promise<InventoryPage>;
-export function RequirementOwnedItems({ items, requirementName, selectedId, onSelect, unit, onUnitChange, queryOverride, onQueryChange, disabled = false, focusSearch = false, onSearch, onAddOwnedItem }: {
+export function RequirementOwnedItems({ items, requirementName, selectedId, onSelect, unit, onUnitChange, queryOverride, onQueryChange, disabled = false, focusSearch = false, onSearch, onAddOwnedItem, onResolvedSelection }: {
   items: InventoryItem[]; requirementName: string; selectedId: string; onSelect(id: string): void;
   unit: QuantityDisplayUnit; onUnitChange(unit: QuantityDisplayUnit): void;
   queryOverride: string | undefined; onQueryChange(query: string | undefined): void; disabled?: boolean; focusSearch?: boolean; onSearch?: OwnedItemSearch | undefined; onAddOwnedItem?: (() => void) | undefined;
+  onResolvedSelection?: ((item: InventoryItem | undefined) => void) | undefined;
 }) {
   const query = (queryOverride ?? requirementName).trim().slice(0, 200);
   const searchEnabled = Boolean(query || queryOverride !== undefined || focusSearch);
@@ -38,6 +39,7 @@ export function RequirementOwnedItems({ items, requirementName, selectedId, onSe
   const matches = page ? page.items.filter(eligible) : loadedMatches;
   const selectedItem = page?.items.find((item) => item.id === selectedId) ?? items.find((item) => item.id === selectedId) ?? (retainedSelection?.id === selectedId ? retainedSelection : undefined);
   useEffect(() => { if (selectedItem) setRetainedSelection(selectedItem); }, [selectedItem]);
+  useEffect(() => { onResolvedSelection?.(selectedItem); }, [selectedItem, onResolvedSelection]);
   const limit = page ? 25 : 5;
   const shownMatches = matches.slice(0, limit);
   const candidates = selectedItem && !shownMatches.some((item) => item.id === selectedId) ? [selectedItem, ...shownMatches] : shownMatches;

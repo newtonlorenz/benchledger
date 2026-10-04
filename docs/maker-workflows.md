@@ -2,23 +2,25 @@
 
 ## Browser entry points
 
-New project offers **Use a template or import a BOM**. Describe the project,
+New project offers **Start from a template** and **Import a parts list (CSV)**. Describe the project,
 review editable template or CSV rows, request a server preview, then explicitly
 create the reviewed project. The operation creates the project, its first
 revision and bounded requirements/workstreams atomically, without reservations.
 An acknowledged creation is not repeated when a subsequent workspace refresh
 fails.
 
-The **Build planning** tab opens parts, plates and workstreams directly. Its
-route can be bookmarked. The Plan toolbar opens **Import requirements from CSV**
-in a review dialog. Larger workflows still load only when opened. CSV append supports 1–24 rows and a 256 KiB
-source. Columns and decimal conventions are reviewed explicitly. Exact owned
+The project has **Overview / Parts / Files / Build**. Build presents Check parts,
+Prepare files, Assemble, Verify the build and Record actual use. Reservations,
+plate planning and task groups are disclosed in Build tools. The sequence stays
+visible during actual-use review. Its
+route can be bookmarked. Parts offers a reviewed CSV import. CSV append supports
+1–24 rows and a 256 KiB source. Columns and decimal conventions are reviewed explicitly. Exact owned
 inventory IDs are never auto-mapped. A preview is actor-owned and expires;
 changed revision, requirement or selected-stock data requires a new review.
 Duplicate names need explicit approval, and an import never replaces stock or
 existing requirements.
 
-**Parts, plates and workstreams** records repeated parts, plate layouts, run
+**Parts and print plates** records repeated parts, plate layouts, run
 counts, material roles, nozzle side and optional time estimates. Runs multiply
 part, gram and time quantities. Snapshots retain versions and file hashes.
 Missing source files, printer choices, material estimates and physical evidence
@@ -26,7 +28,7 @@ remain warnings, not invented validation. No slicer, printer or stock operation
 is performed. Workstreams retain independent progress/notes/due dates and
 provide read-only access to project revision history.
 
-The Shopping list opens **Supplier quotes for this project** first, with views
+**Parts → To source** opens **Supplier quotes for this project** first, with views
 for Needs sourcing, Needs review, Optional and All requirements. Search and
 filters run across the complete revision before pagination, including requirement
 notes and recorded supplier/title text. `total` counts matched rows; `revisionTotal`
@@ -133,7 +135,7 @@ restricted data visible. Workstream pagination uses the same draft guard.
 
 A new project needs only a name. Add its first requirement before choosing a build
 approach or printer; those remain available under Planning details. Template and
-CSV setup retain the name and goal already entered. The Workbench import action
+CSV setup retain the name and goal already entered. The project-library import action
 opens CSV entry directly. Requirement details and workstreams are optional
 disclosures; the reviewed preview remains the boundary before creating records.
 
@@ -166,8 +168,32 @@ Build planning keeps warnings visible while file hashes remain disclosed. New
 plates start with the usable intended printer and its matching recorded setup,
 with explicit overrides available. Add a missing build file inside the editor,
 then select its exact revision file for the part; the draft is retained.
-Non-print projects lead with workstreams and keep part/plate planning optional.
+Part/plate planning stays optional for non-print projects. Assignment/due date,
+material/time estimates and exact file evidence remain available in disclosures.
 
 Changed capture, import and requirement-edit drafts are protected on exit. An
 unconfirmed save keeps its exact command and retry key until acknowledged,
 including when an intervening retry is rejected.
+
+## Files, specialists and actual use
+
+Files groups the selected revision scope into 3D print, Electronics, CAD &
+firmware and Instructions. Open a file's details or supported preview, or download
+the original. A project cover is never used as an artifact preview. Download a
+3MF before opening it in a slicer; BenchLedger does not launch local fabrication
+tools or start a machine. Check printer, material, supports and toolpaths there.
+
+Build's secondary routes retain Assembly, PCB and Used stock when advertised.
+Verification notes return to task groups; evidence can be attached in Files.
+A task marked done or a successful model preview is not physical certification.
+
+Actual-use review displays proposed quantities and the affected stock balances
+provided by the service, then repeats them at confirmation. A confirmed result
+is a receipt; repeating navigation cannot consume stock again. Reservations
+reduce availability without recording consumption.
+
+A part's **Check stock** action retains the requirement draft while the exact
+inventory item is reviewed. The count receipt offers **Return to [part name]**.
+Adding an owned item also returns to the draft with an explicit item selection.
+Saving that selection remains a separate requirement action; a count alone does
+not confirm compatibility.

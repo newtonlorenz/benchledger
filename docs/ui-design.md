@@ -2,224 +2,179 @@
 
 ## Product intent
 
-BenchLedger is a working tool for maker projects, inventory and build records.
-Projects and Inventory are peer destinations. The interface should help a maker
-find the current record, understand its state and take the next useful action.
-It should feel calm and approachable during repeated workshop use.
-
-Keep the distinction between owned stock, confirmed usable stock, project
-requirements and actual sourcing gaps. Stock readiness is separate from design
-or physical-build validation. A missing or unavailable result is never zero or a
-successful check. Do not add marketing panels, simulated activity or unmeasured
-statistics.
+BenchLedger helps a maker recognise a project, find its parts and files, and
+continue the build. Projects and Inventory are peer destinations. Owned stock,
+confirmed usable stock, requirements and actual sourcing gaps remain distinct.
+A missing result is never zero or a successful check.
 
 ## Visual system and ownership
 
-The visual direction is a professional workshop register: a steady navigation
-rail, readable records, thin rules and contextual tools. Light mode uses a warm
-near-white work surface, soft neutral navigation and graphite text. Dark mode
-retains the same hierarchy. Forest green identifies primary actions and selection;
-semantic status colours accompany explicit status text.
+The interface uses warm-white surfaces, graphite text and restrained cobalt
+selection and actions. Dark and System appearance keep the same hierarchy.
+Status colours always accompany text. IBM Plex Sans is served locally; IBM Plex
+Mono is reserved for identifiers and code. Keep the 16px root and readable phone
+form text. Use tabular numerals for quantities.
 
-Each stylesheet has an explicit responsibility:
+Working content uses aligned rows, space and single rules. Product imagery leads
+the gallery and Overview; it does not repeat above Parts or Build. Contextual
+sheets and dialogs have a distinct boundary. Do not turn ordinary task content
+into nested cards, decorative counters or unsupported completion claims.
 
-| File | Responsibility |
+| Stylesheet | Responsibility |
 | --- | --- |
-| `apps/web/src/shadcn.css` | Semantic light/dark colour tokens and Tailwind integration. |
-| `apps/web/src/workspace-shell.css` | Application frame, navigation, utility bar, shared controls, typography, focus and responsive shell. |
-| `apps/web/src/home-experience.css` | Workbench register, recent-project link, optional task queue and workshop tools. |
-| `apps/web/src/inventory-experience.css` | Inventory toolbar, filters, register, view options and inspector composition. |
-| `apps/web/src/project-workspace.css` | Project heading, tabs, Plan context, requirements and project details. |
-| `apps/web/src/workspace-layout.css` | Retained specialist forms, settings and workflow presentation not owned by the files above. |
+| `apps/web/src/shadcn.css` | Semantic light/dark tokens and shared primitives. |
+| `apps/web/src/workspace-shell.css` | Retained common controls, typography and shell foundation. |
+| `apps/web/src/approved-interface.css` | Current header, working rhythm, Settings and responsive sheet treatment. |
+| `apps/web/src/home-experience.css`, `project-library.css` | Project library, view controls, imagery and supporting workspace tools. |
+| `apps/web/src/project-workspace.css` | Project heading, four sections, overview, requirements and grouped files. |
+| `apps/web/src/inventory-experience.css` | Stock collection, filters, rows and contextual item details. |
+| `apps/web/src/specialist-journey.css` | Build sequence, planning forms, stock and inspection reviews. |
+| `apps/web/src/assembly.css`, `pcb.css` | Specialist geometry views and guides. |
+| `apps/web/src/workspace-layout.css` | Retained workflow and form rules not owned above. |
 
-Use the owning stylesheet when changing a surface. Do not append another global
-restyling layer or reintroduce shell, Workbench, inventory or project selectors in
-`workspace-layout.css`. Specialist viewers retain their local styles. Colour
-values belong in semantic tokens; panels must work in both themes.
+Use the existing owner rather than adding another global restyling layer. React
+and Radix provide interaction boundaries; application rules retain authority over
+dismissal, concurrency and stock writes.
 
-React and the existing shared `components/ui` primitives remain in use. Radix
-provides interaction semantics and focus boundaries; it does not determine the
-product's layout. The overhaul changes composition and presentation without a
-framework migration.
+## Navigation and preferences
 
-IBM Plex Sans is the interface font, served by the application. Use IBM Plex Mono
-for code, identifiers and keyboard keys when it aids recognition. Ordinary
-quantities use tabular numerals without requiring a different font family.
-The explicit root size is 16px: `.875rem` body and control text is 14px, `.75rem`
-metadata is 12px, and the standard 1.625rem page title is 26px. Keep this conversion
-stable instead of shrinking the entire application through the root size.
-
-Use space and alignment to group records before adding a border. Main registers
-are flat work surfaces; floating popovers and dialogs have their own boundary.
-Normal controls use a 6px radius. Standard and Compact density change row spacing,
-not evidence or functionality. Compact rows apply to pointer devices; touch
-controls retain a target height of at least 44px. Form text may increase on phones
-to remain readable without browser zoom.
-
-## Navigation and search
-
-Keep Workbench, Inventory and Projects directly available. The desktop rail can
-collapse while retaining accessible control names. Phone navigation must close
-predictably, restore focus and leave the selected working view usable.
-
-The utility bar has one visible Search & commands launcher. It opens navigation,
-project, loaded-item and entry-form commands. Command results explicitly state
-that project and item searches cover loaded records. Selecting a command opens a
-page or form; it does not submit a business mutation.
+The desktop header keeps Projects, Inventory, workspace commands and Settings
+available. Phone navigation keeps Projects and Inventory at the bottom. Settings
+contains Appearance and the supporting agent-access route. Light, Dark, System,
+Standard and Compact choices are browser-local preferences. Compact spacing does
+not reduce touch targets. Inventory view options retain sorting, optional columns
+and saved views separately from workspace appearance.
 
 Control/Command + Shift + K opens workspace commands. Control/Command + K retains
-the direct inventory-search shortcut. Search within a register stays beside its
-records and states its scope. An unavailable project link must never substitute
-another project.
+the inventory-search shortcut. Commands navigate or open forms; they do not
+submit business mutations. Search results state their bounded record scope.
+Existing project subroutes remain reachable through the four-section navigation.
 
-The View control changes browser-local theme and density. Inventory View options
-changes sorting, saved views and optional columns. These are presentation choices,
-not stock writes. Preserve existing local preferences when changing defaults.
+## Project library and Overview
 
-## Workbench
+Projects defaults to Gallery with a remembered List alternative. Each project
+keeps identity, revision, stage and next action together. Search and view controls
+stay compact; filters with no results provide recovery rather than a creation
+prompt. Active and archived projects remain distinguishable. Pins and recent
+project IDs are local preferences, not shared project records.
 
-The Workbench starts with one primary New project action and an Open inventory
-action. A recently opened project appears as an inline resume link, rather than
-another large panel. The project register uses one visible search, view and sort
-strip. Each row keeps its project identity, revision, stage, stock readiness and
-next action together.
+Overview is the project landing section. It shows the selected image, notes and
+one next action derived from the available project state. An image is explicitly
+a design render, reference image or built-product photo. Missing or failed images
+retain useful actions, and a prior-revision selection is not silently reused.
+Images do not establish dimensional accuracy or manufacturing readiness.
 
-Active, attention, pinned, complete and all-project views remain available. Pins
-and recent projects are saved in this browser. Search, sorting and pagination must
-continue to work together; changing a view resets the displayed page limit.
+The project menu contains only actions for that project, including revision
+history, build approach, archive/restore and deletion. New project belongs in the
+library. Destructive actions retain their confirmations.
 
-All next actions expands the complete loaded-project task queue. Workspace tools
-reveals inventory entry, requirements import and recorded equipment. These are
-supporting paths rather than competing default columns. An empty workspace opens
-the entry tools and explains how to start without showing an empty register or a
-success claim.
+## Parts and inventory
 
-Counts cover loaded records only. Unknown stock results remain visible and are
-excluded from check/sourcing counts. A failed refresh preserves the previous
-records, explains the failure and leaves retry available. Equipment details do
-not imply that a printer, material or design has been physically validated.
+Parts holds requirement entry, stock matches, checks and the To source route.
+An empty list presents one primary Add first part action and a quiet import
+alternative. Requirement entry starts with name, amount and unit. Stock
+selection, specifications, alternatives and evidence remain available without
+making them prerequisites for capturing the first requirement.
 
-## Inventory
+On desktop, part details sit beside the undimmed list. Keep the selected stock,
+its uncertainty and Check this stock visible with the requirement. On phones,
+the same draft uses a task sheet. Stock detours preserve the originating draft.
 
-Inventory opens around its stock register. A fresh layout keeps the inspector
-closed; inspecting an item opens it explicitly. Honour an existing saved layout,
-including its inspector choice, width and optional columns.
+Keep required, recorded, available, reserved and used quantities distinct. Ready
+requires the relevant canonical compatibility and evidence checks; owning an
+item or counting it does not prove fit. Supplier quotes retain their source,
+date, package units, currencies and tax/shipping uncertainty. Combined proposals
+remain available as a supporting path. A proposal is not a purchase.
 
-The toolbar keeps search, Filters, View options and Inspector available. Filters
-opens one flat set of labelled controls, with no second hidden filter layer.
-Active criteria remain visible after closing Filters. View options contains
-sorting, saved views, additional columns and explicit reset actions.
+Inventory is a searchable collection with stock views such as Available, Needs
+checking and Reserved. Selection opens contextual item details. On phones those
+details use a sheet; the desktop supports its inspector. Additional columns,
+exact categories, evidence and bulk actions remain available through controls.
+Bulk selections cover loaded records and retain observed versions.
 
-Item identity, recorded stock, available stock and status remain visible. Phone
-rows group the quantity and status with the item instead of relying on a wide
-scrolled table. Additional columns must not replace required evidence. The
-inspector supports reading; opening the item editor leads to the existing stock,
-metadata and evidence workflows.
+Add item records known identity and stock information. Record arrival and Count
+stock are separate operations. Neither an order nor an arrival silently becomes
+confirmed usable stock. Counts review the exact item and proposed balance before
+saving. A successful count is a receipt; compatibility remains a separate check.
 
-Bulk selection refers to loaded items and keeps its stated limits. Loading,
-partial-load failure, no matches, empty inventory and unavailable records need
-distinct messages and useful recovery actions. Do not turn an unsuccessful read
-into a misleading empty-stock view.
+## Files
 
-## Projects and task flow
+Files groups current scoped records under 3D print, Electronics, CAD & firmware
+and Instructions. Each row retains its filename, revision and decision-relevant
+metadata. Details come from the selected file, never the project cover image.
+Missing groups and failed previews have an add or recovery path in context.
+Empty groups use compact rows; selected details align with the Files heading on
+desktop so the actual files and their actions share the working viewport.
 
-A project starts with its name, revision and stage, followed by stable task tabs.
-Project tools groups revision and project-management actions. Project details is
-closed initially and reveals the build approach, supporting context and settings
-when needed. Destructive actions retain their explicit confirmations.
+Preview uses supported file bytes and integrity checks. Unsupported formats show
+details and Download. The browser does not launch a slicer, review toolpaths or
+start a print: download a 3MF and open it in the chosen slicer, then check printer,
+nozzle, material, supports and toolpaths. Assembly and PCB inspection remain
+separate supported viewers.
 
-Place Plan guidance inside the Plan tab, before its requirements. Missing-detail,
-stock-check and sourcing shortcuts open the relevant work. Do not repeat that
-same guidance above Files, Shopping or Build planning. Requirements precede the
-physical-check queue; physical verification stays available below them.
+Choose one exact current project or workstream revision before uploading.
+History/all-files browsing is read-only. Search and scope survive a tab detour
+within the same project revision; a new revision resets them. Staging or dropping
+a file does not bypass explicit upload or draft protection.
 
-Plan and Files preserve their query, filter and scope through tab detours for the
-same project revision. A new revision resets those choices. Staged files require
-an explicit upload, with the revision scope visible. Build planning has its own
-tab. Design tools reveals Assembly and PCB viewers; existing direct links remain
-valid.
+## Build and specialist tools
 
-Shopping offers owned-stock matching before quoting and keeps canonical selected
-quotes distinct from inventory-linked supplier records. Copy/download includes
-the complete canonical proposal, not just the currently filtered rows. Preserve
-source/date, package quantities, currency, coverage and tax/shipping uncertainty.
-The result is a proposal, never an order or purchase authorisation.
+Build follows five ordered steps: check parts, prepare files, assemble, verify
+the build and record actual use. The sequence is guidance, not automatically
+checked-off physical progress. Real stock/file facts are shown where available;
+task status and model previews never certify a physical assembly.
+The compact sequence remains visible alongside actual-use review on desktop
+and above it on phones. Detailed tools stay disclosed in Build tools.
 
-Receiving retains the originating requirement through item capture, explicit
-count and a separate match review. Do not infer received quantities from package
-size or imply that capture confirms compatibility.
+Build tools contains Set aside stock, Parts and print plates, and Task groups
+and progress as separate disclosures. Verification notes
+open the task-group area, where observations can be recorded with the relevant
+work. Evidence files are attached in Files. There is no separate automated
+physical-verification certificate.
+
+Build retains secondary Assembly, PCB and Used stock routes when the server
+advertises them. Plate plans retain repeated parts, layouts, runs, material/time
+estimates, file hashes and history. Task groups retain status, notes, assignment,
+due date and revision history. Coordinate and placement controls stay available
+inside the geometry tools. Missing capabilities explain the unavailable action.
+
+Actual-use review keeps the exact affected stock and proposed movements visible.
+On hand after and available after are distinct; unavailable balance fields are
+labelled rather than invented. The final confirmation repeats affected items and
+quantities. A committed review becomes a receipt and cannot submit again.
+Reservations hold availability and do not record physical consumption.
+The confirmation keeps the consumption and resulting balances beside Apply;
+separate reservation-release and consumption ledger entries remain inspectable.
 
 ## Drafts, confirmations and recovery
 
-Reuse the shared dialog boundary, explicit initial focus and background isolation.
-Escape, Tab/Shift-Tab and focus restoration must work with nested confirmations
-and newly opened dialogs. The skip link moves focus without changing route.
+Use shared focus boundaries and explicit close controls. Escape, Tab/Shift-Tab,
+focus restoration and phone sheets must work without leaving a hidden active
+form behind another editable surface. A requirement's Check stock action keeps
+its draft mounted while the selected item is counted and reviewed. The receipt
+returns to that part by name; adding an owned item also returns without replacing
+the requirement draft. Counting does not save the match or prove compatibility. Supported reauthentication
+recovery retains observation values and original retry identity in memory, not
+browser storage; it does not display restricted inventory while signed out or
+resubmit automatically.
 
-Draft protection covers project and requirement forms, inventory metadata,
-inline build plans, supplier quotes, workstream edits and staged files. Keep
-editing preserves the draft; Discard is explicit. Use before-unload protection
-only while a protected draft or operation exists.
+An ambiguous write keeps its original payload, version and command identity for
+unchanged retry. A definitive conflict never silently overwrites newer data.
+Recorded receipts do not repeat mutations. Errors, empty collections, filtered
+no-results states and unavailable records have different recovery actions.
+An Add a part failure keeps its error, retained-draft explanation and retry
+together in the footer while the fields scroll, including on short phones.
 
-Stock approval and inspection require their existing reviewed confirmation.
-An uncertain save retains its original payload, version and replay identity until
-acknowledged. Show failure and recovery inside the active confirmation. Do not
-allow a visual simplification to dismiss uncertainty or submit a duplicate command.
+## Accessibility and release evidence
 
-Session renewal restores the reviewed stock observation from memory after
-sign-in without displaying inventory while signed out or resubmitting it
-automatically. Reload the exact item, even outside the initial inventory page.
-A definitive rejection permits editing or explicit discard when appropriate;
-an ambiguous result does not prove rejection. Private draft content is not saved
-in browser storage.
+Maintain readable contrast, visible focus, keyboard/touch operation, reduced
+motion, usable zoom and narrow layouts. Check long names, pending writes, failed
+reads and draft continuity in rendered views. Automated checks do not establish
+full WCAG conformance or replace assistive-technology and maker testing.
 
-After a confirmed stock update, show a read-only acknowledgement and focus it.
-Keep close-out beneath the existing project heading; do not leave an obsolete
-review prompt or disabled edit form as the main saved state.
-
-## Optional viewers
-
-Assembly, PCB and Markdown code loads when those views are opened. Image and
-plain-text previews do not need the Markdown parser. Keep loading and recovery
-local to the affected panel, with the preview's close action and focus boundary
-available.
-
-Renderer recovery must preserve edits, parts and notes, and dispose the previous
-graphics resources. If a failed module remains cached, explain that the user
-should check the connection, save work and refresh. Do not automatically reload
-the workspace or offer a retry that cannot recover the failed resource.
-
-## Language and accessibility
-
-Use short, direct sentences and stable maker terminology: Requirements, Inventory,
-Revision and Stock checks. Action labels name their action. Errors explain what
-failed and the available recovery. Keep exact identity, compatibility, uncertainty
-and provenance available when decision-relevant; technical details do not belong
-in every beginner instruction.
-
-Readable contrast, visible keyboard focus, hover/disabled/loading/error states,
-reduced motion, usable narrow layouts and meaningful control names are acceptance
-requirements. Test rendered views as well as token contrast. Automated accessibility
-checks do not establish full WCAG conformance or replace assistive-technology and
-representative-maker testing.
-
-## Verification and release records
-
-The current overhaul's findings, implementation and acceptance gates are recorded
-in [the professional workspace review](reviews/2026-10-03-professional-workspace-overhaul.md).
-Its validation and release status must be filled from actual results. A source
-change, passing local check, merge and deployed revision are separate outcomes.
-
-The original technical-design release recorded 928 unit/integration tests and
-86 browser flows. Those are historical results, not current verification. Later
-records include the [shared-component migration](reviews/2026-09-20-shadcn-foundation.md),
-[maker experience review](reviews/2026-10-02-maker-experience.md),
-[second refinement review](reviews/2026-10-03-maker-refinements.md) and
-[flow refinement review](reviews/2026-10-03-maker-flow-refinements.md). Each applies
-to its own reviewed revision; dated release status may be superseded by its pull
-request or release task.
-
-Use synthetic records for committed tests and screenshots. Require the public
-source check, build, typecheck, coverage and browser gates before release. Verify
-the deployed image identity, readiness, authenticated routes and retained runtime
-data separately. The presentation change introduces no database migration,
-HTTP/MCP schema change, purchasing permission or physical-operation authority.
+Use synthetic fixtures and public assets for verification. Run the required
+public-source, build, typecheck, coverage and browser gates before release.
+Verify deployed identity and authenticated routes separately. The UI redesign
+introduces no new HTTP/MCP operation, stock semantics or physical-operation
+authority. Existing [review records](reviews/2026-10-03-professional-workspace-overhaul.md)
+and showcase images describe their own revisions, not proof of this build.

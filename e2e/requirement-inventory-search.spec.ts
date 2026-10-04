@@ -1,4 +1,4 @@
-import { clickProjectAction } from "./workspace-controls";
+import { clickProjectAction, openProjectSection } from "./workspace-controls";
 import { expect, test } from "@playwright/test";
 
 test("requirement editing searches beyond the 200-item snapshot and restores that choice after reload", async ({ page }) => {
@@ -24,18 +24,25 @@ test("requirement editing searches beyond the 200-item snapshot and restores tha
   await clickProjectAction(page, "New project");
   await page.getByLabel("Project name", { exact: true }).fill("Synthetic remote stock journey");
   await page.getByRole("button", { name: "Create project", exact: true }).click();
-  await page.locator(".bom-section").getByRole("button", { name: "Add first requirement", exact: true }).click();
-  await page.getByLabel("What do you need?", { exact: true }).fill("Connector for sensor");
-  await page.getByRole("button", { name: "Add requirement", exact: true }).click();
+  await openProjectSection(page, "Parts");
+  await page.locator(".bom-section").getByRole("button", { name: "Add first part", exact: true }).click();
+  await page.getByLabel("Part name", { exact: true }).fill("Connector for sensor");
+  await page.getByRole("button", { name: "Add part", exact: true }).click();
   await page.getByRole("button", { name: "Edit requirement Connector for sensor", exact: true }).click();
-  const edit = page.getByRole("dialog", { name: "Edit requirement", exact: true });
+  const edit = page.getByRole("dialog", { name: "Part details", exact: true });
   await edit.getByRole("button", { name: "Find a different owned item", exact: true }).click();
   const searched = page.waitForRequest((request) => request.url().includes("/api/v1/inventory?") && new URL(request.url()).searchParams.get("q") === "Synthetic beyond-page connector");
   await edit.getByLabel("Search matching inventory").fill("Synthetic beyond-page connector");
   expect(new URL((await searched).url()).searchParams.get("limit")).toBe("25");
   await edit.getByRole("button", { name: "Choose owned item Synthetic beyond-page connector", exact: true }).click();
   await edit.getByRole("button", { name: "Save requirement", exact: true }).click();
-  await expect(page.locator(".bom-row")).toContainText("Synthetic beyond-page connector");
+  const row = page.locator(".bom-row");
+  const openStockDetails = async () => {
+    const disclosure = row.getByRole("button", { name: "Stock details", exact: true });
+    if (await disclosure.getAttribute("aria-expanded") !== "true") await disclosure.click();
+  };
+  await openStockDetails();
+  await expect(row.getByRole("button", { name: "Synthetic beyond-page connector", exact: true })).toBeVisible();
   let failRead = true;
   await page.route(`**/api/v1/inventory/${itemId}`, async (route) => {
     if (failRead) await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: { code: "unavailable", message: "Synthetic reference lookup unavailable" } }) });
@@ -43,10 +50,12 @@ test("requirement editing searches beyond the 200-item snapshot and restores tha
   });
   await page.reload();
   await expect(page.getByRole("alert").filter({ hasText: "referenced inventory item" })).toBeVisible();
-  await expect(page.locator(".bom-row")).toContainText("Referenced stock details unavailable");
-  await expect(page.locator(".bom-row")).not.toContainText("No matching stock");
+  await openStockDetails();
+  await expect(row.getByText("Referenced stock details unavailable", { exact: true })).toBeVisible();
+  await expect(row).not.toContainText("No matching stock");
   failRead = false;
   await page.getByRole("button", { name: "Retry project inventory", exact: true }).click();
-  await expect(page.locator(".bom-row")).toContainText("Synthetic beyond-page connector");
+  await openStockDetails();
+  await expect(row.getByRole("button", { name: "Synthetic beyond-page connector", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Retry project inventory", exact: true })).toHaveCount(0);
 });

@@ -26,7 +26,7 @@ it("renders sourcing as an observation, with explicit prices and unknown shippin
   const html = renderToStaticMarkup(<QuoteForm line={line} root="/synthetic" onSaved={() => undefined} onCancel={() => undefined} />); expect(html).toContain("Save quote"); expect(html).toContain("blank if unknown");
 });
 it("keeps import and planning controls contextual and read-only for archived projects", () => {
-  expect(renderToStaticMarkup(<MakerPlanningTools project={project} items={inventory} onRefresh={async () => true} />)).toContain("Parts, plates and task groups");
+  expect(renderToStaticMarkup(<MakerPlanningTools project={project} items={inventory} onRefresh={async () => true} />)).toContain("Build plan");
   expect(renderToStaticMarkup(<ExistingBomImport project={project} onRefresh={async () => true} />)).toContain("Append requirements from CSV");
   expect(renderToStaticMarkup(<ExistingBomImport project={{ ...project, status: "archived" }} onRefresh={async () => true} />)).toBe("");
   expect(renderToStaticMarkup(<WorkstreamPlanning project={project} />)).toContain("Add task group");

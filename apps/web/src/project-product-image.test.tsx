@@ -33,7 +33,7 @@ it("offers recovery after a failed or undecodable image, and never displays stal
   await screen.findByRole("img");
   view.rerender(<ProductImage project={{ ...fixture(), serverRevisionId: "next" }} />);
   expect(screen.queryByRole("img")).toBeNull();
-  expect(screen.getByText("Show what you’re making")).toBeTruthy();
+  expect(screen.getByText("Add a project image")).toBeTruthy();
   await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalled());
 });
 it("keeps missing-image selection accessible in the compact list", () => {

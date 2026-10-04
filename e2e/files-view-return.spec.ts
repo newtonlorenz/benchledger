@@ -1,4 +1,4 @@
-import { clickProjectAction } from "./workspace-controls";
+import { openBuildTool, clickProjectAction } from "./workspace-controls";
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 
@@ -15,7 +15,7 @@ test("Files keeps workstream scope and search across project tabs and resets for
   });
   expect(created.status(), await created.text()).toBe(201);
   await page.goto(`/#/projects/${id}/build`); await page.reload();
-  await page.getByRole("button", { name: "Add task group", exact: true }).click();
+  await openBuildTool(page, "tasks"); await page.getByRole("button", { name: "Add task group", exact: true }).click();
   await page.getByLabel("Task group name").fill("Synthetic body");
   await page.getByRole("button", { name: "Create task group", exact: true }).click();
   await expect(page.getByText("Task group created.", { exact: true })).toBeVisible();
@@ -28,7 +28,7 @@ test("Files keeps workstream scope and search across project tabs and resets for
   await page.getByRole("button", { name: "Add 1 file", exact: true }).click();
   await expect(page.getByText("1 of 1 file uploaded", { exact: true })).toBeVisible();
   await page.getByLabel("Search project files").fill("body");
-  for (const destination of [/^Requirements/u, /^Build steps/u]) {
+  for (const destination of [/^Parts/u, /^Build/u]) {
     await page.getByRole("tab", { name: destination }).click();
     await expect(page.getByRole("alertdialog")).toHaveCount(0);
     await page.getByRole("tab", { name: /^Files/u }).click();
@@ -37,10 +37,10 @@ test("Files keeps workstream scope and search across project tabs and resets for
     await expect(page.getByRole("button", { name: "Download synthetic-body.step", exact: true })).toBeVisible();
   }
   await page.getByLabel("Choose files to upload").setInputFiles({ name: "staged.step", mimeType: "model/step", buffer: Buffer.from("Not uploaded") });
-  await page.getByRole("tab", { name: /^Requirements/u }).click();
+  await page.getByRole("tab", { name: /^Parts/u }).click();
   await page.getByRole("button", { name: "Keep editing", exact: true }).click();
   await expect(page.getByRole("button", { name: "Add 1 file", exact: true })).toBeEnabled();
-  await page.getByRole("tab", { name: /^Requirements/u }).click();
+  await page.getByRole("tab", { name: /^Parts/u }).click();
   await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click();
   await page.getByRole("tab", { name: /^Files/u }).click();
   await expect(scope).toHaveValue(workstreamScope!);

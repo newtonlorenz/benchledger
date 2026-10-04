@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { AddBomDialog, BomLineRow, NewProjectDialog } from "./App";
 import { ProjectEditingContext } from "./project-editing";
 import { projectNextAction } from "./requirement-journey";
@@ -35,38 +35,41 @@ it("suggests owned stock by name but saves no selection unless explicitly chosen
   const create = vi.fn<(input: BomInput) => Promise<boolean>>().mockResolvedValue(true);
   render(<AddBomDialog items={[spool]} project={projects[0]!} expert={false} onClose={() => undefined} onCreate={create} />);
   expect(screen.queryByRole("textbox", { name: "Search matching inventory" })).toBeNull();
-  expect(screen.queryByRole("textbox", { name: /Requirement note/u })).toBeNull();
-  fireEvent.change(screen.getByLabelText("What do you need?"), { target: { value: "PETG" } });
+  expect(screen.getByRole("textbox", { name: /Specification/u })).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Part name"), { target: { value: "PETG" } });
+  fireEvent.click(screen.getByRole("button", { name: "Match from your stock" }));
   const candidate = screen.getByRole("button", { name: "Choose owned item Synthetic PETG" });
   expect(candidate.getAttribute("aria-pressed")).toBe("false");
   expect(candidate.textContent).toContain("350 g available");
   expect(candidate.textContent).toContain("Physically counted");
-  fireEvent.click(screen.getByRole("button", { name: "Add requirement" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add part" }));
   await waitFor(() => expect(create).toHaveBeenCalledWith({ name: "PETG", requiredQuantity: 1, unit: "each", role: "consumed" }));
 });
 
 it("keeps quantity and unit unchanged on stock selection and explicitly adopts the stock unit", async () => {
   const create = vi.fn<(input: BomInput) => Promise<boolean>>().mockResolvedValue(true);
   render(<AddBomDialog items={[spool]} project={projects[0]!} expert={false} onClose={() => undefined} onCreate={create} />);
-  fireEvent.change(screen.getByLabelText("What do you need?"), { target: { value: "PETG" } });
-  fireEvent.change(screen.getByLabelText("Quantity"), { target: { value: "200" } });
+  fireEvent.change(screen.getByLabelText("Part name"), { target: { value: "PETG" } });
+  fireEvent.change(screen.getByLabelText("Amount needed"), { target: { value: "200" } });
+  fireEvent.click(screen.getByRole("button", { name: "Match from your stock" }));
   fireEvent.click(screen.getByRole("button", { name: "Choose owned item Synthetic PETG" }));
   expect(screen.getByLabelText("Unit")).toHaveProperty("value", "each");
-  expect(screen.getByLabelText("Quantity")).toHaveProperty("value", "200");
+  expect(screen.getByLabelText("Amount needed")).toHaveProperty("value", "200");
   expect(screen.getByRole("status").textContent).toContain("No conversion is inferred");
   fireEvent.click(screen.getByRole("button", { name: "Use grams for this requirement" }));
   expect(screen.getByLabelText("Unit")).toHaveProperty("value", "g");
-  expect(screen.getByLabelText("Quantity")).toHaveProperty("value", "200");
+  expect(screen.getByLabelText("Amount needed")).toHaveProperty("value", "200");
   fireEvent.click(screen.getByRole("button", { name: "Find a different owned item" }));
   fireEvent.change(screen.getByLabelText("Search matching inventory"), { target: { value: "nothing-matches" } });
   expect(screen.getByRole("button", { name: "Choose owned item Synthetic PETG" }).getAttribute("aria-pressed")).toBe("true");
-  fireEvent.click(screen.getByRole("button", { name: "Add requirement" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add part" }));
   await waitFor(() => expect(create).toHaveBeenCalledWith({ name: "PETG", requiredQuantity: 200, unit: "g", role: "consumed", itemId: spool.id }));
 });
 
 it("discloses uncertain quantities instead of presenting them as available", () => {
   render(<AddBomDialog items={[{ ...spool, evidence: "delivered", serverEvidence: "delivered_uncounted" }]} project={projects[0]!} expert={false} onClose={() => undefined} onCreate={async () => true} />);
-  fireEvent.change(screen.getByLabelText("What do you need?"), { target: { value: "PETG" } });
+  fireEvent.change(screen.getByLabelText("Part name"), { target: { value: "PETG" } });
+  fireEvent.click(screen.getByRole("button", { name: "Match from your stock" }));
   const candidate = screen.getByRole("button", { name: "Choose owned item Synthetic PETG" });
   expect(candidate.textContent).toContain("Needs a physical check");
   expect(candidate.textContent).toContain("usable quantity unconfirmed");
@@ -106,16 +109,51 @@ it("restores focus only when returning from supporting inventory capture", async
   const onAddOwnedItem = vi.fn();
   const props = { items: [], project: projects[0]!, expert: false, onClose: vi.fn(), onCreate: async () => true, onAddOwnedItem };
   const view = render(<AddBomDialog {...props} />);
-  fireEvent.change(screen.getByLabelText("What do you need?"), { target: { value: "Synthetic connector" } });
+  fireEvent.change(screen.getByLabelText("Part name"), { target: { value: "Synthetic connector" } });
+  fireEvent.click(screen.getByRole("button", { name: "Match from your stock" }));
   fireEvent.click(screen.getByRole("button", { name: "Add an owned item" }));
   expect(onAddOwnedItem).toHaveBeenCalledWith("Synthetic connector");
   view.rerender(<AddBomDialog {...props} suspended />);
-  expect(screen.queryByRole("dialog", { name: "Add a part, material, or tool", hidden: true })).toBeNull();
+  expect(screen.queryByRole("dialog", { name: "Add a part", hidden: true })).toBeNull();
   view.rerender(<AddBomDialog {...props} />);
-  await waitFor(() => expect(screen.getByRole("button", { name: "Add requirement" })).toBe(document.activeElement));
-  const quantity = screen.getByLabelText("Quantity"); quantity.focus();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Add part" })).toBe(document.activeElement));
+  const quantity = screen.getByLabelText("Amount needed"); quantity.focus();
   fireEvent.change(quantity, { target: { value: "3" } });
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(quantity).toBe(document.activeElement);
-  expect(screen.getByLabelText("What do you need?")).toHaveProperty("value", "Synthetic connector");
+  expect(screen.getByLabelText("Part name")).toHaveProperty("value", "Synthetic connector");
+});
+
+it("keeps the failure and retry together without changing any entered part values", async () => {
+  const create = vi.fn<(input: BomInput) => Promise<boolean | { error: string }>>()
+    .mockResolvedValueOnce({ error: "The project changed. Your part has not been saved." })
+    .mockResolvedValueOnce(true);
+  render(<AddBomDialog items={[spool]} project={projects[0]!} expert={false} onClose={vi.fn()} onCreate={create} />);
+  fireEvent.change(screen.getByLabelText("Part name"), { target: { value: "Synthetic PETG tool" } });
+  fireEvent.change(screen.getByLabelText("Amount needed"), { target: { value: "200" } });
+  fireEvent.change(screen.getByLabelText("Unit"), { target: { value: "g" } });
+  fireEvent.change(screen.getByRole("textbox", { name: /Specification/u }), { target: { value: "Check the spool before reuse." } });
+  fireEvent.click(screen.getByRole("button", { name: "Alternatives and notes" }));
+  fireEvent.change(screen.getByLabelText("How will you use it?"), { target: { value: "reusable" } });
+  fireEvent.click(screen.getByRole("checkbox", { name: "Mark as optional" }));
+  fireEvent.click(screen.getByRole("button", { name: "Match from your stock" }));
+  fireEvent.change(screen.getByLabelText("Search matching inventory"), { target: { value: "Synthetic PETG" } });
+  fireEvent.click(screen.getByRole("button", { name: "Choose owned item Synthetic PETG" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add part" }));
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("Couldn’t save. Your entries are kept.");
+  expect(alert.textContent).toContain("The project changed. Your part has not been saved.");
+  const recovery = alert.closest(".add-part-recovery")! as HTMLElement;
+  const retry = within(recovery).getByRole("button", { name: "Try saving again" });
+  expect(screen.getByLabelText("Part name")).toHaveProperty("value", "Synthetic PETG tool");
+  expect(screen.getByLabelText("Amount needed")).toHaveProperty("value", "200");
+  expect(screen.getByLabelText("Unit")).toHaveProperty("value", "g");
+  expect(screen.getByRole("textbox", { name: /Specification/u })).toHaveProperty("value", "Check the spool before reuse.");
+  expect(screen.getByLabelText("How will you use it?")).toHaveProperty("value", "reusable");
+  expect(screen.getByRole("checkbox", { name: "Mark as optional" }).getAttribute("aria-checked")).toBe("true");
+  expect(screen.getByRole("button", { name: "Find a different owned item" })).toBeTruthy();
+  fireEvent.click(retry);
+  await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+  expect(create.mock.calls[0]).toEqual([{ name: "Synthetic PETG tool", requiredQuantity: 200, unit: "g", role: "reusable", itemId: spool.id, optional: true, note: "Check the spool before reuse." }]);
+  expect(create.mock.calls[1]).toEqual(create.mock.calls[0]);
 });

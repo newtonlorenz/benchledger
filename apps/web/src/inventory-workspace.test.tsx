@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { InventoryInspector, InventoryAiCopy } from "./inventory-inspector";
-import { inventory } from "./mock-data";
+import { inventory, projects } from "./mock-data";
 import { inventoryAiBrief, parseInventoryView, parseSavedInventoryViews, readSavedInventoryViews, saveInventoryViews, inventoryViewsKey, inventoryStockLabel, webInventoryEvidence } from "./inventory-workspace-state";
 
 beforeEach(() => localStorage.clear());
@@ -39,14 +39,14 @@ it("inspects evidence without editing and opens the existing stock editor delibe
   const item = { ...inventory[0]!, serverEvidence: "delivered_uncounted" as const, availableQuantity: 0, reserved: 0 };
   const result = render(<InventoryInspector item={item} category="Electronics" onOpen={onOpen} onClose={onClose} />);
   expect(screen.getByText(/not been physically confirmed/u)).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Stock evidence & record details" }).getAttribute("aria-expanded")).toBe("false");
+  expect(screen.getByRole("button", { name: "History & evidence" }).getAttribute("aria-expanded")).toBe("false");
   expect(screen.queryByRole("button", { name: "Copy for AI" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Stock evidence & record details" }));
+  fireEvent.click(screen.getByRole("button", { name: "Identity & compatibility" }));
   expect(screen.getByText(item.id).closest("[hidden]")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Use with an AI assistant" }));
   expect(screen.getByRole("button", { name: "Copy for AI" })).toBeTruthy();
 
-  fireEvent.click(screen.getByRole("button", { name: "Edit item / record stock" })); expect(onOpen).toHaveBeenCalledWith(item.id);
+  fireEvent.click(screen.getByRole("button", { name: "Open item details" })); expect(onOpen).toHaveBeenCalledWith(item.id);
   fireEvent.click(screen.getByRole("button", { name: "Hide item inspector" })); expect(onClose).toHaveBeenCalledOnce();
   result.rerender(<InventoryInspector onOpen={onOpen} onClose={onClose} />); expect(screen.getByText(/Choose an item/u)).toBeTruthy();
 });
@@ -61,4 +61,19 @@ it("copies only selected records and offers a selectable fallback when the clipb
   fireEvent.click(screen.getByRole("button", { name: "Copy for AI (2)" }));
   const fallback = await screen.findByRole("textbox", { name: "Inventory brief" });
   fireEvent.focus(fallback); await waitFor(() => expect((fallback as HTMLTextAreaElement).selectionEnd).toBe((fallback as HTMLTextAreaElement).value.length));
+});
+
+it("keeps project requirements distinct from consumption and opens the exact part", () => {
+  const item = { ...inventory[0]!, evidence: "delivered" as const, serverEvidence: "delivered_uncounted" as const, availableQuantity: 0, quantity: 24, reserved: 3, lastCounted: "2026-09-18", provenance: { observedAt: "2026-09-18T10:00:00Z" } };
+  const project = { ...projects[0]!, bom: [{ id: "part-screws", version: 1, label: "Enclosure screws", itemId: item.id, required: 8, unit: "each" as const }] };
+  const onCountStock = vi.fn(), onOpenProjectPart = vi.fn();
+  render(<InventoryInspector item={item} projects={[project]} onOpen={vi.fn()} onCountStock={onCountStock} onOpenProjectPart={onOpenProjectPart} onClose={vi.fn()} />);
+  expect(screen.getByText(/24 pieces recorded, unconfirmed/)).toBeTruthy();
+  expect(screen.getByText(/Enclosure screws · Needs 8 pieces/)).toBeTruthy();
+  expect(screen.getByText("Required amounts are not a record of stock used.")).toBeTruthy();
+  expect(screen.getByText("Last physical count").nextElementSibling?.textContent).toBe("Not recorded");
+  fireEvent.click(screen.getByRole("button", { name: "Count stock" }));
+  expect(onCountStock).toHaveBeenCalledExactlyOnceWith(item.id);
+  fireEvent.click(screen.getByRole("button", { name: `Open Enclosure screws in ${project.name}` }));
+  expect(onOpenProjectPart).toHaveBeenCalledExactlyOnceWith(project.id, "part-screws");
 });

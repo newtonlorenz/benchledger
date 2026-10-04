@@ -1,5 +1,5 @@
+import "./specialist-journey.css";
 import { Alert } from "./components/ui/alert";
-import { Card } from "./components/ui/card";
 import { Label } from "./components/ui/label";
 import { NativeSelect, NativeSelectOption } from "./components/ui/native-select";
 import { Disclosure, DisclosureTrigger, DisclosureContent } from "./components/ui/disclosure";
@@ -21,16 +21,16 @@ export function WorkstreamPlanning({ project, readOnly = false, onProjectRefresh
   const [creationSaved, setCreationSaved] = useState(false), [projectRefreshError, setProjectRefreshError] = useState(false);
   const source = useWorkflowRead<WorkPage>(`${root}/workstreams?limit=20${cursor ? `&cursor=${cursor}` : ""}`);
   const team = useWorkflowRead<{ members: { id: string; name: string }[] }>("/team/directory");
-  return <Card asChild><section className="surface workstream-planning" aria-label="Task groups">
-    <h2>Task groups</h2><p>Track design, electronics, firmware and assembly separately. A task group marked done does not certify a physical build.</p>
+  return <section id={`build-task-groups-${project.id}`} className="surface workstream-planning" aria-label="Task groups">
+    <h2 tabIndex={-1}>Task groups</h2><p>Give each stage a name, record its progress and keep build or verification notes with it.</p>
     {creationSaved && <p role="status" className="form-success">Task group created.{projectRefreshError ? " The project context could not refresh. Reload before attaching files to the new task group." : ""}</p>}
     {source.loading && <p role="status">Loading task groups…</p>}{source.error && <Alert asChild><p role="alert">{source.error}</p></Alert>}
     {source.data?.data.map((row) => <WorkstreamRow key={`${row.item.id}:${row.assignment?.version ?? 0}`} row={row} root={root} members={team.data?.members ?? []} readOnly={readOnly || project.status === "archived"} onSaved={source.reload} />)}
-    {source.data?.total === 0 && !source.loading && !source.error && !creationSaved && <p>No task groups recorded. Add a task group, such as firmware or assembly.</p>}
+    {source.data?.total === 0 && !source.loading && !source.error && !creationSaved && <p>Add a task group when you need to track a stage, such as wiring, assembly or verification.</p>}
     {!readOnly && project.status !== "archived" && (creating ? <NewWorkstream root={root} onCancel={() => setCreating(false)} onSaved={() => { setCreating(false); setCreationSaved(true); source.reload(); if (onProjectRefresh) void onProjectRefresh().then((ok) => setProjectRefreshError(!ok)).catch(() => setProjectRefreshError(true)); }} /> : <Button variant="outline" type="button" className="button button-secondary" disabled={source.loading || Boolean(source.error)} onClick={() => { setCreationSaved(false); setCreating(true); }}>Add task group</Button>)}
     <div className="workflow-pagination">{cursor && <Button variant="ghost" type="button" className="button button-quiet" onClick={() => navigation ? navigation.request(() => setCursor(undefined)) : setCursor(undefined)}>First task groups</Button>}{source.data?.nextCursor && <Button variant="ghost" type="button" className="button button-quiet" onClick={() => navigation ? navigation.request(() => setCursor(source.data!.nextCursor)) : setCursor(source.data!.nextCursor)}>Next task groups</Button>}<Button variant="ghost" type="button" className="text-button" disabled={creating || source.loading} onClick={() => navigation ? navigation.request(source.reload) : source.reload()}>Refresh task groups</Button></div>
     <RevisionHistory project={project} />
-  </section></Card>;
+  </section>;
 }
 function NewWorkstream({ root, onCancel, onSaved }: { root: string; onCancel(): void; onSaved(): void }) {
   const [name, setName] = useState(""), [kind, setKind] = useState("assembly");
@@ -50,9 +50,9 @@ function WorkstreamRow({ row, root, members, readOnly, onSaved }: { row: WorkRow
   return <Disclosure className="workstream-row"><DisclosureTrigger>{row.item.name} · {({ todo: "To do", in_progress: "In progress", blocked: "Blocked", done: "Done" })[basis?.status ?? "todo"]}</DisclosureTrigger><DisclosureContent><p>{row.item.kind} · revision {row.revision?.number ?? "not recorded"}{row.revision ? `: ${row.revision.name}` : ""}</p>
     <form onSubmit={(event) => { event.preventDefault(); void save(); }}><fieldset className="correction-fields" disabled={readOnly || command.busy || command.uncertain}>
       <Label className="form-field"><span>Task group status</span><NativeSelect aria-label={`Status for ${row.item.name}`} value={status} onChange={(event) => setStatus(event.target.value as typeof status)}>{["todo", "in_progress", "blocked", "done"].map((value) => <NativeSelectOption key={value} value={value}>{value.replaceAll("_", " ")}</NativeSelectOption>)}</NativeSelect></Label>
-      <Label className="form-field"><span>Due date</span><Input type="date" value={due} onChange={(event) => setDue(event.target.value)} /></Label>
+      <Disclosure className="workflow-extra-fields"><DisclosureTrigger>Assignment and due date</DisclosureTrigger><DisclosureContent><Label className="form-field"><span>Due date</span><Input type="date" value={due} onChange={(event) => setDue(event.target.value)} /></Label>
       {members.length > 0 && <Label className="form-field"><span>Assignee</span><NativeSelect aria-label={`Assignee for ${row.item.name}`} value={assignee} onChange={(event) => setAssignee(event.target.value)}><NativeSelectOption value="">Unassigned</NativeSelectOption>{members.map((member) => <NativeSelectOption key={member.id} value={member.id}>{member.name}</NativeSelectOption>)}</NativeSelect></Label>}
-      <Label className="form-field"><span>Task group notes</span><Textarea maxLength={5000} rows={3} value={notes} onChange={(event) => setNotes(event.target.value)} /></Label>
+      </DisclosureContent></Disclosure><Label className="form-field"><span>Task group notes</span><Textarea maxLength={5000} rows={3} value={notes} onChange={(event) => setNotes(event.target.value)} /></Label>
     </fieldset>{command.error && <Alert asChild><p role="alert">{command.error}</p></Alert>}{receipt && !dirty && <p role="status" className="form-success">Task group progress saved.</p>}{!readOnly && <Button variant="outline" type="submit" className="button button-secondary" disabled={command.busy || !dirty && !command.uncertain}>{command.uncertain ? "Retry unchanged assignment" : "Save task group progress"}</Button>}</form>
   </DisclosureContent></Disclosure>;
 }

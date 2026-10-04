@@ -62,3 +62,24 @@ it("hides an empty removal history but makes a removed last requirement recovera
   await waitFor(() => expect(actions.restore).toHaveBeenCalledWith(projects[0]!.bom[0]!));
   await waitFor(() => expect(screen.queryByRole("button", { name: "Removed requirements" })).toBeNull());
 });
+
+it("retains edited part fields while checking stock and selecting a newly added owned item", () => {
+  const line = projects[0]!.bom[0]!;
+  const check = vi.fn(), add = vi.fn();
+  const props = { line, items: inventory, onSave: vi.fn(), onRetire: vi.fn(), onClose: vi.fn(), onBusy: vi.fn(), onCheckStock: check, onAddOwnedItem: add };
+  const view = render(<RequirementEditForm {...props}/>);
+  fireEvent.change(screen.getByLabelText("Requirement name"), { target: { value: "Edited part" } });
+  fireEvent.change(screen.getByLabelText("Required quantity"), { target: { value: "12" } });
+  fireEvent.change(screen.getByLabelText("Specification and notes"), { target: { value: "Confirm exact fit before use." } });
+  fireEvent.click(screen.getByRole("button", { name: "Check this stock" }));
+  expect(check).toHaveBeenCalledWith(line.itemId);
+  fireEvent.click(screen.getByRole("button", { name: "Add an owned item" }));
+  expect(add).toHaveBeenCalledWith("Edited part");
+  const newId = inventory.find(item => item.id !== line.itemId)!.id;
+  view.rerender(<RequirementEditForm {...props} initialItemId={newId}/>);
+  expect(screen.getByLabelText("Requirement name")).toHaveProperty("value", "Edited part");
+  expect(screen.getByLabelText("Required quantity")).toHaveProperty("value", "12");
+  expect(screen.getByLabelText("Specification and notes")).toHaveProperty("value", "Confirm exact fit before use.");
+  fireEvent.click(screen.getByRole("button", { name: "Check this stock" }));
+  expect(check).toHaveBeenLastCalledWith(newId);
+});

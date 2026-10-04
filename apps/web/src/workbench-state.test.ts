@@ -67,6 +67,7 @@ describe("workbench task model", () => {
     const raw = JSON.stringify({ pins: Array.from({ length: 150 }, (_, i) => String(i)), recent: Array.from({ length: 30 }, (_, i) => String(i)) });
     expect(parseHomePreferences(raw).pins).toHaveLength(100); expect(parseHomePreferences(raw).recent).toHaveLength(12);
     expect(homePreferenceKey(true)).not.toBe(homePreferenceKey(false));
+    expect(parseHomePreferences('{"filter":"archived","view":"list"}')).toMatchObject({ filter: "archived", view: "list" });
   });
   it("records recent IDs and remains usable without browser storage", () => {
     const data = new Map<string, string>(); vi.stubGlobal("localStorage", { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => data.set(key, value) });

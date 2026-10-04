@@ -25,7 +25,7 @@ function DraftHarness({ kind, create = vi.fn(async () => "created" as const) }: 
 for (const kind of ["project", "requirement"] as const) {
   it(`retains the ${kind} draft after Escape until discard is chosen`, async () => {
     render(<DraftHarness kind={kind} />);
-    const name = kind === "project" ? "Project name" : "What do you need?";
+    const name = kind === "project" ? "Project name" : "Part name";
     fireEvent.change(screen.getByLabelText(name, { exact: true }), { target: { value: "Synthetic draft" } });
     fireEvent.keyDown(screen.getByLabelText(name, { exact: true }), { key: "Escape" });
     await screen.findByRole("alertdialog");
@@ -45,9 +45,9 @@ for (const kind of ["project", "requirement"] as const) {
     view.unmount();
     const create = vi.fn(async () => "created" as const);
     render(<DraftHarness kind={kind} create={create} />);
-    fireEvent.change(screen.getByLabelText(kind === "project" ? "Project name" : "What do you need?", { exact: true }), { target: { value: "Synthetic draft" } });
+    fireEvent.change(screen.getByLabelText(kind === "project" ? "Project name" : "Part name", { exact: true }), { target: { value: "Synthetic draft" } });
     if (kind === "project") fireEvent.change(screen.getByLabelText("Project goal", { exact: true }), { target: { value: "Check the build" } });
-    fireEvent.click(screen.getByRole("button", { name: kind === "project" ? "Create project" : "Add requirement" }));
+    fireEvent.click(screen.getByRole("button", { name: kind === "project" ? "Create project" : "Add part" }));
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(screen.queryByRole("alertdialog")).toBeNull();

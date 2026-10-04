@@ -1,3 +1,4 @@
+import { navigateWorkspace } from "./workspace-controls";
 import { expect, test, type Page } from "@playwright/test";
 
 async function signIn(page: Page) {
@@ -34,9 +35,9 @@ test("a first commissioning auth rejection remains editable after a post-login v
   });
   await page.goto("/"); await signIn(page);
   await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await navigateWorkspace(page, "Settings");
   await page.getByRole("switch", { name: "Technical details", exact: true }).check();
-  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await navigateWorkspace(page, "Inventory");
   const row = page.locator(".inventory-table tbody tr").filter({ hasText: item.name });
   await row.focus(); await row.press("Enter");
   const drawer = page.getByRole("dialog");
@@ -77,7 +78,7 @@ test("a first commissioning auth rejection remains editable after a post-login v
   await guard.getByRole("button", { name: "Discard changes and leave", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
-  await page.getByRole("button", { name: /^Projects/u }).click();
+  await navigateWorkspace(page, "Projects");
   await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
   expect(writes).toHaveLength(2);
   expect(pageErrors).toEqual([]);
@@ -109,9 +110,9 @@ test("a definitively rejected observation can be discarded when its item is gone
   });
   await page.goto("/"); await signIn(page);
   await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await navigateWorkspace(page, "Settings");
   await page.getByRole("switch", { name: "Technical details", exact: true }).check();
-  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await navigateWorkspace(page, "Inventory");
   const row = page.locator(".inventory-table tbody tr").filter({ hasText: item.name });
   await row.focus(); await row.press("Enter");
   const drawer = page.getByRole("dialog");
@@ -133,7 +134,7 @@ test("a definitively rejected observation can be discarded when its item is gone
   const readsBeforeDiscard = exactReads;
   await page.getByRole("button", { name: "Discard observation and reload", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Cannot open workspace", exact: true })).toHaveCount(0);
-  await page.getByRole("button", { name: /^Projects/u }).click();
+  await navigateWorkspace(page, "Projects");
   await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
@@ -175,11 +176,10 @@ for (const scenario of [
     await page.goto("/"); await signIn(page);
     await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
     if (scenario.operation === "commission") {
-      await page.getByRole("button", { name: "Settings", exact: true }).click();
+      await navigateWorkspace(page, "Settings");
       await page.getByRole("switch", { name: "Technical details", exact: true }).check();
     }
-    if (scenario.width < 800) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
-    await page.getByRole("button", { name: "Inventory", exact: true }).click();
+    await navigateWorkspace(page, "Inventory");
     const row = page.locator(".inventory-table tbody tr").filter({ hasText: item.name });
     await row.focus(); await row.press("Enter");
     const drawer = page.getByRole("dialog");

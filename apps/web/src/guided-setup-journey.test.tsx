@@ -17,6 +17,8 @@ it("previews a name and requirement without forcing planning decisions", async (
   fireEvent.change(screen.getByLabelText("Requirement 1 name"), { target: { value: "Sensor board" } });
   fireEvent.click(screen.getByRole("button", { name: "Preview complete project" }));
   await waitFor(() => expect(preview).toHaveBeenCalledOnce());
+  expect(await screen.findByRole("alert")).toBe(document.activeElement);
+  expect(screen.getByLabelText("Requirement 1 name")).toHaveProperty("value", "Sensor board");
   expect(preview.mock.calls[0]![0]).toMatchObject({ project: { name: "Desk sensor", description: "" }, revision: { fabricationRoute: "undecided" }, bomLines: [{ name: "Sensor board", requiredQuantity: 1 }], reservations: [] });
 });
 
@@ -85,4 +87,15 @@ it("preserves a searched stock selection and changes its unit only by explicit c
   fireEvent.click(screen.getByRole("button", { name: "Preview complete project" }));
   await waitFor(() => expect(preview).toHaveBeenCalledOnce());
   expect(preview.mock.calls[0]![0]).toMatchObject({ bomLines: [{ name: "Filament", itemId: "remote-filament", unit: "gram", requiredQuantity: 200 }] });
+});
+
+it("places the first part action before optional setup sources", () => {
+  render(<GuidedSetup adapter={createSampleWorkspaceAdapter()} items={[]} onDone={async () => undefined} onBusy={() => undefined} />);
+  const add = screen.getByRole("button", { name: "Add draft requirement" });
+  const template = screen.getByRole("button", { name: "Start from a maker template" });
+  const importer = screen.getByRole("button", { name: "Import requirements CSV" });
+  expect(add.compareDocumentPosition(template) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(add.compareDocumentPosition(importer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(template.getAttribute("aria-expanded")).toBe("false");
+  expect(importer.getAttribute("aria-expanded")).toBe("false");
 });

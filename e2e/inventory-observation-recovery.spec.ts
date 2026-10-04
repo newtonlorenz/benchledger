@@ -1,3 +1,4 @@
+import { navigateWorkspace } from "./workspace-controls";
 import { expect, test, type Page } from "@playwright/test";
 
 async function openInventory(page: Page, width: number) {
@@ -5,8 +6,7 @@ async function openInventory(page: Page, width: number) {
   await page.getByLabel("Workspace password").fill("demo-password-please-change");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
-  if (width < 800) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
-  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await navigateWorkspace(page, "Inventory");
 }
 
 for (const width of [390, 1440]) {

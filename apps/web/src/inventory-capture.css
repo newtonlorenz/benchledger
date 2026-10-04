@@ -1,0 +1,78 @@
+/* Capture and guided setup use the same quiet hierarchy as the main workspace. */
+.inventory-capture { min-width: 0; }
+.inventory-capture .dialog-intro { margin-top: 18px; }
+.inventory-capture-context { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-block: 12px; color: var(--muted-foreground); font-size: 14px; }
+.inventory-capture-context button { padding-inline: 0; color: var(--primary); }
+.inventory-capture .inventory-selection-summary { justify-content: space-between; gap: 12px; padding: 14px 0; border: 0; border-bottom: 1px solid var(--border); background: transparent; }
+.inventory-capture .inventory-selection-summary > span > strong { font-size: 12px; font-weight: 500; letter-spacing: 0; text-transform: none; }
+.inventory-capture-form > .form-field, .inventory-capture-form > .form-row { margin-top: 18px; }
+.inventory-capture-form > .form-row .form-field { margin-top: 0; }
+.inventory-capture .inventory-capture-details, .catalog-inventory-flow .inventory-capture-details, .catalog-create-form .inventory-capture-details { margin-top: 24px; border-top: 1px solid var(--border); }
+.inventory-capture-details > [data-disclosure="trigger"], .catalog-browse-details > [data-disclosure="trigger"] { min-height: 48px; font-size: 15px; }
+.inventory-capture-count { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }
+.inventory-capture-count .check-field { min-height: 44px; margin: 0; align-items: center; font-size: 15px; }
+.inventory-capture-count .form-hint { margin-top: 4px; }
+.catalog-inventory-flow .catalog-combobox { margin-top: 22px; }
+.catalog-inventory-flow .field-hint { font-size: 14px; line-height: 1.5; }
+.catalog-inventory-flow .catalog-browse-details { margin-block: 18px 8px; border-top: 1px solid var(--border); }
+.catalog-inventory-flow .catalog-no-results { margin-top: 20px; padding: 16px 0; border: 0; border-top: 1px solid var(--border); background: transparent; }
+.catalog-inventory-flow .catalog-no-results p { margin-bottom: 12px; font-size: 14px; line-height: 1.5; }
+.catalog-inventory-flow .exact-product-card { display: block; margin-top: 22px; padding: 0 0 18px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; }
+.catalog-inventory-flow .exact-product-card h3 { margin: 0 0 6px; font-size: 22px; line-height: 1.3; letter-spacing: -.02em; }
+.catalog-inventory-flow .exact-product-card p { color: var(--muted-foreground); font-size: 14px; line-height: 1.5; }
+.catalog-inventory-flow .link-state-note { margin-block: 12px; padding: 0; border: 0; background: transparent; font-size: 14px; line-height: 1.5; }
+.catalog-create-form { margin-top: 22px; padding: 0; border: 0; background: transparent; }
+.catalog-create-heading { display: block; margin-bottom: 20px; }
+.catalog-create-heading h3 { margin: 0 0 8px; font-size: 22px; }
+.catalog-create-heading p { color: var(--muted-foreground); font-size: 14px; line-height: 1.5; }
+.catalog-create-form .catalog-printer-volume-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 20px; padding: 0; border: 0; }
+.catalog-printer-volume-fields legend { margin-bottom: 8px; font-size: 15px; font-weight: 500; }
+.catalog-create-form .catalog-printer-volume-fields .form-field { margin-top: 0; }
+.guided-setup { min-width: 0; }
+.guided-setup .workflow-steps { display: flex; gap: 16px; padding: 0 0 16px; border-bottom: 1px solid var(--border); background: transparent; }
+.guided-setup .workflow-steps li { display: flex; align-items: center; gap: 8px; padding: 0; color: var(--muted-foreground); font-size: 14px; }
+.guided-setup .workflow-steps li[aria-current="step"] { color: var(--foreground); font-weight: 600; }
+.guided-setup .workflow-steps li span { display: grid; width: 24px; height: 24px; place-items: center; border: 1px solid var(--border); background: transparent; color: inherit; font-size: 12px; }
+.guided-setup .workflow-steps li[aria-current="step"] span { border-color: var(--primary); background: var(--primary); color: var(--primary-foreground); }
+.guided-setup .setup-parts-heading { margin-top: 24px; margin-bottom: 10px; font-size: 18px; }
+.guided-setup .empty-guidance { padding: 0; color: var(--muted-foreground); font-size: 14px; line-height: 1.5; }
+.guided-setup .setup-add-part { margin-block: 16px 24px; }
+.guided-setup .intake-row { margin-top: 16px; padding: 4px 0 16px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; }
+.guided-setup .intake-row > .form-field { margin-top: 14px; }
+.guided-setup .intake-row > .form-row .form-field { margin-top: 14px; }
+.guided-setup .intake-row > .text-button { min-height: 44px; padding-inline: 0; color: var(--muted-foreground); font-size: 13px; }
+.guided-setup .correction-fields > [data-disclosure="root"] { border-top: 1px solid var(--border); }
+.guided-setup [data-disclosure="trigger"] { min-height: 48px; font-size: 14px; }
+.guided-setup [data-disclosure="content"] > p { margin-block: 10px 16px; color: var(--muted-foreground); font-size: 14px; line-height: 1.5; }
+.guided-setup .setup-template-actions { display: grid; gap: 2px; }
+.guided-setup .setup-template-actions button { justify-content: start; min-height: 44px; border: 0; background: transparent; }
+.guided-setup .setup-review, .guided-setup .setup-created { padding-top: 20px; }
+.guided-setup .setup-review h3, .guided-setup .setup-created h3 { margin-bottom: 10px; font-size: 22px; }
+.guided-setup .setup-review-status { margin-block: 12px; color: var(--muted-foreground); font-size: 14px; }
+.guided-setup .setup-review-status:empty { display: none; }
+.guided-setup .setup-review-lines { display: grid; gap: 0; padding: 0; list-style: none; }
+.guided-setup .setup-review-lines li { display: grid; gap: 5px; padding: 16px 0; border: 0; border-bottom: 1px solid var(--border); background: transparent; }
+.guided-setup .setup-review-lines li span, .guided-setup .setup-review-lines li small { color: var(--muted-foreground); font-size: 14px; }
+.guided-setup .csv-mapping { margin-top: 20px; padding: 18px 0 0; border: 0; border-top: 1px solid var(--border); background: transparent; }
+@media (max-width: 600px) {
+  .inventory-capture input, .inventory-capture select, .inventory-capture textarea, .catalog-inventory-flow input, .catalog-inventory-flow select, .guided-setup input, .guided-setup select, .guided-setup textarea { font-size: 16px; min-height: 44px; }
+  .inventory-capture-context { flex-wrap: wrap; gap: 0 12px; }
+  .inventory-capture-form .form-row, .catalog-create-form .form-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .inventory-capture-form .inventory-capture-details .form-row { grid-template-columns: minmax(0, 1fr); }
+  .guided-setup .workflow-steps { gap: 12px; }
+  .guided-setup .workflow-steps li { gap: 6px; font-size: 13px; }
+}
+.guided-setup .workflow-steps li { border: 0; }
+.guided-setup .workflow-steps li span { font-family: var(--font-ui); }
+.guided-setup .correction-fields > [data-disclosure="root"] { padding: 0; border: 0; border-top: 1px solid var(--border); border-radius: 0; }
+.dialog:has(.guided-setup) .dialog-actions { position: static; bottom: auto; padding-block: 20px 0; background: transparent; }
+.dialog:has(.guided-setup) { width: min(740px, calc(100vw - 48px)); }
+@media (max-width: 800px) { .dialog:has(.guided-setup) { width: 100%; max-width: none; } }
+
+/* Keep a failed part save and its retry together while the retained fields scroll. */
+.dialog > .add-part-form { overflow: hidden; }
+.dialog > .add-part-form > .add-part-fields { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 20px; }
+.add-part-fields > .form-hint { margin-top: 16px; }
+.dialog > .add-part-form > .add-part-recovery { flex: 0 0 auto; padding-top: 16px; border-top: 1px solid var(--border); background: var(--surface-strong); }
+.dialog .add-part-recovery > .form-error { margin-top: 0; font-size: 14px; }
+.dialog .add-part-recovery > .dialog-actions { position: static; margin-top: 0; padding-block: 12px 0; border-top: 0; }

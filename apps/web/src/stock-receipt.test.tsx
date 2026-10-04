@@ -16,7 +16,7 @@ it("continues only to the original active revision and requirement", () => {
 it("keeps unconfirmed inventory distinct from counted and matched stock", () => {
   const review = vi.fn(); render(<ReceivedStockNextStep context={context} item={{ ...inventory[0]!, evidence: "delivered" }} project={project} onReview={review} />);
   expect(screen.getByText(/Confirm its physical count above/)).toBeTruthy(); expect(review).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Review this item for the requirement" })); expect(review).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole("button", { name: `Return to ${context.lineName}` })); expect(review).toHaveBeenCalledOnce();
 });
 it("preserves the saved inventory outcome when the project revision has changed", () => {
   render(<ReceivedStockNextStep context={context} item={inventory[0]!} project={{ ...project, serverRevisionId: "new-revision" }} onReview={vi.fn()} />);

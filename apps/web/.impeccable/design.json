@@ -1,22 +1,629 @@
 {
   "schemaVersion": 2,
-  "title": "BenchLedger shadcn workspace",
+  "generatedAt": "2026-10-04T12:25:35.812559+00:00",
+  "title": "Design System: BenchLedger workspace",
   "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "Cobalt",
+        "tonalRamp": [
+          "oklch(15.00% 0.2269 262.69)",
+          "oklch(26.43% 0.2269 262.69)",
+          "oklch(37.86% 0.2269 262.69)",
+          "oklch(49.29% 0.2269 262.69)",
+          "oklch(60.71% 0.2269 262.69)",
+          "oklch(72.14% 0.2269 262.69)",
+          "oklch(83.57% 0.2269 262.69)",
+          "oklch(95.00% 0.2269 262.69)"
+        ]
+      },
+      "primary-dark": {
+        "role": "primary",
+        "displayName": "Cobalt (dark)",
+        "tonalRamp": [
+          "oklch(15.00% 0.0987 264.58)",
+          "oklch(26.43% 0.0987 264.58)",
+          "oklch(37.86% 0.0987 264.58)",
+          "oklch(49.29% 0.0987 264.58)",
+          "oklch(60.71% 0.0987 264.58)",
+          "oklch(72.14% 0.0987 264.58)",
+          "oklch(83.57% 0.0987 264.58)",
+          "oklch(95.00% 0.0987 264.58)"
+        ]
+      },
+      "primary-foreground": {
+        "role": "primary",
+        "displayName": "On cobalt",
+        "tonalRamp": [
+          "oklch(15.00% 0.0000 0.00)",
+          "oklch(26.43% 0.0000 0.00)",
+          "oklch(37.86% 0.0000 0.00)",
+          "oklch(49.29% 0.0000 0.00)",
+          "oklch(60.71% 0.0000 0.00)",
+          "oklch(72.14% 0.0000 0.00)",
+          "oklch(83.57% 0.0000 0.00)",
+          "oklch(95.00% 0.0000 0.00)"
+        ]
+      },
+      "primary-foreground-dark": {
+        "role": "primary",
+        "displayName": "On cobalt (dark)",
+        "tonalRamp": [
+          "oklch(15.00% 0.0700 262.18)",
+          "oklch(26.43% 0.0700 262.18)",
+          "oklch(37.86% 0.0700 262.18)",
+          "oklch(49.29% 0.0700 262.18)",
+          "oklch(60.71% 0.0700 262.18)",
+          "oklch(72.14% 0.0700 262.18)",
+          "oklch(83.57% 0.0700 262.18)",
+          "oklch(95.00% 0.0700 262.18)"
+        ]
+      },
+      "primary-hover": {
+        "role": "primary",
+        "displayName": "Cobalt hover",
+        "tonalRamp": [
+          "oklch(15.00% 0.1905 262.92)",
+          "oklch(26.43% 0.1905 262.92)",
+          "oklch(37.86% 0.1905 262.92)",
+          "oklch(49.29% 0.1905 262.92)",
+          "oklch(60.71% 0.1905 262.92)",
+          "oklch(72.14% 0.1905 262.92)",
+          "oklch(83.57% 0.1905 262.92)",
+          "oklch(95.00% 0.1905 262.92)"
+        ]
+      },
+      "primary-hover-dark": {
+        "role": "primary",
+        "displayName": "Cobalt hover (dark)",
+        "tonalRamp": [
+          "oklch(15.00% 0.0731 265.19)",
+          "oklch(26.43% 0.0731 265.19)",
+          "oklch(37.86% 0.0731 265.19)",
+          "oklch(49.29% 0.0731 265.19)",
+          "oklch(60.71% 0.0731 265.19)",
+          "oklch(72.14% 0.0731 265.19)",
+          "oklch(83.57% 0.0731 265.19)",
+          "oklch(95.00% 0.0731 265.19)"
+        ]
+      },
+      "selection": {
+        "role": "primary",
+        "displayName": "Cobalt wash",
+        "tonalRamp": [
+          "oklch(15.00% 0.0173 264.49)",
+          "oklch(26.43% 0.0173 264.49)",
+          "oklch(37.86% 0.0173 264.49)",
+          "oklch(49.29% 0.0173 264.49)",
+          "oklch(60.71% 0.0173 264.49)",
+          "oklch(72.14% 0.0173 264.49)",
+          "oklch(83.57% 0.0173 264.49)",
+          "oklch(95.00% 0.0173 264.49)"
+        ]
+      },
+      "selection-dark": {
+        "role": "primary",
+        "displayName": "Cobalt wash (dark)",
+        "tonalRamp": [
+          "oklch(15.00% 0.0550 255.19)",
+          "oklch(26.43% 0.0550 255.19)",
+          "oklch(37.86% 0.0550 255.19)",
+          "oklch(49.29% 0.0550 255.19)",
+          "oklch(60.71% 0.0550 255.19)",
+          "oklch(72.14% 0.0550 255.19)",
+          "oklch(83.57% 0.0550 255.19)",
+          "oklch(95.00% 0.0550 255.19)"
+        ]
+      },
+      "background": {
+        "role": "neutral",
+        "displayName": "Warm paper",
+        "tonalRamp": [
+          "oklch(15.00% 0.0026 106.45)",
+          "oklch(26.43% 0.0026 106.45)",
+          "oklch(37.86% 0.0026 106.45)",
+          "oklch(49.29% 0.0026 106.45)",
+          "oklch(60.71% 0.0026 106.45)",
+          "oklch(72.14% 0.0026 106.45)",
+          "oklch(83.57% 0.0026 106.45)",
+          "oklch(95.00% 0.0026 106.45)"
+        ]
+      },
+      "background-dark": {
+        "role": "neutral",
+        "displayName": "Warm paper (dark)",
+        "tonalRamp": [
+          "oklch(15.00% 0.0218 260.51)",
+          "oklch(26.43% 0.0218 260.51)",
+          "oklch(37.86% 0.0218 260.51)",
+          "oklch(49.29% 0.0218 260.51)",
+          "oklch(60.71% 0.0218 260.51)",
+          "oklch(72.14% 0.0218 260.51)",
+          "oklch(83.57% 0.0218 260.51)",
+          "oklch(95.00% 0.0218 260.51)"
+        ]
+      },
+      "card": {
+        "role": "neutral",
+        "displayName": "Working surface",
+        "tonalRamp": [
+          "oklch(15.00% 0.0000 0.00)",
+          "oklch(26.43% 0.0000 0.00)",
+          "oklch(37.86% 0.0000 0.00)",
+          "oklch(49.29% 0.0000 0.00)",
+          "oklch(60.71% 0.0000 0.00)",
+          "oklch(72.14% 0.0000 0.00)",
+          "oklch(83.57% 0.0000 0.00)",
+          "oklch(95.00% 0.0000 0.00)"
+        ]
+      },
+      "card-dark": {
+        "role": "neutral",
+        "displayName": "Working surface (dark)",
+        "tonalRamp": [
+          "oklch(15.00% 0.0398 260.91)",
+          "oklch(26.43% 0.0398 260.91)",
+          "oklch(37.86% 0.0398 260.91)",
+          "oklch(49.29% 0.0398 260.91)",
+          "oklch(60.71% 0.0398 260.91)",
+          "oklch(72.14% 0.0398 260.91)",
+          "oklch(83.57% 0.0398 260.91)",
+          "oklch(95.00% 0.0398 260.91)"
+        ]
+      },
+      "foreground": {
+        "role": "neutral",
+        "displayName": "Graphite",
+        "tonalRamp": [
+          "oklch(15.00% 0.0398 260.91)",
+          "oklch(26.43% 0.0398 260.91)",
+          "oklch(37.86% 0.0398 260.91)",
+          "oklch(49.29% 0.0398 260.91)",
+          "oklch(60.71% 0.0398 260.91)",
+          "oklch(72.14% 0.0398 260.91)",
+          "oklch(83.57% 0.0398 260.91)",
+          "oklch(95.00% 0.0398 260.91)"
+        ]
+      },
+      "foreground-dark": {
+        "role": "neutral",
+        "displayName": "Graphite (dark)",
+        "tonalRamp": [
+          "oklch(15.00% 0.0120 259.82)",
+          "oklch(26.43% 0.0120 259.82)",
+          "oklch(37.86% 0.0120 259.82)",
+          "oklch(49.29% 0.0120 259.82)",
+          "oklch(60.71% 0.0120 259.82)",
+          "oklch(72.14% 0.0120 259.82)",
+          "oklch(83.57% 0.0120 259.82)",
+          "oklch(95.00% 0.0120 259.82)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Quiet surface",
+        "tonalRamp": [
+          "oklch(15.00% 0.0045 258.32)",
+          "oklch(26.43% 0.0045 258.32)",
+          "oklch(37.86% 0.0045 258.32)",
+          "oklch(49.29% 0.0045 258.32)",
+          "oklch(60.71% 0.0045 258.32)",
+          "oklch(72.14% 0.0045 258.32)",
+          "oklch(83.57% 0.0045 258.32)",
+          "oklch(95.00% 0.0045 258.32)"
+        ]
+      },
+      "muted-dark": {
+        "role": "neutral",
+        "displayName": "Quiet surface (dark)",
+        "tonalRamp": [
+          "oklch(15.00% 0.0311 258.33)",
+          "oklch(26.43% 0.0311 258.33)",
+          "oklch(37.86% 0.0311 258.33)",
+          "oklch(49.29% 0.0311 258.33)",
+          "oklch(60.71% 0.0311 258.33)",
+          "oklch(72.14% 0.0311 258.33)",
+          "oklch(83.57% 0.0311 258.33)",
+          "oklch(95.00% 0.0311 258.33)"
+        ]
+      },
+      "muted-foreground": {
+        "role": "neutral",
+        "displayName": "Muted ink",
+        "tonalRamp": [
+          "oklch(15.00% 0.0371 255.70)",
+          "oklch(26.43% 0.0371 255.70)",
+          "oklch(37.86% 0.0371 255.70)",
+          "oklch(49.29% 0.0371 255.70)",
+          "oklch(60.71% 0.0371 255.70)",
+          "oklch(72.14% 0.0371 255.70)",
+          "oklch(83.57% 0.0371 255.70)",
+          "oklch(95.00% 0.0371 255.70)"
+        ]
+      },
+      "muted-foreground-dark": {
+        "role": "neutral",
+        "displayName": "Muted ink (dark)",
+        "tonalRamp": [
+          "oklch(15.00% 0.0292 256.50)",
+          "oklch(26.43% 0.0292 256.50)",
+          "oklch(37.86% 0.0292 256.50)",
+          "oklch(49.29% 0.0292 256.50)",
+          "oklch(60.71% 0.0292 256.50)",
+          "oklch(72.14% 0.0292 256.50)",
+          "oklch(83.57% 0.0292 256.50)",
+          "oklch(95.00% 0.0292 256.50)"
+        ]
+      },
+      "ink-soft": {
+        "role": "neutral",
+        "displayName": "Supporting ink",
+        "tonalRamp": [
+          "oklch(15.00% 0.0458 260.49)",
+          "oklch(26.43% 0.0458 260.49)",
+          "oklch(37.86% 0.0458 260.49)",
+          "oklch(49.29% 0.0458 260.49)",
+          "oklch(60.71% 0.0458 260.49)",
+          "oklch(72.14% 0.0458 260.49)",
+          "oklch(83.57% 0.0458 260.49)",
+          "oklch(95.00% 0.0458 260.49)"
+        ]
+      },
+      "ink-soft-dark": {
+        "role": "neutral",
+        "displayName": "Supporting ink (dark)",
+        "tonalRamp": [
+          "oklch(15.00% 0.0247 259.82)",
+          "oklch(26.43% 0.0247 259.82)",
+          "oklch(37.86% 0.0247 259.82)",
+          "oklch(49.29% 0.0247 259.82)",
+          "oklch(60.71% 0.0247 259.82)",
+          "oklch(72.14% 0.0247 259.82)",
+          "oklch(83.57% 0.0247 259.82)",
+          "oklch(95.00% 0.0247 259.82)"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Divider",
+        "tonalRamp": [
+          "oklch(15.00% 0.0110 256.70)",
+          "oklch(26.43% 0.0110 256.70)",
+          "oklch(37.86% 0.0110 256.70)",
+          "oklch(49.29% 0.0110 256.70)",
+          "oklch(60.71% 0.0110 256.70)",
+          "oklch(72.14% 0.0110 256.70)",
+          "oklch(83.57% 0.0110 256.70)",
+          "oklch(95.00% 0.0110 256.70)"
+        ]
+      },
+      "border-dark": {
+        "role": "neutral",
+        "displayName": "Divider (dark)",
+        "tonalRamp": [
+          "oklch(15.00% 0.0445 256.10)",
+          "oklch(26.43% 0.0445 256.10)",
+          "oklch(37.86% 0.0445 256.10)",
+          "oklch(49.29% 0.0445 256.10)",
+          "oklch(60.71% 0.0445 256.10)",
+          "oklch(72.14% 0.0445 256.10)",
+          "oklch(83.57% 0.0445 256.10)",
+          "oklch(95.00% 0.0445 256.10)"
+        ]
+      },
+      "input": {
+        "role": "neutral",
+        "displayName": "Field edge",
+        "tonalRamp": [
+          "oklch(15.00% 0.0231 254.41)",
+          "oklch(26.43% 0.0231 254.41)",
+          "oklch(37.86% 0.0231 254.41)",
+          "oklch(49.29% 0.0231 254.41)",
+          "oklch(60.71% 0.0231 254.41)",
+          "oklch(72.14% 0.0231 254.41)",
+          "oklch(83.57% 0.0231 254.41)",
+          "oklch(95.00% 0.0231 254.41)"
+        ]
+      },
+      "input-dark": {
+        "role": "neutral",
+        "displayName": "Field edge (dark)",
+        "tonalRamp": [
+          "oklch(15.00% 0.0490 256.02)",
+          "oklch(26.43% 0.0490 256.02)",
+          "oklch(37.86% 0.0490 256.02)",
+          "oklch(49.29% 0.0490 256.02)",
+          "oklch(60.71% 0.0490 256.02)",
+          "oklch(72.14% 0.0490 256.02)",
+          "oklch(83.57% 0.0490 256.02)",
+          "oklch(95.00% 0.0490 256.02)"
+        ]
+      },
+      "success": {
+        "role": "semantic",
+        "displayName": "Success",
+        "tonalRamp": [
+          "oklch(15.00% 0.0849 163.87)",
+          "oklch(26.43% 0.0849 163.87)",
+          "oklch(37.86% 0.0849 163.87)",
+          "oklch(49.29% 0.0849 163.87)",
+          "oklch(60.71% 0.0849 163.87)",
+          "oklch(72.14% 0.0849 163.87)",
+          "oklch(83.57% 0.0849 163.87)",
+          "oklch(95.00% 0.0849 163.87)"
+        ]
+      },
+      "success-dark": {
+        "role": "semantic",
+        "displayName": "Success (dark)",
+        "tonalRamp": [
+          "oklch(15.00% 0.0864 159.95)",
+          "oklch(26.43% 0.0864 159.95)",
+          "oklch(37.86% 0.0864 159.95)",
+          "oklch(49.29% 0.0864 159.95)",
+          "oklch(60.71% 0.0864 159.95)",
+          "oklch(72.14% 0.0864 159.95)",
+          "oklch(83.57% 0.0864 159.95)",
+          "oklch(95.00% 0.0864 159.95)"
+        ]
+      },
+      "warning": {
+        "role": "semantic",
+        "displayName": "Warning",
+        "tonalRamp": [
+          "oklch(15.00% 0.1084 74.79)",
+          "oklch(26.43% 0.1084 74.79)",
+          "oklch(37.86% 0.1084 74.79)",
+          "oklch(49.29% 0.1084 74.79)",
+          "oklch(60.71% 0.1084 74.79)",
+          "oklch(72.14% 0.1084 74.79)",
+          "oklch(83.57% 0.1084 74.79)",
+          "oklch(95.00% 0.1084 74.79)"
+        ]
+      },
+      "warning-dark": {
+        "role": "semantic",
+        "displayName": "Warning (dark)",
+        "tonalRamp": [
+          "oklch(15.00% 0.1056 83.33)",
+          "oklch(26.43% 0.1056 83.33)",
+          "oklch(37.86% 0.1056 83.33)",
+          "oklch(49.29% 0.1056 83.33)",
+          "oklch(60.71% 0.1056 83.33)",
+          "oklch(72.14% 0.1056 83.33)",
+          "oklch(83.57% 0.1056 83.33)",
+          "oklch(95.00% 0.1056 83.33)"
+        ]
+      },
+      "danger": {
+        "role": "semantic",
+        "displayName": "Danger",
+        "tonalRamp": [
+          "oklch(15.00% 0.1793 21.80)",
+          "oklch(26.43% 0.1793 21.80)",
+          "oklch(37.86% 0.1793 21.80)",
+          "oklch(49.29% 0.1793 21.80)",
+          "oklch(60.71% 0.1793 21.80)",
+          "oklch(72.14% 0.1793 21.80)",
+          "oklch(83.57% 0.1793 21.80)",
+          "oklch(95.00% 0.1793 21.80)"
+        ]
+      },
+      "danger-dark": {
+        "role": "semantic",
+        "displayName": "Danger (dark)",
+        "tonalRamp": [
+          "oklch(15.00% 0.0967 13.77)",
+          "oklch(26.43% 0.0967 13.77)",
+          "oklch(37.86% 0.0967 13.77)",
+          "oklch(49.29% 0.0967 13.77)",
+          "oklch(60.71% 0.0967 13.77)",
+          "oklch(72.14% 0.0967 13.77)",
+          "oklch(83.57% 0.0967 13.77)",
+          "oklch(95.00% 0.0967 13.77)"
+        ]
+      },
+      "information": {
+        "role": "semantic",
+        "displayName": "Information",
+        "tonalRamp": [
+          "oklch(15.00% 0.1066 259.18)",
+          "oklch(26.43% 0.1066 259.18)",
+          "oklch(37.86% 0.1066 259.18)",
+          "oklch(49.29% 0.1066 259.18)",
+          "oklch(60.71% 0.1066 259.18)",
+          "oklch(72.14% 0.1066 259.18)",
+          "oklch(83.57% 0.1066 259.18)",
+          "oklch(95.00% 0.1066 259.18)"
+        ]
+      },
+      "information-dark": {
+        "role": "semantic",
+        "displayName": "Information (dark)",
+        "tonalRamp": [
+          "oklch(15.00% 0.0703 257.86)",
+          "oklch(26.43% 0.0703 257.86)",
+          "oklch(37.86% 0.0703 257.86)",
+          "oklch(49.29% 0.0703 257.86)",
+          "oklch(60.71% 0.0703 257.86)",
+          "oklch(72.14% 0.0703 257.86)",
+          "oklch(83.57% 0.0703 257.86)",
+          "oklch(95.00% 0.0703 257.86)"
+        ]
+      },
+      "success-ink": {
+        "role": "semantic",
+        "displayName": "Success ink",
+        "tonalRamp": [
+          "oklch(15.00% 0.0696 162.58)",
+          "oklch(26.43% 0.0696 162.58)",
+          "oklch(37.86% 0.0696 162.58)",
+          "oklch(49.29% 0.0696 162.58)",
+          "oklch(60.71% 0.0696 162.58)",
+          "oklch(72.14% 0.0696 162.58)",
+          "oklch(83.57% 0.0696 162.58)",
+          "oklch(95.00% 0.0696 162.58)"
+        ]
+      },
+      "success-ink-dark": {
+        "role": "semantic",
+        "displayName": "Success ink dark",
+        "tonalRamp": [
+          "oklch(15.00% 0.0698 154.98)",
+          "oklch(26.43% 0.0698 154.98)",
+          "oklch(37.86% 0.0698 154.98)",
+          "oklch(49.29% 0.0698 154.98)",
+          "oklch(60.71% 0.0698 154.98)",
+          "oklch(72.14% 0.0698 154.98)",
+          "oklch(83.57% 0.0698 154.98)",
+          "oklch(95.00% 0.0698 154.98)"
+        ]
+      },
+      "warning-ink": {
+        "role": "semantic",
+        "displayName": "Warning ink",
+        "tonalRamp": [
+          "oklch(15.00% 0.0994 72.86)",
+          "oklch(26.43% 0.0994 72.86)",
+          "oklch(37.86% 0.0994 72.86)",
+          "oklch(49.29% 0.0994 72.86)",
+          "oklch(60.71% 0.0994 72.86)",
+          "oklch(72.14% 0.0994 72.86)",
+          "oklch(83.57% 0.0994 72.86)",
+          "oklch(95.00% 0.0994 72.86)"
+        ]
+      },
+      "warning-ink-dark": {
+        "role": "semantic",
+        "displayName": "Warning ink dark",
+        "tonalRamp": [
+          "oklch(15.00% 0.0925 82.73)",
+          "oklch(26.43% 0.0925 82.73)",
+          "oklch(37.86% 0.0925 82.73)",
+          "oklch(49.29% 0.0925 82.73)",
+          "oklch(60.71% 0.0925 82.73)",
+          "oklch(72.14% 0.0925 82.73)",
+          "oklch(83.57% 0.0925 82.73)",
+          "oklch(95.00% 0.0925 82.73)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "heading": {
+        "displayName": "Heading",
+        "purpose": "Shared page title."
+      },
+      "project-heading": {
+        "displayName": "Project heading",
+        "purpose": "Selected project title above the four sections."
+      },
+      "library-heading": {
+        "displayName": "Library heading",
+        "purpose": "Responsive project-library title."
+      },
+      "mobile-heading": {
+        "displayName": "Mobile heading",
+        "purpose": "Shared page title at the phone breakpoint."
+      },
+      "mobile-project-heading": {
+        "displayName": "Mobile project heading",
+        "purpose": "Compact selected-project title on phones."
+      },
+      "mobile-library-heading": {
+        "displayName": "Mobile library heading",
+        "purpose": "Library heading on phones; the narrowest layout reduces it again."
+      },
+      "section": {
+        "displayName": "Section",
+        "purpose": "Shared section heading."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Small task and content headings."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Working explanations and ordinary form input."
+      },
+      "control": {
+        "displayName": "Control",
+        "purpose": "Shared action and label text."
+      },
+      "supporting": {
+        "displayName": "Supporting",
+        "purpose": "Form hints and supporting explanation."
+      },
+      "compact": {
+        "displayName": "Compact",
+        "purpose": "Compact record states and supporting labels."
+      },
+      "metadata": {
+        "displayName": "Metadata",
+        "purpose": "Subordinate metadata and table headings."
+      },
+      "wordmark": {
+        "displayName": "Wordmark",
+        "purpose": "Desktop workspace identity."
+      },
+      "dialog": {
+        "displayName": "Dialog",
+        "purpose": "Shared dialog and drawer heading."
+      },
+      "mobile-dialog": {
+        "displayName": "Mobile dialog",
+        "purpose": "Dialog and drawer heading on phones."
+      },
+      "technical": {
+        "displayName": "Technical",
+        "purpose": "Identifiers and code; ordinary quantities use tabular interface numerals."
+      }
+    },
     "shadows": [
       {
         "name": "popover",
         "value": "0 12px 32px rgb(24 24 27 / 12%)",
-        "purpose": "Elevated transient controls."
+        "purpose": "Shared transient surfaces in light appearance."
+      },
+      {
+        "name": "popover-dark",
+        "value": "0 12px 32px rgb(0 0 0 / 32%)",
+        "purpose": "Shared transient surfaces in dark appearance."
+      },
+      {
+        "name": "dialog",
+        "value": "0 18px 60px rgb(15 25 40 / 20%)",
+        "purpose": "Bounded task dialogs."
+      }
+    ],
+    "motion": [
+      {
+        "name": "control-state",
+        "value": "160ms ease-out",
+        "purpose": "Shared background and text-colour hover transitions when reduced motion is not requested."
+      },
+      {
+        "name": "dialog-appear",
+        "value": "180ms cubic-bezier(.2,.8,.2,1)",
+        "purpose": "Dialog opening opacity from .75 to 1 when reduced motion is not requested."
       }
     ],
     "breakpoints": [
       {
-        "name": "drawer-navigation",
+        "name": "shared-gutters-and-review-stack",
+        "value": "1100px"
+      },
+      {
+        "name": "phone-navigation-and-sheets",
         "value": "800px"
       },
       {
-        "name": "stacked-home",
-        "value": "1250px"
+        "name": "single-column-gallery",
+        "value": "760px"
+      },
+      {
+        "name": "compact-build-and-stock-forms",
+        "value": "600px"
       }
     ]
   },
@@ -25,21 +632,109 @@
       "name": "Primary button",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "Main action within the current task.",
-      "html": "<button class=\"primary\">New project</button>",
-      "css": ".primary { background:#21634e; color:#fff; border:0; border-radius:8px; padding:8px 12px; font:500 14px sans-serif; }"
+      "description": "Primary action within the current task.",
+      "html": "<button class=\"ds-primary\">Save changes</button>",
+      "css": ".ds-primary{font-family:var(--font-ui,\"IBM Plex Sans Variable\",system-ui,sans-serif);font-size:.9375rem;font-weight:500;line-height:1.4;min-height:42px;padding:10px 16px;border-radius:7px;cursor:pointer;background:var(--primary,#1558e8);color:var(--primary-foreground,#fff);border:1px solid transparent}.ds-primary:hover:not(:disabled){background:var(--accent-hover,#1044b8)}.ds-primary:focus-visible{outline:2px solid var(--ring,#1558e8);outline-offset:3px;}.ds-primary:disabled{opacity:.5;cursor:not-allowed}@media(max-width:800px){.ds-primary{min-height:44px}}@media(prefers-reduced-motion:no-preference){.ds-primary{transition:background-color 160ms ease-out,color 160ms ease-out}}"
+    },
+    {
+      "name": "Secondary button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "A quieter action beside the main task.",
+      "html": "<button class=\"ds-secondary\">Cancel</button>",
+      "css": ".ds-secondary{font-family:var(--font-ui,\"IBM Plex Sans Variable\",system-ui,sans-serif);font-size:.9375rem;font-weight:500;line-height:1.4;min-height:42px;padding:10px 16px;border-radius:7px;cursor:pointer;background:var(--card,#fff);color:var(--foreground,#152033);border:1px solid var(--input,#bcc7d5)}.ds-secondary:hover:not(:disabled){background:var(--muted,#f1f3f6)}.ds-secondary:focus-visible{outline:2px solid var(--ring,#1558e8);outline-offset:3px;}.ds-secondary:disabled{opacity:.5;cursor:not-allowed}@media(max-width:800px){.ds-secondary{min-height:44px}}@media(prefers-reduced-motion:no-preference){.ds-secondary{transition:background-color 160ms ease-out,color 160ms ease-out}}"
+    },
+    {
+      "name": "Text action",
+      "kind": "button",
+      "refersTo": "button-text",
+      "description": "A supporting action without a filled container.",
+      "html": "<button class=\"ds-text\">Import CSV</button>",
+      "css": ".ds-text{font-family:var(--font-ui,\"IBM Plex Sans Variable\",system-ui,sans-serif);display:inline-flex;align-items:center;min-height:40px;padding:4px 0;border:0;background:transparent;color:var(--primary,#1558e8);font-size:.9375rem;font-weight:500;line-height:1.4;cursor:pointer}.ds-text:hover:not(:disabled){text-decoration:underline;text-underline-offset:3px}.ds-text:focus-visible{outline:2px solid var(--ring,#1558e8);outline-offset:3px;}.ds-text:disabled{opacity:.5;cursor:not-allowed}@media(max-width:800px){.ds-text{min-height:44px}}"
+    },
+    {
+      "name": "Text field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Readable input with the label and hint beside the task.",
+      "html": "<label class=\"ds-field\"><span class=\"ds-field-label\">Part name</span><input class=\"ds-input\" value=\"Bracket\"/><small class=\"ds-field-hint\">Use a name you can recognise.</small></label>",
+      "css": ".ds-field{font-family:var(--font-ui,\"IBM Plex Sans Variable\",system-ui,sans-serif);display:grid;gap:7px;color:var(--foreground,#152033)}.ds-field-label{font-size:.9375rem;font-weight:500}.ds-input{font-family:var(--font-ui,\"IBM Plex Sans Variable\",system-ui,sans-serif);width:100%;min-height:44px;padding:10px 12px;border:1px solid var(--input,#bcc7d5);border-radius:7px;background:var(--card,#fff);color:var(--foreground,#152033);font-size:1rem;line-height:1.45;caret-color:var(--primary,#1558e8)}.ds-input:focus-visible{outline:2px solid var(--ring,#1558e8);outline-offset:3px;}.ds-input:disabled{opacity:.5;cursor:not-allowed}.ds-field-hint{font-size:.875rem;line-height:1.5;color:var(--muted-foreground,#536276)}"
+    },
+    {
+      "name": "Project navigation",
+      "kind": "nav",
+      "refersTo": "navigation-tab",
+      "description": "Four equal project sections with an active underline.",
+      "html": "<nav class=\"ds-project-nav\" aria-label=\"Project sections\"><button class=\"ds-tab\" aria-current=\"page\">Overview</button><button class=\"ds-tab\">Parts</button><button class=\"ds-tab\">Files</button><button class=\"ds-tab\">Build</button></nav>",
+      "css": ".ds-project-nav{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));width:min(440px,100%);border-bottom:1px solid var(--border,#dce1e8)}.ds-tab{font-family:var(--font-ui,\"IBM Plex Sans Variable\",system-ui,sans-serif);min-width:0;min-height:48px;padding:10px 16px;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:var(--muted-foreground,#536276);font-size:.9375rem;white-space:nowrap;cursor:pointer}.ds-tab[aria-current=page]{color:var(--primary,#1558e8);border-bottom-color:var(--primary,#1558e8);font-weight:600}.ds-tab:hover{color:var(--foreground,#152033)}.ds-tab:focus-visible{outline:2px solid var(--ring,#1558e8);outline-offset:3px;}@media(max-width:800px){.ds-tab{padding-inline:6px;font-size:.875rem}}"
+    },
+    {
+      "name": "Selected filter",
+      "kind": "chip",
+      "refersTo": "filter-selected",
+      "description": "Selection is distinct from the stock-evidence state.",
+      "html": "<button class=\"ds-filter\" aria-pressed=\"true\">To source</button>",
+      "css": ".ds-filter{font-family:var(--font-ui,\"IBM Plex Sans Variable\",system-ui,sans-serif);min-height:42px;padding:8px 14px;border:1px solid var(--primary,#1558e8);border-radius:6px;color:var(--primary,#1558e8);background:var(--accent-soft,#edf3ff);font-size:.875rem;font-weight:400;cursor:pointer}.ds-filter:focus-visible{outline:2px solid var(--ring,#1558e8);outline-offset:3px;}@media(max-width:800px){.ds-filter{min-height:44px;padding-inline:10px;font-size:.8125rem}}"
+    },
+    {
+      "name": "Working surface",
+      "kind": "card",
+      "refersTo": "surface",
+      "description": "A single boundary around a contained task, with no resting shadow.",
+      "html": "<section class=\"ds-surface\"><h2 class=\"ds-surface-title\">Appearance</h2><p class=\"ds-surface-copy\">Choose Light, Dark or System in Settings.</p></section>",
+      "css": ".ds-surface{font-family:var(--font-ui,\"IBM Plex Sans Variable\",system-ui,sans-serif);padding:24px;border:1px solid var(--border,#dce1e8);border-radius:8px;background:var(--card,#fff);color:var(--foreground,#152033);box-shadow:none}.ds-surface-title{margin:0;font-size:1.25rem;font-weight:600;line-height:1.3}.ds-surface-copy{margin:12px 0 0;font-size:.9375rem;line-height:1.55;color:var(--ink-soft,#42516a)}"
+    },
+    {
+      "name": "Stock state",
+      "kind": "custom",
+      "description": "Plain text records the evidence state; its colour is supporting information.",
+      "html": "<span class=\"ds-stock-state\">Needs checking</span>",
+      "css": ".ds-stock-state{font-family:var(--font-ui,\"IBM Plex Sans Variable\",system-ui,sans-serif);display:inline-flex;align-items:center;gap:5px;font-size:.8125rem;font-weight:500;line-height:1.1;padding:3px 0;border:0;background:transparent;color:var(--amber-ink,#805409)}"
     }
   ],
   "narrative": {
-    "northStar": "A clear, consistent maker workspace",
-    "overview": "Neutral shadcn controls around real inventory and project records.",
+    "northStar": "A visual maker workspace",
+    "overview": "Recognise the project, find its parts and files, and continue the build. Warm white, graphite and restrained cobalt give the workspace a calm, precise character. Project imagery makes work recognisable; aligned records and clear task boundaries make repeated use straightforward.\n\nProjects and Inventory have equal prominence. Light, Dark and System appearance share one hierarchy. The visual system preserves the distinction between a record, confirmed usable stock and physical verification; neither an image nor a colour supplies evidence.",
+    "keyCharacteristics": [
+      "Readable working text and locally bundled IBM Plex type.",
+      "Cobalt actions and selection, with separate labelled evidence states.",
+      "Ruled records and contextual disclosure, with imagery for project identity.",
+      "Shared desktop navigation, phone bottom navigation and scoped task sheets."
+    ],
+    "rules": [
+      {
+        "name": "The Evidence Rule",
+        "body": "Selection identifies the current task; a labelled status reports evidence. Never make colour, imagery or task progress stand in for compatibility, stock confirmation or physical verification.",
+        "section": "colors"
+      },
+      {
+        "name": "The Readable Work Rule",
+        "body": "Use the body and control roles for doing the task. Keep metadata subordinate, retain 16px phone inputs, and let long names wrap without obscuring quantities, actions or evidence.",
+        "section": "typography"
+      },
+      {
+        "name": "The Task Boundary Rule",
+        "body": "Use a sheet or dialog to establish a focused task. Use spacing and rules to organise the work inside it.",
+        "section": "elevation"
+      }
+    ],
     "dos": [
-      "Keep stock evidence labels visible.",
-      "Use the shared components and semantic theme tokens."
+      "**Do** use semantic light/dark tokens and locally bundled IBM Plex type.",
+      "**Do** keep Projects and Inventory as peers and the four project sections in one compact row.",
+      "**Do** use cobalt for actions and selection, with explicit text for evidence states.",
+      "**Do** use readable working text, 16px phone inputs and at least 44px phone targets.",
+      "**Do** preserve drafts, focus recovery and a named return through supporting stock tasks.",
+      "**Do** use revision-bound runtime imagery with an explicit role and honest missing states.",
+      "**Do** keep technical identity, uncertainty and provenance available through contextual disclosure."
     ],
     "donts": [
-      "Do not infer physical readiness from visual state.",
-      "Do not introduce global preflight into embedded viewers."
+      "**Don't** infer compatibility or physical readiness from colour, imagery, file presence or task progress.",
+      "**Don't** restore the retired navigation rail or add competing top-level project tabs.",
+      "**Don't** replace useful working content with decorative metrics, repeated overview imagery or nested cards.",
+      "**Don't** substitute a project cover for a file preview or invent project imagery.",
+      "**Don't** store private runtime images, inventory or form drafts in public design metadata.",
+      "**Don't** imply that a download starts fabrication or that a reservation records consumption.",
+      "**Don't** introduce global resets into embedded viewers or replace shared focus and draft guards."
     ]
   }
 }

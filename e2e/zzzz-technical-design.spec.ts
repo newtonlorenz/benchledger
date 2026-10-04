@@ -1,3 +1,4 @@
+import { openProject, navigateWorkspace } from "./workspace-controls";
 import { expect, test, type Page } from "@playwright/test";
 
 async function signIn(page: Page) {
@@ -6,23 +7,17 @@ async function signIn(page: Page) {
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
 }
-async function navigate(page: Page, name: string) {
-  if ((page.viewportSize()?.width ?? 1400) < 801) await page.getByLabel("Open navigation", { exact: true }).click();
-  const nav = page.getByLabel("Primary navigation", { exact: true });
-  await nav.getByRole("button", { name: name === "Projects" ? /^Projects/u : name, exact: name !== "Projects" }).click();
-}
+const navigate = navigateWorkspace;
 async function theme(page: Page, name: string) {
-  await page.getByLabel("Workspace appearance", { exact: true }).click();
+  await navigate(page, "Settings");
   await page.getByRole("radio", { name, exact: true }).check();
-  await page.keyboard.press("Escape");
 }
 for (const width of [1536, 390, 320]) for (const mode of ["Light", "Dark"]) test(`technical workspace stays readable in ${mode} at ${width}px`, async ({ page }) => {
   await page.setViewportSize({ width, height: 900 }); await signIn(page); await theme(page, mode);
   for (const section of ["Projects", "Inventory", "Project details", "Settings"]) {
     await navigate(page, section === "Project details" ? "Projects" : section);
     if (section === "Project details") {
-      if (width < 801) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
-      await page.getByRole("button", { name: "Switch to project Synthetic H2D desk lamp", exact: true }).click();
+      await openProject(page, "Synthetic H2D desk lamp");
       await expect(page.getByRole("heading", { name: "Synthetic H2D desk lamp", exact: true })).toBeVisible();
     }
     await expect(page.locator("html")).toHaveAttribute("data-theme", mode.toLowerCase());
@@ -34,19 +29,23 @@ for (const width of [1536, 390, 320]) for (const mode of ["Light", "Dark"]) test
   expect(await page.getByRole("dialog").evaluate((element) => { const rect = element.getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight; })).toBe(true);
   await page.keyboard.press("Escape"); await expect(page.getByRole("dialog")).toHaveCount(0);
 });
-test("appearance and compact navigation persist without business-data writes", async ({ page }) => {
+test("appearance and compact rows persist without business-data writes", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 }); await signIn(page);
-  const writes: string[] = []; page.on("request", (request) => { if (request.url().includes("/api/") && !["GET", "HEAD", "OPTIONS"].includes(request.method())) writes.push(request.url()); });
+  const writes: string[] = []; page.on("request", request => { if (request.url().includes("/api/") && !["GET", "HEAD", "OPTIONS"].includes(request.method())) writes.push(request.url()); });
   await navigate(page, "Inventory"); await expect(page.locator(".inventory-table tbody tr").first()).toBeVisible();
-  const before = await page.locator(".inventory-table tbody tr").first().evaluate((row) => row.getBoundingClientRect().height);
-  await page.getByLabel("Workspace appearance").click(); await page.getByRole("radio", { name: "Compact", exact: true }).check(); await page.getByRole("radio", { name: "Dark", exact: true }).check(); await page.keyboard.press("Escape");
-  const after = await page.locator(".inventory-table tbody tr").first().evaluate((row) => row.getBoundingClientRect().height);
+  const before = await page.locator(".inventory-table tbody tr").first().evaluate(row => row.getBoundingClientRect().height);
+  await navigate(page, "Settings");
+  await page.getByRole("radio", { name: "Compact", exact: true }).check();
+  await page.getByRole("radio", { name: "Dark", exact: true }).check();
+  await navigate(page, "Inventory");
+  const after = await page.locator(".inventory-table tbody tr").first().evaluate(row => row.getBoundingClientRect().height);
   expect(after).toBeLessThan(before);
-  await page.getByLabel("Collapse navigation", { exact: true }).click();
-  expect(await page.getByLabel("Primary navigation", { exact: true }).evaluate((nav) => nav.getBoundingClientRect().width)).toBe(64);
-  await page.reload(); await expect(page.locator("html")).toHaveAttribute("data-theme", "dark"); await expect(page.locator("html")).toHaveAttribute("data-density", "compact"); await expect(page.locator("html")).toHaveAttribute("data-nav", "rail");
-  await navigate(page, "Projects"); await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
-  await page.getByLabel("Expand navigation", { exact: true }).click(); expect(writes).toEqual([]);
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page.locator("html")).toHaveAttribute("data-density", "compact");
+  await navigate(page, "Projects");
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
+  expect(writes).toEqual([]);
 });
 test("commands open pages and forms by keyboard while retaining focus boundaries", async ({ page }) => {
   await signIn(page); await page.keyboard.press("Control+Shift+K");
