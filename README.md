@@ -33,6 +33,7 @@ BenchLedger keeps that context together, from the first requirement to the stock
 | --- | --- |
 | **Inventory & equipment** | Search electronics, filament, fasteners, tools and printers. Organise categories, images and locations; track exact product variants and separate ordered, delivered and counted stock. |
 | **Requirements & readiness** | Start from a template or review a CSV import. See **Ready / Check / Decide / Source** requirements, inspect alternatives and reserve confirmed parts. |
+| **Visual project library** | Recognise projects by a selected render, reference image or build photo. Switch between Gallery and a compact List with thumbnails; keep search, pins and next actions close at hand. |
 | **CAD & assembly guides** | Inspect STEP, GLB and STL, select or isolate parts, explore exploded views, and save placements, requirement links and build steps. |
 | **PCB inspection** | Open native KiCad boards or STEP/GLB exports within the project. Inspect top/bottom views, supported copper, drills and footprint outlines. |
 | **Files & revisions** | Keep CAD, firmware, drawings and slicer files with exact project or workstream revisions. Preview supported files and download originals with integrity checks. |
@@ -75,7 +76,9 @@ The same source can join enclosure geometry in **Assembly**. MCP agents inspect 
 
 ### Know what you have. See what is missing.
 
-The workbench brings projects, equipment and next actions together. Open a project to review its requirements: ready to use, needs a physical check, needs a decision, or needs sourcing. Uncertain stock stays uncertain until evidence changes it.
+Projects brings your builds and next actions together. Gallery shows a prominent project image; List keeps a smaller thumbnail beside the project details. Choose an uploaded PNG, JPEG or WebP in **Files → Project image**. [Project image setup and limits](docs/project-images.md).
+
+Open a project to review its requirements: ready to use, needs a physical check, needs a decision, or needs sourcing. Uncertain stock stays uncertain until evidence changes it.
 
 ![Fresh BenchLedger workbench capture with synthetic projects, workshop equipment and next actions](docs/assets/showcase/workbench.png)
 

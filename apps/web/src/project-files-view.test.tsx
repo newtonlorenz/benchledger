@@ -20,7 +20,7 @@ function Harness({ current = project, upload = vi.fn(async () => undefined) }: {
   const guard = useNavigationGuard();
   return <UnsavedWorkContext.Provider value={guard.registry}>
     <button onClick={() => guard.registry.request(() => setFiles(!files))}>{files ? "Open Plan" : "Open Files"}</button>
-    {files && <ProjectFiles key={`${current.id}:${current.serverRevisionId}`} project={current} expert={false} sampleMode={false} onUpload={upload} viewState={view} onViewStateChange={setView} />}
+    {files && <ProjectFiles onProjectRefresh={async () => true} key={`${current.id}:${current.serverRevisionId}`} project={current} expert={false} sampleMode={false} onUpload={upload} viewState={view} onViewStateChange={setView} />}
     {guard.pending && <div role="alertdialog"><button onClick={guard.cancel}>Keep files</button><button onClick={guard.discard}>Discard files</button></div>}
   </UnsavedWorkContext.Provider>;
 }

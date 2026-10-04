@@ -63,7 +63,7 @@ describe("workbench task model", () => {
   });
   it("validates browser preferences and keeps only bounded record identifiers", () => {
     for (const raw of [null, "wrong", "null", "[]", "5"]) expect(parseHomePreferences(raw)).toEqual(defaultHomePreferences);
-    expect(parseHomePreferences('{"pins":["one","one",5,""],"recent":["two"],"sort":"weird","filter":"bad"}')).toEqual({ pins: ["one"], recent: ["two"], filter: "active", sort: "recent" });
+    expect(parseHomePreferences('{"pins":["one","one",5,""],"recent":["two"],"sort":"weird","filter":"bad"}')).toEqual({ view: "gallery", pins: ["one"], recent: ["two"], filter: "active", sort: "recent" });
     const raw = JSON.stringify({ pins: Array.from({ length: 150 }, (_, i) => String(i)), recent: Array.from({ length: 30 }, (_, i) => String(i)) });
     expect(parseHomePreferences(raw).pins).toHaveLength(100); expect(parseHomePreferences(raw).recent).toHaveLength(12);
     expect(homePreferenceKey(true)).not.toBe(homePreferenceKey(false));

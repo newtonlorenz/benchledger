@@ -15,11 +15,17 @@ for (const width of [1440, 390]) {
       const response = await route.fetch();
       const body = await response.json() as { inventory: unknown[]; projects: Array<{ name: string }>; offers: unknown[] };
       body.inventory = [];
-      body.projects = body.projects.filter((project) => project.name === name);
+      body.projects = [];
       body.offers = [];
       await route.fulfill({ response, json: body });
     });
-    await page.route("**/api/v1/projects?status=archived&limit=200", (route) => route.fulfill({ json: { data: [], limit: 200, total: 0 } }));
+    await page.route("**/api/v1/project-library?**", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json() as { data: Array<{ name: string }>; nextCursor?: string };
+      body.data = body.data.filter((project) => project.name === name);
+      delete body.nextCursor;
+      await route.fulfill({ response, json: body });
+    });
     await signIn(page);
 
     const onboarding = page.getByRole("region", { name: "Getting started", exact: true });

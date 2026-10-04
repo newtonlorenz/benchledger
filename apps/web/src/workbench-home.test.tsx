@@ -124,3 +124,16 @@ it("expands a filtered task queue and opens equipment without implying usability
   fireEvent.click(screen.getByRole("button", { name: new RegExp(printer.name, "u") }));
   expect(data.onItem).toHaveBeenCalledWith(printer.id);
 });
+it("remembers gallery and list layouts while preserving image selection and project navigation", () => {
+  const data = props(); data.projects[0] = { ...data.projects[0]!, projectLibraryAvailable: true };
+  const view = render(<WorkbenchHome {...data} />);
+  expect(screen.getByRole("button", { name: "Gallery" }).getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "Choose image for Café fixture" }));
+  expect(data.onOpen).toHaveBeenCalledWith("Café fixture", "files");
+  fireEvent.click(screen.getByRole("button", { name: "List" }));
+  expect(document.querySelectorAll(".project-image-row")).toHaveLength(2);
+  view.unmount(); render(<WorkbenchHome {...data} />);
+  expect(screen.getByRole("button", { name: "List" }).getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "Open project Café fixture" }));
+  expect(data.onOpen).toHaveBeenLastCalledWith("Café fixture");
+});

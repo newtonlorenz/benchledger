@@ -1,11 +1,15 @@
 import { z } from "zod/v3";
-import { assemblyInputSchema, inspectAssemblySchema, idSchema, workflowPageSchema, sourcingPageSchema, createRequirementOfferSchema, chooseRequirementOfferSchema, buildPlanInputSchema, workAssignmentInputSchema, createWorkstreamSchema, bomImportInputSchema, bomImportCommitSchema, commandJsonSchema } from "@benchledger/api-contract";
+import { assemblyInputSchema, inspectAssemblySchema, idSchema, workflowPageSchema, sourcingPageSchema, projectLibraryQuerySchema, projectPresentationInputSchema, createRequirementOfferSchema, chooseRequirementOfferSchema, buildPlanInputSchema, workAssignmentInputSchema, createWorkstreamSchema, bomImportInputSchema, bomImportCommitSchema, commandJsonSchema } from "@benchledger/api-contract";
 import type { McpToolDefinition, JsonObject, McpRequestContext } from "./types.js";
 import { McpAdapterError } from "./errors.js";
 import type { ApplicationService } from "@benchledger/application";
 import { ApplicationError } from "@benchledger/application";
 const project = z.object({ projectId: idSchema }).strict(), revision = project.extend({ projectRevisionId: idSchema }).strict();
 export const MAKER_TOOL_SCHEMAS = {
+  list_project_library: projectLibraryQuerySchema,
+  read_project_presentation: revision,
+  save_project_presentation: revision.extend({ presentation: projectPresentationInputSchema }).strict(),
+  read_project_presentation_history: revision.merge(workflowPageSchema),
   read_requirement_sourcing: revision.merge(sourcingPageSchema),
   record_requirement_offer: revision.extend({ offer: createRequirementOfferSchema }).strict(),
   choose_requirement_offer: revision.extend({ choice: chooseRequirementOfferSchema }).strict(),
@@ -28,6 +32,10 @@ export const MAKER_TOOL_SCHEMAS = {
 };
 export type MakerToolName = keyof typeof MAKER_TOOL_SCHEMAS;
 const descriptions: Record<MakerToolName, string> = {
+  list_project_library: "Read a bounded project-library page with current revision, requirements/readiness, project and workstream artifact metadata, selected cover. Pass each returned cursor until absent; there is no workspace-size cap. Default active includes completed projects and excludes archived. Project-scoped tokens see only allow-listed projects. No global inventory/offers, file bytes or physical operations are returned.",
+  read_project_presentation: "Read the exact revision's deliberately selected display cover and caption. An unavailable, retired, historical or changed-hash image is invalidated with warnings. An image is never manufacturing validation.",
+  save_project_presentation: "Select or clear the current revision's display cover with observed expectedVersion (0 initially) and a stable command key. A cover must be an active PNG/JPEG/WebP no larger than 20 MiB from this exact project revision or a current workstream revision. imageKind records render, reference or built_photo; none certifies physical readiness. Retains prior selections without stock or equipment effects.",
+  read_project_presentation_history: "Read bounded retained project presentation versions, including cleared cover selections and their original hashes.",
   read_requirement_sourcing: "Read requirement-bound quotes, explicit selections and package-aware estimates. Search and filter the complete revision before paging. total counts matches; revisionTotal and currency totals cover the full revision. Only required Source gaps count; currencies stay separate and unknown shipping/tax remain explicit.",
   record_requirement_offer: "Record an immutable supplier observation against a requirement without creating owned stock. Canonical units are each, gram, metre, millimetre, millilitre or set. No URL is fetched, purchase made or compatibility inferred.",
   choose_requirement_offer: "Explicitly review a quote against the current requirement before selecting it for estimates. Selection is optimistic-versioned and never authorises purchase.",
@@ -48,7 +56,7 @@ const descriptions: Record<MakerToolName, string> = {
   commit_bom_import: "Commit the exact actor-owned, unexpired BOM preview atomically with a stable command key. A stale revision, requirement or selected-stock basis requires re-preview. No stock is created or reserved.",
   read_project_team: "Read the safe name/ID/role directory for enabled members with access to the selected project. Never returns credentials."
 };
-const writes = new Set<MakerToolName>(["save_project_assembly", "record_requirement_offer", "choose_requirement_offer", "save_build_plan", "create_workstream", "update_work_assignment", "preview_bom_import", "commit_bom_import"]);
+const writes = new Set<MakerToolName>(["save_project_presentation", "save_project_assembly", "record_requirement_offer", "choose_requirement_offer", "save_build_plan", "create_workstream", "update_work_assignment", "preview_bom_import", "commit_bom_import"]);
 export const MAKER_TOOL_DEFINITIONS: readonly McpToolDefinition[] = Object.entries(MAKER_TOOL_SCHEMAS).map(([key, schema]) => {
   const name = key as MakerToolName, mutating = writes.has(name), family = name.includes("offer") || name.includes("sourcing") ? "offers" : name.includes("bom_import") ? "bom" : "projects";
   return { name, description: descriptions[name], requiredScope: `${family}:${mutating ? "write" : "read"}` as McpToolDefinition["requiredScope"], mutating, inputSchema: commandJsonSchema(schema) as JsonObject };
@@ -60,6 +68,10 @@ export async function invokeMakerTool(service: ApplicationService, name: MakerTo
   const page = { ...(input.limit === undefined ? {} : { limit: input.limit }), ...(input.cursor === undefined ? {} : { cursor: input.cursor }) };
   try {
     switch (name) {
+      case "list_project_library": return await service.makerWorkflows.projectLibrary({ ...page, ...(input.status === undefined ? {} : { status: input.status }) }, context.projectIds);
+      case "read_project_presentation": return { presentation: await service.makerWorkflows.projectPresentation(projectId, revisionId) };
+      case "save_project_presentation": return await service.makerWorkflows.saveProjectPresentation(projectId, revisionId, input.presentation, ctx);
+      case "read_project_presentation_history": return await service.makerWorkflows.projectPresentationHistory(projectId, revisionId, page);
       case "read_requirement_sourcing": return await service.makerWorkflows.sourcing(projectId, revisionId, { ...page, ...(input.query === undefined ? {} : { query: input.query }), ...(input.filter === undefined ? {} : { filter: input.filter }) });
       case "record_requirement_offer": return await service.makerWorkflows.recordOffer(projectId, revisionId, input.offer, ctx);
       case "choose_requirement_offer": return await service.makerWorkflows.chooseOffer(projectId, revisionId, input.choice, ctx);

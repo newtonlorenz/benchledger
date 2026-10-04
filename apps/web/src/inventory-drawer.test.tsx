@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { InventoryDrawer } from "./App";
 import { WorkspaceModal } from "./components/workspace-modal";
 import { AlertDialogTitle } from "./components/ui/alert-dialog";
@@ -70,7 +70,8 @@ it("keeps a metadata draft through the existing leave guard and a failed version
   expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Updated label");
   expect(screen.queryByRole("button", { name: "Review physical count" })).toBeNull();
   actions.onUpdate.mockResolvedValueOnce({ ...item, name: "Updated label", version: 4 });
-  fireEvent.submit(screen.getByRole("form", { name: "Edit item" }));
+  // Settle the save and its draft-guard effect before the next user action.
+  await act(async () => { fireEvent.submit(screen.getByRole("form", { name: "Edit item" })); });
   await waitFor(() => expect(screen.queryByRole("form", { name: "Edit item" })).toBeNull());
   expect(screen.getByRole("button", { name: "Review physical count" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Close item details" }));

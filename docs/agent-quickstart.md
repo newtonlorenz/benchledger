@@ -118,6 +118,18 @@ tokens: concurrent writes can affect later pages, and keyset snapshot semantics
 are not yet provided. Read the project resources for context, BOM, and artifact
 metadata when working in a project.
 
+For a visual project overview, use `list_project_library` when advertised and
+follow every `nextCursor`. Its default `active` status includes completed
+projects and excludes archived ones; `archived` and `all` are explicit options.
+The library returns project-scoped metadata and image selections, not image bytes
+or global inventory. Read the selected revision with `read_project_presentation`
+before saving a change through `save_project_presentation`, using the observed
+version and a stable command key. Select an already attached PNG, JPEG or WebP
+of up to 20 MiB from the current project or workstream revision, with an honest
+`render`, `reference` or `built_photo` label. Browser users choose the same file
+in **Files → Project image**. See [project images](project-images.md) for the
+contract and history; a picture does not establish physical readiness.
+
 ## Minute 2–4: beginner path
 
 Ask one concrete question in plain language:

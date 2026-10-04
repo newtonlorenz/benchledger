@@ -3,6 +3,7 @@
 import { resolveBomSpecification } from "@benchledger/domain/specification";
 import { resolveBomAlternativeQuantity } from "@benchledger/domain/quantity-conversion";
 import type { InspectionAction } from "./inspection-ui";
+import type { ProjectPresentation } from "@benchledger/api-contract";
 
 export type StockState =
   | "available"
@@ -396,6 +397,8 @@ export interface Artifact {
   status: "candidate" | "validated" | "superseded";
   machine?: string;
   material?: string;
+  mediaType?: string;
+  byteSize?: number;
   /** Exact artifact ancestry. Legacy/unbound files intentionally omit all
    * three IDs and are shown only in the read-only All files view. */
   projectRevisionId?: string;
@@ -450,6 +453,9 @@ export interface Project {
   workItems?: ProjectWorkItem[];
   /** All project artifacts, including historical and legacy/unbound files. */
   allArtifacts?: Artifact[];
+  /** Connected library metadata; absence preserves compatibility with older services. */
+  projectLibraryAvailable?: boolean;
+  presentation?: ProjectPresentation | null;
   /** Canonical application-service readiness returned by the workspace API. */
   gapEvaluation?: ProjectGapEvaluation;
   /** Connected readiness was invalidated and could not be reloaded. Source

@@ -29,6 +29,10 @@ first public release; all current work is under **Unreleased**.
 
 ### Added
 
+- Visual project Gallery and a remembered compact List with thumbnails, retaining
+  search, pins, readiness and next actions.
+- Revision-scoped project image selection in Files, authenticated SHA-256-checked
+  previews, and paged HTTP/MCP project-library and presentation history operations.
 - JSON, ZIP and SVG project artifacts through browser Files and the supported
   host helper, retaining the 100 MiB limit, exact revision scope and hash checks.
   ZIP stays opaque and download-only; SVG uses a verified, escaped source preview.

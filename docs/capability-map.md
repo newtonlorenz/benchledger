@@ -16,6 +16,24 @@ working width. On narrow screens, open the
 navigation drawer to switch projects or archive views. These changes do not
 add API or MCP operations or change stock evidence.
 
+## Visual project library
+
+Projects defaults to Gallery, with a remembered List option that retains image
+thumbnails. Both layouts keep search, pins, readiness and next actions. Active
+and archived projects remain separate. **Files → Project image** selects a
+current-revision PNG, JPEG or WebP of up to 20 MiB and labels it as a design
+render, reference image or built-product photo. The browser verifies the
+authenticated artifact download against its saved SHA-256 before display.
+
+`GET /api/v1/project-library` and MCP `list_project_library` return bounded
+project pages with current revisions, requirements/readiness, artifact metadata
+and selected presentation metadata. Follow every `nextCursor`; status defaults
+to `active` (including completed projects) and also accepts `archived` or `all`.
+Project allow-lists apply before pagination. These reads return no global
+inventory or offer collection. Presentation reads, saves and retained history
+share the revision-scoped application service. See [project images](project-images.md)
+for exact routes, fields and image ancestry rules.
+
 ## Inventory workstation
 
 Inventory has a sortable register, a persistent inspector, explicit recorded and
@@ -211,6 +229,8 @@ and invalid hashes. Mutating tools use optimistic versions where applicable.
 | Catalog | `search_catalog_products`, `read_catalog_product`, `read_inventory_product_profile` | `catalog:read` | No |
 | Catalog | `create_catalog_product`, `update_catalog_product`, `link_inventory_product_profile` | `catalog:write` | Yes |
 | Projects | `list_projects`, `list_removed_projects`, `read_removed_project_history`, `read_project`, `read_work_item`, `read_project_revision`, `read_work_item_revision` | `projects:read` | No |
+| Project images | `list_project_library`, `read_project_presentation`, `read_project_presentation_history` | `projects:read` | No; bounded project-scoped metadata, with no image bytes |
+| Project images | `save_project_presentation` | `projects:write` | Yes; current revision, observed presentation version, stable command key and eligible artifact required |
 | Projects | `create_project`, `create_project_with_initial_revision`, `update_project`, `archive_project`, `restore_project`, `remove_project`, `retire_project` (compatibility alias), `create_work_item`, `create_project_revision`, `update_project_revision`, `create_work_item_revision` | `projects:write` | Yes; revision route/printer planning is narrow and versioned; atomic initial setup accepts stable caller IDs |
 | Project setup | `preview_project_setup` | `projects:write` + `bom:write` | Preview metadata only; actor-owned 30-minute row, no graph/stock/audit/event mutation |
 | Project setup | `commit_project_setup` | `projects:write` + `bom:write` | Yes; exact preview, reservations, one aggregate audit, and idempotent replay |
@@ -362,8 +382,9 @@ stock-view and exact-location filters, stable name/location ordering, and a
 default page size of 25 with **Load more**. Each response is read-committed: `nextCursor` is opaque and should be
 passed back unchanged, but concurrent writes may change later pages. Keyset
 snapshot semantics are deliberately deferred. The bounded `/workspace` preview
-continues to support the overview and project flows; it is not the inventory
-list source. Inventory pages hydrate exact catalog products and physical
+continues to support workspace context; the browser follows all project-library
+pages when that capability is advertised. Neither is the inventory list source.
+Inventory pages hydrate exact catalog products and physical
 profiles when present.
 
 | Human workflow | UI surface | MCP composition |
@@ -375,6 +396,7 @@ profiles when present.
 | Commission delivered or ordered stock | Item commissioning action with observed quantity and provenance | `read_inventory_item` → `commission_inventory_item` |
 | Add an exact printer or spool | Exact-product guided add; reported printers remain inspect-first until explicitly commissioned | catalog search/read → `create_inventory_with_product_profile` |
 | Start a project | Guided project setup | `create_project_with_initial_revision` → `create_work_item`; optional stable `projectId`/`revisionId` identify records; use `create_project_revision` for later planning baselines |
+| Recognise a project visually | Projects Gallery or List; Files → Project image | `list_project_library` → `read_project_presentation` → `save_project_presentation`; `read_project_presentation_history` retains prior selections, while artifact bytes use authenticated host transfer |
 | Archive or restore a project | Project Archive action and explicit Archived view | `archive_project` / `restore_project`; archive hides default lists, releases active reservations with evidence, retains history, and restore never recreates reservations |
 | Understand a build gap | BOM editor and gap panel | `list_bom_lines` → `calculate_bom_gaps`; Decide before supplier lookup, inspect candidate diagnostics and conversion capacity/overage reasons in Check results, and shop only Source lines |
 | Resolve a physical project check | Project Plan Checks panel below the requirements; beginner shows three concrete questions and View all, expert reveals canonical traceability; confirmed compatibility and conversion collect explicit values/evidence, and completion is preview-first with exact before/after line alternatives/conversions plus explicit confirmation | HTTP: `GET /api/v1/project-revisions/{revisionId}/inspections` → `GET .../{inspectionId}` → `POST .../{inspectionId}/completion-preview` → explicit `POST .../{inspectionId}/completion-commit`; MCP: `list_inspections` → `read_inspection` → `preview_inspection_completion` → `commit_inspection_completion`, with nested REST `each` ↔ MCP `piece` unit/conversion mapping, affected line/item plus relevant reservation staleness basis, before/after items/gaps/lines, affected and reevaluated gaps, refreshed inspections/evidence, and project-scoped fail-closed authorization |
@@ -499,7 +521,7 @@ Home Check/Decide actions open the selected project with that requirement filter
 Missing or unusable printer setup is also a home task for printed projects,
 using the same eligibility rules as project guidance.
 
-Projects opens the register. Requirements exposes add and reviewed CSV
+Projects opens the selected Gallery or List layout. Requirements exposes add and reviewed CSV
 append actions together. Shopping shows project quotes first and retains older
 inventory-linked offers separately. Files supports scoped search and drop staging;
 the user must still confirm Add files. No new API, permission or stock semantics

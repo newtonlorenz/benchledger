@@ -6,13 +6,13 @@ export type HomeTaskKind = "setup" | "requirements" | "decide" | "check" | "sour
 export interface HomeTask { id: string; projectId: string; projectName: string; kind: HomeTaskKind; label: string; detail: string; count: number }
 export interface HomeProject { project: Project; tasks: HomeTask[]; ready: number; required: number; unknown: boolean }
 export type HomeFilter = "active" | "attention" | "pinned" | "complete" | "all";
-export interface HomePreferences { pins: string[]; recent: string[]; filter: HomeFilter; sort: "recent" | "name" | "attention" }
-export const defaultHomePreferences: HomePreferences = { pins: [], recent: [], filter: "active", sort: "recent" };
+export interface HomePreferences { view: "gallery" | "list"; pins: string[]; recent: string[]; filter: HomeFilter; sort: "recent" | "name" | "attention" }
+export const defaultHomePreferences: HomePreferences = { view: "gallery", pins: [], recent: [], filter: "active", sort: "recent" };
 const ids = (value: unknown): string[] => Array.isArray(value) ? [...new Set(value.filter((id): id is string => typeof id === "string" && id.length > 0 && id.length <= 240))].slice(0, 100) : [];
 export function parseHomePreferences(raw: string | null): HomePreferences {
   try { const data: unknown = JSON.parse(raw ?? "null"); if (!data || typeof data !== "object" || Array.isArray(data)) return { ...defaultHomePreferences };
     const value = data as Record<string, unknown>;
-    return { pins: ids(value.pins), recent: ids(value.recent).slice(0, 12), filter: ["active", "attention", "pinned", "complete", "all"].includes(String(value.filter)) ? value.filter as HomeFilter : "active", sort: ["recent", "name", "attention"].includes(String(value.sort)) ? value.sort as HomePreferences["sort"] : "recent" };
+    return { view: value.view === "list" ? "list" : "gallery", pins: ids(value.pins), recent: ids(value.recent).slice(0, 12), filter: ["active", "attention", "pinned", "complete", "all"].includes(String(value.filter)) ? value.filter as HomeFilter : "active", sort: ["recent", "name", "attention"].includes(String(value.sort)) ? value.sort as HomePreferences["sort"] : "recent" };
   } catch { return { ...defaultHomePreferences }; }
 }
 export function homePreferenceKey(sample: boolean): string { return `benchledger.home.v1.${sample ? "sample" : "workspace"}`; }
