@@ -3004,13 +3004,13 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       return archived;
     },
     async refreshProjectReadiness() {
-      const refreshed = await Promise.all([...projectCache.values()].map(async (project): Promise<Project> => {
+      const refreshed = await Promise.all([...projectCache.values()].filter((project) => project.status !== "archived").map(async (project): Promise<Project> => {
         const revisionId = project.serverRevisionId;
         if (revisionId === undefined) return project;
         const gaps = await request<ServerGapEvaluation>(`/project-revisions/${encodeURIComponent(revisionId)}/gaps`);
         const gapEvaluation = mapGapEvaluation(gaps, project.bom);
         if (gapEvaluation === undefined) return invalidGapEvaluation();
-        return { ...project, gapEvaluation };
+        return { ...project, gapEvaluation, readinessUnavailable: false };
       }));
       refreshed.forEach((project) => projectCache.set(project.id, project));
       return refreshed;
