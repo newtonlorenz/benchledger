@@ -38,7 +38,7 @@ import type {
 } from "@benchledger/api-contract";
 import { AuthManager, type AuthConfig, type AuthScope, type Principal, hashBearerToken } from "./auth.js";
 import { createMemoryRuntime, createSyntheticRuntime, type MemoryRuntime } from "./memory-store.js";
-import { ArtifactTransferManager, TRANSFER_RESPONSE_HEADERS, TRANSFER_TOKEN_HEADER, type FinalizeCapabilityBody, type TransferCapability } from "./artifact-transfer.js";
+import { ArtifactTransferManager, ARTIFACT_DOWNLOAD_HEADERS, TRANSFER_RESPONSE_HEADERS, TRANSFER_TOKEN_HEADER, type FinalizeCapabilityBody, type TransferCapability } from "./artifact-transfer.js";
 import { publicBaseUrlFromEnvironment } from "./config.js";
 
 declare module "fastify" {
@@ -2072,7 +2072,14 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     return mutation;
   });
   app.get(route("/artifacts/:id"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id); return service.getArtifact(params.id); });
-  app.get(route("/artifacts/:id/download"), async (request, reply) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id); const downloaded = await service.readArtifact(params.id); return reply.type(downloaded.artifact.mediaType).header("content-disposition", artifactContentDisposition(downloaded.artifact.filename)).send(Buffer.from(downloaded.body)); });
+  app.get(route("/artifacts/:id/download"), async (request, reply) => {
+    requireScope(request, "read", auth);
+    const params = request.params as { id: string };
+    await requireArtifactReferenceScope(request, service, params.id);
+    const downloaded = await service.readArtifact(params.id);
+    for (const [name, value] of Object.entries(ARTIFACT_DOWNLOAD_HEADERS)) reply.header(name, value);
+    return reply.type(downloaded.artifact.mediaType).header("content-disposition", artifactContentDisposition(downloaded.artifact.filename)).send(Buffer.from(downloaded.body));
+  });
   app.get(route("/transfers/artifacts/:id/download"), async (request, reply) => {
     const params = request.params as { id: string };
     const token = request.headers[TRANSFER_TOKEN_HEADER];
@@ -2086,7 +2093,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
       artifactTransfer.releaseDownload(token, params.id);
       throw error;
     }
-    for (const [name, value] of Object.entries(TRANSFER_RESPONSE_HEADERS)) reply.header(name, value);
+    for (const [name, value] of Object.entries(ARTIFACT_DOWNLOAD_HEADERS)) reply.header(name, value);
     return reply.type(downloaded.artifact.mediaType).header("content-disposition", artifactContentDisposition(downloaded.artifact.filename)).send(Buffer.from(downloaded.body));
   });
   app.delete(route("/artifacts/:id"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.retireArtifact(params.id, parseExpectedVersion(request), requestContext(request)); });

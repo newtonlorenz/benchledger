@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-test("project files preview Markdown, images and STL and preserve download-only files", async ({ page }) => {
+test("project files preview safe content and preserve ZIP, SVG and JSON originals", async ({ page }) => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" onload="window.previewUnsafe=true"><script>window.previewUnsafe=true</script><image href="https://example.org/svg-preview-tracker"/></svg>';
+  const evidence = JSON.stringify({ note: "<script>window.previewUnsafe=true</script>", passed: true });
+  const requests: string[] = [];
+  await page.route("https://example.org/svg-preview-tracker", (route) => { requests.push(route.request().url()); return route.abort(); });
   await page.goto("/");
   await page.getByLabel("Workspace password").fill("demo-password-please-change");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
@@ -11,10 +15,13 @@ test("project files preview Markdown, images and STL and preserve download-only 
     { name: "preview-drawing.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j1ioAAAAASUVORK5CYII=", "base64") },
     { name: "preview-part.stl", mimeType: "model/stl", buffer: Buffer.from("solid part\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid part") },
     { name: "preview-source.step", mimeType: "model/step", buffer: Buffer.from("Synthetic download-only source") },
+    { name: "preview-source.zip", mimeType: "application/zip", buffer: Buffer.from("504b0506000000000000000000000000000000000000", "hex") },
+    { name: "preview-drawing.svg", mimeType: "image/svg+xml", buffer: Buffer.from(svg) },
+    { name: "preview-evidence.json", mimeType: "application/json", buffer: Buffer.from(evidence) },
   ];
   await page.getByLabel("Choose files to upload").setInputFiles(files);
-  await page.getByRole("button", { name: "Add 4 files", exact: true }).click();
-  await expect(page.getByText("4 of 4 files uploaded", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Add 7 files", exact: true }).click();
+  await expect(page.getByText("7 of 7 files uploaded", { exact: true })).toBeVisible();
   const markdownButton = page.getByRole("button", { name: "Preview preview-instructions.md", exact: true });
   await markdownButton.click();
   let dialog = page.getByRole("dialog", { name: "preview-instructions.md", exact: true });
@@ -42,6 +49,18 @@ test("project files preview Markdown, images and STL and preserve download-only 
   await dialog.getByRole("button", { name: "Close preview" }).click();
   await expect(page.getByRole("button", { name: "Preview preview-source.step", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Download preview-source.step", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Preview preview-source.zip", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Download preview-source.zip", exact: true })).toBeVisible();
+  for (const [name, source] of [["preview-drawing.svg", svg], ["preview-evidence.json", evidence]] as const) {
+    await page.getByRole("button", { name: `Preview ${name}`, exact: true }).click();
+    dialog = page.getByRole("dialog", { name, exact: true });
+    await expect(dialog.locator("pre")).toHaveText(source);
+    await expect(dialog.locator("svg, img, script, iframe, object, embed")).toHaveCount(0);
+    await dialog.getByRole("button", { name: "Close preview" }).click();
+    await expect(page.getByRole("button", { name: `Download ${name}`, exact: true })).toBeVisible();
+  }
+  expect(requests).toEqual([]);
+  expect(await page.evaluate(() => Reflect.get(window, "previewUnsafe"))).toBeUndefined();
   await page.route("**/artifacts/*/download", (route) => route.fulfill({ status: 200, body: "corrupted" }));
   await markdownButton.click();
   await expect(page.getByRole("dialog").getByRole("alert")).toContainText("integrity check");

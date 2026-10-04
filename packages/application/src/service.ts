@@ -55,11 +55,14 @@ const CONFIRMED_EVIDENCE = new Set(["physically_counted", "commissioned"]);
 export const FILAMENT_CATALOG_IDENTITY_UNKNOWN = FILAMENT_CATALOG_IDENTITY_UNKNOWN_BLOCKER;
 const COMMISSIONABLE_EVIDENCE = new Set(["delivered_uncounted", "ordered_unverified"]);
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
-const ALLOWED_BINARY_MEDIA = new Set([
+const ALLOWED_ARTIFACT_MEDIA = new Set([
   "application/pdf", "image/jpeg", "image/png", "image/webp", "application/octet-stream",
+  "application/json", "application/zip", "application/x-zip-compressed", "image/svg+xml",
   "model/step", "model/stl", "model/gltf-binary", "application/x-kicad-pcb", "application/vnd.ms-package.3dmanufacturing-3mf"
 ]);
-const DISALLOWED_EXTENSIONS = new Set([".html", ".htm", ".svg", ".js", ".mjs", ".cjs", ".exe", ".sh", ".zip", ".tar", ".gz"]);
+// ZIP source bundles stay opaque; SVG drawings are never executed or inlined.
+// Downloads are authenticated attachments and SVG previews use escaped text.
+const DISALLOWED_EXTENSIONS = new Set([".html", ".htm", ".js", ".mjs", ".cjs", ".exe", ".sh", ".tar", ".gz"]);
 const INVENTORY_SCAN_PAGE_SIZE = 200;
 const WORKSPACE_SECURITY_ENTITY_ID = "workspace";
 
@@ -2779,7 +2782,7 @@ export class ApplicationService {
     await this.assertArtifactAncestry(normalizedInput);
     if (normalizedInput.byteSize <= 0 || normalizedInput.byteSize > MAX_UPLOAD_BYTES) throw new ApplicationError("quota_exceeded", "Upload exceeds the per-file limit");
     const filename = safeFilename(normalizedInput.filename);
-    if (!ALLOWED_BINARY_MEDIA.has(normalizedInput.mediaType) && !normalizedInput.mediaType.startsWith("text/")) {
+    if (!ALLOWED_ARTIFACT_MEDIA.has(normalizedInput.mediaType) && !normalizedInput.mediaType.startsWith("text/")) {
       throw new ApplicationError("unsupported_media", "This media type is not accepted");
     }
     const normalized = { ...normalizedInput, filename };

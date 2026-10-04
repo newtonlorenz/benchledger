@@ -363,6 +363,16 @@ CAD, STL, STEP, 3MF, build, firmware, or other large files as base64, and never
 accepts an absolute host path, shell command, SQL statement, or executable
 upload. Artifact paths are logical IDs, not host filesystem paths.
 
+Browser Files and the supported host helper accept JSON (`application/json`),
+ZIP (`application/zip` or `application/x-zip-compressed`), and SVG
+(`image/svg+xml`), with the same 100 MiB limit, revision authorisation and
+length/hash checks. ZIP files are stored opaquely for download without extraction
+or execution. SVG previews show escaped source through the verified 1 MiB text
+preview; they never embed SVG markup or create SVG image Blob URLs. Both
+authenticated download routes return the original as an attachment with
+`no-store`, `no-referrer`, `nosniff`, and `sandbox; default-src 'none'` CSP.
+Other excluded file types remain excluded.
+
 Typical roles include `source`, `cad`, `step`, `stl`, `three_mf`,
 `slicer_project`, `gcode`, `drawing`, `validation`, and `document`. Manifest
 freezing is deferred in the current application service; treat hashes and
@@ -455,6 +465,12 @@ also shared: scoped tokens may read offers only when an `itemId` is supplied,
 but may not record offer snapshots. Human approval remains required for
 purchasing, external publication, deployment, credential changes, destructive
 purge, printer control, heating, firmware flashing, and physical tests.
+
+Project-scoped writes can retain purchase context in requirement notes or
+revision artifacts and supplier observations through `record_requirement_offer`.
+Creating stock requires an authorised workspace inventory write, followed by
+explicit requirement matching. A quoted package quantity does not establish
+received or physically counted stock.
 
 For HTTP bearer configuration, a token listed in the write hash environment
 variable receives both read and write scopes, while a read token remains
