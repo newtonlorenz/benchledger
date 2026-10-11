@@ -16,6 +16,8 @@ is specific to a project. Source files remain unchanged.
    concentric parts receive different axial directions. A single part remains
    assembled. Use **Find a part** to search names or groups, then select, hide
    or isolate parts. The list scrolls independently of the selected-part controls.
+   Choose **Isometric**, **Front** or **Rear** to inspect the same separation
+   from another angle. Changing separation keeps the chosen camera view.
 4. **Edit assembly** exposes names, colours, materials, fixing notes, requirement
    links, with **Placement and separation** disclosing position/rotation/separation
    adjustments. Position and separation
@@ -31,6 +33,10 @@ presentation, not a collision-free removal path or proof of physical fit. Parts
 may need to be installed in a different direction from their display offset.
 A project without geometry continues to use Files, requirements and build plans.
 Archived projects retain their saved view but cannot save changes.
+
+If browser graphics are unavailable or the graphics connection is lost, the
+parts list, fixing notes and edits remain available. **Retry 3D viewer** reopens
+the model without clearing the current draft, selection or separation.
 
 ## Supported sources
 
@@ -116,3 +122,28 @@ and [Open CASCADE licensing](https://dev.opencascade.org/resources/licensing).
 
 The synthetic STEP test fixture consists of two boxes created with CadQuery.
 It contains no real project geometry or identifiers.
+
+## Visual regression review
+
+After building, run the focused browser review with:
+
+```sh
+npx playwright test e2e/assembly-review.spec.ts e2e/assembly.spec.ts e2e/visual-review.spec.ts
+```
+
+The review generates four labelled PNG contact sheets and a JSON manifest in
+Playwright's per-test output directory, attached to the test results. It covers
+three camera views and five separation values across light/dark and desktop/phone
+layouts. The manifest identifies the synthetic source hash, project revision and
+unsaved inspected draft; it does not imply a persisted assembly version.
+
+The checks assert visible rendered geometry, stable assembled dimensions,
+camera/separation state, selection/isolation and layout bounds, and fail on
+unexpected page errors. A synthetic blank-image control checks that the image
+analysis can reject a blank model. The separate recovery scenario disables WebGL,
+edits notes and retries before and after restoring graphics support.
+
+Inspect the sheets for visual correctness. These are review artifacts rather
+than approved pixel baselines, collision checks, manufacturing checks or proof
+of physical fit. The existing `npm run check` gate includes these tests. No
+additional rendering library or browser harness is required.

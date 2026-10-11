@@ -6,7 +6,7 @@ import { ApiError, workflowRequest } from "./api";
 import { projects } from "./mock-data";
 import type { AssemblyInput, ProjectAssembly } from "@benchledger/api-contract";
 vi.mock("./api", async original => ({ ...await original<typeof import("./api")>(), workflowRequest: vi.fn() }));
-vi.mock("./assembly-canvas", () => ({ default: () => <div aria-label="Synthetic model canvas" /> }));
+vi.mock("./assembly-canvas", () => ({ default: ({ view, explosion }: { view: string; explosion: number }) => <div aria-label="Synthetic model canvas" data-view={view} data-explosion={explosion} /> }));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.mocked(workflowRequest).mockReset(); });
 const project = { ...structuredClone(projects[0]!), id: "synthetic-project", serverRevisionId: "synthetic-revision", artifacts: [{ id: "file-1", name: "enclosure.glb", role: "File" as const, revision: "r01", size: "1 KB", hash: "a".repeat(64), updated: "2026-09-12", status: "candidate" as const, projectRevisionId: "synthetic-revision" }] };
 project.allArtifacts = project.artifacts;
@@ -15,6 +15,24 @@ const part = { id: "part-1", artifactId: "file-1", nodeId: "mesh-0", name: "Cove
 const inspection = { sources: [source], parts: [part], geometry: [{ ...part, positions: [0, 0, 0, 10, 0, 0, 0, 10, 0], indices: [0, 1, 2] }], warnings: ["Synthetic viewing warning"] };
 const saved: ProjectAssembly = { id: "synthetic-revision", projectId: project.id, projectRevisionId: project.serverRevisionId, version: 1, contentSha256: "b".repeat(64), name: "Saved assembly", sources: [source], parts: [part], steps: [], notes: "", updatedAt: "2026-09-12T00:00:00Z", updatedBy: "synthetic" };
 const click = (name: string) => fireEvent.click(screen.getByRole("button", { name }));
+it("changes inspection angles without resetting separation, selection or the current camera", async () => {
+  vi.mocked(workflowRequest).mockImplementation(async path => path.endsWith("/inspect") ? inspection : { assembly: saved, warnings: [] });
+  render(<AssemblyWorkspace project={project} onFiles={() => {}} />);
+  await screen.findByLabelText("Synthetic model canvas");
+  click("Cover"); click("Exploded"); click("Front");
+  const canvas = screen.getByLabelText("Synthetic model canvas");
+  expect(canvas.dataset).toMatchObject({ view: "front", explosion: "100" });
+  expect(screen.getByRole("button", { name: "Cover" }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByRole("button", { name: "Front" }).getAttribute("aria-pressed")).toBe("true");
+  click("Assembled");
+  expect(canvas.dataset).toMatchObject({ view: "front", explosion: "0" });
+  click("Rear"); click("Exploded");
+  expect(canvas.dataset).toMatchObject({ view: "rear", explosion: "100" });
+  click("Isometric");
+  expect(canvas.dataset).toMatchObject({ view: "iso", explosion: "100" });
+  expect(screen.getByRole("button", { name: "Rear" }).getAttribute("aria-pressed")).toBe("false");
+  expect(screen.queryByText("Unsaved changes")).toBeNull();
+});
 it("imports with explicit units, edits shared parts/steps and replays an uncertain save unchanged", async () => {
   let persisted: ProjectAssembly | null = null, saves = 0;
   vi.mocked(workflowRequest).mockImplementation(async (path, method, body) => {
