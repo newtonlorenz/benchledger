@@ -14,7 +14,7 @@
 .assembly-toolbar button[aria-pressed=true], .assembly-guide-switch button[aria-pressed=true] { color: var(--moss-dark); background: var(--surface-strong); }
 .assembly-canvas { height: clamp(340px, 46dvh, 560px); width: 100%; min-width: 0; position: relative; }
 .assembly-canvas canvas { display: block; touch-action: none; }
-.assembly-dimensions { position: absolute; top: 82px; left: 22px; font-size: .8rem; z-index: 1; pointer-events: none; color: var(--assembly-stage-ink); font-variant-numeric: tabular-nums; }
+.assembly-dimensions { margin: 0 20px 8px; font-size: .8rem; pointer-events: none; color: var(--assembly-stage-ink); font-variant-numeric: tabular-nums; }
 .assembly-dimensions small { display: block; margin-top: 4px; color: inherit; font-size: .75rem; }
 .assembly-gestures { font-size: .8rem; color: var(--ink-soft); margin: 8px 20px 16px; }
 .assembly-slider { margin: 0; padding: 16px 20px; background: var(--surface-strong); border-top: 1px solid var(--line); }

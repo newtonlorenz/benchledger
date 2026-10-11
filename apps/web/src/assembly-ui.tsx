@@ -62,7 +62,7 @@ export function AssemblyWorkspace({ project, onFiles }: { project: Project; onFi
   const sourceFor = (file: typeof files[number]): AssemblySource => ({ artifactId: file.id, sha256: file.hash, upAxis: /\.glb$/iu.test(file.name) ? "y" : "z", unit: /\.glb$/iu.test(file.name) ? "metre" : "millimetre" });
   const part = draft?.parts.find(p => p.id === selected);
   const toggle = (ids: string[], visible: boolean) => setHidden(current => { const next = new Set(current); ids.forEach(id => visible ? next.delete(id) : next.add(id)); return next; });
-  const preset = (value: number, direction: typeof view = "iso") => { setExplosion(value); setView(direction); setFit(v => v + 1); };
+  const preset = (value: number, direction: typeof view = view) => { setExplosion(value); setView(direction); setFit(v => v + 1); };
   if (!root) return <section className="assembly-empty"><h2>Assembly explorer</h2><p>Create a project revision to attach an assembly.</p></section>;
   return <section ref={workspace} className="assembly-workspace" aria-label="Assembly explorer">
     <header className="assembly-heading"><div><h2>{draft?.name ?? "Assembly guide"}</h2><p>{draft ? `${draft.parts.length} parts · ${dirty ? "Unsaved changes" : `Saved version ${draft.expectedVersion}`}` : "Review how the parts fit together and record the build order for this revision."}</p></div>
@@ -83,7 +83,13 @@ export function AssemblyWorkspace({ project, onFiles }: { project: Project; onFi
     {draft && !choosing && <>
       {draft.sources.length > 1 && <p className="assembly-placement-note">Parts keep their exported positions. Use Edit assembly to adjust placement if separate files overlap.</p>}
       <div className="assembly-layout"><div className="assembly-stage">
-        <div className="assembly-toolbar" role="group" aria-label="Assembly views"><Button variant="ghost" type="button" aria-pressed={explosion === 0} onClick={() => preset(0)}>Assembled</Button><Button variant="ghost" type="button" aria-pressed={explosion === 100} onClick={() => preset(100)}>Exploded</Button><Button variant="ghost" type="button" onClick={() => preset(explosion, "rear")}>Rear</Button><Button variant="ghost" type="button" onClick={() => { setHidden(new Set()); setFit(v => v + 1); }}>Show all</Button><Button variant="ghost" type="button" onClick={() => setFit(v => v + 1)}>Fit view</Button></div>
+        <div className="assembly-toolbar" role="group" aria-label="Assembly views">
+          <Button variant="ghost" type="button" aria-pressed={explosion === 0} onClick={() => preset(0)}>Assembled</Button>
+          <Button variant="ghost" type="button" aria-pressed={explosion === 100} onClick={() => preset(100)}>Exploded</Button>
+          {([["iso", "Isometric"], ["front", "Front"], ["rear", "Rear"]] as const).map(([direction, label]) => <Button key={direction} variant="ghost" type="button" aria-pressed={view === direction} onClick={() => preset(explosion, direction)}>{label}</Button>)}
+          <Button variant="ghost" type="button" onClick={() => { setHidden(new Set()); setFit(v => v + 1); }}>Show all</Button>
+          <Button variant="ghost" type="button" onClick={() => setFit(v => v + 1)}>Fit view</Button>
+        </div>
         {geometry.length > 0 ? <Canvas geometry={geometry} parts={draft.parts} hidden={hidden} selected={selected} explosion={explosion} view={view} fit={fit} onSelect={setSelected} /> : <div className="assembly-canvas"><p>The parts guide is available while the model loads.</p></div>}
         <p className="assembly-gestures">Drag to rotate · scroll or pinch to zoom · click a part to inspect</p>
         <div className="assembly-slider"><Label htmlFor="assembly-explosion">Pull the assembly apart <output>{explosion}%</output></Label><Slider id="assembly-explosion" aria-label="Assembly separation" min={0} max={100} value={[explosion]} onValueChange={values => setExplosion(values[0] ?? 0)} onPointerUp={() => setFit(v => v + 1)} onKeyUp={() => setFit(v => v + 1)} /><p>Separation shows relationships, not a verified removal path.</p></div>

@@ -2,6 +2,53 @@ import { openFileDetails, openProject, openProjectSection } from "./workspace-co
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import AxeBuilder from "@axe-core/playwright";
+test("assembly notes remain usable when graphics are unavailable and survive retry", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.addInitScript(() => {
+    const original = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (...args: Parameters<typeof original>) {
+      if (/^webgl2?$|^experimental-webgl$/u.test(args[0]) && !Reflect.get(window, "testGraphicsAvailable")) return null;
+      return original.apply(this, args);
+    } as typeof original;
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/"); await page.getByLabel("Workspace password").fill("demo-password-please-change");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await openProject(page, "Synthetic H2D desk lamp");
+  page.on("console", message => {
+    if (message.type() === "error" && !/^(?:THREE\.WebGLRenderer: )+Error creating WebGL context\.$/u.test(message.text())) errors.push(message.text());
+  });
+  await page.getByRole("tab", { name: /^Files/u }).click();
+  await page.getByLabel("Choose files to upload").setInputFiles({ name: "synthetic-no-graphics.step", mimeType: "model/step", buffer: await readFile("packages/artifacts/testfiles/synthetic-assembly.step") });
+  await page.getByRole("button", { name: "Add 1 file", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Download synthetic-no-graphics.step", exact: true })).toBeVisible();
+  await openProjectSection(page, "Assembly");
+  await page.getByLabel("synthetic-no-graphics.step", { exact: true }).check();
+  await page.getByRole("button", { name: "Open assembly", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("3D viewing is unavailable in this browser");
+  await expect(page.locator(".assembly-canvas canvas")).toHaveCount(0);
+  await page.getByRole("button", { name: "Lid", exact: true }).click();
+  await page.getByRole("button", { name: "Edit assembly", exact: true }).click();
+  await page.getByLabel("Fixing notes").fill("Keep this draft while restoring the model view.");
+  await page.getByRole("button", { name: "Front", exact: true }).click();
+  await page.getByRole("button", { name: "Exploded", exact: true }).click();
+  await page.getByRole("button", { name: "Retry 3D viewer", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("3D viewing is unavailable in this browser");
+  await expect(page.getByLabel("Fixing notes")).toHaveValue("Keep this draft while restoring the model view.");
+  await page.evaluate(() => Reflect.set(window, "testGraphicsAvailable", true));
+  await page.getByRole("button", { name: "Retry 3D viewer", exact: true }).click();
+  await expect(page.locator(".assembly-canvas canvas")).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.locator(".assembly-dimensions")).toContainText("40.0 × 30.0 × 17.0 mm");
+  await expect(page.getByLabel("Fixing notes")).toHaveValue("Keep this draft while restoring the model view.");
+  await expect(page.getByRole("button", { name: "Front", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Lid", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("slider", { name: "Assembly separation" })).toHaveAttribute("aria-valuenow", "100");
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  expect(errors).toEqual([]);
+});
+
 test("assembly explorer imports CAD, edits a guide, saves and reopens on desktop and mobile", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/"); await page.getByLabel("Workspace password").fill("demo-password-please-change"); await page.getByRole("button", { name: "Sign in", exact: true }).click();

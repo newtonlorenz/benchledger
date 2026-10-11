@@ -79,7 +79,11 @@ export default function AssemblyCanvas(props: AssemblyCanvasProps) {
         }
       });
       setError(undefined); update.current(); resize();
-    } catch (cause) { dispose(); setError(cause instanceof Error ? cause.message : "3D viewing is unavailable in this browser."); }
+    } catch (cause) {
+      update.current = () => {}; fitView.current = () => {};
+      dispose();
+      setError(!renderer ? "3D viewing is unavailable in this browser. Check its graphics support, then retry." : cause instanceof Error ? cause.message : "3D viewing is unavailable in this browser.");
+    }
     return () => { update.current = () => {}; fitView.current = () => {}; dispose(); };
   }, [props.geometry, props.parts.map(p => `${p.id}:${p.artifactId}:${p.nodeId}`).join("|"), attempt]);
   useEffect(() => update.current(), [props.parts, props.hidden, props.selected, props.explosion]);

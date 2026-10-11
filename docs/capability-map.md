@@ -581,6 +581,12 @@ replacing local drafts; it is not a routine row in Project actions.
 
 The shared Build → Assembly route supports all fabrication routes. `inspect_assembly_sources`, `read_project_assembly`, `save_project_assembly` and `read_assembly_history` expose the same hash-bound placements, part groups, BOM links and build steps to agents. Read tools require project read scope; saving requires project write scope, an observed version and a stable command key. No physical effects. See [Assembly explorer](assembly-explorer.md) for limits and HTTP parity.
 
+Browser inspection offers isometric, front and rear views while retaining the
+chosen separation. Graphics recovery preserves draft notes and selection.
+Synthetic browser review packs cover intermediate separation values, camera
+views, themes and phone layouts; their images provide visual review evidence,
+not manufacturing or physical-fit validation. Agent and HTTP contracts are unchanged.
+
 ### PCB inspection
 
 The `pcb.read` capability exposes a read-only Build → PCB route over the existing assembly inspection service. Native KiCad PCB files preserve source thickness, supported drill/copper/footprint geometry and exact file hashes. STEP/GLB exports retain their node geometry. Top/bottom views, layer visibility and source-derived component selection are available where the source permits; missing bodies and unsupported geometry are reported explicitly. The same inspection is available through MCP. See [PCB viewer](pcb-viewer.md).

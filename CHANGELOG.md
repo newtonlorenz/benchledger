@@ -74,6 +74,12 @@ first public release; all current work is under **Unreleased**.
 
 ### Changed
 
+- Inspect assemblies from isometric, front and rear views without resetting
+  separation; keep the selected camera while assembling or separating parts.
+- Keep assembly dimensions clear of wrapped phone controls and explain unavailable
+  graphics with an in-place retry. Add synthetic visual review packs and browser
+  checks for intermediate separation states and draft-preserving graphics recovery.
+
 - Serve both authenticated artifact downloads as attachments with no-store,
   no-referrer, nosniff and a sandbox/default-src-none Content Security Policy.
 
