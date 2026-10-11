@@ -74,6 +74,9 @@ first public release; all current work is under **Unreleased**.
 
 ### Changed
 
+- Update Sharp to 0.35.5 and the transitive source-map-js dependency to 1.2.2
+  to resolve the production dependency security audit findings.
+
 - Inspect assemblies from isometric, front and rear views without resetting
   separation; keep the selected camera while assembling or separating parts.
 - Keep assembly dimensions clear of wrapped phone controls and explain unavailable
