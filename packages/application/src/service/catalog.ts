@@ -1,5 +1,6 @@
 import { ApplicationError, notFound } from "../errors.js";
-import { isConfirmedEvidence } from "@benchledger/domain";
+import { countsAsInStock } from "@benchledger/domain";
+import type { StockReceivingPolicy } from "@benchledger/api-contract";
 import type { ApplicationPorts, CatalogProductListOptions, Mutation, Page, RequestContext } from "../ports.js";
 import { boundedCursor, boundedLimit, requireId } from "./shared.js";
 import { FILAMENT_CATALOG_IDENTITY_UNKNOWN_BLOCKER, catalogProductSchema, createCatalogProductSchema, createInventoryProductProfileSchema, inventoryProductProfileSchema, updateCatalogProductSchema, updateInventoryProductProfileSchema } from "@benchledger/api-contract";
@@ -19,7 +20,7 @@ export function catalogPort(ports: Pick<ApplicationPorts, "catalog">): NonNullab
  * product profile. A bare item kind is not enough ancestry to make a printer
  * assignment trustworthy.
  */
-export async function assertOwnedPrinter(ports: Pick<ApplicationPorts, "inventory" | "catalog">, itemId: string): Promise<void> {
+export async function assertOwnedPrinter(ports: Pick<ApplicationPorts, "inventory" | "catalog">, itemId: string, policy: StockReceivingPolicy): Promise<void> {
   const item = await ports.inventory.getItem(itemId);
   if (item === null) throw notFound("Inventory item", itemId);
   if (item.kind !== "printer") throw new ApplicationError("validation", "The intended printer must be an owned printer inventory item");
@@ -27,8 +28,10 @@ export async function assertOwnedPrinter(ports: Pick<ApplicationPorts, "inventor
   if (item.unit !== "each" || item.unitStatus === "needs_correction") {
     throw new ApplicationError("validation", "The intended printer must use a compatible each unit");
   }
-  if (!isConfirmedEvidence(item.evidence.state) || item.quantity <= 0 || item.availableQuantity <= 0) {
-    throw new ApplicationError("validation", "The intended printer must have positive available stock with physically counted or commissioned evidence");
+  if (!countsAsInStock(item.evidence.state, policy) || item.quantity <= 0 || item.availableQuantity <= 0) {
+    throw new ApplicationError("validation", policy === "on_receipt"
+      ? "The intended printer must have positive available stock with physically counted or commissioned evidence"
+      : "The intended printer must have positive available stock that counts as in stock under the workspace receiving policy");
   }
   const profile = await catalogPort(ports).getInventoryProductProfile(itemId);
   if (profile === null || profile.itemId !== itemId || profile.profileType !== "printer_asset" || profile.linkState !== "confirmed") {

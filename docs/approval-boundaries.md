@@ -58,6 +58,9 @@ The following are intentionally not MCP tools:
 - fetching arbitrary supplier URLs or scraping live prices;
 - publishing a project, pushing a public repository, or deploying a service;
 - changing credentials, token scopes, or authentication configuration;
+- changing the workspace stock receiving policy (when bought, delivered or
+  received stock counts as in stock); agents may read it but a workspace
+  administrator changes it in Settings;
 - permanently purging records, blobs, backups, or audit history;
 - starting a printer, heating a machine, moving hardware, generating/submitting a
   print job, flashing firmware, or changing printer configuration;

@@ -44,7 +44,9 @@ import type {
 import { DEFAULT_MANAGED_INVENTORY_CATEGORIES } from "./category-ui";
 import type { CategoryCreateInput, CategoryUpdateInput, ManagedInventoryCategory } from "./category-ui";
 import type { InspectionAction, InspectionCompletionInput, InspectionCompletionPreview, InspectionCompletionResult } from "./inspection-ui";
-import { inspectionActionSchema, inspectionCompletionCommitSchema, inspectionCompletionPreviewSchema } from "@benchledger/api-contract";
+import { inspectionActionSchema, inspectionCompletionCommitSchema, inspectionCompletionPreviewSchema, stockReceivingPolicyImpactSchema, workspacePreferencesSchema } from "@benchledger/api-contract";
+import { DEFAULT_STOCK_RECEIVING_POLICY } from "./stock-receiving-policy";
+import type { StockReceivingImpact, StockReceivingPolicy, WorkspacePreferencesView } from "./stock-receiving-policy";
 
 type ServerHealth = { status: "ok" | "degraded"; service: string; version: string; demo: boolean; now: string };
 type ServerInventoryItem = {
@@ -55,6 +57,9 @@ type ServerInventoryItem = {
   tags: string[];
   links: Array<{ supplier: string; url: string; label?: string; currentPriceMinor?: number; currency?: string; observedAt?: string; packageQuantity?: number }>;
   evidence: { state: string; source?: string; sourceId?: string; observedAt?: string; note?: string };
+  /** Server-derived availability under the workspace stock receiving policy. */
+  availability?: string;
+  primaryImage?: { id?: unknown; url?: unknown; width?: unknown; height?: unknown };
   catalogProduct?: unknown;
   product?: unknown;
   productProfile?: unknown;
@@ -86,7 +91,7 @@ type ServerRevision = { id: string; projectId: string; number: number; name: str
 type ServerProject = { id: string; name: string; description?: string; status: string; currentRevisionId?: string; createdAt: string; updatedAt: string; version: number; removedAt?: string; removedBy?: string; lastLifecycleStatus?: string; workItems?: ServerWorkItem[]; projectRevisions?: ServerRevision[]; revisions?: ServerRevision[]; workItemRevisions?: ServerRevision[]; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; currentRevision?: ServerRevision };
 type ServerProjectTombstone = { id: string; name: string; removedAt: string; removedBy: string; lastLifecycleStatus: string; releasedReservationIds: string[]; version: number; auditId?: string };
 type ServerOffer = { id: string; itemId?: string; name: string; supplier: string; url: string; priceMinor: number; currency: CurrencyCode; packageQuantity?: number; observedAt: string; staleAfterDays?: number; version: number };
-type ServerWorkspace = { inventory: ServerInventoryItem[]; projects: ServerProject[]; offers: ServerOffer[]; source: "api"; fetchedAt: string; capabilities?: unknown };
+type ServerWorkspace = { inventory: ServerInventoryItem[]; projects: ServerProject[]; offers: ServerOffer[]; source: "api"; fetchedAt: string; capabilities?: unknown; preferences?: unknown };
 type ServerUploadSession = { id: string; artifactId: string; expiresAt: string; maxBytes: number; uploadUrl: string; status: "pending" | "finalized" | "expired" };
 type ServerReconciliationEvidence = { state: string; source?: string; sourceId?: string; observedAt?: string; note?: string; condition?: string; uncertainty?: number };
 type ServerReconciliationConvertedAsset = { id?: string; name: string; kind: string; quantity: number; unit: string; location?: string; tags?: string[]; links?: unknown[]; evidence?: ServerReconciliationEvidence };
@@ -223,7 +228,7 @@ export interface WorkspaceAccessUpdateResult {
   session?: LoginResult;
 }
 export interface SessionResult { authenticated: true; actor: string; source?: string; scopes: string[]; projectIds?: string[]; memberId?: string; memberVersion?: number; teamEnabled?: boolean }
-export interface WorkspaceSnapshot { inventory: InventoryItem[]; projects: Project[]; offers: Offer[]; source: "api" | "synthetic"; fetchedAt: string; health?: ServerHealth; capabilities?: readonly string[]; session?: SessionResult }
+export interface WorkspaceSnapshot { inventory: InventoryItem[]; projects: Project[]; offers: Offer[]; source: "api" | "synthetic"; fetchedAt: string; health?: ServerHealth; capabilities?: readonly string[]; session?: SessionResult; preferences?: WorkspacePreferencesView }
 export interface InventoryCategoryPage { data: readonly ManagedInventoryCategory[]; nextCursor?: string; limit: number; total?: number }
 export type InventoryKindQuery = "printer" | "tool" | "accessory" | "consumable" | "electronic" | "fastener" | "filament" | "wire" | "adhesive" | "other";
 export interface InventoryListQuery {
@@ -283,6 +288,12 @@ export interface WorkspaceAdapter {
   login(password: string, username?: string): Promise<LoginResult>;
   logout(): Promise<void>;
   loadWorkspace(): Promise<WorkspaceSnapshot>;
+  /** Stock receiving policy and other interpretation preferences (readable by every member). */
+  getWorkspacePreferences(): Promise<WorkspacePreferencesView>;
+  /** Read-only preview of which items would start or stop counting as in stock. */
+  previewStockReceivingPolicy(policy: StockReceivingPolicy): Promise<StockReceivingImpact>;
+  /** Administrator-only, versioned and audited. Never rewrites evidence. */
+  updateStockReceivingPolicy(policy: StockReceivingPolicy, expectedVersion: number): Promise<WorkspacePreferencesView>;
   listArchivedProjects(): Promise<Project[]>;
   /**
    * Re-evaluate stock readiness for active projects (optionally only the
@@ -451,7 +462,39 @@ function mapInventoryCondition(value: string | undefined): InventoryCondition | 
   return value === "new" || value === "good" || value === "worn" || value === "needs_repair" || value === "unknown" ? value : undefined;
 }
 
+/** Server availability under the receiving policy; absent on older services. */
+function mapPolicyAvailability(value: unknown): InventoryItem["policyAvailability"] {
+  return value === "confirmed" || value === "assumed" || value === "inspect_first" || value === "ordered" || value === "unknown" ? value : undefined;
+}
+
+/** In stock under the workspace policy: counted/commissioned, or policy-trusted. */
+function countsAsInStock(item: ServerInventoryItem): boolean {
+  const availability = mapPolicyAvailability(item.availability);
+  if (availability !== undefined) return availability === "confirmed" || availability === "assumed";
+  return item.evidence.state === "physically_counted" || item.evidence.state === "commissioned";
+}
+
+/** Accept only the same-origin image content route for this exact item. */
+function mapPrimaryImage(itemId: string, value: ServerInventoryItem["primaryImage"]): { primaryImage: NonNullable<InventoryItem["primaryImage"]> } | undefined {
+  if (value === undefined || typeof value.id !== "string" || typeof value.url !== "string") return undefined;
+  const expected = `/api/v1/inventory/${encodeURIComponent(itemId)}/images/${encodeURIComponent(value.id)}/content`;
+  if (value.url !== expected) return undefined;
+  const width = typeof value.width === "number" && value.width > 0 ? value.width : 1;
+  const height = typeof value.height === "number" && value.height > 0 ? value.height : 1;
+  return { primaryImage: { id: value.id, url: value.url, width, height } };
+}
+
+/** Older services omit preferences; callers then keep the conservative default. */
+function mapWorkspacePreferences(value: unknown): WorkspacePreferencesView | undefined {
+  const parsed = workspacePreferencesSchema.safeParse(value);
+  return parsed.success ? { stockReceivingPolicy: parsed.data.stockReceivingPolicy, version: parsed.data.version } : undefined;
+}
+
 function mapStockState(item: ServerInventoryItem): InventoryItem["state"] {
+  if (countsAsInStock(item)) {
+    if (item.availableQuantity > 0) return "available";
+    return item.quantity > 0 ? "reserved" : "depleted";
+  }
   if (item.evidence.state === "ordered_unverified") return "ordered-unverified";
   if (item.evidence.state === "physically_counted" || item.evidence.state === "commissioned") {
     if (item.availableQuantity > 0) return "available";
@@ -996,7 +1039,8 @@ export function mapInventoryItem(item: ServerInventoryItem): InventoryItem {
   const category = mapCategory(item.kind);
   const state = mapStockState(item);
   const condition = mapInventoryCondition(item.condition);
-  const confirmed = item.evidence.state === "physically_counted" || item.evidence.state === "commissioned";
+  const confirmed = countsAsInStock(item);
+  const policyAvailability = mapPolicyAvailability(item.availability);
   const catalogProduct = mapCatalogProduct(item.catalogProduct ?? item.product, category === "Filament" ? "filament" : category === "Printers" ? "printer" : undefined);
   const mappedProfile = mapInventoryProductProfile(item.productProfile, item.id);
   const productProfile = mappedProfile ?? (item.catalogProductId || item.linkState
@@ -1015,7 +1059,7 @@ export function mapInventoryItem(item: ServerInventoryItem): InventoryItem {
     ...(item.model ? { model: item.model } : {}),
     description: item.description?.trim() || "No description recorded.", quantity: item.quantity, availableQuantity: item.availableQuantity, unit: mapUnit(item.unit),
     reserved: confirmed ? Math.max(item.quantity - item.availableQuantity, 0) : 0,
-    state, evidence: mapEvidence(item.evidence.state), serverEvidence: mapServerEvidence(item.evidence.state), location: item.location?.trim() || "Unassigned",
+    state, evidence: mapEvidence(item.evidence.state), serverEvidence: mapServerEvidence(item.evidence.state), ...(policyAvailability === undefined ? {} : { policyAvailability }), ...(mapPrimaryImage(item.id, item.primaryImage) ?? {}), location: item.location?.trim() || "Unassigned",
     ...(dimensions ? { dimensions } : {}), ...(item.manufacturer ? { manufacturer: item.manufacturer } : {}), ...(item.sku ? { sku: item.sku } : {}),
     ...(condition ? { condition } : {}),
     tags: [...item.tags], compatibility: [],
@@ -1200,7 +1244,9 @@ function mapGapCandidate(value: unknown): BomGapCandidate | undefined {
     availableQuantity,
     suppliedQuantity,
     inspectQuantity,
-    reason
+    reason,
+    ...(record?.evidenceState === undefined ? {} : { evidenceState: mapServerEvidence(String(record.evidenceState)) }),
+    ...(mapPolicyAvailability(record?.availability) === undefined ? {} : { availability: mapPolicyAvailability(record?.availability)! })
   };
 }
 
@@ -2460,6 +2506,9 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     async login() { return { authenticated: true, actor: "sample", csrfToken: "sample", expiresAt: new Date(Date.now() + 3_600_000).toISOString() }; },
     async logout() {},
     async loadWorkspace() { return state; },
+    async getWorkspacePreferences() { return { stockReceivingPolicy: DEFAULT_STOCK_RECEIVING_POLICY, version: 1 }; },
+    async previewStockReceivingPolicy(policy) { return { from: DEFAULT_STOCK_RECEIVING_POLICY, to: policy, version: 1, gained: [], lost: [], blockedBy: [], truncated: false }; },
+    async updateStockReceivingPolicy() { throw new ApiError("Stock settings are unavailable in the sample workspace", { kind: "forbidden", status: 403 }); },
     async listArchivedProjects() { return structuredClone(state.projects.filter((project) => project.status === "archived")); },
     async refreshProjectReadiness(projectIds) { return structuredClone(state.projects.filter((project) => project.status !== "archived" && (projectIds === undefined || projectIds.includes(project.id)))); },
     async listInventory(query) { return sampleInventoryPage(state.inventory, query); },
@@ -3067,7 +3116,30 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       projectCache.clear();
       mappedProjects.forEach((project) => projectCache.set(project.id, project));
       const capabilities = Array.isArray(workspace.capabilities) ? workspace.capabilities.filter((action): action is string => typeof action === "string") : [];
-      return { inventory: mappedInventory, projects: mappedProjects, offers: workspace.offers.map(mapOffer), source: "api", fetchedAt: workspace.fetchedAt || new Date().toISOString(), health: currentHealth, capabilities, session: currentSession };
+      const preferences = mapWorkspacePreferences(workspace.preferences);
+      return { inventory: mappedInventory, projects: mappedProjects, offers: workspace.offers.map(mapOffer), source: "api", fetchedAt: workspace.fetchedAt || new Date().toISOString(), health: currentHealth, capabilities, session: currentSession, ...(preferences === undefined ? {} : { preferences }) };
+    },
+    async getWorkspacePreferences() {
+      const preferences = mapWorkspacePreferences(await request<unknown>("/workspace/preferences"));
+      if (preferences === undefined) throw new ApiError("The service returned invalid workspace preferences", { kind: "server", status: 502, code: "invalid_preferences" });
+      return preferences;
+    },
+    async previewStockReceivingPolicy(policy) {
+      const parsed = stockReceivingPolicyImpactSchema.safeParse(await request<unknown>(`/workspace/preferences/stock-receiving-impact?stockReceivingPolicy=${encodeURIComponent(policy)}`));
+      if (!parsed.success) throw new ApiError("The service returned an invalid stock setting preview", { kind: "server", status: 502, code: "invalid_preferences_impact" });
+      return parsed.data;
+    },
+    async updateStockReceivingPolicy(policy, expectedVersion) {
+      const token = csrfToken ?? cookieValue("forge_csrf");
+      if (!token) throw new ApiError("Your session needs a fresh CSRF token before changing workspace settings", { kind: "csrf", status: 403 });
+      const payload = await request<unknown>("/workspace/preferences", {
+        method: "PUT",
+        headers: { "Idempotency-Key": idempotencyKey("stock-receiving-policy"), "If-Match": `"${expectedVersion}"` },
+        body: JSON.stringify({ stockReceivingPolicy: policy, expectedVersion })
+      }, token);
+      const preferences = mapWorkspacePreferences(responseValue(payload));
+      if (preferences === undefined) throw new ApiError("The service returned invalid workspace preferences", { kind: "server", status: 502, code: "invalid_preferences" });
+      return preferences;
     },
     async listArchivedProjects() {
       const payload = await request<unknown>("/projects?status=archived&limit=200");

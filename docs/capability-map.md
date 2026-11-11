@@ -183,6 +183,13 @@ and invalid hashes. Mutating tools use optimistic versions where applicable.
 | Offers | `record_offer_snapshot` | `offers:write` | Yes |
 | Context | `refresh_context`, `get_capabilities` | `context:read` | No |
 
+The workspace stock receiving policy (when bought, delivered or received stock
+counts as in stock) is readable through `refresh_context`,
+`read_inventory_summary`, inventory rows (`inStock`, `policyAvailability`) and
+BOM gap candidates (`availability`, `evidenceState`). There is deliberately no
+MCP tool to change it: it is a human Settings decision
+(`PUT /api/v1/workspace/preferences`, administrator browser session only).
+
 Project reads, filters and writes use one lifecycle value everywhere:
 `idea`, `planned`, `ready`, `building`, `validating`, `complete`, or `archived`.
 `archive_project` is the reversible project-retirement command (the former
@@ -322,6 +329,8 @@ profiles when present.
 | Organize inventory | Settings category manager; inventory table, category filter, and item drawer show managed assignments | `list_inventory_categories` → `create_inventory_category` / `update_inventory_category` / `archive_inventory_category`; pass `categoryNodeId` when creating or updating an item; `kind` remains the separate semantic filter |
 | Correct metadata across loaded items | Explicit inventory selection and confirmation dialog | `bulk_update_inventory_items` with 1–100 `{itemId, expectedVersion}` targets; location, canonical condition, or normalized tag add/remove only; atomic preflight, deterministic updated/unchanged results, and no-op rows emit no audit/event |
 | Count uncertain stock | Item count form and stock timeline | `read_inventory_item` → `record_stock_event(kind=count_correction)` |
+| Choose when stock counts as in stock | Settings → “When does stock count as in stock?” with an impact preview before saving | Read-only: `refresh_context` / `read_inventory_summary` report `stockReceivingPolicy`; no MCP tool changes it |
+| Receive delivered or ordered stock | Item drawer “Receive and count” (a physical count records `physically_counted`, audited as received) | `read_inventory_item` → `commission_inventory_item` |
 | Commission delivered or ordered stock | Item commissioning action with observed quantity and provenance | `read_inventory_item` → `commission_inventory_item` |
 | Add an exact printer or spool | Exact-product guided add; reported printers remain inspect-first until explicitly commissioned | catalog search/read → `create_inventory_with_product_profile` |
 | Start a project | Guided project setup | `create_project_with_initial_revision` → `create_work_item`; optional stable `projectId`/`revisionId` identify records; use `create_project_revision` for later planning baselines |

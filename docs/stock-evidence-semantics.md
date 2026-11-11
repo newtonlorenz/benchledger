@@ -5,17 +5,60 @@ item was ordered is not the same fact as a counted, usable item on the shelf.
 The distinction is what lets an agent make a useful recommendation without
 overpromising.
 
+## Stock receiving policy
+
+Each workspace answers one question in **Settings → When does stock count as
+in stock?** The answer is the `stockReceivingPolicy` workspace preference:
+
+| Policy | Label | Ordered (`ordered_unverified`) | Delivered (`delivered_uncounted`) | Counted / commissioned |
+| --- | --- | --- | --- | --- |
+| `on_purchase` | When it's bought | In stock (assumed) | In stock (assumed) | In stock |
+| `on_delivery` | When it's delivered | Pending (`ordered`) | In stock (assumed) | In stock |
+| `on_receipt` (default) | When I've received and checked it | Pending (`ordered`) | Pending (`inspect_first`) | In stock |
+
+`on_receipt` is the historical behaviour and the default. Choose it to manage
+delivered and received stock separately: ordered and delivered stock stay
+pending until a receiving count or commissioning confirms them.
+
+The policy **never rewrites stored evidence**. It is an explicit input to the
+domain classifier (`classifyEvidenceAvailability(state, policy)` in
+`packages/domain/src/evidence.ts`), and every derived view reads it per
+operation: BOM supply eligibility, reservation eligibility, available
+quantities, gap evaluation and readiness, shopping proposals, the
+inspect-first queue and project setup previews. Stock that counts only because
+of the policy is reported as `assumed`, and every surface keeps the recorded
+evidence beside it (for example “In stock · delivered, not counted”).
+
+Changing the policy is a human workspace-administrator decision: an unscoped
+browser session (`PUT /api/v1/workspace/preferences`) with optimistic
+versioning (`If-Match` or `expectedVersion`) and an audit row recording the
+actor and `from`/`to`. Every authenticated caller can read it
+(`GET /api/v1/workspace/preferences`, the `/workspace` snapshot,
+`refresh_context` and `read_inventory_summary`). MCP has no tool to change it.
+`GET /api/v1/workspace/preferences/stock-receiving-impact` previews which rows
+start or stop counting. A change that would make reserved stock stop counting
+is refused (`409 policy_change_strands_reservations`) until those rows are
+counted or their reservations are released.
+
+The ledger starts a delivered or ordered row from its recorded (claimed)
+quantity, so policy-trusted stock can be reserved and used. That baseline is
+not counted evidence; a receiving count replaces it and records the replaced
+claim as `claimedBaseline` in the append-only count event.
+
 ## Availability states
 
-| State | Meaning | Eligible for automatic BOM supply? | Human action |
+| Availability | Meaning | Eligible for automatic BOM supply and reservation? | Human action |
 | --- | --- | --- | --- |
 | `confirmed` | Physical count or commissioning evidence supports current usable quantity | Yes, when unit, compatibility, condition, and quantity match | None unless the project is safety-relevant |
-| `inspect_first` | A plausible item exists, but current quantity, condition, or identity needs checking | No | Count/inspect, then record a compensating stock event |
-| `delivered_uncounted` | Delivery evidence says it arrived; no current count | No | Locate and count |
-| `ordered_unverified` | Order evidence says it was purchased or shipped | No | Wait for delivery, then count |
-| `allocated` | Confirmed stock is reserved or assigned to a project | Only for that reservation/project | Release or record usage |
-| `depleted` | Ledger says no usable amount remains | No | Receive/count new stock |
-| `retired` | Logical record is no longer active | No | Preserve history; create a replacement record if needed |
+| `assumed` | Delivery or order evidence that the workspace receiving policy trusts | Yes, as for `confirmed`; the evidence stays uncounted | Count it when it arrives to record receipt |
+| `inspect_first` | A plausible item exists, but current quantity, condition, or identity needs checking (includes delivered stock under `on_receipt`) | No | Count/inspect, then record a compensating stock event |
+| `ordered` | Order evidence only, not trusted by the policy | No | Wait for delivery, then count |
+| `unknown` | No usable evidence | No | Record a count or evidence |
+
+Stored evidence states remain `physically_counted`, `commissioned`,
+`delivered_uncounted`, `ordered_unverified`, `allocated`, `consumed` and
+`unknown`. Allocated stock is usable only for its reservation/project; depleted
+rows have no usable amount; retired rows keep their history.
 
 MCP outputs report the stored canonical evidence state exactly
 (`physically_counted`, `commissioned`, `delivered_uncounted`,
@@ -64,14 +107,25 @@ claims, record the observed count/correction and retain the prior event. A
 reservation is not consumption; actual consumption is recorded separately with
 `record_usage`.
 
-An uncertain `delivered_uncounted` or `ordered_unverified` item can become
-`commissioned` only through the explicit commissioning command. The command
-requires a current version, an observed quantity, and commissioned provenance
-(source and observation time). It appends a count event that keeps the prior
-evidence in its audit payload; generic metadata PATCH cannot change evidence,
-and a generic `count_correction` stock event adjusts already-counted stock but
-does not make uncertain stock counted. A confirmed inspection completion is the
-other supported path.
+An uncertain `delivered_uncounted` or `ordered_unverified` item is received
+in one of three ways, each appending a count event that keeps the prior
+evidence in its audit payload:
+
+- **Receiving count** (`POST /inventory/{id}/count`, the browser's “Receive and
+  count”): a physical count of delivered or ordered stock is what receiving
+  means. It records `physically_counted` evidence and is audited as received
+  (`received: true`, evidence from/to). This is the same under every policy.
+- **Commissioning** (`commission_inventory_item`): requires a current version,
+  an observed quantity, and commissioned provenance (source and observation
+  time), and records `commissioned` evidence.
+- **A confirmed inspection completion.**
+
+Generic metadata PATCH cannot change evidence. A generic `count_correction`
+stock event adjusts already-counted stock but never makes uncertain stock
+counted, and other generic stock movements (receipt, correction, loss and so
+on) are refused for delivered or ordered rows until they are received, because
+they would silently move the claimed quantity. Reservations and project usage
+of policy-trusted stock use their own audited paths.
 
 ## BOM evaluation
 
@@ -81,7 +135,8 @@ stock state. The response must include:
 
 - requested and supplied quantities in canonical units;
 - candidate item IDs and compatibility reasons;
-- whether the candidate is confirmed or inspect-first;
+- whether the candidate is confirmed, assumed under the receiving policy, or
+  inspect-first, together with its unchanged stored evidence state;
 - shortfall, the Ready/Check/Decide/Source decision, and recommended action
   (`reuse`, `inspect`, `specify`, `buy`, or `none`);
 - the evidence that caused the classification.
@@ -129,10 +184,12 @@ evidence, and provenance. Such rows are excluded from confident matching,
 reservation, usage, project setup, and reconciliation until corrected through
 an explicit evidence-bearing workflow.
 
-Confirmed stock is consumed by allocation arithmetic, so two projects cannot
-silently reserve the same available quantity. If no confirmed candidate covers a
-fully specified required line, the agent may prepare a shopping proposal. It
-must not reserve uncertain stock merely to make the gap disappear.
+In-stock quantity (confirmed, or assumed under the receiving policy) is
+consumed by allocation arithmetic, so two projects cannot silently reserve the
+same available quantity. If no in-stock candidate covers a fully specified
+required line, the agent may prepare a shopping proposal. It must not reserve
+stock the policy does not count merely to make the gap disappear, and it must
+not change the policy (that is a human Settings decision).
 
 ## Shopping-list semantics
 

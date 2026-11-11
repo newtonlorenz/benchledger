@@ -2,6 +2,7 @@ import { ApplicationError, conflict, notFound } from "../errors.js";
 import { isConfirmedEvidence, isCommissionableEvidence } from "@benchledger/domain";
 import { canonicalInventoryBulkUpdate, inventoryBulkUpdateFingerprint, normalizeInventoryBulkChanges } from "../inventory-bulk.js";
 import { parseInventoryCursor } from "../inventory-pagination.js";
+import { inventoryImageContentPath } from "../inventory-images.js";
 import type { ApplicationPorts, BulkMutation, InventoryBulkUpdateResult, InventoryCategoryListOptions, InventoryCategoryPort, InventoryListOptions, Mutation, Page, RequestContext, StockMutation, UpdateInventoryInput } from "../ports.js";
 import { catalogPort } from "./catalog.js";
 import { assertCompatibleInventoryUnit, boundedLimit, commandContext, inventoryWithUnitStatus, nowIso, requireId } from "./shared.js";
@@ -39,6 +40,22 @@ export function categoryListOptions(query: Partial<InventoryCategoryListOptions>
   };
 }
 
+function assertOptionalVersion(expectedVersion: number | undefined): void {
+  if (expectedVersion !== undefined && (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1)) {
+    throw new ApplicationError("validation", "expectedVersion must be a positive integer");
+  }
+}
+
+/**
+ * Optional optimistic check for stock commands. It runs inside the audited
+ * unit of work, so no other write can land between the check and the event.
+ */
+function assertItemVersion(current: InventoryItem, expectedVersion: number | undefined): void {
+  if (expectedVersion !== undefined && current.version !== expectedVersion) {
+    throw conflict(`Inventory item '${current.id}' changed since it was read`, { reason: "version_conflict", expectedVersion, actualVersion: current.version, retryable: true });
+  }
+}
+
 /** Inventory items, managed categories, stock events, physical counts and commissioning. */
 export class InventoryModule extends ServiceModule {
   async listInventory(query: InventoryListQuery): Promise<Page<InventoryItem>> {
@@ -46,7 +63,15 @@ export class InventoryModule extends ServiceModule {
     parseInventoryCursor(parsed.cursor);
     return this.ports.unitOfWork.exclusive(async () => {
       const page = await this.ports.inventory.listItems(parsed);
-      return { ...page, data: page.data.map(inventoryWithUnitStatus) };
+      const covers = await this.ports.inventoryImages?.primaryImages?.(page.data.map((item) => item.id));
+      return {
+        ...page,
+        data: page.data.map((item) => {
+          const cover = covers?.get(item.id);
+          const withStatus = inventoryWithUnitStatus(item);
+          return cover === undefined ? withStatus : { ...withStatus, primaryImage: { id: cover.id, url: inventoryImageContentPath(item.id, cover.id), mediaType: cover.mediaType, width: cover.width, height: cover.height } };
+        })
+      };
     });
   }
 
@@ -235,31 +260,48 @@ export class InventoryModule extends ServiceModule {
     });
   }
 
-  async recordStockEvent(input: StockEventInput, ctx: RequestContext): Promise<Mutation<StockMutation>> {
+  async recordStockEvent(input: StockEventInput, ctx: RequestContext, expectedVersion?: number): Promise<Mutation<StockMutation>> {
     const parsed = stockEventInputSchema.parse(input);
+    assertOptionalVersion(expectedVersion);
     // The generic stock-event path (MCP count_correction) corrects stock that
     // is already counted; it never promotes ordered, delivered or unknown
     // evidence (docs/stock-evidence-semantics.md).
-    if (parsed.type === "count") return this.countInventory(parsed.itemId, parsed.quantity, ctx, parsed.unit, parsed.note, true);
+    if (parsed.type === "count") return this.countInventory(parsed.itemId, parsed.quantity, ctx, parsed.unit, parsed.note, true, expectedVersion);
     return this.mutate(ctx, `inventory.stock.${parsed.type}`, "inventory_item", parsed.itemId, async () => {
       const current = await this.ports.inventory.getItem(parsed.itemId);
       if (!current) throw notFound("Inventory item", parsed.itemId);
+      assertItemVersion(current, expectedVersion);
+      // Delivered/ordered rows carry a recorded (claimed) quantity, not a
+      // count. Generic movements would silently adjust that claim, so they
+      // require a receiving count first. Reservations and project usage of
+      // policy-trusted stock use their own audited paths.
+      if (isCommissionableEvidence(current.evidence.state)) {
+        throw conflict("Receive this item with a physical count (or commission it) before recording other stock movements", {
+          reason: "evidence_not_received",
+          itemId: parsed.itemId,
+          evidenceState: current.evidence.state,
+          recoveryAction: "record_physical_count",
+          retryable: false
+        });
+      }
       assertCompatibleInventoryUnit(current, `Cannot record ${parsed.type}`);
       const mutation = await this.ports.inventory.recordStockEvent(parsed, ctx);
       return { value: { ...mutation, item: inventoryWithUnitStatus(mutation.item) }, entityId: mutation.item.id, version: mutation.item.version };
     });
   }
 
-  async recordPhysicalCount(itemId: string, quantity: number, ctx: RequestContext, unit?: InventoryItem["unit"], note?: string): Promise<Mutation<StockMutation>> {
-    return this.countInventory(itemId, quantity, ctx, unit, note, false);
+  async recordPhysicalCount(itemId: string, quantity: number, ctx: RequestContext, unit?: InventoryItem["unit"], note?: string, expectedVersion?: number): Promise<Mutation<StockMutation>> {
+    return this.countInventory(itemId, quantity, ctx, unit, note, false, expectedVersion);
   }
 
-  private async countInventory(itemId: string, quantity: number, ctx: RequestContext, unit: InventoryItem["unit"] | undefined, note: string | undefined, correctionOnly: boolean): Promise<Mutation<StockMutation>> {
+  private async countInventory(itemId: string, quantity: number, ctx: RequestContext, unit: InventoryItem["unit"] | undefined, note: string | undefined, correctionOnly: boolean, expectedVersion?: number): Promise<Mutation<StockMutation>> {
+    assertOptionalVersion(expectedVersion);
     const parsedId = requireId(itemId, "item id");
     if (!Number.isFinite(quantity) || quantity < 0) throw new ApplicationError("validation", "Physical count must be zero or greater");
     return this.mutate(ctx, "inventory.stock.count", "inventory_item", parsedId, async () => {
       const current = await this.ports.inventory.getItem(parsedId);
       if (!current) throw notFound("Inventory item", parsedId);
+      assertItemVersion(current, expectedVersion);
       if (correctionOnly && !isConfirmedEvidence(current.evidence.state)) {
         throw conflict("A count correction cannot establish counted stock; commission the item or record a physical count", {
           reason: "evidence_not_counted",
@@ -271,10 +313,19 @@ export class InventoryModule extends ServiceModule {
       }
       assertCompatibleInventoryUnit(current, "Cannot record a physical count");
       if (unit !== undefined && unit !== current.unit) throw new ApplicationError("validation", `Unit mismatch: item uses ${current.unit}, count uses ${unit}`);
+      // A physical count of delivered or ordered stock is what receiving
+      // means: it records `physically_counted` evidence and keeps the prior
+      // evidence in the append-only count event.
+      const receiving = isCommissionableEvidence(current.evidence.state);
       const value = this.ports.inventory.recordPhysicalCount
-        ? await this.ports.inventory.recordPhysicalCount(parsedId, quantity, ctx, note)
+        ? await this.ports.inventory.recordPhysicalCount(parsedId, quantity, ctx, note ?? (receiving ? "Received and counted" : undefined))
         : await this.recordPhysicalCountFallback(parsedId, quantity, ctx, note);
-      return { value: { ...value, item: inventoryWithUnitStatus(value.item) }, entityId: value.item.id, version: value.item.version };
+      return {
+        value: { ...value, item: inventoryWithUnitStatus(value.item) },
+        entityId: value.item.id,
+        version: value.item.version,
+        ...(receiving ? { auditChange: { received: true, evidenceFrom: current.evidence.state, evidenceTo: value.item.evidence.state } } : {})
+      };
     });
   }
 

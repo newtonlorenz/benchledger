@@ -112,7 +112,7 @@ export class BomModule extends ServiceModule {
       const lines = await this.ports.projects.listBomLines(id);
       const inventory = await listAllInventory(this.ports.inventory);
       const reservations = await this.ports.projects.listReservations(id);
-      return evaluateBomGapsFromData(id, lines, inventory, reservations);
+      return evaluateBomGapsFromData(id, lines, inventory, reservations, await this.stockReceivingPolicy());
     });
   }
 

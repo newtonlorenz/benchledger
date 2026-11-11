@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ApplicationError, type ApplicationService } from "@benchledger/application";
 import { McpAdapter } from "./adapter.js";
 import { createApplicationBackend } from "./application-backend.js";
+import { CAPABILITY_DOCUMENT, TOOL_DEFINITIONS } from "./capabilities.js";
 import type { McpRequestContext } from "./types.js";
 
 const date = "2026-08-30T10:00:00.000Z";
@@ -149,7 +150,7 @@ describe("createApplicationBackend translation coverage", () => {
       apiItem({ id: "unknown", evidence: { state: "unknown", source: "legacy", observedAt: undefined }, availableQuantity: 2, dimensions: undefined, links: [] }),
     ], limit: 200 });
     const summary = await backend.inventory.summary({ limit: 50 }, context);
-    expect(summary.counts).toEqual({ totalItems: 7, confirmedItems: 0, confirmedEvidenceItems: 2, availableConfirmedItems: 2, inspectFirstItems: 1, allocatedItems: 3, allocatedQuantities: [{ unit: "gram", value: 1099 }], depletedItems: 1, unverifiedItems: 2, retiredItems: 0, missingItems: 0 });
+    expect(summary.counts).toEqual({ totalItems: 7, confirmedItems: 0, confirmedEvidenceItems: 2, availableConfirmedItems: 2, inspectFirstItems: 1, allocatedItems: 3, allocatedQuantities: [{ unit: "gram", value: 1099 }], depletedItems: 1, unverifiedItems: 2, retiredItems: 0, missingItems: 0, assumedInStockItems: 0 });
     const created = await backend.inventory.create({ name: "wire", category: "electronics", quantity: { value: 2, unit: "piece" }, evidence: { state: "delivery", source: "email", recordedAt: date }, dimensions: { length: 1, unit: "metre", source: "manufacturer", uncertainty: 0.01 }, condition: "opened", links: [{ label: "Shop", url: "https://shop.example/wire" }] }, context);
     expect(service.createInventoryItem).toHaveBeenCalledWith(expect.objectContaining({ kind: "electronic", unit: "each", evidence: expect.objectContaining({ state: "delivered_uncounted" }), dimensions: expect.objectContaining({ lengthMm: 1000, measured: false, uncertaintyMm: 10 }), condition: "worn" }), expect.objectContaining({ actor: context.actorId, source: "mcp", correlationId: context.correlationId, idempotencyKey: context.idempotencyKey, fingerprint: context.fingerprint }));
     expect(created.item).toMatchObject({ category: "electronic" });
@@ -225,7 +226,7 @@ describe("createApplicationBackend translation coverage", () => {
     const backend = createApplicationBackend(service);
     const summary = await backend.inventory.summary({ limit: 50 }, context);
 
-    expect(summary.counts).toEqual({ totalItems: 53, confirmedItems: 0, confirmedEvidenceItems: 40, availableConfirmedItems: 40, inspectFirstItems: 13, allocatedItems: 40, allocatedQuantities: [{ unit: "gram", value: 39960 }], depletedItems: 0, unverifiedItems: 0, retiredItems: 0, missingItems: 0 });
+    expect(summary.counts).toEqual({ totalItems: 53, confirmedItems: 0, confirmedEvidenceItems: 40, availableConfirmedItems: 40, inspectFirstItems: 13, allocatedItems: 40, allocatedQuantities: [{ unit: "gram", value: 39960 }], depletedItems: 0, unverifiedItems: 0, retiredItems: 0, missingItems: 0, assumedInStockItems: 0 });
     expect(summary.categories).toEqual([
       { category: "filament", itemCount: 27 },
       { category: "electronic", itemCount: 26 },
@@ -786,6 +787,26 @@ describe("live MCP context and vocabulary", () => {
     expect(refreshed).toMatchObject({ inventory: { totalItems: 3, scannedItems: 3, truncated: false, inspectFirstItems: 1, unverifiedItems: 1 } });
     expect(refreshed).not.toHaveProperty("expiresAt");
     expect(refreshed).not.toHaveProperty("project");
+  });
+
+  it("exposes the human-chosen receiving policy read-only beside truthful evidence", async () => {
+    const service = serviceFixture() as ReturnType<typeof serviceFixture> & { getWorkspacePreferences?: () => Promise<unknown> };
+    service.getWorkspacePreferences = async () => ({ stockReceivingPolicy: "on_delivery", version: 2, updatedAt: date });
+    const delivered = apiItem({ id: "delivered", quantity: 4, availableQuantity: 4, allocatedQuantity: 0, availability: "assumed", evidence: { state: "delivered_uncounted", source: "email", observedAt: date } });
+    const ordered = apiItem({ id: "ordered", quantity: 2, availableQuantity: 0, allocatedQuantity: 0, availability: "ordered", evidence: { state: "ordered_unverified", source: "order", observedAt: date } });
+    service.listInventory.mockResolvedValue({ data: [delivered, ordered], limit: 100, total: 2 });
+    const backend = createApplicationBackend(service);
+    const refreshed = await backend.context.refresh({}, context);
+    expect(refreshed).toMatchObject({ stockReceivingPolicy: "on_delivery", inventory: { assumedInStockItems: 1, unverifiedItems: 2 } });
+    const items = (await backend.inventory.list({ limit: 25 }, context)).items;
+    expect(items.map((item) => [item.id, item.availability, item.evidence.state, item.inStock, item.policyAvailability])).toEqual([
+      ["delivered", "delivered_uncounted", "delivered_uncounted", true, "assumed"],
+      ["ordered", "ordered_unverified", "ordered_unverified", false, "ordered"],
+    ]);
+    await expect(backend.inventory.summary({ limit: 25 }, context)).resolves.toMatchObject({ stockReceivingPolicy: "on_delivery", counts: { assumedInStockItems: 1 } });
+    const document = JSON.stringify(CAPABILITY_DOCUMENT);
+    expect(document).toMatch(/no MCP tool to change it/);
+    expect(TOOL_DEFINITIONS.some((definition) => /preference|receiving_policy/u.test(definition.name))).toBe(false);
   });
 
   it("refresh_context only includes snapshots the token may read", async () => {

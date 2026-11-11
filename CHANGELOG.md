@@ -54,6 +54,36 @@ first public release; all current work is under **Unreleased**.
 
 ### Added
 
+- **Atomic version checks for stock commands.** `POST /inventory/{id}/count`
+  and `POST /inventory/{id}/stock-events` honour an optional `If-Match` or body
+  `expectedVersion` inside the audited command (409 `version_conflict` on
+  mismatch); omitting both keeps the previous behaviour.
+- **Inventory list thumbnails.** Inventory list rows carry an optional
+  `primaryImage` (`id`, same-origin `url` of the image content route,
+  `mediaType`, `width`, `height`) for the first gallery image; the web
+  inventory table shows it.
+- **Print item labels.** The item drawer previews and prints a label with a QR
+  code for `benchledger://item/<id>` (error correction M, four-module quiet
+  zone) plus name, variant and location, using a small built-in encoder and
+  print CSS (no new dependency, no inline script).
+
+- **Stock receiving policy.** Settings asks “When does stock count as in
+  stock?” — when it's bought (`on_purchase`), when it's delivered
+  (`on_delivery`) or when I've received and checked it (`on_receipt`, the
+  default and previous behaviour). The policy changes only derived
+  availability (BOM supply, reservations, available quantities, readiness,
+  shopping, inspect-first queue); stored evidence is never rewritten and the
+  web keeps it visible (“In stock · delivered, not counted”). The change is
+  previewed against current inventory, versioned (`If-Match`), audited
+  (actor, from/to), administrator-only, and refused while reserved stock would
+  stop counting. New `GET/PUT /api/v1/workspace/preferences`,
+  `GET /api/v1/workspace/preferences/stock-receiving-impact`, `preferences` in
+  the workspace snapshot, `availability` on inventory items and BOM gap
+  candidates, and read-only `stockReceivingPolicy`/`inStock`/
+  `policyAvailability` in MCP outputs. MCP cannot change the policy. Migration
+  `workspace_preferences_schema_version` 1 adds the
+  `forge_workspace_preferences` singleton.
+
 - iOS 27 design direction for the phone client, with native Liquid Glass tabs,
   large titles, native search, inset lists, dark appearance and Dynamic Type.
 
@@ -89,6 +119,13 @@ first public release; all current work is under **Unreleased**.
 - LAN deployment, backup/restore, privacy scanning, and public-project community files
 
 ### Changed
+
+- A physical count of delivered or ordered stock is now documented and audited
+  as receiving it (`received: true`). Generic stock movements on delivered or
+  ordered rows are refused until they are received. Descriptive edits no
+  longer rewrite an item's recorded quantity.
+- Demo mode lists projects in the same order as production (most recently
+  updated first); the demo-only creation-order wrapper was removed.
 
 - Freeze stock-review and inspection inputs while requests are pending or unconfirmed; recover with the exact reviewed payload
 - Render saved stock outcomes as immutable receipts and use one keyboard/inert boundary for inline approval dialogs

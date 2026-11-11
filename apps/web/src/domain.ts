@@ -85,6 +85,10 @@ export interface BomGapCandidate {
   readonly suppliedQuantity: number;
   readonly inspectQuantity: number;
   readonly reason: string;
+  /** Stored evidence of the candidate, reported unchanged. */
+  readonly evidenceState?: InventoryEvidenceState;
+  /** Availability under the receiving policy used for this evaluation. */
+  readonly availability?: "confirmed" | "assumed" | "inspect_first" | "ordered" | "unknown";
 }
 
 export type InventoryCategory =
@@ -293,6 +297,14 @@ export interface InventoryItem {
   availableQuantity?: number;
   /** Lossless API evidence state used by the paginated inventory query. */
   serverEvidence?: InventoryEvidenceState;
+  /**
+   * Server classification under the workspace stock receiving policy.
+   * `assumed` counts as in stock only because the policy trusts delivery or
+   * purchase evidence; `serverEvidence` still reports what was recorded.
+   */
+  policyAvailability?: "confirmed" | "assumed" | "inspect_first" | "ordered" | "unknown";
+  /** Cover image for list rows (authenticated same-origin content route). */
+  primaryImage?: { id: string; url: string; width: number; height: number };
   unit: QuantityDisplayUnit;
   reserved: number;
   state: StockState;

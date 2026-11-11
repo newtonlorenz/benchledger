@@ -167,7 +167,7 @@ export class McpProtocol {
         protocolVersion,
         capabilities: { tools: {}, resources: {} },
         serverInfo: { name: this.serverInfo.name, version: this.serverInfo.version },
-        instructions: "tools/list is authoritative for inputs. benchledger://capabilities explains stock evidence, error and approval semantics; read it once per session. Only physically_counted or commissioned stock is usable; everything else is inspect-first. Ask the human before destructiveHint tools.",
+        instructions: "tools/list is authoritative for inputs. benchledger://capabilities explains stock evidence, error and approval semantics; read it once per session. By default only physically_counted or commissioned stock is usable; a human-chosen stock receiving policy may also count delivered or ordered stock (see inStock and refresh_context). Everything else is inspect-first. Ask the human before destructiveHint tools.",
       },
     };
   }

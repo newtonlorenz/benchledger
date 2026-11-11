@@ -10,6 +10,7 @@ import { ProjectAccess } from "./service/project-access.js";
 import type { ServiceModuleDependencies } from "./service/module.js";
 import { nowIso } from "./service/shared.js";
 import { WorkspaceSecurityModule } from "./service/workspace-security.js";
+import { WorkspacePreferencesModule } from "./service/workspace-preferences.js";
 import { CatalogModule } from "./service/catalog.js";
 import { BuildConfigurationModule } from "./service/build-configurations.js";
 import { InventoryModule } from "./service/inventory.js";
@@ -42,6 +43,7 @@ export class ApplicationService {
   readonly team: TeamService;
   private readonly runner: CommandRunner;
   private readonly workspaceSecurityModule: WorkspaceSecurityModule;
+  private readonly workspacePreferencesModule: WorkspacePreferencesModule;
   private readonly catalogModule: CatalogModule;
   private readonly buildConfigurationModule: BuildConfigurationModule;
   private readonly inventoryModule: InventoryModule;
@@ -58,6 +60,7 @@ export class ApplicationService {
     this.runner = new CommandRunner(ports);
     const modules: ServiceModuleDependencies = { ports, runner: this.runner, access: new ProjectAccess(ports), app: this };
     this.workspaceSecurityModule = new WorkspaceSecurityModule(modules);
+    this.workspacePreferencesModule = new WorkspacePreferencesModule(modules);
     this.catalogModule = new CatalogModule(modules);
     this.buildConfigurationModule = new BuildConfigurationModule(modules);
     this.inventoryModule = new InventoryModule(modules);
@@ -122,6 +125,21 @@ export class ApplicationService {
 
   updateWorkspaceSecurity(input: WorkspaceSecurityMutation, ctx: RequestContext): Promise<Mutation<import("@benchledger/api-contract").WorkspaceSecurityStatus>> {
     return this.workspaceSecurityModule.updateWorkspaceSecurity(input, ctx);
+  }
+
+  /** Workspace interpretation preferences (stock receiving policy); readable by every authenticated caller. */
+  getWorkspacePreferences(): Promise<import("@benchledger/api-contract").WorkspacePreferences> {
+    return this.workspacePreferencesModule.getWorkspacePreferences();
+  }
+
+  /** Read-only preview of which inventory rows would start or stop counting as in stock. */
+  previewStockReceivingPolicy(stockReceivingPolicy: unknown): Promise<import("@benchledger/api-contract").StockReceivingPolicyImpact> {
+    return this.workspacePreferencesModule.previewStockReceivingPolicy(stockReceivingPolicy);
+  }
+
+  /** Audited, versioned policy change. Hosts must restrict this to human administrators. */
+  updateWorkspacePreferences(input: import("@benchledger/api-contract").UpdateWorkspacePreferences, ctx: RequestContext): Promise<Mutation<import("@benchledger/api-contract").WorkspacePreferences>> {
+    return this.workspacePreferencesModule.updateWorkspacePreferences(input, ctx);
   }
 
   listCatalogProducts(query: Partial<CatalogProductListOptions> = {}): Promise<Page<CatalogProduct>> {
@@ -212,12 +230,14 @@ export class ApplicationService {
     return this.inventoryModule.bulkUpdateInventoryItems(input, ctx);
   }
 
-  recordStockEvent(input: StockEventInput, ctx: RequestContext): Promise<Mutation<StockMutation>> {
-    return this.inventoryModule.recordStockEvent(input, ctx);
+  /** `expectedVersion`, when given, is checked atomically inside the audited command. */
+  recordStockEvent(input: StockEventInput, ctx: RequestContext, expectedVersion?: number): Promise<Mutation<StockMutation>> {
+    return this.inventoryModule.recordStockEvent(input, ctx, expectedVersion);
   }
 
-  recordPhysicalCount(itemId: string, quantity: number, ctx: RequestContext, unit?: InventoryItem["unit"], note?: string): Promise<Mutation<StockMutation>> {
-    return this.inventoryModule.recordPhysicalCount(itemId, quantity, ctx, unit, note);
+  /** `expectedVersion`, when given, is checked atomically inside the audited command. */
+  recordPhysicalCount(itemId: string, quantity: number, ctx: RequestContext, unit?: InventoryItem["unit"], note?: string, expectedVersion?: number): Promise<Mutation<StockMutation>> {
+    return this.inventoryModule.recordPhysicalCount(itemId, quantity, ctx, unit, note, expectedVersion);
   }
 
   commissionInventoryItem(itemId: string, input: CommissionInventoryItem, expectedVersion: number | undefined, ctx: RequestContext): Promise<Mutation<StockMutation>> {

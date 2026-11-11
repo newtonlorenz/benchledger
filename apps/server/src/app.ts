@@ -21,7 +21,8 @@ import {
   createBuildConfigurationSnapshotSchema, saveReconciliationDraftSchema, commitReconciliationSchema,
   workspaceSecurityMutationSchema, projectStatusSchema,
   removeProjectSchema, projectSetupProposalSchema, commitProjectSetupSchema, commitProjectSetupBodySchema,
-  inspectionObservationSchema, commitInspectionCompletionBodySchema
+  inspectionObservationSchema, commitInspectionCompletionBodySchema,
+  updateWorkspacePreferencesSchema, stockReceivingPolicyImpactQuerySchema
 } from "@benchledger/api-contract";
 import { ApplicationError, ApplicationService } from "@benchledger/application";
 import type { ApplicationPorts, BuildConfigurationListOptions, CatalogProductListOptions, GapEvaluation, Mutation, Page, ProjectListOptions, RequestContext } from "@benchledger/application";
@@ -35,7 +36,7 @@ import type {
   BuildConfigurationSnapshot as ApiBuildConfigurationSnapshot,
   InventoryProductProfile as ApiInventoryProductProfile,
   WorkspaceSecurityStatus as ApiWorkspaceSecurityStatus,
-  WorkspaceSecurityMutation
+  WorkspaceSecurityMutation, WorkspacePreferences as ApiWorkspacePreferences
 } from "@benchledger/api-contract";
 import { AuthManager, assertStrongSessionSecret, type AuthConfig, type AuthScope, type Principal, hashBearerToken } from "./auth.js";
 import { ArtifactTransferManager, TRANSFER_RESPONSE_HEADERS, TRANSFER_TOKEN_HEADER, type FinalizeCapabilityBody, type TransferCapability } from "./artifact-transfer.js";
@@ -422,6 +423,25 @@ function parseInventoryProductProfileBody(value: unknown): unknown {
 /** The binding is optional and validated by the canonical API contract. */
 const beginArtifactUploadRequestSchema = beginUploadSchema;
 
+/**
+ * Optional optimistic version for stock commands: If-Match and/or body
+ * `expectedVersion`. When both are present they must agree. Absent means the
+ * legacy unconditional behaviour.
+ */
+function optionalStockVersion(request: FastifyRequest, body: unknown): number | undefined {
+  const header = parseExpectedVersion(request);
+  const raw = body !== null && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>).expectedVersion : undefined;
+  if (raw !== undefined && (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw < 1)) throw new ApplicationError("validation", "expectedVersion must be a positive integer");
+  if (header !== undefined && raw !== undefined && header !== raw) throw new ApplicationError("validation", "If-Match and expectedVersion must agree");
+  return raw ?? header;
+}
+
+function withoutExpectedVersion(body: unknown): Record<string, unknown> {
+  if (body === null || typeof body !== "object" || Array.isArray(body)) return {};
+  const { expectedVersion: _expectedVersion, ...rest } = body as Record<string, unknown>;
+  return rest;
+}
+
 function parsePhysicalCount(body: unknown): { readonly quantity: number; readonly note?: string } {
   if (body === null || typeof body !== "object" || Array.isArray(body)) throw new ApplicationError("validation", "Request body is invalid");
   const value = body as Record<string, unknown>;
@@ -664,6 +684,8 @@ interface WorkspaceSnapshot {
   readonly source: "api";
   readonly fetchedAt: string;
   readonly capabilities: readonly string[];
+  /** Interpretation preferences that label availability (for example the stock receiving policy). */
+  readonly preferences: ApiWorkspacePreferences;
   readonly pagination: {
     readonly inventory: { readonly limit: number; readonly total?: number; readonly nextCursor?: string };
     readonly projects: { readonly limit: number; readonly total?: number; readonly nextCursor?: string };
@@ -710,10 +732,11 @@ async function hydrateWorkspaceInventory(
 }
 
 async function workspaceSnapshot(service: ApplicationService, projectIds?: ReadonlySet<string>): Promise<WorkspaceSnapshot> {
-  const [inventory, projects, offers] = await Promise.all([
+  const [inventory, projects, offers, preferences] = await Promise.all([
     service.listInventory({ limit: 200 }),
     projectIds === undefined ? service.listProjects({ limit: 200 }) : scopedProjectPage(service, { limit: 200 }, projectIds),
-    service.listOffers(undefined, 200)
+    service.listOffers(undefined, 200),
+    service.getWorkspacePreferences()
   ]);
   const enrichedProjects = await Promise.all(projects.data.map(async (project): Promise<WorkspaceProject> => {
     const [workItems, artifacts] = await Promise.all([
@@ -745,6 +768,7 @@ async function workspaceSnapshot(service: ApplicationService, projectIds?: Reado
     source: "api",
     fetchedAt: new Date().toISOString(),
     capabilities: [...(service.assemblies.supports() ? ["assembly.read", "assembly.write"] : []), ...(service.inventoryImages.supports() ? ["inventory.images.read", "inventory.images.write"] : []), ...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : []), ...(service.makerWorkflows.supports() ? ["maker_workflows.read", "maker_workflows.write"] : [])],
+    preferences,
     pagination: {
       inventory: { limit: inventory.limit, ...(inventory.total === undefined ? {} : { total: inventory.total }), ...(inventory.nextCursor === undefined ? {} : { nextCursor: inventory.nextCursor }) },
       projects: { limit: projects.limit, ...(projects.total === undefined ? {} : { total: projects.total }), ...(projects.nextCursor === undefined ? {} : { nextCursor: projects.nextCursor }) },
@@ -1131,8 +1155,9 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   app.get(route("/capabilities"), async () => ({
     name: "BenchLedger", version: service.getVersion(), protocol: "rest-v1", demo,
     authentication: { accessModes: ["lan_open", "password"], access: "/api/v1/auth/access", explicitLanSession: "/api/v1/auth/lan-session", bearerRequiredForMcp: true },
-    vocabulary: { confirmed: "physically counted or commissioned stock", inspect_first: "recorded stock requiring a physical count", missing: "no confirmed or inspect-first candidate" },
-    actions: [...(service.assemblies.supports() ? ["assembly.read", "assembly.write"] : []), ...(service.inventoryImages.supports() ? ["inventory.images.read", "inventory.images.write"] : []), "inventory.read", "inventory.write", "inventory.categories.read", "inventory.categories.write", "catalog.read", "catalog.write", "inventory.product_profile.read", "inventory.product_profile.write", "projects.read", "projects.write", "projects.remove", "projects.removed_history", "build_configurations.read", "build_configurations.create", "bom.evaluate", "artifacts.version", "offers.compare", "events.subscribe", ...(service.makerWorkflows.supports() ? ["project_setup.guided", "requirement_offers.read", "requirement_offers.write", "build_plan.read", "build_plan.write", "workstreams.read", "workstreams.write", "bom.import"] : []), ...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : [])],
+    vocabulary: { confirmed: "physically counted or commissioned stock", assumed: "delivered or ordered stock that counts as in stock only because the workspace stock receiving policy trusts it; evidence is unchanged", inspect_first: "recorded stock requiring a physical count", ordered: "ordered stock not yet counted as in stock", missing: "no confirmed or inspect-first candidate" },
+    stockReceivingPolicy: { policies: ["on_purchase", "on_delivery", "on_receipt"], default: "on_receipt", read: "/api/v1/workspace/preferences", impact: "/api/v1/workspace/preferences/stock-receiving-impact", change: "human workspace administrator browser session only" },
+    actions: [...(service.assemblies.supports() ? ["assembly.read", "assembly.write"] : []), ...(service.inventoryImages.supports() ? ["inventory.images.read", "inventory.images.write"] : []), "inventory.read", "inventory.write", "workspace.preferences.read", "inventory.categories.read", "inventory.categories.write", "catalog.read", "catalog.write", "inventory.product_profile.read", "inventory.product_profile.write", "projects.read", "projects.write", "projects.remove", "projects.removed_history", "build_configurations.read", "build_configurations.create", "bom.evaluate", "artifacts.version", "offers.compare", "events.subscribe", ...(service.makerWorkflows.supports() ? ["project_setup.guided", "requirement_offers.read", "requirement_offers.write", "build_plan.read", "build_plan.write", "workstreams.read", "workstreams.write", "bom.import"] : []), ...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : [])],
     approvalBoundaries: ["purchasing", "external publication", "permanent deletion", "credential changes", "printer control"]
   }));
   app.get(route("/openapi.json"), async () => jsonOpenApi(service.getVersion()));
@@ -1281,6 +1306,35 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   app.get(route("/auth/session"), async (request) => { const principal = requirePrincipal(request); return { authenticated: true, actor: principal.actor, source: principal.source, scopes: [...principal.scopes], projectIds: principal.projectIds ? [...principal.projectIds] : undefined, ...(principal.memberId ? { memberId: principal.memberId, memberVersion: principal.memberVersion } : {}), teamEnabled: teamState.enabled }; });
 
   app.get(route("/workspace"), async (request) => { const principal = requireScope(request, "read", auth); if (principal.via === "bearer") rejectScopedGlobalAccess(request); return workspaceSnapshot(service, principal.projectIds); });
+  app.get(route("/workspace/preferences"), async (request, reply) => {
+    requireScope(request, "read", auth);
+    const preferences = await service.getWorkspacePreferences();
+    reply.header("etag", `"${preferences.version}"`);
+    return preferences;
+  });
+  app.get(route("/workspace/preferences/stock-receiving-impact"), async (request) => {
+    requireScope(request, "read", auth);
+    rejectScopedGlobalAccess(request);
+    const query = parseBody(stockReceivingPolicyImpactQuerySchema, request.query);
+    return service.previewStockReceivingPolicy(query.stockReceivingPolicy);
+  });
+  app.put(route("/workspace/preferences"), async (request, reply) => {
+    // Interpretation of stock evidence is a human workspace decision. Bearer
+    // tokens (including MCP agents) and project-scoped sessions cannot change it.
+    const principal = requireScope(request, "admin", auth);
+    if (principal.via !== "session" || principal.source !== "ui" || principal.projectIds !== undefined) {
+      throw new ApplicationError("forbidden", "Only a workspace administrator browser session may change workspace preferences");
+    }
+    const headerVersion = parseExpectedVersion(request);
+    const body = parseBody(updateWorkspacePreferencesSchema, request.body);
+    if (headerVersion !== undefined && body.expectedVersion !== undefined && headerVersion !== body.expectedVersion) {
+      throw new ApplicationError("validation", "If-Match and expectedVersion must agree");
+    }
+    const expectedVersion = body.expectedVersion ?? headerVersion;
+    const mutation = await service.updateWorkspacePreferences({ stockReceivingPolicy: body.stockReceivingPolicy, ...(expectedVersion === undefined ? {} : { expectedVersion }) }, requestContext(request));
+    reply.header("etag", `"${mutation.data.version}"`);
+    return mutationBody(mutation);
+  });
   app.get(route("/catalog/products"), async (request) => {
     requireScope(request, "read", auth);
     return service.listCatalogProducts(parseCatalogQuery(request.query));
@@ -1348,7 +1402,8 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const params = request.params as { id: string };
     const item = await service.getInventoryItem(params.id);
     const body = parsePhysicalCount(request.body);
-    const mutation = await service.recordPhysicalCount(params.id, body.quantity, requestContext(request), item.unit, body.note);
+    const expectedVersion = optionalStockVersion(request, request.body);
+    const mutation = await service.recordPhysicalCount(params.id, body.quantity, requestContext(request), item.unit, body.note, expectedVersion);
     return reply.code(201).send(mutation);
   });
   app.post(route("/inventory/:id/commission"), async (request, reply) => {
@@ -1381,7 +1436,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     return mutation;
   });
   app.get(route("/inventory/:id/stock-events"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; const page = parsePageQuery(request.query); return service.listStockEvents(params.id, page.limit, page.cursor); });
-  app.post(route("/inventory/:id/stock-events"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; const input = parseBody(stockEventInputSchema, { ...(request.body as Record<string, unknown>), itemId: params.id }); const mutation = await service.recordStockEvent(input, requestContext(request)); return reply.code(201).send(mutation); });
+  app.post(route("/inventory/:id/stock-events"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; const expectedVersion = optionalStockVersion(request, request.body); const input = parseBody(stockEventInputSchema, { ...withoutExpectedVersion(request.body), itemId: params.id }); const mutation = await service.recordStockEvent(input, requestContext(request), expectedVersion); return reply.code(201).send(mutation); });
 
   app.get(route("/projects"), async (request) => {
     requireScope(request, "read", auth);

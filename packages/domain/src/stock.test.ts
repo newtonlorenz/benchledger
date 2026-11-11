@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createStockEvent, deriveStockBalance, StockLedger } from "./stock.js";
+import { createStockEvent, deriveStockBalance, StockLedger, uncountedBaselineQuantity } from "./stock.js";
 import { createId } from "./ids.js";
 import type { InventoryItem } from "./types.js";
 
@@ -17,6 +17,31 @@ const item: InventoryItem = {
 };
 
 describe("stock ledger", () => {
+  it("starts uncounted delivered/ordered rows from their recorded quantity without inventing counted evidence", () => {
+    const delivered: InventoryItem = { ...item, id: "delivered-1", sourceStatus: "delivered_uncounted", reusePolicy: "inspect_first", confidence: "inspect_first", purchasedQuantity: 12, reportedQuantity: 10 };
+    const { reportedQuantity: _reported, ...withoutReported } = delivered;
+    const ordered: InventoryItem = { ...withoutReported, id: "ordered-1", sourceStatus: "ordered_unverified", confidence: "ordered" };
+    const unknown: InventoryItem = { ...delivered, id: "unknown-1", sourceStatus: "unknown", confidence: "unknown" };
+    expect(uncountedBaselineQuantity(delivered)).toBe(10);
+    expect(uncountedBaselineQuantity(ordered)).toBe(12);
+    expect(uncountedBaselineQuantity(unknown)).toBeUndefined();
+    expect(uncountedBaselineQuantity(item)).toBeUndefined();
+    expect(deriveStockBalance(delivered, [])).toMatchObject({ onHand: 10, allocated: 0, available: 10, reported: 10 });
+    expect(deriveStockBalance(unknown, [])).toMatchObject({ onHand: 0, available: 0 });
+    const allocate = createStockEvent({ id: "alloc-d", itemId: delivered.id, kind: "allocate", quantity: 4, unit: "piece", reason: "reservation", occurredAt: "2026-01-02T00:00:00.000Z" });
+    const consume = createStockEvent({ id: "use-d", itemId: delivered.id, kind: "consume", quantity: 2, unit: "piece", reason: "used", occurredAt: "2026-01-03T00:00:00.000Z" });
+    expect(deriveStockBalance(delivered, [allocate, consume])).toMatchObject({ onHand: 8, allocated: 4, available: 4 });
+    // A receiving count is absolute: it replaces the claimed baseline.
+    const count = createStockEvent({ id: "count-d", itemId: delivered.id, kind: "count", quantity: 9, unit: "piece", reason: "received", occurredAt: "2026-01-04T00:00:00.000Z" });
+    expect(deriveStockBalance(delivered, [allocate, count])).toMatchObject({ onHand: 9, allocated: 4, available: 5, lastCountAt: "2026-01-04T00:00:00.000Z" });
+    // Once received, the row is counted; the receiving count records the
+    // claim it replaced so earlier allocations still replay validly.
+    const received: InventoryItem = { ...delivered, sourceStatus: "physically_confirmed", confidence: "confirmed", reportedQuantity: 9 };
+    expect(() => deriveStockBalance(received, [allocate, count])).toThrow(/allocate more stock/);
+    const receivingCount = { ...count, evidence: { claimedBaseline: 10 } };
+    expect(deriveStockBalance(received, [allocate, consume, receivingCount])).toMatchObject({ onHand: 9, allocated: 4, available: 5 });
+  });
+
   it("keeps append-only events and calculates unallocated stock", () => {
     const first = createStockEvent({ id: "receipt-1", itemId: item.id, kind: "receipt", quantity: 10, unit: "piece", reason: "received", occurredAt: "2026-01-01T00:00:00.000Z" });
     const second = createStockEvent({ id: "allocate-1", itemId: item.id, kind: "allocate", quantity: 3, unit: "piece", reason: "project reservation", occurredAt: "2026-01-02T00:00:00.000Z" });

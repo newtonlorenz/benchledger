@@ -1,5 +1,5 @@
 import { ApplicationError } from "../errors.js";
-import type { ApplicationPorts, AuditEvent, AuditInput, BulkMutation, EventBusEvent, InventoryBulkUpdateResult, Mutation, RequestContext } from "../ports.js";
+import type { ApplicationPorts, AuditChange, AuditEvent, AuditInput, BulkMutation, EventBusEvent, InventoryBulkUpdateResult, Mutation, RequestContext } from "../ports.js";
 import { createHash } from "node:crypto";
 
 /** The single-entity outcome an audited command operation returns. */
@@ -8,6 +8,8 @@ export interface MutationOutcome<T> {
   readonly entityId: string;
   readonly version?: number;
   readonly eventMetadata?: Readonly<Record<string, unknown>>;
+  /** Scalar change summary persisted with the audit row (for example from/to). */
+  readonly auditChange?: AuditChange;
   /** Allow an aggregate result to include the single audit identity. */
   readonly withAudit?: (audit: AuditEvent) => T;
   /** Cleanup for filesystem state if the audited mutation cannot commit. */
@@ -65,7 +67,8 @@ export class CommandRunner {
           ...(ctx.idempotencyKey ? { idempotencyKey: ctx.idempotencyKey } : {}),
           entityType,
           entityId: result.entityId || provisionalEntityId,
-          ...(result.version !== undefined ? { version: result.version } : {})
+          ...(result.version !== undefined ? { version: result.version } : {}),
+          ...(result.auditChange === undefined ? {} : { change: result.auditChange })
         };
         const audit = await this.ports.audit.append(auditInput);
         const mutation: Mutation<T> = { data: result.withAudit?.(audit) ?? result.value, audit, correlationId: ctx.correlationId, replayed: false };

@@ -91,12 +91,41 @@ export function assertStockCommandReplay(existing: StockEvent, candidate: StockE
   }
 }
 
-function initialBalance(item: InventoryItem): StockBalance {
+const UNCOUNTED_SOURCE_STATUSES: ReadonlySet<string> = new Set(["delivered_uncounted", "shipped_available_baseline", "ordered_unverified"]);
+
+/**
+ * Recorded (claimed, not counted) quantity of a delivered or ordered row.
+ *
+ * The ledger starts such a row from this quantity so that, when the workspace
+ * receiving policy trusts delivery or purchase evidence, reservations and
+ * usage have a balance to draw from. It is not counted evidence: whether the
+ * quantity is *available* is decided separately by `countsAsInStock` with the
+ * policy, and an absolute receiving count replaces the baseline.
+ */
+export function uncountedBaselineQuantity(item: InventoryItem): number | undefined {
+  if (!UNCOUNTED_SOURCE_STATUSES.has(item.sourceStatus)) return undefined;
+  const quantity = item.reportedQuantity ?? item.purchasedQuantity;
+  return Number.isFinite(quantity) && quantity > 0 ? roundQuantity(quantity) : 0;
+}
+
+/**
+ * A receiving count that replaced a claimed quantity records that claim as
+ * `evidence.claimedBaseline`. Reservations or usage recorded before the count
+ * drew on the claim, so replaying them needs the same starting point.
+ */
+function claimedBaselineFromReceipt(ordered: readonly StockEvent[]): number | undefined {
+  const firstCount = ordered.find((event) => event.kind !== "evidence" && event.semantics === "absolute_count");
+  const claimed = firstCount?.evidence?.claimedBaseline;
+  return typeof claimed === "number" && Number.isFinite(claimed) && claimed >= 0 ? roundQuantity(claimed) : undefined;
+}
+
+function initialBalance(item: InventoryItem, ordered: readonly StockEvent[]): StockBalance {
+  const baseline = uncountedBaselineQuantity(item) ?? claimedBaselineFromReceipt(ordered) ?? 0;
   return {
     itemId: item.id,
-    onHand: 0,
+    onHand: baseline,
     allocated: 0,
-    available: 0,
+    available: baseline,
     ...(item.reportedQuantity === undefined ? {} : { reported: item.reportedQuantity }),
     confidence: item.confidence
   };
@@ -156,7 +185,7 @@ export function deriveStockBalance(item: InventoryItem, events: readonly StockEv
     .filter(({ event }) => event.itemId === item.id)
     .sort((a, b) => compareTimestamps(a.event.occurredAt, b.event.occurredAt) || compareTimestamps(a.event.createdAt, b.event.createdAt) || a.index - b.index)
     .map(({ event }) => event);
-  return ordered.reduce(applyEvent, initialBalance(item));
+  return ordered.reduce(applyEvent, initialBalance(item, ordered));
 }
 
 export class StockLedger {

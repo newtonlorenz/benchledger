@@ -7,6 +7,7 @@ export class ProductionInventoryImageAdapter implements InventoryImagePort {
   constructor(private readonly repository: InventoryImageRepository) {}
   normalize = normalizeInventoryImage;
   gallery(itemId: string) { return attempt(() => this.repository.gallery(itemId)); }
+  primaryImages(itemIds: readonly string[]) { return attempt(() => this.repository.primaryImages(itemIds)); }
   content(itemId: string, imageId: string) { return attempt(() => this.repository.content(itemId, imageId)); }
   add(image: InventoryImage, bytes: Uint8Array, expectedVersion: number) { return attempt(() => this.repository.add(image, bytes, expectedVersion)); }
 }

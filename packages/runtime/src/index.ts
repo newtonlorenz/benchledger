@@ -12,8 +12,10 @@ import {
   AuditRepository, BomRepository, BenchDatabase, InventoryRepository, ProcurementRepository,
   ProjectRepository, ReservationRepository, CanonicalCatalogRepository,
   ReconciliationRepository, migrateCatalogSchema, migrateProjectSchema, migrateWorkspaceSecuritySchema,
-  WorkspaceSecurityRepository, ProjectSetupRepository, migrateProjectSetupSchema, InspectionRepository, migrateInspectionSchema
+  WorkspaceSecurityRepository, ProjectSetupRepository, migrateProjectSetupSchema, InspectionRepository, migrateInspectionSchema,
+  WorkspacePreferencesRepository, migrateWorkspacePreferencesSchema
 } from "@benchledger/database";
+import { ProductionWorkspacePreferencesAdapter } from "./workspace-preferences-adapter.js";
 import type { WorkspacePasswordHasher, WorkspacePasswordVerifier } from "./workspace-security-adapter.js";
 import { ProductionWorkspaceSecurityAdapter } from "./workspace-security-adapter.js";
 import { ProductionArtifactAdapter } from "./artifact-adapter.js";
@@ -116,6 +118,7 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
     migrateProjectSetupSchema(database);
     migrateInspectionSchema(database);
     migrateWorkspaceSecuritySchema(database);
+    migrateWorkspacePreferencesSchema(database);
     if (options.seedStarterCatalog !== false) seedStarterCatalog(database);
     const artifacts = new ArtifactStore({ root: artifactDir, maxUploadBytes, maxStorageBytes });
     const initialized = await artifacts.init();
@@ -131,8 +134,10 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
     const auditRepository = new AuditRepository(database);
     const barrier = new ExclusiveBarrier();
     const unitOfWork = new ProductionUnitOfWork(database, barrier);
+    const workspacePreferences = new ProductionWorkspacePreferencesAdapter(new WorkspacePreferencesRepository(database), unitOfWork);
+    workspacePreferences.initialize();
     const inventoryCategories = new ProductionInventoryCategoryAdapter(database, unitOfWork);
-    const inventory = new ProductionInventoryAdapter(database, inventoryRepository, state, unitOfWork, inventoryCategories.repository);
+    const inventory = new ProductionInventoryAdapter(database, inventoryRepository, state, unitOfWork, inventoryCategories.repository, workspacePreferences);
     const events = new ProductionEventBus();
     const health = new ProductionHealth(database, artifacts);
     const canonicalCatalog = new CanonicalCatalogRepository(database);
@@ -153,8 +158,9 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
       catalog,
       buildConfigurations: new ProductionBuildConfigurationAdapter(database, canonicalCatalog.snapshots, unitOfWork),
       reconciliations: new ProductionReconciliationAdapter(database, reconciliationRepository, projectRepository, bomRepository, reservationRepository, inventoryRepository, inventory, projectAdapter, state, unitOfWork),
-      inspections: new ProductionInspectionAdapter(database, inspectionRepository, inventoryRepository, bomRepository, state, unitOfWork),
+      inspections: new ProductionInspectionAdapter(database, inspectionRepository, inventoryRepository, bomRepository, state, unitOfWork, workspacePreferences),
       workspaceSecurity,
+      workspacePreferences,
       inventoryImages: new ProductionInventoryImageAdapter(new InventoryImageRepository(database)),
       makerWorkflows: new ProductionMakerWorkflowAdapter(new MakerWorkflowRepository(database)),
       teamSecurity: new ProductionTeamAdapter(new TeamRepository(database)),
@@ -204,6 +210,7 @@ export * from "./category-adapter.js";
 export * from "./starter-catalog-data.js";
 export * from "./starter-catalog.js";
 export * from "./workspace-security-adapter.js";
+export * from "./workspace-preferences-adapter.js";
 export * from "./project-setup-adapter.js";
 export { computeBuildConfigurationContentSha256 } from "@benchledger/database";
 

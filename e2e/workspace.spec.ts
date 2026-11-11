@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { openCurrentProject, openProjectIndex } from "./project-nav";
+import { openCurrentProject, openProjectByName, openProjectIndex } from "./project-nav";
 
 const demoPassword = "demo-password-please-change";
 
@@ -15,7 +15,7 @@ test("default screens omit redundant prompts and non-editable preferences", asyn
 
 test("requirement errors explain the rejected input without discarding the draft", async ({ page }) => {
   await signIn(page);
-  await openCurrentProject(page);
+  await openProjectByName(page);
   await page.getByRole("button", { name: "Add a requirement", exact: true }).click();
   await page.getByLabel("What do you need?").fill("Keep this requirement draft");
   await page.route("**/api/v1/**", async (route) => {
@@ -59,7 +59,7 @@ test("an upload notification never covers the next dialog's mobile save action",
   await page.setViewportSize({ width: 320, height: 650 });
   await signIn(page);
   await page.getByRole("button", { name: "Open navigation", exact: true }).click();
-  await openCurrentProject(page);
+  await openProjectByName(page);
   await page.getByRole("tab", { name: /^Files/u }).click();
   await page.getByLabel("Choose files to upload").setInputFiles({ name: "notification-review.txt", mimeType: "text/plain", buffer: Buffer.from("Synthetic notification regression") });
   await page.getByRole("button", { name: "Add 1 file", exact: true }).click();
@@ -91,7 +91,7 @@ test("long beginner forms keep their actions visible on small screens", async ({
   await page.setViewportSize({ width: 390, height: 650 });
   await signIn(page);
   await page.getByRole("button", { name: "Open navigation" }).click();
-  await openCurrentProject(page);
+  await openProjectByName(page);
   await page.getByRole("button", { name: "Add a requirement", exact: true }).click();
   const dialog = page.getByRole("dialog");
   const button = dialog.getByRole("button", { name: "Add requirement", exact: true });
@@ -104,7 +104,7 @@ test("long beginner forms keep their actions visible on small screens", async ({
 
 test("beginner can use owned stock without technical mode and keep the selection while searching", async ({ page }) => {
   await signIn(page);
-  await openCurrentProject(page);
+  await openProjectByName(page);
   await page.getByRole("button", { name: "Add a requirement", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByLabel("What do you need?").fill("Owned board review");

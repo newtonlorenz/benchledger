@@ -199,7 +199,7 @@ export class ProjectModule extends ServiceModule {
       const intendedPrinterItemId = route === "printed"
         ? (hasPrinterField ? parsed.intendedPrinterItemId : predecessor?.intendedPrinterItemId ?? null)
         : null;
-      if (intendedPrinterItemId !== undefined && intendedPrinterItemId !== null) await assertOwnedPrinter(this.ports, intendedPrinterItemId);
+      if (intendedPrinterItemId !== undefined && intendedPrinterItemId !== null) await assertOwnedPrinter(this.ports, intendedPrinterItemId, await this.stockReceivingPolicy());
       const createInput: CreateProjectRevision = {
         ...parsed,
         ...(route === undefined ? {} : { fabricationRoute: route }),
@@ -225,7 +225,7 @@ export class ProjectModule extends ServiceModule {
       const intendedPrinterItemId = route === "printed"
         ? (hasPrinterField ? parsed.intendedPrinterItemId : current.intendedPrinterItemId ?? null)
         : null;
-      if (intendedPrinterItemId !== undefined && intendedPrinterItemId !== null) await assertOwnedPrinter(this.ports, intendedPrinterItemId);
+      if (intendedPrinterItemId !== undefined && intendedPrinterItemId !== null) await assertOwnedPrinter(this.ports, intendedPrinterItemId, await this.stockReceivingPolicy());
       const update = {
         ...parsed,
         fabricationRoute: route,
@@ -247,7 +247,7 @@ export class ProjectModule extends ServiceModule {
     if (parsed.revision.intendedPrinterItemId !== undefined && parsed.revision.intendedPrinterItemId !== null && effectiveRoute !== "printed") {
       throw new ApplicationError("validation", "The intended printer requires the printed fabrication route");
     }
-    if (parsed.revision.intendedPrinterItemId !== undefined && parsed.revision.intendedPrinterItemId !== null) await assertOwnedPrinter(this.ports, parsed.revision.intendedPrinterItemId);
+    if (parsed.revision.intendedPrinterItemId !== undefined && parsed.revision.intendedPrinterItemId !== null) await assertOwnedPrinter(this.ports, parsed.revision.intendedPrinterItemId, await this.stockReceivingPolicy());
     // The atomic command is also used by MCP hosts without an HTTP request
     // fingerprint. Always derive the digest from the parsed, canonical
     // payload so transport envelope differences cannot change replay

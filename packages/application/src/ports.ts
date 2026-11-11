@@ -80,6 +80,15 @@ export interface WorkspaceSecurityPort {
   }, expectedVersion: number | undefined): Promise<WorkspaceSecurityStatus>;
 }
 
+/**
+ * Workspace-wide interpretation preferences. Changing them never rewrites
+ * stored evidence; it changes how the evidence is classified.
+ */
+export interface WorkspacePreferencesPort {
+  get(): Promise<import("@benchledger/api-contract").WorkspacePreferences>;
+  setStockReceivingPolicy(policy: import("@benchledger/api-contract").StockReceivingPolicy, expectedVersion: number | undefined): Promise<import("@benchledger/api-contract").WorkspacePreferences>;
+}
+
 export interface CatalogProductListOptions {
   readonly q?: string;
   readonly kind?: CatalogProductKind;
@@ -425,7 +434,12 @@ export interface AuditInput {
   readonly entityType: string;
   readonly entityId: string;
   readonly version?: number;
+  /** Small, non-secret change summary retained with the audit row. */
+  readonly change?: AuditChange;
 }
+
+/** Scalar from/to style summary; never credentials or free-form payloads. */
+export type AuditChange = Readonly<Record<string, string | number | boolean>>;
 
 export interface AuditEvent {
   readonly id: string;
@@ -437,6 +451,7 @@ export interface AuditEvent {
   readonly entityType: string;
   readonly entityId: string;
   readonly version?: number;
+  readonly change?: AuditChange;
   readonly createdAt: string;
 }
 
@@ -511,6 +526,8 @@ export interface ApplicationPorts {
   readonly projectSetups?: ProjectSetupPort;
   readonly inspections?: InspectionPort;
   readonly workspaceSecurity?: WorkspaceSecurityPort;
+  /** Absent on legacy hosts, which keep the default `on_receipt` policy. */
+  readonly workspacePreferences?: WorkspacePreferencesPort;
   readonly makerWorkflows?: MakerWorkflowPort;
   readonly teamSecurity?: TeamSecurityPort;
   readonly audit: AuditPort;

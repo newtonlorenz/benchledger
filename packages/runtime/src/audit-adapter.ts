@@ -16,6 +16,14 @@ function actorType(source: RequestSource): AuditActor["type"] {
   }
 }
 
+/** Read back only the scalar change summary shape written by `append`. */
+function auditChange(value: unknown): AuditEvent["change"] {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter((entry): entry is [string, string | number | boolean] => typeof entry[1] === "string" || typeof entry[1] === "boolean" || (typeof entry[1] === "number" && Number.isFinite(entry[1])));
+  return entries.length === 0 ? undefined : Object.fromEntries(entries);
+}
+
 export class ProductionAuditAdapter implements AuditPort {
   constructor(private readonly repository: AuditRepository, private readonly database: BenchDatabase, private readonly state: RuntimeState, private readonly unitOfWork: Pick<UnitOfWorkPort, "exclusive">) {}
 
@@ -30,7 +38,10 @@ export class ProductionAuditAdapter implements AuditPort {
         sourceSurface: input.source,
         correlationId: input.correlationId,
         ...(input.version === undefined ? {} : { afterVersion: input.version }),
-        ...(input.idempotencyKey === undefined ? {} : { metadata: { idempotencyKey: input.idempotencyKey } })
+        ...(input.idempotencyKey === undefined && input.change === undefined ? {} : { metadata: {
+          ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+          ...(input.change === undefined ? {} : { change: { ...input.change } })
+        } })
       });
       const stored = this.repository.append(native);
       if (input.idempotencyKey !== undefined) this.state.setMetadata("audit", stored.id, { idempotencyKey: input.idempotencyKey });
@@ -44,6 +55,7 @@ export class ProductionAuditAdapter implements AuditPort {
         entityType: stored.entityType,
         entityId: stored.entityId,
         ...(stored.afterVersion === undefined ? {} : { version: stored.afterVersion }),
+        ...(input.change === undefined ? {} : { change: { ...input.change } }),
         createdAt: stored.occurredAt
       };
     }));
@@ -70,6 +82,7 @@ export class ProductionAuditAdapter implements AuditPort {
     // only in runtime metadata, so read that per returned row as a fallback.
     const own = record.metadata?.idempotencyKey;
     const idempotencyKey = typeof own === "string" ? own : this.state.getMetadata("audit", record.id).idempotencyKey;
+    const change = auditChange(record.metadata?.change);
     return {
       id: record.id,
       action: record.action,
@@ -80,6 +93,7 @@ export class ProductionAuditAdapter implements AuditPort {
       entityType: record.entityType,
       entityId: record.entityId,
       ...(record.afterVersion === undefined ? {} : { version: record.afterVersion }),
+      ...(change === undefined ? {} : { change }),
       createdAt: record.occurredAt
     } satisfies AuditEvent;
   }

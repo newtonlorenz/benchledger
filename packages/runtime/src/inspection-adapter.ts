@@ -1,5 +1,6 @@
+import { DEFAULT_STOCK_RECEIVING_POLICY_READER, type StockReceivingPolicyReader } from "./workspace-preferences-adapter.js";
 import { createHash } from "node:crypto";
-import { createStockEvent, DomainError } from "@benchledger/domain";
+import { createStockEvent, DomainError, uncountedBaselineQuantity } from "@benchledger/domain";
 import type {
   CreateInventoryItem,
   InspectionEvidence,
@@ -43,6 +44,7 @@ export class ProductionInspectionAdapter implements InspectionPort {
     private readonly bomRepository: BomRepository,
     private readonly state: RuntimeState,
     private readonly unitOfWork: Pick<UnitOfWorkPort, "transactional">,
+    private readonly policyReader: StockReceivingPolicyReader = DEFAULT_STOCK_RECEIVING_POLICY_READER,
   ) {}
 
   async savePreview(preview: import("@benchledger/api-contract").InspectionCompletionPreview): Promise<import("@benchledger/api-contract").InspectionCompletionPreview> {
@@ -99,6 +101,7 @@ export class ProductionInspectionAdapter implements InspectionPort {
         if (quantity === undefined || input.observation.unit !== currentApi.unit) throw new DomainError("invalid_unit", "physical inspection quantity does not match the inventory unit");
         const balance = this.inventoryRepository.balance(item.id);
         if (quantity < balance.allocated) throw new DomainError("over_allocation", "physical count cannot be below allocated quantity");
+        const claimedBaseline = uncountedBaselineQuantity(item);
         const nextNative = nativeItemFromApi(this.createCountInput(currentApi, quantity, input.observation), item.id, recordedAt, item);
         this.inventoryRepository.upsert(nextNative);
         const nextVersion = actualItemVersion + 1;
@@ -111,7 +114,7 @@ export class ProductionInspectionAdapter implements InspectionPort {
           reason: input.observation.note ?? "Inspection physical quantity",
           actor: actorForContext(ctx),
           source: ctx.source,
-          evidence: { inspectionEvidenceId: id, previousEvidence: currentApi.evidence, state: "physically_counted" },
+          evidence: { inspectionEvidenceId: id, previousEvidence: currentApi.evidence, state: "physically_counted", ...(claimedBaseline === undefined ? {} : { claimedBaseline }) },
           correlationId: ctx.correlationId,
           idempotencyKey: `${id}-count`,
           occurredAt: recordedAt,
@@ -176,6 +179,6 @@ export class ProductionInspectionAdapter implements InspectionPort {
 
   private toApi(item: import("@benchledger/domain").InventoryItem, version: number): ApiInventoryItem {
     const balance = this.inventoryRepository.balance(item.id);
-    return clone(apiInventoryFromNative(item, balance, version));
+    return clone(apiInventoryFromNative(item, balance, version, this.policyReader.stockReceivingPolicy()));
   }
 }

@@ -63,3 +63,23 @@ visible if a continuation request fails. Filter changes and inventory mutations
 restart at page one. Pagination is read-committed, so concurrent writes can
 shift later pages; the current offset cursor is opaque and keyset snapshots are
 deferred.
+
+## Stock receiving setting
+
+Settings asks one question: **When does stock count as in stock?** — when
+it's bought, when it's delivered, or when I've received and checked it (the
+default). Saving first shows the impact on current inventory (“12 items will
+now count as in stock”), and refuses a change that would strand project
+reservations. Stock that counts only because of this setting stays labelled
+with its real evidence (“In stock · delivered, not counted”) in the inventory
+list, item drawer and BOM rows, and the item drawer keeps **Receive and
+count** available. Only a workspace administrator can change it; everyone else
+sees it read-only. After a change the workspace, inventory pages and project
+readiness are refetched.
+
+## Item labels
+
+The item drawer offers **Print label**: a preview of a QR code encoding
+`benchledger://item/<id>` (the mobile app's scan format) with the item name,
+variant and location, then the browser print dialog. The label holds no server
+address or credential.

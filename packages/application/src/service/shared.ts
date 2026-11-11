@@ -1,7 +1,7 @@
 import { ApplicationError } from "../errors.js";
 import type { ApplicationPorts, RequestContext } from "../ports.js";
 import { idSchema, isUnitCompatibleWithItemKind, unitCorrectionReason } from "@benchledger/api-contract";
-import type { InventoryItem } from "@benchledger/api-contract";
+import type { InventoryItem, StockReceivingPolicy } from "@benchledger/api-contract";
 import { createHash } from "node:crypto";
 
 export const INVENTORY_SCAN_PAGE_SIZE = 200;
@@ -125,4 +125,16 @@ export function canonicalize(value: unknown): unknown {
     return Object.fromEntries(Object.keys(record).filter((key) => record[key] !== undefined).sort().map((key) => [key, canonicalize(record[key])]));
   }
   return value;
+}
+
+/** Reservation rule wording that matches the workspace receiving policy. */
+export function inStockReservationRule(policy: StockReceivingPolicy): string {
+  if (policy === "on_purchase") return "Only bought, delivered or physically confirmed stock can be reserved (receiving policy: when bought)";
+  if (policy === "on_delivery") return "Only delivered or physically confirmed stock can be reserved (receiving policy: when delivered)";
+  return "Only physically confirmed stock can be reserved";
+}
+
+/** Quantity wording for the stock that counts under the receiving policy. */
+export function inStockQuantityLabel(policy: StockReceivingPolicy): string {
+  return policy === "on_receipt" ? "confirmed stock" : "in-stock quantity";
 }

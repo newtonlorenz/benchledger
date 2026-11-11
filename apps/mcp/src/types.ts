@@ -157,7 +157,17 @@ export interface InventoryItem {
   /** Derived semantic-unit state; legacy mismatches remain visible for correction. */
   unitStatus?: "compatible" | "needs_correction";
   unitCorrectionReason?: string;
+  /** Evidence-based bucket (unchanged by the receiving policy). */
   availability: Availability;
+  /**
+   * True when the row counts as in stock under the workspace stock receiving
+   * policy (reservable, eligible to supply BOM lines). It can be true for
+   * delivered_uncounted or ordered_unverified evidence when the human chose
+   * a policy that trusts delivery or purchase; the evidence is not upgraded.
+   */
+  inStock?: boolean;
+  /** Server classification under the policy: confirmed, assumed, inspect_first, ordered or unknown. */
+  policyAvailability?: "confirmed" | "assumed" | "inspect_first" | "ordered" | "unknown";
   evidence: EvidenceSummary;
   description?: string;
   manufacturer?: string;
@@ -192,7 +202,11 @@ export interface InventorySummary {
     /** Retired records are retained for history but excluded from reuse. */
     retiredItems: number;
     missingItems: number;
+    /** Active records that count as in stock only because the receiving policy trusts unverified evidence. */
+    assumedInStockItems?: number;
   };
+  /** Workspace stock receiving policy used for availability (read-only for agents). */
+  stockReceivingPolicy?: StockReceivingPolicyName;
   categories: readonly { category: string; itemCount: number }[];
 }
 
@@ -1009,11 +1023,18 @@ export interface ContextRefreshInput {
   maxAgeSeconds?: number;
 }
 
+export type StockReceivingPolicyName = "on_purchase" | "on_delivery" | "on_receipt";
+
 export interface RefreshedContext {
   /** Server time when this snapshot was read. */
   generatedAt: string;
+  /**
+   * When recorded stock counts as in stock. Set by a human in workspace
+   * Settings; there is no MCP tool to change it.
+   */
+  stockReceivingPolicy?: StockReceivingPolicyName;
   /** Small live snapshot; omitted when the caller opted out. */
-  inventory?: { totalItems: number; scannedItems: number; truncated: boolean; inspectFirstItems: number; unverifiedItems: number; allocatedItems: number };
+  inventory?: { totalItems: number; scannedItems: number; truncated: boolean; inspectFirstItems: number; unverifiedItems: number; allocatedItems: number; assumedInStockItems?: number };
   project?: { id: string; name: string; status: string; version: number; currentRevisionId?: string; blocked: boolean; blockedReasons: number };
   inventorySummaryUri: string;
   projectUris: readonly string[];

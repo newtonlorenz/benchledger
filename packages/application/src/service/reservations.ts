@@ -2,13 +2,13 @@ import { ApplicationError, conflict, notFound } from "../errors.js";
 import type { Mutation, RequestContext, ReservationDetails, StockMutation, UsageInput } from "../ports.js";
 import { assertConsumedBomRequirement, bomSpecification, matchesBomConstraints, unsupportedBomConstraintKeys } from "./bom-rules.js";
 import { bomCandidateQuantityConversion, canReserveBomItem } from "./gap-evaluation.js";
-import { assertCompatibleInventoryUnit, inventoryWithUnitStatus, requireId } from "./shared.js";
+import { assertCompatibleInventoryUnit, inStockQuantityLabel, inStockReservationRule, inventoryWithUnitStatus, requireId } from "./shared.js";
 import { createReservationSchema } from "@benchledger/api-contract";
 import type { CreateReservation, InventoryItem, Reservation } from "@benchledger/api-contract";
-import { exceedsReservableQuantity, quantityExceeds, isConfirmedEvidence } from "@benchledger/domain";
+import { exceedsReservableQuantity, quantityExceeds, countsAsInStock } from "@benchledger/domain";
 import { ServiceModule } from "./module.js";
 
-/** Reservations against confirmed stock and recorded project usage. */
+/** Reservations against stock that counts under the receiving policy, and recorded project usage. */
 export class ReservationModule extends ServiceModule {
   async createReservation(revisionId: string, input: CreateReservation, ctx: RequestContext): Promise<Mutation<Reservation>> {
     const parsed = createReservationSchema.parse(input);
@@ -42,8 +42,9 @@ export class ReservationModule extends ServiceModule {
       if (!matchesBomConstraints(item, line.constraints)) {
         throw new ApplicationError("validation", "Inventory item does not satisfy the BOM constraints");
       }
-      if (!isConfirmedEvidence(item.evidence.state)) {
-        throw new ApplicationError("conflict", "Only physically confirmed stock can be reserved");
+      const policy = await this.stockReceivingPolicy();
+      if (!countsAsInStock(item.evidence.state, policy)) {
+        throw new ApplicationError("conflict", inStockReservationRule(policy), { reason: "not_in_stock", evidenceState: item.evidence.state, stockReceivingPolicy: policy });
       }
       const activeReservations = (await this.ports.projects.listReservations(parentId))
         .filter((reservation) => reservation.status === "active" && reservation.lineId === line.id);
@@ -73,7 +74,7 @@ export class ReservationModule extends ServiceModule {
           : `Cannot reserve beyond the BOM requirement of ${line.requiredQuantity} ${line.unit}; ${parsed.quantity} set(s) would exceed whole-set coverage`);
       }
       if (quantityExceeds(parsed.quantity, item.availableQuantity)) {
-        throw conflict(`Not enough confirmed stock to reserve ${parsed.quantity} ${item.unit}`);
+        throw conflict(`Not enough ${inStockQuantityLabel(policy)} to reserve ${parsed.quantity} ${item.unit}`);
       }
       const reservation = await this.ports.projects.createReservation(parentId, parsed, ctx);
       return { value: reservation, entityId: reservation.id, version: reservation.version };

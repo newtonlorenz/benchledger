@@ -3,10 +3,10 @@ import type { GapEvaluation, Mutation, RequestContext } from "../ports.js";
 import { bomRequirementRequestsPrinter, bomSpecification, canonicalizeBomLineWrite, matchesBomConstraints } from "./bom-rules.js";
 import { assertOwnedPrinter } from "./catalog.js";
 import { bomCandidateQuantityConversion, canReserveBomItem, evaluateBomGapsFromData } from "./gap-evaluation.js";
-import { canonicalize, listAllInventory, nowIso } from "./shared.js";
+import { canonicalize, inStockReservationRule, listAllInventory, nowIso } from "./shared.js";
 import { bomLineSchema, commitProjectSetupSchema, isUnitCompatibleWithItemKind, projectSetupPreviewSchema, projectSetupProposalSchema, reservationSchema, unitCorrectionReason } from "@benchledger/api-contract";
 import type { BomLine, CommitProjectSetup, CreateProjectWithInitialRevision, InventoryItem, ProjectSetupCommitResult, ProjectSetupFieldError, ProjectSetupPreview, ProjectSetupProposal, Reservation } from "@benchledger/api-contract";
-import { exceedsReservableQuantity, quantityExceeds, isConfirmedEvidence } from "@benchledger/domain";
+import { exceedsReservableQuantity, quantityExceeds, countsAsInStock } from "@benchledger/domain";
 import { createHash, randomUUID } from "node:crypto";
 import { ServiceModule } from "./module.js";
 
@@ -132,11 +132,12 @@ export class ProjectSetupModule extends ServiceModule {
     const setup = this.ports.projectSetups;
     if (setup === undefined) throw new ApplicationError("integrity_error", "This runtime does not support project setup previews");
     const previewId = setupDerivedId(randomUUID(), "preview", "setup-preview");
+    const policy = await this.stockReceivingPolicy();
     const proposal = canonicalizeSetupProposal(setupNormalize(previewId, parsed));
     const intendedPrinterItemId = proposal.revision.intendedPrinterItemId;
     if (intendedPrinterItemId !== undefined && intendedPrinterItemId !== null) {
       if (proposal.revision.fabricationRoute !== "printed") throw new ApplicationError("validation", "The intended printer requires the printed fabrication route");
-      await assertOwnedPrinter(this.ports, intendedPrinterItemId);
+      await assertOwnedPrinter(this.ports, intendedPrinterItemId, policy);
     }
     const inventory = await this.ports.unitOfWork.exclusive(() => listAllInventory(this.ports.inventory));
     const now = nowIso();
@@ -194,7 +195,7 @@ export class ProjectSetupModule extends ServiceModule {
         if (reservation.unit !== undefined && reservation.unit !== item.unit) fieldErrors.push({ path: `reservations.${index}.unit`, code: "unit_mismatch", message: "Reservation unit must match the inventory item" });
         if (conversion !== undefined && !Number.isSafeInteger(reservation.quantity)) fieldErrors.push({ path: `reservations.${index}.quantity`, code: "unit_mismatch", message: "Converted reservations must use a whole number of sets" });
         if (!matchesBomConstraints(item, line.constraints)) fieldErrors.push({ path: `reservations.${index}.itemId`, code: "constraint_mismatch", message: "Inventory item does not satisfy the BOM constraints" });
-        if (!isConfirmedEvidence(item.evidence.state)) fieldErrors.push({ path: `reservations.${index}.itemId`, code: "insufficient_evidence", message: "Only physically confirmed stock can be reserved" });
+        if (!countsAsInStock(item.evidence.state, policy)) fieldErrors.push({ path: `reservations.${index}.itemId`, code: "insufficient_evidence", message: inStockReservationRule(policy) });
         const priorUnit = reservationUnitsByLine.get(line.localRef);
         if (priorUnit !== undefined && priorUnit !== item.unit) {
           mixedReservationLines.add(line.localRef);
@@ -223,7 +224,7 @@ export class ProjectSetupModule extends ServiceModule {
     // then treats the projected reservation as owned by its declaring line,
     // while keeping the remaining free pool unavailable to other lines.
     const plannedInventory = setupProjectedInventory(inventory, plannedReservationRecords);
-    const evaluated = evaluateBomGapsFromData(revisionId, setupLines, plannedInventory, plannedReservationRecords);
+    const evaluated = evaluateBomGapsFromData(revisionId, setupLines, plannedInventory, plannedReservationRecords, policy);
     const gaps = evaluated.lines;
     const unresolvedSpecifications = proposal.bomLines.flatMap((line) => {
       const specification = line.constraints.specification;
@@ -284,10 +285,11 @@ export class ProjectSetupModule extends ServiceModule {
       // failures. Preserve that precedence before reading the live inventory;
       // stale-basis checks apply only to otherwise valid previews.
       if (preview.fieldErrors.length > 0) throw new ApplicationError("validation", "Project setup preview contains semantic field errors");
+      const policy = await this.stockReceivingPolicy();
       const intendedPrinterItemId = preview.proposal.revision.intendedPrinterItemId;
       if (intendedPrinterItemId !== undefined && intendedPrinterItemId !== null) {
         if (preview.proposal.revision.fabricationRoute !== "printed") throw new ApplicationError("validation", "The intended printer requires the printed fabrication route");
-        await assertOwnedPrinter(this.ports, intendedPrinterItemId);
+        await assertOwnedPrinter(this.ports, intendedPrinterItemId, policy);
       }
       // Candidate identity is part of the preview basis as well as the
       // quantity/evidence rows below. A new inventory row that now matches a
@@ -319,11 +321,11 @@ export class ProjectSetupModule extends ServiceModule {
       for (const reservation of preview.proposal.reservations) {
         const line = setupLines.find((candidate) => candidate.id === preview.proposal.bomLines.find((entry) => entry.localRef === reservation.bomLineLocalRef)?.id);
         const item = currentInventoryById.get(reservation.itemId);
-        if (line === undefined || item === undefined || !isUnitCompatibleWithItemKind(item.kind, item.unit) || !canReserveBomItem(line, item) || !isConfirmedEvidence(item.evidence.state)) {
+        if (line === undefined || item === undefined || !isUnitCompatibleWithItemKind(item.kind, item.unit) || !canReserveBomItem(line, item) || !countsAsInStock(item.evidence.state, policy)) {
           throw conflict("Project setup reservation basis is stale", { reason: "stale_basis", staleItems: [reservation.itemId], recoveryAction: "preview_project_setup", retryable: false, commitState: "not_committed" });
         }
       }
-      const currentGaps = evaluateBomGapsFromData(preview.gaps.revisionId, setupLines, setupProjectedInventory(currentInventory, setupReservations), setupReservations);
+      const currentGaps = evaluateBomGapsFromData(preview.gaps.revisionId, setupLines, setupProjectedInventory(currentInventory, setupReservations), setupReservations, policy);
       const previewGaps = new Map(preview.gaps.lines.map((gap) => [gap.lineId, gap]));
       const changedCandidates = currentGaps.lines.filter((gap) => {
         const prior = previewGaps.get(gap.lineId);
@@ -343,7 +345,7 @@ export class ProjectSetupModule extends ServiceModule {
       // planned reservations now exist as active reservations and must still
       // count for their own lines without becoming free stock elsewhere.
       const committedInventory = await listAllInventory(this.ports.inventory);
-      const committedGaps = evaluateBomGapsFromData(value.revision.id, value.bomLines, committedInventory, value.reservations);
+      const committedGaps = evaluateBomGapsFromData(value.revision.id, value.bomLines, committedInventory, value.reservations, policy);
       const committed: ProjectSetupCommitResult = {
         ...value,
         gaps: { revisionId: committedGaps.revisionId, lines: [...committedGaps.lines], totals: { ...committedGaps.totals } }

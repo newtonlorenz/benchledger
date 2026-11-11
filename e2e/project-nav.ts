@@ -17,3 +17,17 @@ export async function openProjectIndex(page: Page): Promise<void> {
   await page.getByRole("button", { name: /^Projects/u }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Projects", exact: true })).toBeVisible();
 }
+
+/** The synthetic demo reference project seeded by the demo runtime. */
+export const REFERENCE_PROJECT_NAME = "Synthetic H2D desk lamp";
+
+/**
+ * Open one named project from the index. Demo mode lists projects like
+ * production (most recently updated first), so specs that need the seeded
+ * reference project open it by name instead of relying on list order.
+ */
+export async function openProjectByName(page: Page, name: string = REFERENCE_PROJECT_NAME): Promise<void> {
+  await openProjectIndex(page);
+  await page.getByRole("button", { name: `Open project ${name}`, exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name, exact: true })).toBeVisible();
+}

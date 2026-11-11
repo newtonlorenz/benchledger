@@ -59,9 +59,10 @@ of writes because the client is stale.
 Read `benchledger://inventory/summary` (or `read_inventory_summary`, which takes
 no arguments and always counts the whole inventory) and use `list_inventory`
 with a small page (normally `limit: 25`). `refresh_context` is optional: it
-returns a small live snapshot (server time, attention counts over the first
-100 items and, with `projectId`, the project's status, version, current
-revision and blocked state). It has no expiry; call it again when freshness
+returns a small live snapshot (server time, the workspace
+`stockReceivingPolicy`, attention counts over the first 100 items and, with
+`projectId`, the project's status, version, current revision and blocked
+state). It has no expiry; call it again when freshness
 matters:
 
 ```json
@@ -171,7 +172,16 @@ For a beginner, use plain language and explain one next action:
 The agent should call `calculate_bom_gaps` and explain every required result as
 one of four decisions:
 
-- **Ready:** physically confirmed or commissioned stock meets the line.
+- **Ready:** stock that counts as in stock meets the line. By default that is
+  physically confirmed or commissioned stock. If the human chose a stock
+  receiving policy of `on_delivery` or `on_purchase` (Settings → “When does
+  stock count as in stock?”), delivered or ordered stock also counts; gap
+  candidates then report `availability: "assumed"` with the unchanged
+  `evidenceState`, and inventory rows report `inStock: true` with
+  `policyAvailability: "assumed"`. Say so when you report readiness (“ready,
+  relying on delivered but uncounted inserts”). The policy is read-only for
+  agents: there is no MCP tool to change it; ask the human to change it in
+  Settings.
 - **Check:** a relevant item exists but its quantity, condition, identity, or
   compatibility still needs inspection. Partial confirmed coverage is Check
   only while an inspect-first candidate may cover the remaining quantity.

@@ -48,14 +48,14 @@ describe("demo runtime", () => {
     expect(existsSync(runtime.dataDir)).toBe(false);
   });
 
-  it("lists demo projects in creation order with the real filters and cursors", async () => {
+  it("lists demo projects with production ordering (most recently updated first) and the real filters and cursors", async () => {
     const runtime = await createDemoRuntime();
     try {
       await new Promise((resolve) => setTimeout(resolve, 5));
       await runtime.ports.projects.createProject({ id: "a-later-project", name: "Later reference", description: "Another reference project", status: "planned" }, ctx("order"));
       const first = await runtime.ports.projects.listProjects({ limit: 1 });
-      expect(first).toMatchObject({ data: [{ id: SYNTHETIC_DEMO_PROJECT_ID }], nextCursor: "1", total: 2 });
-      await expect(runtime.ports.projects.listProjects({ limit: 1, cursor: "1" })).resolves.toMatchObject({ data: [{ id: "a-later-project" }] });
+      expect(first).toMatchObject({ data: [{ id: "a-later-project" }], nextCursor: "1", total: 2 });
+      await expect(runtime.ports.projects.listProjects({ limit: 1, cursor: "1" })).resolves.toMatchObject({ data: [{ id: SYNTHETIC_DEMO_PROJECT_ID }] });
       await expect(runtime.ports.projects.listProjects({ q: "later", limit: 5 })).resolves.toMatchObject({ data: [{ id: "a-later-project" }], total: 1 });
       await expect(runtime.ports.projects.listProjects({ limit: 1, cursor: "bad" })).rejects.toMatchObject({ code: "invalid_cursor" });
       await expect(runtime.ports.projects.getProject("a-later-project")).resolves.toMatchObject({ name: "Later reference" });

@@ -1,5 +1,6 @@
 import { bomSpecificationSchema, unitCorrectionReason } from "@benchledger/api-contract";
-import { canonicalProjectStatus, isConfirmedEvidence } from "@benchledger/domain";
+import { canonicalProjectStatus, classifyEvidenceAvailability, isCommissionableEvidence, isConfirmedEvidence } from "@benchledger/domain";
+import type { StockReceivingPolicy } from "@benchledger/domain";
 import type {
   CreateInventoryItem, InventoryItem as ApiInventoryItem, StockEvent as ApiStockEvent,
   StockEventInput, Project as ApiProject, WorkItem as ApiWorkItem, ProjectRevision as ApiProjectRevision,
@@ -286,12 +287,24 @@ export function nativeItemFromApi(input: CreateInventoryItem, id: string, now: s
   };
 }
 
-export function apiInventoryFromNative(item: InventoryItem, balance: { readonly onHand: number; readonly available: number }, version: number): ApiInventoryItem {
+/**
+ * Project a stored row for API callers. `policy` (the workspace stock
+ * receiving policy) decides only the derived `availability` and
+ * `availableQuantity`; the stored evidence is reported unchanged.
+ */
+export function apiInventoryFromNative(item: InventoryItem, balance: { readonly onHand: number; readonly available: number; readonly allocated?: number }, version: number, policy: StockReceivingPolicy): ApiInventoryItem {
   const metadata = readInventoryMetadata(item.source);
   const state = metadata.evidence?.state ?? fallbackEvidence(item);
-  const quantity = isConfirmedEvidence(state) ? balance.onHand : (item.reportedQuantity ?? item.purchasedQuantity);
-  const availableQuantity = isConfirmedEvidence(state) ? Math.max(0, balance.available) : 0;
-  const allocatedQuantity = isConfirmedEvidence(state) ? Math.max(0, Math.min(quantity, quantity - availableQuantity)) : 0;
+  const availability = classifyEvidenceAvailability(state, policy);
+  const inStock = availability === "confirmed" || availability === "assumed";
+  // Counted rows and delivered/ordered rows (whose ledger starts from the
+  // recorded quantity) both have a meaningful ledger balance.
+  const ledgerBacked = isConfirmedEvidence(state) || isCommissionableEvidence(state);
+  const quantity = ledgerBacked ? balance.onHand : (item.reportedQuantity ?? item.purchasedQuantity);
+  const availableQuantity = inStock ? Math.max(0, Math.min(quantity, balance.available)) : 0;
+  const allocatedQuantity = inStock
+    ? Math.max(0, Math.min(quantity, quantity - availableQuantity))
+    : ledgerBacked ? Math.max(0, Math.min(quantity, balance.allocated ?? 0)) : 0;
   const evidence = metadata.evidence ?? { state };
   const kind = metadata.kind ?? mapCategoryToKind(item.category);
   const unit = mapNativeUnitToApi(item.unit);
@@ -317,6 +330,7 @@ export function apiInventoryFromNative(item: InventoryItem, balance: { readonly 
     tags: metadata.tags?.slice() ?? [],
     links: metadata.links?.slice() ?? [],
     evidence,
+    availability,
     ...(item.retiredAt === undefined ? {} : { retiredAt: item.retiredAt }),
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,

@@ -1,9 +1,9 @@
 import { ApplicationError } from "../errors.js";
-import { isConfirmedEvidence } from "@benchledger/domain";
+import { classifyEvidenceAvailability, countsAsInStock } from "@benchledger/domain";
 import type { GapEvaluation } from "../ports.js";
 import { bomSpecification, matchesBomConstraints } from "./bom-rules.js";
 import { bomGapSchema, isUnitCompatibleWithItemKind, quantityConversionSchema } from "@benchledger/api-contract";
-import type { BomGap, BomGapCandidate, BomLine, InventoryItem, Reservation } from "@benchledger/api-contract";
+import type { BomGap, BomGapCandidate, BomLine, InventoryItem, Reservation, StockReceivingPolicy } from "@benchledger/api-contract";
 
 export type BomCandidateKind = "exact" | "confirmed_alternative" | "uncertain_alternative";
 
@@ -154,7 +154,14 @@ export interface BomLineAllocation {
  * allocator with their proposed reservations, so preview and live BOM reads
  * cannot drift in candidate ordering, shared-stock allocation, or totals.
  */
-export function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], active: readonly InventoryItem[], reservations: readonly Reservation[]): GapEvaluation {
+export function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], active: readonly InventoryItem[], reservations: readonly Reservation[], policy: StockReceivingPolicy): GapEvaluation {
+  // The receiving policy decides which stored evidence counts as in stock.
+  // It never changes the evidence reported on each candidate.
+  const inStock = (candidate: BomCandidate): boolean => countsAsInStock(candidate.item.evidence.state, policy);
+  const evidenceFacts = (candidate: BomCandidate): Pick<BomGapCandidate, "evidenceState" | "availability"> => ({
+    evidenceState: candidate.item.evidence.state,
+    availability: classifyEvidenceAvailability(candidate.item.evidence.state, policy),
+  });
   const ownedReservations = new Map<string, number>();
   const reservedByItem = new Map<string, number>();
   for (const reservation of reservations) {
@@ -228,6 +235,7 @@ export function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], a
         suppliedQuantity: prior?.suppliedQuantity ?? 0,
         inspectQuantity: prior?.inspectQuantity ?? 0,
         reason: bomCandidateReason(line, candidate),
+        ...evidenceFacts(candidate),
       });
     }
   };
@@ -268,6 +276,7 @@ export function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], a
         suppliedQuantity: (prior?.suppliedQuantity ?? 0) + (mode === "confirmed" ? taken : 0),
         inspectQuantity: (prior?.inspectQuantity ?? 0) + (mode === "inspect" ? covered : 0),
         reason: bomCandidateReason(line, candidate),
+        ...evidenceFacts(candidate),
       });
       if (takenInventory <= 0 || covered <= 0) continue;
       if (mode === "confirmed") {
@@ -290,14 +299,14 @@ export function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], a
   // approved-alternative line later in the stable ordering.
   for (const line of allocationLines) {
     const candidates = candidatesByLine.get(line) ?? [];
-    const confirmed = candidates.filter((candidate) => canSupplyBomCandidate(candidate) && isConfirmedEvidence(candidate.item.evidence.state) && bomCandidateHasResolvableQuantity(line, candidate));
+    const confirmed = candidates.filter((candidate) => canSupplyBomCandidate(candidate) && inStock(candidate) && bomCandidateHasResolvableQuantity(line, candidate));
     recordCandidateFacts(line, confirmed, "confirmed");
     const suppliedQuantity = bomSpecification(line).sufficient ? allocate(line, confirmed, line.requiredQuantity, "confirmed") : 0;
     allocations.set(line, { suppliedQuantity, inspectQuantity: 0 });
   }
   for (const line of allocationLines) {
     const candidates = candidatesByLine.get(line) ?? [];
-    const uncertain = candidates.filter((candidate) => !canSupplyBomCandidate(candidate) || !isConfirmedEvidence(candidate.item.evidence.state) || !bomCandidateHasResolvableQuantity(line, candidate));
+    const uncertain = candidates.filter((candidate) => !canSupplyBomCandidate(candidate) || !inStock(candidate) || !bomCandidateHasResolvableQuantity(line, candidate));
     recordCandidateFacts(line, uncertain, "inspect");
     const suppliedQuantity = allocations.get(line)?.suppliedQuantity ?? 0;
     const inspectQuantity = allocate(line, uncertain, Math.max(line.requiredQuantity - suppliedQuantity, 0), "inspect");
@@ -306,7 +315,7 @@ export function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], a
 
   const gaps: BomGap[] = lines.map((line) => {
     const candidates = candidatesByLine.get(line) ?? [];
-    const uncertain = candidates.filter((candidate) => !canSupplyBomCandidate(candidate) || !isConfirmedEvidence(candidate.item.evidence.state) || !bomCandidateHasResolvableQuantity(line, candidate));
+    const uncertain = candidates.filter((candidate) => !canSupplyBomCandidate(candidate) || !inStock(candidate) || !bomCandidateHasResolvableQuantity(line, candidate));
     const suppliedQuantity = allocations.get(line)?.suppliedQuantity ?? 0;
     const inspectQuantity = allocations.get(line)?.inspectQuantity ?? 0;
     const missingQuantity = Math.max(line.requiredQuantity - suppliedQuantity - inspectQuantity, 0);
@@ -343,14 +352,14 @@ export function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], a
       };
     });
     const reasons = [
-      ...(suppliedQuantity > 0 ? ["Physically confirmed stock covers part or all of this requirement."] : []),
+      ...(suppliedQuantity > 0 ? [suppliedReason(line, candidates, candidateFacts, policy)] : []),
       ...(uncertain.some((candidate) => !canSupplyBomCandidate(candidate)) ? ["Some matching stock needs an explicit compatibility decision before use."] : []),
-      ...(uncertain.some((candidate) => canSupplyBomCandidate(candidate) && !isConfirmedEvidence(candidate.item.evidence.state)) ? ["Some matching stock is recorded but needs a physical count before use."] : []),
+      ...(uncertain.some((candidate) => canSupplyBomCandidate(candidate) && !inStock(candidate)) ? [notInStockReason(policy)] : []),
       ...(uncertain.some((candidate) => isUnitCompatibleWithItemKind(candidate.item.kind, candidate.item.unit) && !bomCandidateHasResolvableQuantity(line, candidate)) ? ["A cross-unit alternative has no valid evidence-backed conversion; inspect before use."] : []),
       ...(uncertain.some((candidate) => !isUnitCompatibleWithItemKind(candidate.item.kind, candidate.item.unit)) ? ["Matching stock has a unit that needs correction before use."] : []),
       ...(decision === "decide" ? [`Specify ${specification.missingDecisions.join(" and ")} before sourcing this requirement.`] : []),
       ...(roleNeedsReview ? ["Requirement role is not recorded; review whether this item is consumed or reusable before reserving or closing out."] : []),
-      ...(decision !== "decide" && missingQuantity > 0 ? ["No confirmed stock covers the remaining quantity."] : []),
+      ...(decision !== "decide" && missingQuantity > 0 ? [policy === "on_receipt" ? "No confirmed stock covers the remaining quantity." : "No in-stock quantity covers the remaining quantity."] : []),
       ...(decision !== "decide" && candidates.length === 0 ? ["No matching inventory item was found for this line."] : []),
     ];
     return bomGapSchema.parse({
@@ -387,4 +396,26 @@ export function evaluateBomGapsFromData(id: string, lines: readonly BomLine[], a
       sourceLines: gaps.filter((gap) => gap.optional !== true && gap.decision === "source").length,
     }
   };
+}
+
+/**
+ * Explain supply honestly: stock that counts only because the receiving
+ * policy trusts its delivery or purchase evidence is named as such.
+ */
+function suppliedReason(line: BomLine, candidates: readonly BomCandidate[], facts: ReadonlyMap<string, BomGapCandidate>, policy: StockReceivingPolicy): string {
+  const assumed = candidates.some((candidate) => classifyEvidenceAvailability(candidate.item.evidence.state, policy) === "assumed"
+    && (facts.get(`${line.id}\u0000${candidate.item.id}`)?.suppliedQuantity ?? 0) > 0);
+  if (!assumed) return "Physically confirmed stock covers part or all of this requirement.";
+  return policy === "on_purchase"
+    ? "In-stock quantity covers part or all of this requirement; some of it is bought or delivered but not yet counted (receiving policy: when bought)."
+    : "In-stock quantity covers part or all of this requirement; some of it is delivered but not yet counted (receiving policy: when delivered).";
+}
+
+/** Why recorded stock is not yet usable under the current policy. */
+export function notInStockReason(policy: StockReceivingPolicy): string {
+  return policy === "on_receipt"
+    ? "Some matching stock is recorded but needs a physical count before use."
+    : policy === "on_delivery"
+      ? "Some matching stock is ordered but not delivered, or needs a physical count before use."
+      : "Some matching stock needs a physical count before use.";
 }

@@ -20,12 +20,12 @@ import type { BenchDatabase } from "@benchledger/database";
 import { RuntimeState } from "./persistence.js";
 import {
   apiBomLineFromNative, apiProjectFromNative, apiProjectRevisionFromNative, apiReservationFromNative, apiStockEventFromNative,
-  apiWorkItemFromNative, apiWorkItemRevisionFromNative, isConfirmedEvidence, mapApiKindToCategory,
+  apiWorkItemFromNative, apiWorkItemRevisionFromNative, mapApiKindToCategory,
   mapApiUnitToDomain, nativeConstraintsFromApi, nativeProjectStatus
 } from "./mappers.js";
 import { ProductionInventoryAdapter } from "./inventory-adapter.js";
 import { attempt, clone, nowIso, page } from "./utils.js";
-import { createStockEvent, exceedsReservableQuantity, quantityExceeds } from "@benchledger/domain";
+import { countsAsInStock, createStockEvent, exceedsReservableQuantity, quantityExceeds } from "@benchledger/domain";
 import { bomAlternativeSchema } from "@benchledger/api-contract";
 
 const PROJECT = "project";
@@ -628,7 +628,8 @@ export class ProductionProjectAdapter implements ProjectPort {
       if (!matchesBomConstraints(item, apiLine.constraints)) throw new DomainError("invalid_reservation_reference", "inventory item does not satisfy the BOM constraints");
       const conversion = bomQuantityConversion(apiLine, item);
       if (item.unit !== this.apiUnit(line.unit) && conversion === undefined) throw new DomainError("invalid_reservation_reference", "reservation unit does not match the BOM line and has no valid quantity conversion");
-      if (!isConfirmedEvidence(item.evidence.state)) throw new DomainError("insufficient_stock", "only physically confirmed stock can be reserved");
+      const policy = this.inventory.stockReceivingPolicy();
+      if (!countsAsInStock(item.evidence.state, policy)) throw new DomainError("insufficient_stock", policy === "on_receipt" ? "only physically confirmed stock can be reserved" : "only stock that counts as in stock under the workspace receiving policy can be reserved");
       const reservedForLine = this.reservations.listActiveForLine(revisionId, input.lineId)
         .reduce((total, reservation) => {
           const reservedNative = this.inventory.native(reservation.itemId);

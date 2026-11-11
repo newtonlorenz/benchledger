@@ -1,5 +1,5 @@
 import { matchesInventorySearch } from "@benchledger/domain/inventory-search";
-import { assertStockCommandReplay, createId, createStockEvent, DomainError } from "@benchledger/domain";
+import { assertStockCommandReplay, createId, createStockEvent, DomainError, uncountedBaselineQuantity } from "@benchledger/domain";
 import type { CommissionInventoryItem, InventoryItem as ApiInventoryItem, CreateInventoryItem, StockEvent as ApiStockEvent, StockEventInput } from "@benchledger/api-contract";
 import type { InventoryItem, StockEvent } from "@benchledger/domain";
 import { ApplicationError, applyInventoryBulkChanges, normalizeInventoryBulkChanges, parseInventoryCursor } from "@benchledger/application";
@@ -12,6 +12,8 @@ import {
   nativeItemFromApi, nativeStockEventFromApi, readInventoryMetadata
 } from "./mappers.js";
 import { attempt, clone, nowIso, page } from "./utils.js";
+import { DEFAULT_STOCK_RECEIVING_POLICY_READER, type StockReceivingPolicyReader } from "./workspace-preferences-adapter.js";
+import type { StockReceivingPolicy } from "@benchledger/domain";
 
 const ENTITY = "inventory_item";
 
@@ -57,6 +59,20 @@ function mergeInventoryInput(current: ApiInventoryItem, input: UpdateInventoryIn
   };
 }
 
+/**
+ * Descriptive edits never change quantities. The API quantity of a delivered
+ * or ordered row is its ledger balance (claimed quantity less usage), so
+ * writing it back would silently move the claimed baseline.
+ */
+function preserveRecordedQuantities(updated: InventoryItem, current: InventoryItem): InventoryItem {
+  const { reportedQuantity: _reported, ...withoutReported } = updated;
+  return {
+    ...withoutReported,
+    purchasedQuantity: current.purchasedQuantity,
+    ...(current.reportedQuantity === undefined ? {} : { reportedQuantity: current.reportedQuantity })
+  };
+}
+
 function initialCountEvent(item: InventoryItem, quantity: number, version: number): StockEvent {
   return createStockEvent({
     id: `${item.id}-initial-count`,
@@ -96,7 +112,13 @@ export class ProductionInventoryAdapter implements InventoryPort {
     private readonly state: RuntimeState,
     private readonly unitOfWork: Pick<UnitOfWorkPort, "exclusive">,
     private readonly categoryAssignments?: InventoryCategoryRepository,
+    private readonly policyReader: StockReceivingPolicyReader = DEFAULT_STOCK_RECEIVING_POLICY_READER,
   ) {}
+
+  /** The current workspace receiving policy, read per projection. */
+  stockReceivingPolicy(): StockReceivingPolicy {
+    return this.policyReader.stockReceivingPolicy();
+  }
 
   async listItems(options: InventoryListOptions): Promise<Page<ApiInventoryItem>> {
     return this.unitOfWork.exclusive(() => attempt(async () => {
@@ -106,11 +128,12 @@ export class ProductionInventoryAdapter implements InventoryPort {
       const categories = this.categoryAssignments?.listItemCategoryNodes();
       const versions = this.state.getVersions(ENTITY);
       const ledgers = this.repository.listStockEventsByItem();
+      const policy = this.stockReceivingPolicy();
       const items = records.map((item) => {
         const assigned = categories?.get(item.id);
         const withCategory = assigned === undefined ? item : { ...item, categoryNodeId: assigned };
         const balance = this.repository.balanceOf(item, ledgers.get(item.id) ?? []);
-        return apiInventoryFromNative(withCategory, balance, versions.get(item.id) ?? 1);
+        return apiInventoryFromNative(withCategory, balance, versions.get(item.id) ?? 1, policy);
       }).filter((item) => {
         if (!options.includeRetired && item.retiredAt !== undefined) return false;
         if (options.kind !== undefined && item.kind !== options.kind) return false;
@@ -201,7 +224,7 @@ export class ProductionInventoryAdapter implements InventoryPort {
       const merged = mergeInventoryInput(currentApi, input);
       return this.database.transaction(() => {
         this.state.ensureVersion(ENTITY, id, expectedVersion);
-        const updated = nativeItemFromApi(merged, id, nowIso(), current);
+        const updated = preserveRecordedQuantities(nativeItemFromApi(merged, id, nowIso(), current), current);
         this.repository.upsert(updated);
         if (this.categoryAssignments !== undefined && input.categoryNodeId !== undefined) this.categoryAssignments.setItemCategoryNode(id, input.categoryNodeId ?? undefined, updated.updatedAt);
         const nextVersion = this.state.bumpVersion(ENTITY, id);
@@ -254,7 +277,7 @@ export class ProductionInventoryAdapter implements InventoryPort {
             ...(changes.tags === undefined ? {} : { tags: metadata.tags }),
           });
           const now = nowIso();
-          const native = nativeItemFromApi(merged, entry.target.itemId, now, entry.current);
+          const native = preserveRecordedQuantities(nativeItemFromApi(merged, entry.target.itemId, now, entry.current), entry.current);
           this.repository.upsert(native);
           const version = this.state.bumpVersion(ENTITY, entry.target.itemId);
           updated.push(this.toApi(native, version));
@@ -327,6 +350,7 @@ export class ProductionInventoryAdapter implements InventoryPort {
         }, itemId, now, current);
         this.repository.upsert(updated);
         const nextVersion = this.state.getVersion(ENTITY, itemId) + 1;
+        const claimedBaseline = uncountedBaselineQuantity(current);
         const event = createStockEvent({
           id: `${itemId}-${evidenceState === "commissioned" ? "commission" : "physical-count"}-${nextVersion}`,
           itemId,
@@ -340,6 +364,7 @@ export class ProductionInventoryAdapter implements InventoryPort {
             apiItemVersion: nextVersion,
             state: evidenceState,
             previousEvidence: currentApi.evidence,
+            ...(claimedBaseline === undefined ? {} : { claimedBaseline }),
             ...(commissioning === undefined || commissioning.evidence.source === undefined ? {} : { source: commissioning.evidence.source }),
             ...(commissioning === undefined || commissioning.evidence.sourceId === undefined ? {} : { sourceId: commissioning.evidence.sourceId }),
             ...(commissioning === undefined || commissioning.evidence.observedAt === undefined ? {} : { observedAt: commissioning.evidence.observedAt }),
@@ -417,7 +442,7 @@ export class ProductionInventoryAdapter implements InventoryPort {
     const assigned = this.categoryAssignments?.getItemCategoryNode(item.id);
     const withCategory = assigned === undefined ? item : { ...item, categoryNodeId: assigned };
     const balance = this.repository.balance(item.id);
-    return clone(apiInventoryFromNative(withCategory, balance, version));
+    return clone(apiInventoryFromNative(withCategory, balance, version, this.stockReceivingPolicy()));
   }
 
   metadata(id: string): ReturnType<typeof readInventoryMetadata> {

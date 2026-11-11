@@ -58,6 +58,10 @@ describe("inventory images across application, HTTP and MCP", () => {
       const content = await app.inject({ url: contentUrl, headers });
       expect(content.statusCode).toBe(200); expect(content.headers["content-type"]).toBe("image/webp"); expect(content.headers["cache-control"]).toBe("private, no-store");
       expect((await app.inject({ url: contentUrl.replace("printer-h2d", "board-esp32"), headers })).statusCode).toBe(404);
+      // List rows carry the cover image reference; items without images omit it.
+      const listed = (await app.inject({ url: "/api/v1/inventory?limit=50", headers })).json() as { data: Array<{ id: string; primaryImage?: unknown }> };
+      expect(listed.data.find((row) => row.id === "printer-h2d")?.primaryImage).toEqual({ id: imageId, url: contentUrl, mediaType: "image/webp", width: expect.any(Number), height: expect.any(Number) });
+      expect(listed.data.find((row) => row.id === "board-esp32")).not.toHaveProperty("primaryImage");
       const login = await app.inject({ method: "POST", url: "/api/v1/auth/login", payload: { password: demoPassword } });
       const cookies = login.headers["set-cookie"] as string[];
       expect((await app.inject({ method: "POST", url, headers: { cookie: cookies.map(c => c.split(";")[0]).join("; ") }, payload: upload })).statusCode).toBe(403);

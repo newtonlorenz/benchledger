@@ -34,6 +34,11 @@ Use confirmed quantity, unit, condition, constraints, provenance and current
 project state. Commission physically checked orders/deliveries through
 `commission_inventory_item` (or a confirmed inspection commit); metadata edits
 and `count_correction` stock events cannot establish counted stock.
+The human chooses when stock counts as in stock (workspace
+`stockReceivingPolicy`: `on_receipt` default, `on_delivery`, `on_purchase`).
+Read it from `refresh_context`; never try to change it. Policy-trusted rows
+(`inStock: true`, `policyAvailability: "assumed"`) are usable but still
+uncounted, so name that assumption when you rely on them.
 A counted item can still require compatibility inspection.
 
 Explain required BOM lines as Ready, Check, Decide or Source. Resolve exact

@@ -1,5 +1,5 @@
 import { ApplicationError, conflict, notFound } from "../errors.js";
-import { isConfirmedEvidence } from "@benchledger/domain";
+import { countsAsInStock } from "@benchledger/domain";
 import type { ApplicationPorts, BuildConfigurationListOptions, Mutation, Page, RequestContext } from "../ports.js";
 import { FILAMENT_CATALOG_IDENTITY_UNKNOWN, catalogPort } from "./catalog.js";
 import { canonicalize, assertCompatibleInventoryUnit, boundedCursor, boundedLimit, buildConfigurationPort, nowIso, requireId } from "./shared.js";
@@ -168,8 +168,11 @@ export class BuildConfigurationModule extends ServiceModule {
         if (item.retiredAt !== undefined) {
           throw new ApplicationError("validation", `Inventory item '${item.id}' is retired and cannot be selected as a physical filament`);
         }
-        if (!isConfirmedEvidence(item.evidence.state)) {
-          throw new ApplicationError("validation", `Inventory item '${item.id}' requires physically_counted or commissioned evidence before an unlinked filament can be selected`);
+        const policy = await this.stockReceivingPolicy();
+        if (!countsAsInStock(item.evidence.state, policy)) {
+          throw new ApplicationError("validation", policy === "on_receipt"
+            ? `Inventory item '${item.id}' requires physically_counted or commissioned evidence before an unlinked filament can be selected`
+            : `Inventory item '${item.id}' must count as in stock under the workspace receiving policy before an unlinked filament can be selected`);
         }
         filamentSelections.push({
           itemId: item.id,

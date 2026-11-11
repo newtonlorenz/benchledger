@@ -7,6 +7,7 @@ import { makerWorkflowOpenApi } from "./maker-workflow-routes.js";
  * step with the route handlers in app.ts and the api-contract schemas.
  */
 export function jsonOpenApi(version: string): Record<string, unknown> {
+  const stockIfMatchParameter = { in: "header", name: "If-Match", required: false, schema: { type: "string", pattern: "^(W/)?\\\"?[1-9][0-9]*\\\"?$" }, description: "Optional item version. When present it is checked atomically with the stock command; a mismatch returns 409." };
   // Keep the public description aligned with the canonical
   // createInventoryWithProductProfileSchema. The item half is the existing
   // createInventoryItem contract; the profile half deliberately has no
@@ -480,7 +481,13 @@ export function jsonOpenApi(version: string): Record<string, unknown> {
         CreateInventoryCategory: createInventoryCategorySchema,
         UpdateInventoryCategory: updateInventoryCategorySchema,
         ProjectTombstone: { type: "object", additionalProperties: false, required: ["id", "name", "removedAt", "removedBy", "lastLifecycleStatus", "releasedReservationIds", "version"], properties: { id: { type: "string" }, name: { type: "string" }, removedAt: { type: "string", format: "date-time" }, removedBy: { type: "string" }, lastLifecycleStatus: { $ref: "#/components/schemas/ProjectLifecycle" }, releasedReservationIds: { type: "array", items: { type: "string" } }, version: { type: "integer", minimum: 1 }, auditId: { type: "string" } } },
-        ProjectLifecycle: { type: "string", enum: projectLifecycleValues, description: "Canonical project lifecycle. Blocked is derived from reasons and is not a lifecycle value." }
+        ProjectLifecycle: { type: "string", enum: projectLifecycleValues, description: "Canonical project lifecycle. Blocked is derived from reasons and is not a lifecycle value." },
+        StockReceivingPolicy: { type: "string", enum: ["on_purchase", "on_delivery", "on_receipt"], description: "When recorded stock counts as in stock: when bought, when delivered, or when received and checked (default). Never rewrites stored evidence." },
+        StockAvailability: { type: "string", enum: ["confirmed", "assumed", "inspect_first", "ordered", "unknown"], description: "Derived from evidence and the receiving policy. `assumed` counts as in stock only because the policy trusts delivery or purchase evidence." },
+        WorkspacePreferences: { type: "object", additionalProperties: false, required: ["stockReceivingPolicy", "version", "updatedAt"], properties: { stockReceivingPolicy: { $ref: "#/components/schemas/StockReceivingPolicy" }, version: { type: "integer", minimum: 1 }, updatedAt: { type: "string", format: "date-time" } } },
+        UpdateWorkspacePreferences: { type: "object", additionalProperties: false, required: ["stockReceivingPolicy"], properties: { stockReceivingPolicy: { $ref: "#/components/schemas/StockReceivingPolicy" }, expectedVersion: { type: "integer", minimum: 1 } } },
+        StockReceivingPolicyImpactItem: { type: "object", additionalProperties: false, required: ["itemId", "name", "evidenceState", "quantity", "unit", "from", "to", "allocatedQuantity"], properties: { itemId: { type: "string" }, name: { type: "string" }, evidenceState: { type: "string", enum: ["physically_counted", "commissioned", "delivered_uncounted", "ordered_unverified", "allocated", "consumed", "unknown"] }, quantity: { type: "number", minimum: 0 }, unit: { type: "string" }, from: { $ref: "#/components/schemas/StockAvailability" }, to: { $ref: "#/components/schemas/StockAvailability" }, allocatedQuantity: { type: "number", minimum: 0 } } },
+        StockReceivingPolicyImpact: { type: "object", additionalProperties: false, required: ["from", "to", "version", "gained", "lost", "blockedBy", "truncated"], properties: { from: { $ref: "#/components/schemas/StockReceivingPolicy" }, to: { $ref: "#/components/schemas/StockReceivingPolicy" }, version: { type: "integer", minimum: 1 }, gained: { type: "array", items: { $ref: "#/components/schemas/StockReceivingPolicyImpactItem" } }, lost: { type: "array", items: { $ref: "#/components/schemas/StockReceivingPolicyImpactItem" } }, blockedBy: { type: "array", description: "Rows that would stop counting while they hold project reservations; the change is refused until they are counted or released.", items: { $ref: "#/components/schemas/StockReceivingPolicyImpactItem" } }, truncated: { type: "boolean" } } }
       }
     },
     paths: {
@@ -524,7 +531,33 @@ export function jsonOpenApi(version: string): Record<string, unknown> {
           responses: { "200": { description: "Updated workspace access mode and fresh session" }, "400": { description: "Invalid operation" }, "401": { description: "Current password is invalid" }, "403": { description: "UI administrator session required" }, "409": { description: "Stale access version or idempotency conflict" }, "429": { description: "Too many attempts" } }
         }
       },
-      "/workspace": { get: { responses: { "200": { description: "Authenticated aggregate workspace snapshot" } } } },
+      "/workspace": { get: { responses: { "200": { description: "Authenticated aggregate workspace snapshot, including `preferences` (stock receiving policy) used to label availability" } } } },
+      "/workspace/preferences": {
+        get: {
+          summary: "Read workspace preferences",
+          description: "Readable by every authenticated caller. The ETag carries the version.",
+          responses: { "200": { description: "Current preferences", content: { "application/json": { schema: { $ref: "#/components/schemas/WorkspacePreferences" } } } } }
+        },
+        put: {
+          security: [{ cookieAuth: [] }],
+          summary: "Change the stock receiving policy",
+          description: "Human decision: requires an unscoped workspace administrator browser session with CSRF. Bearer tokens and MCP cannot change it. Versioned (If-Match or expectedVersion) and audited with from/to. Refused with 409 `policy_change_strands_reservations` while reserved stock would stop counting. Never rewrites stored evidence.",
+          parameters: [
+            { in: "header", name: "If-Match", required: false, schema: { type: "string", pattern: "^(W/)?\\\"?[1-9][0-9]*\\\"?$" }, description: "Optional; must match expectedVersion when both are supplied." },
+            { in: "header", name: "Idempotency-Key", required: false, schema: { type: "string", minLength: 8, maxLength: 200 } }
+          ],
+          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateWorkspacePreferences" } } } },
+          responses: { "200": { description: "Mutation envelope with the updated preferences and audit event" }, "400": { description: "Invalid policy or mismatched versions" }, "403": { description: "Administrator browser session required" }, "409": { description: "Stale version, or reserved stock would stop counting" } }
+        }
+      },
+      "/workspace/preferences/stock-receiving-impact": {
+        get: {
+          summary: "Preview a stock receiving policy change",
+          description: "Read-only. Lists inventory rows that would start (`gained`) or stop (`lost`) counting as in stock, and reserved rows that block the change.",
+          parameters: [{ in: "query", name: "stockReceivingPolicy", required: true, schema: { $ref: "#/components/schemas/StockReceivingPolicy" } }],
+          responses: { "200": { description: "Impact preview", content: { "application/json": { schema: { $ref: "#/components/schemas/StockReceivingPolicyImpact" } } } }, "400": { description: "Unknown policy" } }
+        }
+      },
       "/inventory": { get: { description: "Returns a bounded inventory page; categoryNodeId and unassigned=true are mutually exclusive.", parameters: inventoryQueryParameters, responses: { "200": { description: "Inventory page" } } }, post: { responses: { "201": { description: "Inventory item" } } } },
       "/inventory/categories": {
         get: { parameters: [
@@ -589,8 +622,8 @@ export function jsonOpenApi(version: string): Record<string, unknown> {
         }
       },
       "/inventory/{id}/product-profile": { get: { responses: { "200": { description: "Physical inventory product profile" }, "404": { description: "Profile not found" } } }, put: { responses: { "200": { description: "Updated physical inventory product profile" } } } },
-      "/inventory/{id}/count": { post: { responses: { "201": { description: "Recorded physical count" } } } },
-      "/inventory/{id}/stock-events": { get: { responses: { "200": { description: "Stock event page" } } }, post: { responses: { "201": { description: "Stock mutation" } } } },
+      "/inventory/{id}/count": { post: { parameters: [stockIfMatchParameter], requestBody: { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: true, required: ["quantity"], properties: { quantity: { type: "number", minimum: 0 }, note: { type: "string", maxLength: 2000 }, expectedVersion: { type: "integer", minimum: 1, description: "Optional; must equal If-Match when both are sent." } } } } } }, description: "Optional optimistic concurrency via If-Match or expectedVersion, checked atomically (409 version_conflict on mismatch). Records an absolute physical count with `physically_counted` evidence. For delivered or ordered stock this is the receiving step: it replaces the recorded (claimed) quantity, keeps the prior evidence in the append-only count event, and is audited as received.", responses: { "201": { description: "Recorded physical count" } } } },
+      "/inventory/{id}/stock-events": { get: { responses: { "200": { description: "Stock event page" } } }, post: { description: "Optional optimistic concurrency: send If-Match and/or body expectedVersion (they must agree). When present, the item version is checked atomically with the event; a mismatch returns 409 version_conflict and records nothing.", parameters: [stockIfMatchParameter], responses: { "201": { description: "Stock mutation" }, "409": { description: "Item version changed, or the evidence does not allow this movement" } } } },
       "/projects": { get: { description: "Returns a bounded project page. Archived and removed projects are hidden by default; status=archived is the explicit reversible Archived view.", parameters: [{ name: "status", in: "query", required: false, schema: { $ref: "#/components/schemas/ProjectLifecycle" } }], responses: { "200": { description: "Project page" } } }, post: { responses: { "201": { description: "Project" } } } },
       "/projects/removed": { get: { description: "List retained project removal tombstones as a bounded page. Removed projects cannot be restored or purged.", parameters: [{ name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } }, { name: "cursor", in: "query", required: false, schema: { type: "string", maxLength: 200 }, description: "Opaque continuation cursor from the preceding page." }], responses: { "200": { description: "Removed project tombstone page" } } } },
       "/projects/with-initial-revision": {

@@ -5,7 +5,7 @@ import type { ApplicationPorts, GapEvaluation, InspectionPort, Mutation, Page, R
 import { evaluateBomGapsFromData } from "./gap-evaluation.js";
 import { canonicalize, commandContext, listAllInventory, nowIso, requireId } from "./shared.js";
 import { bomLineSchema, commitInspectionCompletionSchema, inspectionCompletionCommitSchema, inspectionCompletionPreviewSchema, inspectionObservationSchema } from "@benchledger/api-contract";
-import type { BomLine, InspectionAction, InspectionCompletionCommit, InspectionCompletionPreview, InspectionObservation, InventoryItem, Reservation } from "@benchledger/api-contract";
+import type { BomLine, InspectionAction, InspectionCompletionCommit, InspectionCompletionPreview, InspectionObservation, InventoryItem, Reservation, StockReceivingPolicy } from "@benchledger/api-contract";
 import { randomUUID } from "node:crypto";
 import { ServiceModule } from "./module.js";
 
@@ -155,6 +155,7 @@ export class InspectionModule extends ServiceModule {
     readonly inventory: readonly InventoryItem[];
     readonly reservations: readonly Reservation[];
     readonly gaps: GapEvaluation;
+    readonly policy: StockReceivingPolicy;
     readonly actions: readonly InspectionAction[];
   }> {
     const id = requireId(revisionId, "revision id");
@@ -162,8 +163,9 @@ export class InspectionModule extends ServiceModule {
     const lines = await this.ports.projects.listBomLines(id);
     const inventory = await listAllInventory(this.ports.inventory);
     const reservations = await this.ports.projects.listReservations(id);
-    const gaps = evaluateBomGapsFromData(id, lines, inventory, reservations);
-    return { lines, inventory, reservations, gaps, actions: deriveInspectionActions(id, gaps.lines, lines, inventory) };
+    const policy = await this.stockReceivingPolicy();
+    const gaps = evaluateBomGapsFromData(id, lines, inventory, reservations, policy);
+    return { lines, inventory, reservations, gaps, policy, actions: deriveInspectionActions(id, gaps.lines, lines, inventory, policy) };
   }
 
   async previewInspectionCompletion(revisionId: string, input: unknown, ctx: RequestContext): Promise<InspectionCompletionPreview> {
@@ -188,7 +190,7 @@ export class InspectionModule extends ServiceModule {
         : item;
       const projectedInventory = snapshot.inventory.map((candidate) => candidate.id === item.id ? afterItem : candidate);
       const projectedLines = snapshot.lines.map((line) => lineSnapshots.after.find((candidate) => candidate.id === line.id) ?? line);
-      const afterGaps = evaluateBomGapsFromData(id, projectedLines, projectedInventory, snapshot.reservations);
+      const afterGaps = evaluateBomGapsFromData(id, projectedLines, projectedInventory, snapshot.reservations, snapshot.policy);
       const affectedLines = action.lineIds.map((lineId) => {
         const before = snapshot.gaps.lines.find((gap) => gap.lineId === lineId);
         const after = afterGaps.lines.find((gap) => gap.lineId === lineId);
@@ -260,7 +262,7 @@ export class InspectionModule extends ServiceModule {
         : item;
       const expectedInventory = snapshot.inventory.map((candidate) => candidate.id === item.id ? expectedAfterItem : candidate);
       const expectedLinesForEvaluation = snapshot.lines.map((line) => expectedLines.after.find((candidate) => candidate.id === line.id) ?? line);
-      const expectedAfterGaps = evaluateBomGapsFromData(id, expectedLinesForEvaluation, expectedInventory, snapshot.reservations);
+      const expectedAfterGaps = evaluateBomGapsFromData(id, expectedLinesForEvaluation, expectedInventory, snapshot.reservations, snapshot.policy);
       const expectedAffectedGaps = expectedAfterGaps.lines.filter((gap) => action.lineIds.includes(gap.lineId));
       const same = (left: unknown, right: unknown) => JSON.stringify(canonicalize(left)) === JSON.stringify(canonicalize(right));
       if (!same(item, preview.before.item)

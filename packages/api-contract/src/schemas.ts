@@ -42,6 +42,18 @@ export const stockEvidenceSchema = z.enum([
   "consumed",
   "unknown"
 ]);
+/**
+ * Workspace stock receiving policy: when recorded stock counts as in stock.
+ * Mirrors `STOCK_RECEIVING_POLICIES` in @benchledger/domain (parity is
+ * tested in the application package, which depends on both).
+ */
+export const stockReceivingPolicySchema = z.enum(["on_purchase", "on_delivery", "on_receipt"]);
+/**
+ * Server-derived availability of an inventory row under the current receiving
+ * policy. `assumed` means the row counts as in stock only because the policy
+ * trusts its delivery/purchase evidence; the stored evidence is unchanged.
+ */
+export const stockAvailabilitySchema = z.enum(["confirmed", "assumed", "inspect_first", "ordered", "unknown"]);
 export const stockEventTypeSchema = z.enum([
   "receipt",
   "count",
@@ -106,6 +118,20 @@ const inventoryItemShape = z.object({
   tags: z.array(z.string().min(1).max(80)).max(50),
   links: z.array(supplierLinkSchema).max(30),
   evidence: evidenceSchema,
+  /** Derived by the server from `evidence.state` and the workspace receiving policy. */
+  availability: stockAvailabilitySchema.optional(),
+  /**
+   * List rows only: the item's first (cover) gallery image. `url` is the
+   * authenticated, same-origin content route (normalized WebP, at most
+   * 512 KiB); there is no separate thumbnail variant.
+   */
+  primaryImage: z.object({
+    id: idSchema,
+    url: z.string().min(1).max(600).regex(/^\/api\/v1\/inventory\/[^/]+\/images\/[^/]+\/content$/u),
+    mediaType: z.literal("image/webp"),
+    width: z.number().int().positive(),
+    height: z.number().int().positive()
+  }).strict().optional(),
   retiredAt: isoDateSchema.optional(),
   createdAt: isoDateSchema,
   updatedAt: isoDateSchema,
@@ -113,7 +139,7 @@ const inventoryItemShape = z.object({
 }).strict();
 
 function validateInventoryItemQuantityInvariant(
-  value: { readonly quantity: number; readonly availableQuantity: number; readonly allocatedQuantity?: number | undefined; readonly evidence: { readonly state: string } },
+  value: { readonly quantity: number; readonly availableQuantity: number; readonly allocatedQuantity?: number | undefined; readonly evidence: { readonly state: string }; readonly availability?: string | undefined },
   ctx: z.RefinementCtx
 ): void {
   if (value.availableQuantity > value.quantity) {
@@ -123,7 +149,12 @@ function validateInventoryItemQuantityInvariant(
       message: "availableQuantity cannot exceed quantity"
     });
   }
-  const confirmedEvidence = value.evidence.state === "physically_counted" || value.evidence.state === "commissioned";
+  // The contract cannot import the domain policy rule. A row that the server
+  // classified as in stock (confirmed or policy-assumed) carries that
+  // classification; older payloads without it fall back to verified evidence.
+  const confirmedEvidence = value.availability === undefined
+    ? value.evidence.state === "physically_counted" || value.evidence.state === "commissioned"
+    : value.availability === "confirmed" || value.availability === "assumed";
   const expectedAllocatedQuantity = value.quantity - value.availableQuantity;
   const allocationTolerance = Number.EPSILON * Math.max(1, value.quantity, value.availableQuantity);
   if (confirmedEvidence && value.allocatedQuantity !== undefined && Math.abs(value.allocatedQuantity - expectedAllocatedQuantity) > allocationTolerance) {
@@ -805,6 +836,10 @@ export const bomGapCandidateSchema = z.object({
   suppliedQuantity: z.number().finite().nonnegative(),
   inspectQuantity: z.number().finite().nonnegative(),
   reason: z.string().max(1000),
+  /** Stored evidence of the candidate row, reported unchanged. */
+  evidenceState: stockEvidenceSchema.optional(),
+  /** Availability under the receiving policy used for this evaluation. */
+  availability: stockAvailabilitySchema.optional(),
 }).strict();
 export const bomGapSchema = z.object({
   lineId: idSchema,
@@ -1093,6 +1128,8 @@ export const auditEventSchema = z.object({
   entityType: z.string().max(160),
   entityId: idSchema,
   version: z.number().int().positive().optional(),
+  /** Small, non-secret change summary (for example a setting's from/to values). */
+  change: z.record(z.string().max(80), z.union([z.string().max(200), z.number().finite(), z.boolean()])).optional(),
   createdAt: isoDateSchema
 }).strict();
 

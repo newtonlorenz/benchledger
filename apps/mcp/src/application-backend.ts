@@ -100,6 +100,7 @@ import type {
   RecordOfferSnapshotInput,
   RecordStockEventInput,
   RefreshedContext,
+  StockReceivingPolicyName,
   ReleaseReservationInput,
   Reservation,
   ReservationDetails,
@@ -335,7 +336,10 @@ export function createApplicationBackend(service: ApplicationService, options: P
         for (let pageNumber = 0; pageNumber < MAX_INVENTORY_SUMMARY_PAGES; pageNumber += 1) {
           const page = await service.listInventory({ limit, includeRetired: true, ...(cursor === undefined ? {} : { cursor }) });
           items = [...items, ...page.data.map(toMcpInventoryItem)];
-          if (page.nextCursor === undefined) return inventorySummary(items);
+          if (page.nextCursor === undefined) {
+            const stockReceivingPolicy = await readStockReceivingPolicy(service);
+            return { ...inventorySummary(items), ...(stockReceivingPolicy === undefined ? {} : { stockReceivingPolicy }) };
+          }
           if (visitedCursors.has(page.nextCursor)) {
             throw new McpAdapterError("BACKEND_ERROR", "Inventory summary pagination did not make progress.");
           }
@@ -718,8 +722,10 @@ export function createApplicationBackend(service: ApplicationService, options: P
             inspectFirstItems: items.filter((item) => item.availability === "inspect_first").length,
             unverifiedItems: items.filter((item) => item.availability === "ordered_unverified" || item.availability === "delivered_uncounted").length,
             allocatedItems: items.filter((item) => (item.allocatedQuantity?.value ?? 0) > 0).length,
+            assumedInStockItems: items.filter((item) => item.policyAvailability === "assumed").length,
           };
         }
+        const stockReceivingPolicy = await readStockReceivingPolicy(service);
         let project: RefreshedContext["project"];
         if (input.projectId !== undefined && context.scopes.includes("projects:read")) {
           const current = await service.getProject(input.projectId);
@@ -728,6 +734,7 @@ export function createApplicationBackend(service: ApplicationService, options: P
         }
         return {
           generatedAt: new Date().toISOString(),
+          ...(stockReceivingPolicy === undefined ? {} : { stockReceivingPolicy }),
           ...(inventory === undefined ? {} : { inventory }),
           ...(project === undefined ? {} : { project }),
           inventorySummaryUri: "benchledger://inventory/summary",
@@ -1025,6 +1032,16 @@ function slicePage<T>(items: readonly T[], limit: number, cursor: string | undef
   return { items: selected, nextCursor: next, hasMore: next !== null };
 }
 
+/**
+ * The receiving policy is read-only context for agents. Hosts composed from a
+ * partial service (older embeddings and test doubles) simply omit it.
+ */
+async function readStockReceivingPolicy(service: ApplicationService): Promise<StockReceivingPolicyName | undefined> {
+  const reader = (service as Partial<Pick<ApplicationService, "getWorkspacePreferences">>).getWorkspacePreferences;
+  if (typeof reader !== "function") return undefined;
+  return (await reader.call(service)).stockReceivingPolicy;
+}
+
 function inventorySummary(items: readonly InventoryItem[]) {
   const categories = new Map<string, number>();
   for (const item of items) categories.set(item.category, (categories.get(item.category) ?? 0) + 1);
@@ -1055,6 +1072,7 @@ function inventorySummary(items: readonly InventoryItem[]) {
       unverifiedItems: items.filter((item) => item.availability === "ordered_unverified" || item.availability === "delivered_uncounted").length,
       retiredItems: items.filter((item) => item.availability === "retired").length,
       missingItems: 0,
+      assumedInStockItems: items.filter((item) => item.availability !== "retired" && item.policyAvailability === "assumed").length,
     },
     categories: [...categories.entries()].map(([category, itemCount]) => ({ category, itemCount })),
   };
@@ -1267,6 +1285,7 @@ function toMcpInventoryItem(item: ApiInventoryItem): InventoryItem {
     unitStatus: correctionReason === undefined ? "compatible" : "needs_correction",
     ...(correctionReason === undefined ? {} : { unitCorrectionReason: correctionReason }),
     availability: toMcpAvailability(item),
+    ...(item.availability === undefined ? {} : { inStock: item.availability === "confirmed" || item.availability === "assumed", policyAvailability: item.availability }),
     evidence: toMcpEvidence(item),
     ...(item.categoryNodeId === undefined ? {} : { categoryNodeId: item.categoryNodeId }),
     ...(item.description === undefined ? {} : { description: item.description }),
