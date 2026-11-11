@@ -34,11 +34,15 @@
   },
   "overrides": {
     "@expo/fingerprint": {
-      "glob": "^14.0.4"
+      "glob": "^14.0.4",
+      "minimatch": "^11.0.8"
     },
     "query-string": "9.5.1",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "test-exclude": {
+      "minimatch": "^11.0.8"
+    }
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",
