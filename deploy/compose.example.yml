@@ -20,6 +20,20 @@ services:
       BENCHLEDGER_DATA_DIR: /var/lib/benchledger
       BENCHLEDGER_MAX_STORAGE_BYTES: 10737418240
       BENCHLEDGER_MAX_UPLOAD_BYTES: 104857600
+      # Set these in the private env file (see .env.example), not here:
+      # - BENCHLEDGER_ALLOWED_HOSTS: only the BENCHLEDGER_PUBLIC_BASE_URL host
+      #   and loopback names are accepted by default; any other Host gets 421.
+      #   List extra LAN IP addresses or mDNS names, comma-separated, without
+      #   scheme or port. A reverse proxy must forward the original Host
+      #   (nginx: proxy_set_header Host $host; Caddy does by default), or list
+      #   the service name it (or an external health probe) uses here.
+      # - BENCHLEDGER_TRUST_PROXY: false (default), a proxy hop count, or proxy
+      #   IPv4/IPv6 addresses/CIDRs; only behind a reverse proxy (`true` means
+      #   one hop). Invalid entries stop startup.
+      # - BENCHLEDGER_SECURE_COOKIES: leave unset to derive Secure cookies from
+      #   an https:// public base URL. Plain-HTTP access to such a server will
+      #   not keep a session unless set to false (cookies then unencrypted).
+      # - BENCHLEDGER_SESSION_SECRET: required; the placeholder is rejected.
     env_file:
       # Set BENCHLEDGER_ENV_FILE to an explicit private absolute path for a
       # real deployment. The relative default keeps a local checkout demo

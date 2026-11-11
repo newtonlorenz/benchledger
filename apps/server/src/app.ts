@@ -1,12 +1,13 @@
-import { registerInventoryImageRoutes, inventoryImageOpenApi } from "./inventory-image-routes.js";
-import { memberLoginSchema } from "@benchledger/api-contract";
+import { registerInventoryImageRoutes } from "./inventory-image-routes.js";
+import { INVENTORY_IMAGE_MAX_BYTES, memberLoginSchema } from "@benchledger/api-contract";
 import type { TeamMember } from "@benchledger/api-contract";
-import { registerMakerWorkflowRoutes, makerWorkflowOpenApi } from "./maker-workflow-routes.js";
+import { registerMakerWorkflowRoutes } from "./maker-workflow-routes.js";
 import { createHash, createHmac, randomUUID } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { open, type FileHandle } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import Fastify, { type FastifyHttpOptions, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import type { Server as HttpServer } from "node:http";
 import cookie from "@fastify/cookie";
 import swagger from "@fastify/swagger";
 import {
@@ -20,11 +21,12 @@ import {
   createBuildConfigurationSnapshotSchema, saveReconciliationDraftSchema, commitReconciliationSchema,
   workspaceSecurityMutationSchema, projectStatusSchema,
   removeProjectSchema, projectSetupProposalSchema, commitProjectSetupSchema, commitProjectSetupBodySchema,
-  inspectionObservationSchema, commitInspectionCompletionBodySchema
+  inspectionObservationSchema, commitInspectionCompletionBodySchema,
+  updateWorkspacePreferencesSchema, stockReceivingPolicyImpactQuerySchema
 } from "@benchledger/api-contract";
 import { ApplicationError, ApplicationService, hydrateProject } from "@benchledger/application";
 import type { ApplicationPorts, BuildConfigurationListOptions, CatalogProductListOptions, GapEvaluation, Mutation, Page, ProjectListOptions, RequestContext } from "@benchledger/application";
-import { createProductionRuntime } from "@benchledger/runtime";
+import { createDemoRuntime, createProductionRuntime } from "@benchledger/runtime";
 import { createApplicationMcpProtocol, createMcpHttpHandler } from "@benchledger/mcp";
 import type { McpRequestContext, Scope as McpScope } from "@benchledger/mcp";
 import type {
@@ -34,12 +36,12 @@ import type {
   BuildConfigurationSnapshot as ApiBuildConfigurationSnapshot,
   InventoryProductProfile as ApiInventoryProductProfile,
   WorkspaceSecurityStatus as ApiWorkspaceSecurityStatus,
-  WorkspaceSecurityMutation
+  WorkspaceSecurityMutation, WorkspacePreferences as ApiWorkspacePreferences
 } from "@benchledger/api-contract";
-import { AuthManager, type AuthConfig, type AuthScope, type Principal, hashBearerToken } from "./auth.js";
-import { createMemoryRuntime, createSyntheticRuntime, type MemoryRuntime } from "./memory-store.js";
+import { AuthManager, assertStrongSessionSecret, type AuthConfig, type AuthScope, type Principal, hashBearerToken } from "./auth.js";
 import { ArtifactTransferManager, ARTIFACT_DOWNLOAD_HEADERS, TRANSFER_RESPONSE_HEADERS, TRANSFER_TOKEN_HEADER, type FinalizeCapabilityBody, type TransferCapability } from "./artifact-transfer.js";
-import { publicBaseUrlFromEnvironment } from "./config.js";
+import { positiveIntegerFromEnvironment, publicBaseUrlFromEnvironment } from "./config.js";
+import { jsonOpenApi } from "./openapi.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -63,7 +65,21 @@ export interface ServerOptions {
   readonly webRoot?: string;
   readonly version?: string;
   readonly logger?: boolean;
-  readonly trustProxy?: boolean;
+  /**
+   * Fastify trust-proxy setting. Default off: X-Forwarded-For is ignored.
+   * Prefer a hop count or explicit proxy addresses over `true`.
+   */
+  readonly trustProxy?: boolean | number | string | readonly string[];
+  /**
+   * Extra Host names accepted besides the public base URL host and loopback
+   * names. Requests with any other Host are rejected (DNS-rebinding defence).
+   */
+  readonly allowedHosts?: readonly string[];
+  /**
+   * Fixed delay added to every login attempt (correct or not) while the
+   * workspace-wide failed-login ceiling is exceeded. Defaults to one second.
+   */
+  readonly loginSlowdownMs?: number;
   /** Exact configured origin used for MCP transfer capability links. */
   readonly publicBaseUrl?: string;
   /** Host-owned transfer manager; injectable for route-level integration tests. */
@@ -77,6 +93,128 @@ export interface RuntimeHandle {
 
 const PUBLIC_PATHS = new Set(["/api/v1/health", "/api/v1/ready", "/api/v1/auth/login", "/api/v1/auth/member-login", "/api/v1/auth/access", "/api/v1/auth/lan-session", "/api/v1/openapi.json", "/api/v1/capabilities"]);
 const UUID_OR_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
+/** Default request body ceiling for JSON and other non-upload routes. */
+const DEFAULT_BODY_LIMIT = 2 * 1024 * 1024;
+/**
+ * The largest MCP payload is add_inventory_image: INVENTORY_IMAGE_MAX_BYTES
+ * raw bytes, base64-encoded (4/3 expansion) inside a JSON-RPC envelope with
+ * item/image metadata. Other MCP tools stay under the 1 MB general limit.
+ */
+const MCP_ENVELOPE_ALLOWANCE = 64 * 1024;
+const MCP_BODY_LIMIT = Math.ceil(INVENTORY_IMAGE_MAX_BYTES / 3) * 4 + MCP_ENVELOPE_ALLOWANCE;
+/** Unauthenticated credential endpoints never need more than a few KiB. */
+const AUTH_BODY_LIMIT = 16 * 1024;
+const DEFAULT_UPLOAD_BODY_LIMIT = 100 * 1024 * 1024;
+const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]"] as const;
+const API_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; sandbox";
+/**
+ * The built SPA loads only same-origin module scripts and stylesheets. Inline
+ * style attributes remain allowed for React/three.js layout; blob:/data: cover
+ * local previews and embedded GLB/texture resources decoded in the browser.
+ */
+const SPA_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "connect-src 'self' blob: data:",
+  "worker-src 'self' blob:",
+  "media-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'"
+].join("; ");
+
+/**
+ * Media types an artifact may be served as. Anything else (HTML, SVG, XML,
+ * scripts) is forced to application/octet-stream so a stored file can never
+ * execute in the application origin, even if a browser ignores the
+ * attachment disposition.
+ */
+const SAFE_ARTIFACT_MEDIA_TYPES = new Set([
+  "application/octet-stream", "application/pdf", "application/zip", "application/x-zip-compressed", "application/json", "application/x-kicad-pcb",
+  "image/jpeg", "image/png", "image/webp", "image/gif",
+  "model/step", "model/stl", "model/gltf-binary", "model/3mf", "application/vnd.ms-package.3dmanufacturing-3mf",
+  "text/plain", "text/markdown", "text/csv"
+]);
+
+export function artifactResponseType(mediaType: string): string {
+  if (typeof mediaType !== "string" || /[\u0000-\u001f\u007f]/u.test(mediaType)) return "application/octet-stream";
+  const essence = mediaType.split(";", 1)[0]!.trim().toLowerCase();
+  if (!SAFE_ARTIFACT_MEDIA_TYPES.has(essence)) return "application/octet-stream";
+  return essence.startsWith("text/") ? `${essence}; charset=utf-8` : essence;
+}
+
+function hostName(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const host = value.trim().toLowerCase();
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    return end < 0 ? undefined : host.slice(0, end + 1);
+  }
+  const colon = host.indexOf(":");
+  return colon < 0 ? host : host.slice(0, colon);
+}
+
+class PreconditionRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PreconditionRequiredError";
+  }
+}
+
+/** Require If-Match on routes where first-party clients always send it. */
+function parseMandatoryIfMatch(request: FastifyRequest): number {
+  const version = parseExpectedVersion(request);
+  if (version === undefined) throw new PreconditionRequiredError("If-Match with the current version is required; reload the record and retry with its version");
+  return version;
+}
+
+const PAGE_LIMIT_PATTERN = /^[1-9][0-9]{0,2}$/u;
+
+/** Strictly parse limit/cursor query parameters shared by paged REST routes. */
+function parsePageQuery(query: unknown, defaultLimit = 50): { readonly limit: number; readonly cursor?: string } {
+  const record = query !== null && typeof query === "object" ? query as Record<string, unknown> : {};
+  const issues: { path: string[]; message: string }[] = [];
+  let limit = defaultLimit;
+  if (record.limit !== undefined) {
+    const raw = record.limit;
+    if (typeof raw !== "string" || !PAGE_LIMIT_PATTERN.test(raw) || Number(raw) > 200) issues.push({ path: ["limit"], message: "limit must be an integer between 1 and 200" });
+    else limit = Number(raw);
+  }
+  let cursor: string | undefined;
+  if (record.cursor !== undefined) {
+    const raw = record.cursor;
+    if (typeof raw !== "string" || raw.length === 0 || raw.length > 512 || /[\u0000-\u001f\u007f]/u.test(raw)) issues.push({ path: ["cursor"], message: "cursor must be a non-empty opaque string of at most 512 characters" });
+    else cursor = raw;
+  }
+  if (issues.length > 0) throw new ApplicationError("validation", "Query parameters are invalid", { issues });
+  return { limit, ...(cursor === undefined ? {} : { cursor }) };
+}
+
+function zodIssues(error: unknown): readonly ValidationIssue[] | null {
+  if (!(error instanceof Error) || error.name !== "ZodError") return null;
+  const issues = (error as Error & { readonly issues?: unknown }).issues;
+  if (!Array.isArray(issues)) return null;
+  return issues.map((issue: { path?: unknown; message?: unknown; code?: unknown }) => ({
+    path: Array.isArray(issue.path) ? issue.path.filter((part): part is string | number => typeof part === "string" || typeof part === "number") : [],
+    message: typeof issue.message === "string" ? issue.message : "Invalid value",
+    ...(typeof issue.code === "string" ? { code: issue.code } : {})
+  }));
+}
+
+type ValidationIssue = { readonly path: readonly (string | number)[]; readonly message: string; readonly code?: string };
+
+/** Validate a server-built response; a mismatch is a logged 500, never a client 400. */
+function shapeResponse<T>(schema: { safeParse(value: unknown): { success: true; data: T } | { success: false; error: unknown } }, value: unknown): T {
+  const result = schema.safeParse(value);
+  if (result.success) return result.data;
+  const error = new Error(`Server response failed its schema: ${JSON.stringify(zodIssues(result.error) ?? [])}`);
+  error.name = "ResponseShapeError";
+  throw error;
+}
 
 function randomSecret(): string {
   return `${randomUUID()}${randomUUID()}`;
@@ -174,6 +312,8 @@ type AttemptWindow = { readonly count: number; readonly resetAt: number };
 const AUTH_ATTEMPT_LIMIT = 5;
 const AUTH_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
 const PASSWORD_HASH_CONCURRENCY_LIMIT = 2;
+const GLOBAL_LOGIN_FAILURE_LIMIT = 50;
+const DEFAULT_LOGIN_SLOWDOWN_MS = 1000;
 
 function securityFingerprint(operation: WorkspaceSecurityRequest, secret: string): string {
   // Do not JSON-serialize a security request: password text and encoded hashes
@@ -282,6 +422,25 @@ function parseInventoryProductProfileBody(value: unknown): unknown {
 
 /** The binding is optional and validated by the canonical API contract. */
 const beginArtifactUploadRequestSchema = beginUploadSchema;
+
+/**
+ * Optional optimistic version for stock commands: If-Match and/or body
+ * `expectedVersion`. When both are present they must agree. Absent means the
+ * legacy unconditional behaviour.
+ */
+function optionalStockVersion(request: FastifyRequest, body: unknown): number | undefined {
+  const header = parseExpectedVersion(request);
+  const raw = body !== null && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>).expectedVersion : undefined;
+  if (raw !== undefined && (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw < 1)) throw new ApplicationError("validation", "expectedVersion must be a positive integer");
+  if (header !== undefined && raw !== undefined && header !== raw) throw new ApplicationError("validation", "If-Match and expectedVersion must agree");
+  return raw ?? header;
+}
+
+function withoutExpectedVersion(body: unknown): Record<string, unknown> {
+  if (body === null || typeof body !== "object" || Array.isArray(body)) return {};
+  const { expectedVersion: _expectedVersion, ...rest } = body as Record<string, unknown>;
+  return rest;
+}
 
 function parsePhysicalCount(body: unknown): { readonly quantity: number; readonly note?: string } {
   if (body === null || typeof body !== "object" || Array.isArray(body)) throw new ApplicationError("validation", "Request body is invalid");
@@ -400,12 +559,17 @@ async function serveWebAsset(root: string, requestPath: string): Promise<{ reado
   const candidate = resolve(root, normalized);
   const rel = relative(resolve(root), candidate);
   if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
+  // Open once, then check and read through the same descriptor so the file
+  // that is type-checked is the file that is served.
+  let handle: FileHandle | undefined;
   try {
-    const details = await stat(candidate);
-    if (!details.isFile()) return null;
-    return { path: candidate, body: await readFile(candidate) };
+    handle = await open(candidate, "r");
+    if (!(await handle.stat()).isFile()) return null;
+    return { path: candidate, body: await handle.readFile() };
   } catch {
     return null;
+  } finally {
+    await handle?.close();
   }
 }
 
@@ -498,746 +662,6 @@ function artifactContentDisposition(filename: string): string {
   return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
-function jsonOpenApi(version: string): Record<string, unknown> {
-  // Keep the public description aligned with the canonical
-  // createInventoryWithProductProfileSchema. The item half is the existing
-  // createInventoryItem contract; the profile half deliberately has no
-  // itemId because the service assigns the newly-created item's identity.
-  const inventoryWithProductProfileSchema = {
-    type: "object",
-    additionalProperties: false,
-    required: ["item", "profile"],
-    properties: {
-      item: { $ref: "#/components/schemas/CreateInventoryItem" },
-      profile: { $ref: "#/components/schemas/CreateInventoryProductProfileWithoutItem" }
-    }
-  };
-  const inventoryBulkUpdateSchema = {
-    type: "object",
-    additionalProperties: false,
-    required: ["targets", "changes"],
-    properties: {
-      targets: {
-        type: "array", minItems: 1, maxItems: 100,
-        items: {
-          type: "object", additionalProperties: false, required: ["itemId", "expectedVersion"],
-          properties: {
-            itemId: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
-            expectedVersion: { type: "integer", minimum: 1 }
-          }
-        }
-      },
-      changes: {
-        type: "object", additionalProperties: false, minProperties: 1,
-        properties: {
-          location: { type: "string", minLength: 1, maxLength: 240 },
-          condition: { type: "string", enum: ["new", "good", "worn", "needs_repair", "unknown"] },
-          tags: {
-            type: "object", additionalProperties: false, minProperties: 1,
-            properties: {
-              add: { type: "array", minItems: 1, maxItems: 50, items: { type: "string", minLength: 1, maxLength: 80 } },
-              remove: { type: "array", minItems: 1, maxItems: 50, items: { type: "string", minLength: 1, maxLength: 80 } }
-            }
-          }
-        }
-      }
-    }
-  };
-  const createInventoryItemSchema = {
-    type: "object",
-    additionalProperties: false,
-    required: ["name", "kind", "quantity", "unit", "tags", "links", "evidence"],
-    properties: {
-      id: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
-      name: { type: "string", minLength: 1, maxLength: 240 },
-      kind: { type: "string", enum: ["printer", "tool", "accessory", "consumable", "electronic", "fastener", "filament", "wire", "adhesive", "other"] },
-      categoryNodeId: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$", description: "Optional user-managed category or subcategory assignment." },
-      description: { type: "string", maxLength: 5000 },
-      manufacturer: { type: "string", maxLength: 200 },
-      model: { type: "string", maxLength: 200 },
-      sku: { type: "string", maxLength: 200 },
-      quantity: { type: "number", minimum: 0 },
-      availableQuantity: { type: "number", minimum: 0, description: "Available confirmed stock. availableQuantity cannot exceed quantity; the server rejects requests that violate this cross-field invariant." },
-      unit: { type: "string", enum: ["each", "gram", "millimetre", "millilitre", "metre", "set"] },
-      location: { type: "string", maxLength: 240 },
-      condition: { type: "string", enum: ["new", "good", "worn", "needs_repair", "unknown"] },
-      dimensions: {
-        type: "object", additionalProperties: false,
-        properties: {
-          lengthMm: { type: "number", minimum: 0 }, widthMm: { type: "number", minimum: 0 },
-          heightMm: { type: "number", minimum: 0 }, diameterMm: { type: "number", minimum: 0 },
-          measured: { type: "boolean" }, uncertaintyMm: { type: "number", minimum: 0 }, note: { type: "string", maxLength: 500 }
-        }
-      },
-      tags: { type: "array", maxItems: 50, items: { type: "string", minLength: 1, maxLength: 80 } },
-      links: {
-        type: "array", maxItems: 30,
-        items: {
-          type: "object", additionalProperties: false, required: ["supplier", "url"],
-          properties: {
-            supplier: { type: "string", minLength: 1, maxLength: 160 }, url: { type: "string", format: "uri", maxLength: 2000 },
-            label: { type: "string", maxLength: 200 }, currentPriceMinor: { type: "integer", minimum: 0 }, currency: { type: "string", minLength: 3, maxLength: 3 },
-            observedAt: { type: "string", format: "date-time" }, packageQuantity: { type: "number", exclusiveMinimum: 0 }
-          }
-        }
-      },
-      evidence: {
-        type: "object", additionalProperties: false, required: ["state"],
-        properties: {
-          state: { type: "string", enum: ["physically_counted", "commissioned", "delivered_uncounted", "ordered_unverified", "allocated", "consumed", "unknown"] },
-          source: { type: "string", maxLength: 500 }, sourceId: { type: "string", maxLength: 500 },
-          observedAt: { type: "string", format: "date-time" }, note: { type: "string", maxLength: 1000 }
-        }
-      }
-    }
-  };
-  const commissionInventoryItemSchema = {
-    type: "object", additionalProperties: false,
-    required: ["quantity", "unit", "evidence"],
-    properties: {
-      quantity: { type: "number", minimum: 0, description: "Observed usable quantity after commissioning." },
-      unit: { type: "string", enum: ["each", "gram", "millimetre", "millilitre", "metre", "set"] },
-      evidence: {
-        type: "object", additionalProperties: false, required: ["state", "source", "observedAt"],
-        properties: {
-          state: { const: "commissioned" }, source: { type: "string", minLength: 1, maxLength: 500 }, sourceId: { type: "string", maxLength: 500 },
-          observedAt: { type: "string", format: "date-time" }, note: { type: "string", maxLength: 1000 }
-        }
-      }
-    }
-  };
-  const createInventoryProductProfileWithoutItemSchema = {
-    oneOf: [
-      {
-        type: "object", additionalProperties: false,
-        required: ["catalogProductId", "profileType", "linkState", "details"],
-        properties: {
-          catalogProductId: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
-          profileType: { const: "filament_spool" },
-          linkState: { type: "string", enum: ["confirmed", "reported", "suggested"] },
-          details: {
-            type: "object", additionalProperties: false,
-            properties: {
-              lot: { type: "string", minLength: 1, maxLength: 160 }, batch: { type: "string", minLength: 1, maxLength: 160 },
-              lotCode: { type: "string", minLength: 1, maxLength: 160 }, openedState: { type: "string", enum: ["sealed", "open", "unknown"] },
-              openedAt: { type: "string", format: "date-time" }, tareMassG: { type: "number", minimum: 0 },
-              currentPlacement: { type: "string", minLength: 1, maxLength: 240 }, dryingHistory: { type: "string", maxLength: 2000 }
-            }
-          }
-        }
-      },
-      {
-        type: "object", additionalProperties: false,
-        required: ["catalogProductId", "profileType", "linkState", "details"],
-        properties: {
-          catalogProductId: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
-          profileType: { const: "printer_asset" },
-          linkState: { type: "string", enum: ["confirmed", "reported", "suggested"] },
-          details: {
-            type: "object", additionalProperties: false,
-            properties: {
-              assetLabel: { type: "string", minLength: 1, maxLength: 240 }, commissionedAt: { type: "string", format: "date-time" },
-              location: { type: "string", minLength: 1, maxLength: 240 }, condition: { type: "string", enum: ["new", "good", "worn", "needs_repair", "unknown"] }
-            }
-          }
-        }
-      }
-    ]
-  };
-  const inventoryCategorySchema = {
-    type: "object", additionalProperties: false,
-    required: ["id", "name", "sortOrder", "archived", "createdAt", "updatedAt", "version"],
-    properties: {
-      id: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
-      name: { type: "string", minLength: 1, maxLength: 120 },
-      parentId: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
-      sortOrder: { type: "integer", minimum: 0 },
-      archived: { type: "boolean" },
-      createdAt: { type: "string", format: "date-time" },
-      updatedAt: { type: "string", format: "date-time" },
-      version: { type: "integer", minimum: 1 }
-    }
-  };
-  const createInventoryCategorySchema = {
-    type: "object", additionalProperties: false,
-    required: ["name"],
-    properties: {
-      id: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
-      name: { type: "string", minLength: 1, maxLength: 120 },
-      parentId: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
-      sortOrder: { type: "integer", minimum: 0, default: 0 }
-    }
-  };
-  const updateInventoryCategorySchema = {
-    type: "object", additionalProperties: false, minProperties: 1,
-    properties: {
-      name: { type: "string", minLength: 1, maxLength: 120 },
-      sortOrder: { type: "integer", minimum: 0 }
-    }
-  };
-  const categoryIdParameter = { name: "id", in: "path", required: true, schema: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" } };
-  const categoryVersionParameter = { name: "If-Match", in: "header", required: true, description: "Required category version for optimistic concurrency.", schema: { type: "string", pattern: "^[1-9][0-9]*$" } };
-  const inventoryQueryParameters = [
-    { name: "q", in: "query", required: false, schema: { type: "string", maxLength: 200 } },
-    { name: "kind", in: "query", required: false, schema: { type: "string", enum: ["printer", "tool", "accessory", "consumable", "electronic", "fastener", "filament", "wire", "adhesive", "other"] } },
-    { name: "evidence", in: "query", required: false, schema: { type: "string", enum: ["physically_counted", "commissioned", "delivered_uncounted", "ordered_unverified", "allocated", "consumed", "unknown"] } },
-    { name: "available", in: "query", required: false, schema: { type: "boolean" } },
-    { name: "stockView", in: "query", required: false, schema: { type: "string", enum: ["available", "check", "reserved", "depleted"] } },
-    { name: "sort", in: "query", required: false, schema: { type: "string", enum: ["name", "name_desc", "location"] } },
-    { name: "location", in: "query", required: false, schema: { type: "string", maxLength: 256 }, description: "Exact location; applied before pagination." },
-    { name: "includeRetired", in: "query", required: false, description: "Include retired inventory history; active rows are returned by default.", schema: { type: "boolean", default: false } },
-    { name: "categoryNodeId", in: "query", required: false, description: "Exact managed category or subcategory ID. Mutually exclusive with unassigned=true.", schema: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" } },
-    { name: "unassigned", in: "query", required: false, description: "Return inventory without a managed category assignment. Mutually exclusive with categoryNodeId.", schema: { type: "boolean" } },
-    { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } },
-    { name: "cursor", in: "query", required: false, schema: { type: "string", maxLength: 200 } }
-  ];
-  const projectLifecycleValues = ["idea", "planned", "ready", "building", "validating", "complete", "archived"];
-  const fabricationRouteSchema = {
-    type: "string",
-    enum: ["printed", "ready_made", "none", "undecided"],
-    description: "Planning-only manufacturing route. An intended printer is valid only with printed."
-  };
-  const projectRevisionSchema = {
-    type: "object", additionalProperties: false,
-    required: ["id", "projectId", "number", "name", "status", "fabricationRoute", "createdAt", "version"],
-    properties: {
-      id: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
-      projectId: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
-      number: { type: "integer", minimum: 1 },
-      name: { type: "string", minLength: 1, maxLength: 240 },
-      notes: { type: "string", maxLength: 10000 },
-      status: { type: "string", enum: ["concept", "CAD complete", "DFAM reviewed", "mesh validated", "slicer validated", "test printed", "fit/function verified", "production approved"] },
-      fabricationRoute: fabricationRouteSchema,
-      intendedPrinterItemId: { oneOf: [{ type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" }, { type: "null" }], description: "Planning-only owned printer item; null is an explicit clear and omission means no field was supplied." },
-      createdAt: { type: "string", format: "date-time" },
-      version: { type: "integer", minimum: 1 }
-    }
-  };
-  const createProjectRevisionSchema = {
-    type: "object", additionalProperties: false, required: ["name", "status"],
-    properties: {
-      id: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
-      name: { type: "string", minLength: 1, maxLength: 240 },
-      notes: { type: "string", maxLength: 10000 },
-      status: { type: "string", enum: ["concept", "CAD complete", "DFAM reviewed", "mesh validated", "slicer validated", "test printed", "fit/function verified", "production approved"] },
-      fabricationRoute: fabricationRouteSchema,
-      intendedPrinterItemId: { oneOf: [{ type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" }, { type: "null" }], description: "Planning-only owned printer item; omit to inherit, or pass null to explicitly clear. A non-null value requires fabricationRoute=printed." }
-    },
-    description: "When omitted, fabricationRoute and intendedPrinterItemId carry forward from the current revision. A printer assignment requires printed."
-  };
-  const updateProjectRevisionSchema = {
-    type: "object", additionalProperties: false, minProperties: 1,
-    properties: {
-      fabricationRoute: fabricationRouteSchema,
-      intendedPrinterItemId: { oneOf: [{ type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" }, { type: "null" }], description: "Planning-only owned printer item; null clears the assignment. A non-null value requires fabricationRoute=printed." }
-    },
-    description: "Narrow planning update; lifecycle, evidence, BOM, and build configuration are unchanged."
-  };
-  const createProjectWithInitialRevisionSchema = {
-    type: "object", additionalProperties: false, required: ["project", "revision"],
-    properties: {
-      project: {
-        type: "object", additionalProperties: false, required: ["name", "status"],
-        properties: {
-          id: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$", description: "Optional caller-provided stable project identifier. It is never regenerated or reclaimed after removal." },
-          name: { type: "string", minLength: 1, maxLength: 240 },
-          description: { type: "string", maxLength: 5000 },
-          status: { type: "string", enum: projectLifecycleValues }
-        }
-      },
-      revision: {
-        type: "object", additionalProperties: false, required: ["name", "status"],
-        properties: {
-          id: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$", description: "Optional caller-provided stable initial revision identifier. It must not already exist." },
-          name: { type: "string", minLength: 1, maxLength: 240 },
-          notes: { type: "string", maxLength: 10000 },
-          status: { type: "string", enum: ["concept", "CAD complete", "DFAM reviewed", "mesh validated", "slicer validated", "test printed", "fit/function verified", "production approved"] },
-          fabricationRoute: fabricationRouteSchema,
-          intendedPrinterItemId: { oneOf: [{ type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" }, { type: "null" }], description: "Planning-only owned printer item; omit to leave unassigned, or pass null to explicitly clear. A non-null value requires fabricationRoute=printed." }
-        }
-      }
-    }
-  };
-  const projectCreationConflictDetailsSchema = {
-    type: "object", additionalProperties: false,
-    required: ["reason", "field", "id", "retryable", "commitState"],
-    description: "Safe conflict details identify only the requested target. No project, revision, record, SQL, or backend details are exposed.",
-    properties: {
-      reason: { type: "string", enum: ["project_id_exists", "revision_id_exists", "project_name_exists", "idempotency_key_reused"] },
-      field: { type: "string", enum: ["projectId", "revisionId", "projectName", "idempotencyKey"] },
-      id: { type: "string", minLength: 1, maxLength: 240 },
-      retryable: { const: false },
-      commitState: { const: "not_committed" },
-      commandId: { type: "string", minLength: 1, maxLength: 200 }
-    }
-  };
-  const errorResponseSchema = {
-    type: "object", additionalProperties: false, required: ["error"],
-    properties: {
-      error: {
-        type: "object", additionalProperties: false, required: ["code", "message"],
-        properties: {
-          code: { type: "string", minLength: 1, maxLength: 80 },
-          message: { type: "string", minLength: 1, maxLength: 1000 },
-          details: { $ref: "#/components/schemas/ProjectCreationConflictDetails" },
-          correlationId: { type: "string", minLength: 1, maxLength: 160 }
-        }
-      }
-    }
-  };
-  const setupProposalSchema = {
-    type: "object", additionalProperties: false, required: ["project", "revision", "bomLines"],
-    properties: {
-      project: { type: "object", additionalProperties: false, required: ["name", "status"], properties: { id: { type: "string", minLength: 1, maxLength: 160 }, name: { type: "string", minLength: 1, maxLength: 240 }, description: { type: "string", maxLength: 5000 }, status: { $ref: "#/components/schemas/ProjectLifecycle" } } },
-      revision: { type: "object", additionalProperties: false, required: ["name", "status"], properties: { id: { type: "string", minLength: 1, maxLength: 160 }, name: { type: "string", minLength: 1, maxLength: 240 }, notes: { type: "string", maxLength: 10000 }, status: { type: "string" }, fabricationRoute: fabricationRouteSchema, intendedPrinterItemId: { oneOf: [{ type: "string", minLength: 1, maxLength: 160 }, { type: "null" }] } } },
-      workItems: { type: "array", maxItems: 6, default: [], items: { type: "object", additionalProperties: false, required: ["localRef", "name", "kind", "revision"], properties: { localRef: { type: "string", minLength: 1, maxLength: 160 }, id: { type: "string", minLength: 1, maxLength: 160 }, name: { type: "string", minLength: 1, maxLength: 240 }, kind: { type: "string" }, description: { type: "string", maxLength: 5000 }, revision: { type: "object", additionalProperties: false, required: ["name", "status"], properties: { id: { type: "string", minLength: 1, maxLength: 160 }, name: { type: "string", minLength: 1, maxLength: 240 }, notes: { type: "string", maxLength: 10000 }, status: { type: "string" } } } } } },
-      bomLines: { type: "array", minItems: 1, maxItems: 24, items: { type: "object", additionalProperties: false, required: ["localRef", "name", "requiredQuantity", "unit"], properties: { localRef: { type: "string", minLength: 1, maxLength: 160 }, revisionLocalRef: { type: "string", minLength: 1, maxLength: 160 }, id: { type: "string", minLength: 1, maxLength: 160 }, name: { type: "string", minLength: 1, maxLength: 240 }, itemId: { type: "string", minLength: 1, maxLength: 160 }, role: { anyOf: [{ type: "string", enum: ["consumed", "reusable"] }, { type: "null" }] }, requiredQuantity: { type: "number", exclusiveMinimum: 0 }, unit: { type: "string" }, optional: { type: "boolean", default: false }, constraints: { type: "object", additionalProperties: false, properties: { kind: { type: "string" }, manufacturer: { type: "string" }, model: { type: "string" }, sku: { type: "string" }, tag: { type: "string" }, nameIncludes: { type: "string" }, specification: { type: "object", additionalProperties: true } } }, alternatives: { type: "array", maxItems: 20, items: { type: "object", additionalProperties: false, required: ["itemId"], properties: { itemId: { type: "string", minLength: 1, maxLength: 160 }, reason: { type: "string", maxLength: 1000 }, compatible: { type: "string", enum: ["confirmed", "conditional", "unknown"] } } } }, notes: { type: "string", maxLength: 2000 } } } },
-      reservations: { type: "array", maxItems: 48, default: [], items: { type: "object", additionalProperties: false, required: ["localRef", "bomLineLocalRef", "itemId", "quantity"], properties: { localRef: { type: "string", minLength: 1, maxLength: 160 }, bomLineLocalRef: { type: "string", minLength: 1, maxLength: 160 }, id: { type: "string", minLength: 1, maxLength: 160 }, itemId: { type: "string", minLength: 1, maxLength: 160 }, quantity: { type: "number", exclusiveMinimum: 0 }, unit: { type: "string" } } } }
-    }
-  };
-  const setupPreviewSchema = {
-    type: "object", additionalProperties: false, required: ["id", "version", "status", "createdAt", "updatedAt", "expiresAt", "contentSha256", "proposal", "fieldErrors", "unresolvedSpecifications", "gaps", "plannedReservations", "affectedInventory", "correlationId"],
-    properties: {
-      id: { type: "string" }, version: { type: "integer", minimum: 1 }, status: { type: "string", enum: ["active", "committed", "expired"] }, createdAt: { type: "string", format: "date-time" }, updatedAt: { type: "string", format: "date-time" }, expiresAt: { type: "string", format: "date-time" }, contentSha256: { type: "string", pattern: "^[a-f0-9]{64}$" }, proposal: setupProposalSchema,
-      fieldErrors: { type: "array", maxItems: 100, items: { type: "object", additionalProperties: false, required: ["path", "code", "message"], properties: { path: { type: "string" }, code: { type: "string" }, message: { type: "string" } } } },
-      unresolvedSpecifications: { type: "array", maxItems: 24, items: { type: "object", additionalProperties: false, required: ["bomLineLocalRef", "missingDecisions"], properties: { bomLineLocalRef: { type: "string" }, missingDecisions: { type: "array", items: { type: "string" } } } } },
-      gaps: { type: "object", additionalProperties: false, required: ["revisionId", "lines", "totals"], properties: { revisionId: { type: "string" }, lines: { type: "array", maxItems: 24 }, totals: { type: "object", additionalProperties: true } } },
-      plannedReservations: { type: "array", maxItems: 48 }, affectedInventory: { type: "array", maxItems: 48 }, correlationId: { type: "string" }
-    }
-  };
-  const artifactIdSchema = { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" };
-  const bomRoleSchema = {
-    oneOf: [
-      { type: "string", enum: ["consumed", "reusable"] },
-      { type: "null" }
-    ],
-    description: "Null is retained for legacy requirements whose stock role was not recorded; it must be reviewed before use."
-  };
-  const bomSpecificationSchema = {
-    type: "object", additionalProperties: false, required: ["status"],
-    properties: {
-      status: { type: "string", enum: ["sufficient", "insufficient"] },
-      decisions: {
-        type: "object", additionalProperties: false,
-        properties: {
-          identity: { type: "string", minLength: 1, maxLength: 240 }, purpose: { type: "string", minLength: 1, maxLength: 240 },
-          voltage: { type: "string", minLength: 1, maxLength: 240 }, current_or_load: { type: "string", minLength: 1, maxLength: 240 },
-          connector: { type: "string", minLength: 1, maxLength: 240 }, compatibility: { type: "string", minLength: 1, maxLength: 240 },
-          dimensions: { type: "string", minLength: 1, maxLength: 240 }, resistance: { type: "string", minLength: 1, maxLength: 240 },
-          power_rating: { type: "string", minLength: 1, maxLength: 240 }
-        }
-      },
-      missingDecisions: { type: "array", minItems: 1, maxItems: 9, uniqueItems: true, items: { type: "string", enum: ["identity", "purpose", "voltage", "current_or_load", "connector", "compatibility", "dimensions", "resistance", "power_rating"] } }
-    },
-    description: "Insufficient specifications must name missing decisions; sufficient specifications must record at least one decision."
-  };
-  const bomConstraintsSchema = {
-    type: "object", additionalProperties: false,
-    properties: {
-      kind: { type: "string" }, manufacturer: { type: "string" }, model: { type: "string" }, sku: { type: "string" },
-      tag: { type: "string" }, nameIncludes: { type: "string" }, specification: bomSpecificationSchema
-    }
-  };
-  const bomQuantityConversionSchema = {
-    type: "object", additionalProperties: false, required: ["inventory", "requirement", "evidence"],
-    properties: {
-      inventory: { type: "object", additionalProperties: false, required: ["quantity", "unit"], properties: { quantity: { const: 1 }, unit: { const: "set" } } },
-      requirement: { type: "object", additionalProperties: false, required: ["quantity", "unit"], properties: { quantity: { type: "integer", minimum: 1 }, unit: { const: "each" } } },
-      evidence: {
-        type: "object", additionalProperties: false, required: ["basis", "observedAt"],
-        properties: {
-          basis: { type: "string", enum: ["package_label", "manufacturer_spec", "physical_count", "user_assertion"] },
-          observedAt: { type: "string", format: "date-time" }, source: { type: "string", maxLength: 500 }, sourceId: { type: "string", maxLength: 500 }, note: { type: "string", maxLength: 1000 }
-        }
-      }
-    }
-  };
-  const bomAlternativeSchema = {
-    type: "object", additionalProperties: false, required: ["itemId"],
-    properties: {
-      itemId: artifactIdSchema, reason: { type: "string", maxLength: 1000 }, compatible: { type: "string", enum: ["confirmed", "conditional", "unknown"], default: "conditional" },
-      quantityConversion: bomQuantityConversionSchema
-    }
-  };
-  const bomWriteProperties = {
-    name: { type: "string", minLength: 1, maxLength: 240 }, itemId: artifactIdSchema, role: bomRoleSchema,
-    requiredQuantity: { type: "number", exclusiveMinimum: 0 }, unit: { type: "string", enum: ["each", "gram", "millimetre", "millilitre", "metre", "set"] },
-    optional: { type: "boolean" }, constraints: bomConstraintsSchema, alternatives: { type: "array", maxItems: 20, items: bomAlternativeSchema }, notes: { type: "string", maxLength: 2000 }
-  };
-  const bomLineSchema = {
-    type: "object", additionalProperties: false,
-    required: ["id", "revisionId", "name", "requiredQuantity", "unit", "optional", "constraints", "alternatives", "createdAt", "updatedAt", "version"],
-    properties: {
-      id: artifactIdSchema, revisionId: artifactIdSchema, ...bomWriteProperties,
-      retiredAt: { type: "string", format: "date-time" }, createdAt: { type: "string", format: "date-time" }, updatedAt: { type: "string", format: "date-time" }, version: { type: "integer", minimum: 1 }
-    }
-  };
-  const createBomLineOpenApiSchema = {
-    type: "object", additionalProperties: false,
-    required: ["name", "requiredQuantity", "unit", "optional", "alternatives"],
-    properties: { id: artifactIdSchema, ...bomWriteProperties }
-  };
-  const updateBomLineOpenApiSchema = { type: "object", additionalProperties: false, properties: { ...bomWriteProperties, itemId: { anyOf: [artifactIdSchema, { type: "null" }], description: "Null clears the selected inventory item; omission preserves it." } } };
-  const artifactRoleSchema = {
-    type: "string",
-    enum: ["source", "cad", "document", "brief", "design_record", "cad_source", "step", "stl", "three_mf", "slicer_project", "gcode", "firmware", "drawing", "validation", "photo", "text", "other"]
-  };
-  const artifactScopeSchema = {
-    oneOf: [
-      { type: "object", additionalProperties: false, required: ["projectRevisionId"], properties: { projectRevisionId: artifactIdSchema } },
-      { type: "object", additionalProperties: false, required: ["workItemId", "workItemRevisionId"], properties: { workItemId: artifactIdSchema, workItemRevisionId: artifactIdSchema } }
-    ],
-    description: "Exactly one revisioned scope: a project revision or a work-item revision."
-  };
-  const artifactUploadCommonProperties = {
-    projectId: artifactIdSchema,
-    role: artifactRoleSchema,
-    filename: { type: "string", minLength: 1, maxLength: 255 },
-    mediaType: { type: "string", minLength: 1, maxLength: 200 },
-    byteSize: { type: "integer", exclusiveMinimum: 0, maximum: 104857600 },
-    sha256: { type: "string", minLength: 64, maxLength: 64, pattern: "^[a-f0-9]{64}$" },
-    author: { type: "string", maxLength: 200 },
-    source: { type: "string", maxLength: 500 }
-  };
-  const beginUploadSchema = {
-    oneOf: [
-      {
-        type: "object",
-        additionalProperties: false,
-        required: ["projectId", "projectRevisionId", "role", "filename", "mediaType", "byteSize", "sha256"],
-        properties: { ...artifactUploadCommonProperties, projectRevisionId: artifactIdSchema, buildConfigurationSnapshotId: artifactIdSchema }
-      },
-      {
-        type: "object",
-        additionalProperties: false,
-        required: ["projectId", "workItemId", "workItemRevisionId", "role", "filename", "mediaType", "byteSize", "sha256"],
-        properties: { ...artifactUploadCommonProperties, workItemId: artifactIdSchema, workItemRevisionId: artifactIdSchema }
-      }
-    ],
-    description: "Every new upload must contain exactly one revisioned scope and its owning projectId. Legacy revisionId and ambiguous scopes are rejected."
-  };
-  const artifactListQuerySchema = {
-    oneOf: [
-      {
-        type: "object",
-        additionalProperties: false,
-        required: ["projectRevisionId"],
-        properties: { projectRevisionId: artifactIdSchema, role: artifactRoleSchema }
-      },
-      {
-        type: "object",
-        additionalProperties: false,
-        required: ["workItemId", "workItemRevisionId"],
-        properties: { workItemId: artifactIdSchema, workItemRevisionId: artifactIdSchema, role: artifactRoleSchema }
-      },
-      {
-        type: "object",
-        additionalProperties: false,
-        properties: { role: artifactRoleSchema }
-      }
-    ],
-    description: "Read-only listing supports one exact project revision, one exact work-item revision, or all artifacts in the project."
-  };
-  return {
-    openapi: "3.1.0",
-    info: { title: "BenchLedger API", version, description: "Evidence-based maker inventory and project workspace API." },
-    servers: [{ url: "/api/v1" }],
-    security: [{ bearerAuth: [] }, { cookieAuth: [] }],
-    components: {
-      securitySchemes: {
-      bearerAuth: { type: "http", scheme: "bearer", description: "Scoped MCP/API token. Store the plaintext token only in the client secret store." },
-      cookieAuth: { type: "apiKey", in: "cookie", name: "forge_session" },
-      transferAuth: { type: "apiKey", in: "header", name: "X-Bench-Transfer-Token", description: "Short-lived single-purpose capability issued by the authenticated browser/host transfer flow; keep it in the header and never put it in a URL." }
-      },
-      schemas: {
-        CreateInventoryItem: createInventoryItemSchema,
-        CommissionInventoryItem: commissionInventoryItemSchema,
-        InventoryBulkUpdate: inventoryBulkUpdateSchema,
-        CreateInventoryProductProfileWithoutItem: createInventoryProductProfileWithoutItemSchema,
-        CreateInventoryWithProductProfile: inventoryWithProductProfileSchema,
-        CreateProjectWithInitialRevision: createProjectWithInitialRevisionSchema,
-        FabricationRoute: fabricationRouteSchema,
-        ProjectRevision: projectRevisionSchema,
-        CreateProjectRevision: createProjectRevisionSchema,
-        UpdateProjectRevision: updateProjectRevisionSchema,
-        BomLine: bomLineSchema,
-        CreateBomLine: createBomLineOpenApiSchema,
-        UpdateBomLine: updateBomLineOpenApiSchema,
-        ProjectSetupProposal: { ...setupProposalSchema, description: "Strict bounded project setup proposal (maximum 6 work items, 24 BOM lines, 48 reservations, 256 KiB)." },
-        ProjectSetupPreview: { ...setupPreviewSchema, description: "Strict actor-owned 30-minute project setup preview." },
-        CommitProjectSetup: { type: "object", additionalProperties: false, required: ["expectedPreviewVersion", "contentSha256", "confirmReservations"], properties: { expectedPreviewVersion: { type: "integer", minimum: 1 }, contentSha256: { type: "string", pattern: "^[a-f0-9]{64}$" }, confirmReservations: { type: "boolean" } } },
-        ProjectCreationConflictDetails: projectCreationConflictDetailsSchema,
-        ErrorResponse: errorResponseSchema,
-        ArtifactScope: artifactScopeSchema,
-        BeginUpload: beginUploadSchema,
-        ArtifactListQuery: artifactListQuerySchema,
-        InventoryCategory: inventoryCategorySchema,
-        CreateInventoryCategory: createInventoryCategorySchema,
-        UpdateInventoryCategory: updateInventoryCategorySchema,
-        ProjectTombstone: { type: "object", additionalProperties: false, required: ["id", "name", "removedAt", "removedBy", "lastLifecycleStatus", "releasedReservationIds", "version"], properties: { id: { type: "string" }, name: { type: "string" }, removedAt: { type: "string", format: "date-time" }, removedBy: { type: "string" }, lastLifecycleStatus: { $ref: "#/components/schemas/ProjectLifecycle" }, releasedReservationIds: { type: "array", items: { type: "string" } }, version: { type: "integer", minimum: 1 }, auditId: { type: "string" } } },
-        ProjectLifecycle: { type: "string", enum: projectLifecycleValues, description: "Canonical project lifecycle. Blocked is derived from reasons and is not a lifecycle value." }
-      }
-    },
-    paths: {
-      ...makerWorkflowOpenApi(),
-      ...inventoryImageOpenApi(),
-      "/health": { get: { security: [], responses: { "200": { description: "Service health" } } } },
-      "/ready": { get: { security: [], responses: { "200": { description: "Readiness checks" }, "503": { description: "Not ready" } } } },
-      "/auth/login": { post: { security: [], responses: { "200": { description: "Session created" }, "401": { description: "Invalid credentials" }, "429": { description: "Too many attempts" } } } },
-      "/auth/access": {
-        get: { security: [], responses: { "200": { description: "Workspace access mode (mode, passwordConfigured, and version only)" } } },
-        patch: {
-          security: [{ cookieAuth: [] }],
-          summary: "Update browser workspace access mode (operation form)",
-          description: "UI-only unscoped administrator session. Requires CSRF, Idempotency-Key, and an operation-first body with expectedVersion (If-Match may also carry the same version). A successful mutation rotates the browser session and invalidates prior sessions.",
-          parameters: [
-            { in: "header", name: "If-Match", required: false, schema: { type: "string", pattern: "^(W/)?\\\"?[1-9][0-9]*\\\"?$" }, description: "Optional when expectedVersion is present in the body; if both are supplied they must match." },
-            { in: "header", name: "Idempotency-Key", required: true, schema: { type: "string", minLength: 8, maxLength: 200 } }
-          ],
-          requestBody: { required: true, content: { "application/json": { schema: { oneOf: [
-            { type: "object", additionalProperties: false, required: ["operation", "newPassword", "expectedVersion"], properties: { operation: { const: "enable" }, newPassword: { type: "string", minLength: 12, maxLength: 512 }, expectedVersion: { type: "integer", minimum: 1 } } },
-            { type: "object", additionalProperties: false, required: ["operation", "currentPassword", "expectedVersion"], properties: { operation: { const: "disable" }, currentPassword: { type: "string", minLength: 12, maxLength: 512 }, expectedVersion: { type: "integer", minimum: 1 } } },
-            { type: "object", additionalProperties: false, required: ["operation", "currentPassword", "newPassword", "expectedVersion"], properties: { operation: { const: "change_password" }, currentPassword: { type: "string", minLength: 12, maxLength: 512 }, newPassword: { type: "string", minLength: 12, maxLength: 512 }, expectedVersion: { type: "integer", minimum: 1 } } }
-          ] } } } },
-          responses: { "200": { description: "Updated workspace access mode and fresh session" }, "400": { description: "Invalid operation" }, "401": { description: "Current password is invalid" }, "403": { description: "UI administrator session required" }, "409": { description: "Stale access version or idempotency conflict" }, "429": { description: "Too many attempts" } }
-        }
-      },
-      "/auth/lan-session": { post: { security: [], responses: { "200": { description: "Explicit LAN session" }, "403": { description: "Password mode is enabled" } } } },
-      "/auth/security": {
-        post: {
-          security: [{ cookieAuth: [] }],
-          summary: "Update browser workspace access mode (operation form)",
-          parameters: [
-            { in: "header", name: "If-Match", required: false, schema: { type: "string", pattern: "^(W/)?\\\"?[1-9][0-9]*\\\"?$" }, description: "Required when expectedVersion is omitted from the body." },
-            { in: "header", name: "Idempotency-Key", required: true, schema: { type: "string", minLength: 8, maxLength: 200 } }
-          ],
-          requestBody: { required: true, content: { "application/json": { schema: { oneOf: [
-            { type: "object", additionalProperties: false, required: ["operation", "newPassword", "expectedVersion"], properties: { operation: { const: "enable" }, newPassword: { type: "string", minLength: 12, maxLength: 512 }, expectedVersion: { type: "integer", minimum: 1 } } },
-            { type: "object", additionalProperties: false, required: ["operation", "currentPassword", "expectedVersion"], properties: { operation: { const: "disable" }, currentPassword: { type: "string", minLength: 12, maxLength: 512 }, expectedVersion: { type: "integer", minimum: 1 } } },
-            { type: "object", additionalProperties: false, required: ["operation", "currentPassword", "newPassword", "expectedVersion"], properties: { operation: { const: "change_password" }, currentPassword: { type: "string", minLength: 12, maxLength: 512 }, newPassword: { type: "string", minLength: 12, maxLength: 512 }, expectedVersion: { type: "integer", minimum: 1 } } }
-          ] } } } },
-          responses: { "200": { description: "Updated workspace access mode and fresh session" }, "400": { description: "Invalid operation" }, "401": { description: "Current password is invalid" }, "403": { description: "UI administrator session required" }, "409": { description: "Stale access version or idempotency conflict" }, "429": { description: "Too many attempts" } }
-        }
-      },
-      "/workspace": { get: { responses: { "200": { description: "Authenticated aggregate workspace snapshot" } } } },
-      "/project-library": { get: { summary: "Read a bounded maker project library page", description: "Current revisions, requirements and readiness, exact project/workstream artifact ancestry, deliberate display covers. Project-scoped accounts see only their allow-listed projects. Default active includes completed projects. Iterate every nextCursor to read the complete library; no aggregate project cap.", parameters: [
-        { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 25 } },
-        { name: "cursor", in: "query", schema: { type: "string", minLength: 1, maxLength: 2048 } },
-        { name: "status", in: "query", schema: { type: "string", enum: ["active", "archived", "all"], default: "active" } }
-      ], responses: { "200": { description: "Project library page {data,limit,nextCursor?}; presentation is top-level on each project" }, "400": { description: "Invalid query or cursor" }, "403": { description: "Missing read authority" } } } },
-      "/inventory": { get: { description: "Returns a bounded inventory page; categoryNodeId and unassigned=true are mutually exclusive.", parameters: inventoryQueryParameters, responses: { "200": { description: "Inventory page" } } }, post: { responses: { "201": { description: "Inventory item" } } } },
-      "/inventory/categories": {
-        get: { parameters: [
-          { name: "includeArchived", in: "query", required: false, schema: { type: "boolean", default: false } },
-          { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } },
-          { name: "cursor", in: "query", required: false, schema: { type: "string", maxLength: 512 } },
-        ], responses: { "200": { description: "Managed inventory category page" } } },
-        post: { requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CreateInventoryCategory" } } } }, responses: { "201": { description: "Managed inventory category" } } }
-      },
-      "/inventory/categories/{id}": {
-        parameters: [categoryIdParameter],
-        get: { responses: { "200": { description: "Managed inventory category" } } },
-        patch: { parameters: [categoryVersionParameter], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateInventoryCategory" } } } }, responses: { "200": { description: "Updated managed inventory category" } } }
-      },
-      "/inventory/categories/{id}/archive": { parameters: [categoryIdParameter], post: { parameters: [categoryVersionParameter], responses: { "200": { description: "Archived managed inventory category" } } } },
-      "/inventory/bulk": {
-        patch: {
-          summary: "Apply one bounded metadata batch to explicit inventory items",
-          description: "Targets carry explicit optimistic versions. The server preflights every target and commits location, condition, and tag add/remove changes atomically; no-op targets keep their version and produce no audit or event.",
-          parameters: [{
-            name: "Idempotency-Key",
-            in: "header",
-            required: true,
-            description: "Stable command identity used to safely replay an identical bulk update.",
-            schema: { type: "string", minLength: 8, maxLength: 200 }
-          }],
-          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/InventoryBulkUpdate" } } } },
-          responses: { "200": { description: "Bulk inventory mutation with per-item audits" }, "400": { description: "Invalid request or missing idempotency key" }, "403": { description: "CSRF, write-scope, or project-scoped denial" }, "409": { description: "Version, idempotency, or atomic commit conflict" } }
-        }
-      },
-      "/inventory/with-product-profile": {
-        post: {
-          summary: "Create an inventory item and exact physical product profile atomically",
-          description: "The strict request contains only item and profile. The profile omits itemId; the server assigns it to the newly-created inventory item and rolls both records back if the compound command cannot commit.",
-          requestBody: {
-            required: true,
-            content: { "application/json": { schema: { $ref: "#/components/schemas/CreateInventoryWithProductProfile" } } }
-          },
-          responses: {
-            "201": { description: "Inventory item and physical profile mutation" },
-            "400": { description: "Invalid compound request" },
-            "409": { description: "Conflict or failed atomic commit" }
-          }
-        }
-      },
-      "/inventory/{id}": { delete: {
-        summary: "Delete an inventory item or printer from active lists, retaining history",
-        description: "Workspace-wide write access and session CSRF protection apply. Allocated stock must be released first. No physical stock event is invented. Existing project references retain their identity and need replacement stock. Use a stable Idempotency-Key when retrying.",
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }, { name: "If-Match", in: "header", required: true, schema: { type: "integer", minimum: 1 } }, { name: "Idempotency-Key", in: "header", schema: { type: "string" } }],
-        responses: { "200": { description: "Retired item with audit receipt" }, "400": { description: "Current item version required" }, "401": { description: "Authentication required" }, "403": { description: "Write access or CSRF rejected" }, "404": { description: "Item not found" }, "409": { description: "Stale version or allocated stock; refresh or release stock first" } }
-      }, get: { responses: { "200": { description: "Inventory item" } } }, patch: { responses: { "200": { description: "Updated inventory item" } } } },
-      "/inventory/{id}/commission": {
-        post: {
-          summary: "Commission an uncertain inventory item",
-          description: "Records the observed quantity and commissioned provenance as an append-only count event. The item evidence state cannot be changed by generic PATCH.",
-          parameters: [
-            { name: "If-Match", in: "header", required: true, schema: { type: "integer", minimum: 1 }, description: "Expected inventory item version; stale versions are rejected with 409." },
-            { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 8, maxLength: 200 }, description: "Stable key for retrying this exact commissioning command; reusing it with different input is rejected." }
-          ],
-          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CommissionInventoryItem" } } } },
-          responses: { "201": { description: "Commissioning event and resulting inventory item" }, "400": { description: "Invalid commissioning request" }, "409": { description: "Version conflict or invalid evidence transition" } }
-        }
-      },
-      "/inventory/{id}/product-profile": { get: { responses: { "200": { description: "Physical inventory product profile" }, "404": { description: "Profile not found" } } }, put: { responses: { "200": { description: "Updated physical inventory product profile" } } } },
-      "/inventory/{id}/count": { post: { responses: { "201": { description: "Recorded physical count" } } } },
-      "/inventory/{id}/stock-events": { get: { responses: { "200": { description: "Stock event page" } } }, post: { responses: { "201": { description: "Stock mutation" } } } },
-      "/projects": { get: { description: "Returns a bounded project page. Archived and removed projects are hidden by default; status=archived is the explicit reversible Archived view.", parameters: [{ name: "status", in: "query", required: false, schema: { $ref: "#/components/schemas/ProjectLifecycle" } }], responses: { "200": { description: "Project page" } } }, post: { responses: { "201": { description: "Project" } } } },
-      "/projects/removed": { get: { description: "List retained project removal tombstones as a bounded page. Removed projects cannot be restored or purged.", parameters: [{ name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } }, { name: "cursor", in: "query", required: false, schema: { type: "string", maxLength: 200 }, description: "Opaque continuation cursor from the preceding page." }], responses: { "200": { description: "Removed project tombstone page" } } } },
-      "/projects/with-initial-revision": {
-        post: {
-          summary: "Create a project and its first planning revision atomically",
-          description: "Accepts optional caller-provided stable project and revision IDs. An identical retry with the same Idempotency-Key replays exactly once. A 409 identifies a project ID, revision ID, generated project name/slug, or reused idempotency key; read the existing project, choose a different ID, or choose a different project name as directed. No records are committed on conflict.",
-          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CreateProjectWithInitialRevision" } } } },
-          responses: {
-            "201": { description: "Project and initial revision mutation" },
-            "400": { description: "Invalid project, revision, or stable identifier" },
-            "409": { description: "Project ID, revision ID, generated project name/slug, or idempotency-key conflict; no records were committed.", content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
-          }
-        }
-      },
-      "/project-setup/previews": { post: { summary: "Preview a bounded project graph setup", requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectSetupProposal" } } } }, responses: { "201": { description: "Actor-owned project setup preview" }, "400": { description: "Invalid proposal or semantic field errors" }, "403": { description: "Project-scoped token denied" } } } },
-      "/project-setup/previews/{id}/commit": { post: { summary: "Commit an exact project setup preview atomically", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", minLength: 1, maxLength: 160 } }, { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 8, maxLength: 200 } }], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CommitProjectSetup" } } } }, responses: { "200": { description: "Complete project graph, one aggregate audit, and context" }, "400": { description: "Invalid commit or missing reservation confirmation" }, "403": { description: "Project-scoped or insufficient scope" }, "409": { description: "Stale basis, identity, reservation, or idempotency conflict" } } } },
-      "/projects/{id}/revisions": { post: { requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CreateProjectRevision" } } } }, responses: { "201": { description: "Project revision" }, "400": { description: "Invalid route/printer planning fields" }, "404": { description: "Project not found" } } } },
-      "/project-revisions/{id}": {
-        get: { summary: "Read one project revision", responses: { "200": { description: "Project revision", content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectRevision" } } } }, "403": { description: "Revision scope denied" }, "404": { description: "Revision not found" } } },
-        patch: {
-          summary: "Update revision fabrication route planning",
-          description: "Narrow update of fabricationRoute and intendedPrinterItemId. intendedPrinterItemId is planning equipment only; a non-null value requires printed, and null clears the assignment. Lifecycle, evidence, BOM, and build configuration are unchanged.",
-          parameters: [{ name: "id", in: "path", required: true, schema: artifactIdSchema }, { name: "If-Match", in: "header", required: true, description: "Expected project revision version for optimistic concurrency.", schema: { type: "string", pattern: "^[1-9][0-9]*$" } }],
-          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateProjectRevision" } } } },
-          responses: { "200": { description: "Updated project revision", content: { "application/json": { schema: { type: "object" } } } }, "400": { description: "Invalid route/printer planning fields or missing If-Match" }, "403": { description: "Revision scope denied" }, "404": { description: "Revision not found" }, "409": { description: "Revision version conflict" } }
-        }
-      },
-      "/projects/{id}/restore": { post: { description: "Restore an archived project to idea; retained history stays in place and released reservations are not recreated.", responses: { "200": { description: "Restored project" }, "400": { description: "Invalid version precondition" }, "409": { description: "Version or project lifecycle conflict" } } } },
-      "/projects/{id}": { delete: { description: "Irreversibly remove an archived or active project from ordinary workspace views. Requires exact name confirmation, If-Match, and Idempotency-Key; retained history remains discoverable and no purge is available.", parameters: [{ in: "header", name: "If-Match", required: true, schema: { type: "string" } }, { in: "header", name: "Idempotency-Key", required: true, schema: { type: "string", minLength: 8, maxLength: 200 } }], requestBody: { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: false, required: ["name"], properties: { name: { type: "string", minLength: 1, maxLength: 240 } } } } } }, responses: { "200": { description: "Project tombstone and released reservation IDs" }, "400": { description: "Missing preconditions or invalid confirmation" }, "409": { description: "Version, confirmation, or idempotency conflict" }, "410": { description: "Project was already removed" } } } },
-      "/projects/{id}/removed-history": { get: { description: "Read a bounded page of append-only audit history for a removed project.", parameters: [{ name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } }, { name: "cursor", in: "query", required: false, schema: { type: "string", maxLength: 200 }, description: "Opaque continuation cursor from the preceding page." }], responses: { "200": { description: "Removed project audit page" }, "409": { description: "Project has not been removed" } } } },
-      "/catalog/products": { get: { responses: { "200": { description: "Bounded exact catalog product page" } } }, post: { responses: { "201": { description: "Catalog product mutation" } } } },
-      "/catalog/products/{id}": { get: { responses: { "200": { description: "Exact catalog product" } } }, patch: { responses: { "200": { description: "Updated exact catalog product" } } } },
-      "/project-revisions/{id}/bom": { get: { parameters: [{ name: "includeRetired", in: "query", required: false, schema: { type: "boolean", default: false } }], responses: { "200": { description: "Active BOM lines by default; retired history when explicitly requested" } } }, post: { requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CreateBomLine" } } } }, responses: { "201": { description: "BOM line" } } } },
-      "/bom-lines/{id}": { patch: { summary: "Update a BOM requirement, including legacy role repair", parameters: [{ name: "id", in: "path", required: true, schema: artifactIdSchema }, { name: "If-Match", in: "header", required: false, description: "Optional expected BOM line version for optimistic concurrency.", schema: { type: "string", pattern: "^[1-9][0-9]*$" } }], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateBomLine" } } } }, responses: { "200": { description: "Updated BOM line" }, "400": { description: "Invalid BOM line or version precondition" }, "409": { description: "Version, active-reservation, or compatibility conflict" } } }, delete: { parameters: [{ name: "If-Match", in: "header", required: true, schema: { type: "integer", minimum: 1 } }], responses: { "200": { description: "Retired BOM line" }, "400": { description: "Missing or invalid version precondition" }, "409": { description: "Version or active-reservation conflict" } } } },
-      "/bom-lines/{id}/restore": { post: { parameters: [{ name: "If-Match", in: "header", required: true, schema: { type: "integer", minimum: 1 } }], responses: { "200": { description: "Restored BOM line" }, "400": { description: "Missing or invalid version precondition" }, "409": { description: "Version conflict" } } } },
-      "/project-revisions/{id}/build-configurations": { get: { responses: { "200": { description: "Immutable build configuration snapshot page" } } }, post: { responses: { "201": { description: "Immutable build configuration snapshot" } } } },
-      "/build-configurations/{id}": { get: { responses: { "200": { description: "Immutable build configuration snapshot" } } } },
-      "/project-revisions/{id}/gaps": { get: { responses: { "200": { description: "Evidence-backed BOM gaps" } } } },
-      "/project-revisions/{revisionId}/inspections": {
-        get: {
-          summary: "List the derived inspection queue",
-          description: "Returns only current Check-gap inspection actions. The queue is recomputed from canonical BOM and inventory evidence and is never persisted.",
-          parameters: [
-            { name: "revisionId", in: "path", required: true, schema: { type: "string" } },
-            { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } },
-            { name: "cursor", in: "query", required: false, schema: { type: "string", maxLength: 512 } },
-          ],
-          responses: { "200": { description: "Deterministically sorted inspection action page" }, "403": { description: "Revision scope denied" } },
-        },
-      },
-      "/project-revisions/{revisionId}/inspections/{inspectionId}": {
-        get: {
-          summary: "Read one derived inspection action",
-          responses: { "200": { description: "Current inspection action" }, "404": { description: "Action is unavailable or has resolved" } },
-        },
-      },
-      "/project-revisions/{revisionId}/inspections/{inspectionId}/completion-preview": {
-        post: {
-          summary: "Preview an inspection completion",
-          description: "Returns an actor-bound, expiring before/after projection and basis. Preview never mutates stock, BOM, evidence, or audit state.",
-          parameters: [{ name: "revisionId", in: "path", required: true, schema: { type: "string" } }, { name: "inspectionId", in: "path", required: true, schema: { type: "string" } }],
-          responses: { "201": { description: "Actor-bound completion preview requiring confirmation" }, "400": { description: "Invalid observation" }, "409": { description: "Current action or basis conflict" } },
-        },
-      },
-      "/project-revisions/{revisionId}/inspections/{inspectionId}/completion-commit": {
-        post: {
-          summary: "Commit a confirmed inspection completion",
-          description: "Requires confirmed=true and a separate Idempotency-Key. Rechecks preview actor, expiry, hash, action and line/item basis in one unit of work; appends evidence and applies only physical-count stock changes atomically.",
-          parameters: [{ name: "revisionId", in: "path", required: true, schema: { type: "string" } }, { name: "inspectionId", in: "path", required: true, schema: { type: "string" } }, { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 8, maxLength: 200 } }],
-          responses: { "200": { description: "Evidence, resulting item when counted, gaps, and current queue" }, "400": { description: "Invalid or unconfirmed commit" }, "409": { description: "Stale preview, basis, or idempotency conflict; recover with list_inspections" } },
-        },
-      },
-      "/project-revisions/{id}/reconciliation": {
-        get: { summary: "Read the current post-project reconciliation draft", responses: { "200": { description: "Reconciliation draft, or null before the first save" } } },
-        put: { summary: "Save a review-only post-project reconciliation draft", responses: { "200": { description: "Saved reconciliation draft mutation" }, "409": { description: "Version or basis conflict" } } }
-      },
-      "/project-revisions/{id}/reconciliation/commit": { post: { summary: "Commit a reviewed reconciliation atomically", responses: { "200": { description: "Committed reconciliation mutation" }, "409": { description: "Stale basis, version, or replay conflict" } } } },
-      "/project-revisions/{id}/usage": { post: { responses: { "201": { description: "Recorded reviewed project usage" } } } },
-      "/projects/{id}/artifacts": {
-        get: {
-          summary: "List artifacts by exact revision scope or all project artifacts",
-          description: "Read-only listing. Supply projectRevisionId for one exact project revision, workItemId plus workItemRevisionId for one exact work-item revision, or neither for all project artifacts. A work-item ID without its revision and legacy revisionId are rejected.",
-          parameters: [
-            { name: "id", in: "path", required: true, schema: artifactIdSchema },
-            { name: "projectRevisionId", in: "query", required: false, schema: artifactIdSchema },
-            { name: "workItemId", in: "query", required: false, schema: artifactIdSchema },
-            { name: "workItemRevisionId", in: "query", required: false, schema: artifactIdSchema },
-            { name: "role", in: "query", required: false, schema: artifactRoleSchema }
-          ],
-          responses: { "200": { description: "Artifact list" }, "400": { description: "Invalid or ambiguous scope" }, "404": { description: "Revision scope not found in the project" } }
-        }
-      },
-      "/artifacts/uploads": {
-        post: {
-          summary: "Begin a revision-scoped artifact upload",
-          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/BeginUpload" } } } },
-          responses: { "201": { description: "Upload session" }, "400": { description: "Invalid, ambiguous, legacy, or unrevisioned scope" }, "403": { description: "Project-scoped access denied" }, "404": { description: "Revision scope not found in the project" } }
-        }
-      },
-      "/artifacts/uploads/{id}": {
-        get: {
-          summary: "Read durable upload progress before retrying bytes",
-          description: "Requires read access and upload project scope. Returns session identity, status and receivedBytes. Reading does not extend expiry. Resume only the remaining bytes at the reported offset, then finalize to verify size and SHA-256.",
-          parameters: [{ name: "id", in: "path", required: true, schema: artifactIdSchema }],
-          responses: { "200": { description: "Upload session with receivedBytes" }, "403": { description: "Read access or upload project scope denied" }, "404": { description: "Upload not found" } }
-        },
-        put: {
-          summary: "Write the bytes for an existing artifact upload",
-          description: "Requires write access. Project-scoped bearer tokens resolve the upload's durable project ancestry before writing. Send the exact declared bytes, or the remaining suffix with Upload-Offset after reading session progress. The offset is checked atomically; a stale offset returns 409 without appending. Maximum 100 MiB, subject to the configured server limit. Browser sessions require CSRF protection.",
-          parameters: [{ name: "id", in: "path", required: true, schema: artifactIdSchema }, { name: "Upload-Offset", in: "header", required: false, schema: { type: "integer", minimum: 0 } }],
-          requestBody: { required: true, content: { "application/octet-stream": { schema: { type: "string", format: "binary" } } } },
-          responses: { "200": { description: "Bytes received", content: { "application/json": { schema: { type: "object", required: ["receivedBytes"], properties: { receivedBytes: { type: "integer", minimum: 0 } } } } } }, "403": { description: "Write access or upload project scope denied" }, "409": { description: "Byte offset changed; read progress before resuming" }, "413": { description: "Configured byte limit exceeded" } }
-        }
-      },
-      "/artifacts/uploads/{id}/finalize": {
-        post: {
-          summary: "Finalize and verify an existing artifact upload",
-          description: "Requires write access and durable upload project allow-list membership. No body is required. The shared application service checks project state, byte length and SHA-256 before committing. The response is a mutation envelope with artifact metadata in data. After an ambiguous response inspect the revision before repeating an upload.",
-          parameters: [{ name: "id", in: "path", required: true, schema: artifactIdSchema }],
-          responses: { "200": { description: "Finalized artifact mutation", content: { "application/json": { schema: { type: "object", required: ["data"], properties: { data: { type: "object", description: "Artifact metadata including id, projectId, revisionId, optional workItemId, role, filename, byteSize and sha256" } } } } } }, "403": { description: "Write access or upload project scope denied" }, "409": { description: "Project state or integrity conflict" } }
-        }
-      },
-      "/artifacts/{id}": {
-        get: {
-          summary: "Read artifact metadata without downloading bytes",
-          description: "Requires read access and durable artifact project allow-list membership. revisionId is the stored revision identifier; workItemId distinguishes work-item scope from project-revision scope.",
-          parameters: [{ name: "id", in: "path", required: true, schema: artifactIdSchema }],
-          responses: { "200": { description: "Artifact metadata", content: { "application/json": { schema: { type: "object", required: ["id", "projectId", "role", "filename", "byteSize", "sha256"], properties: { id: artifactIdSchema, projectId: artifactIdSchema, revisionId: artifactIdSchema, workItemId: artifactIdSchema, role: artifactRoleSchema, filename: { type: "string" }, byteSize: { type: "integer", minimum: 0 }, sha256: { type: "string", pattern: "^[a-f0-9]{64}$" } } } } } }, "403": { description: "Read access or artifact project scope denied" }, "404": { description: "Artifact not found" } }
-        }
-      },
-      "/artifacts/{id}/download": {
-        get: {
-          summary: "Download stored artifact bytes",
-          description: "Requires read access and durable artifact project allow-list membership. Verify returned bytes against metadata byteSize and sha256. Content-Type is the stored media type; Content-Disposition includes an ASCII fallback and RFC5987 UTF-8 filename.",
-          parameters: [{ name: "id", in: "path", required: true, schema: artifactIdSchema }],
-          responses: { "200": { description: "Artifact bytes", headers: { "Content-Disposition": { schema: { type: "string" } } }, content: { "*/*": { schema: { type: "string", format: "binary" } } } }, "403": { description: "Read access or artifact project scope denied" }, "404": { description: "Artifact not found" } }
-        }
-      },
-      "/transfers/uploads/{id}": { put: { security: [{ transferAuth: [] }], responses: { "200": { description: "Uploaded bytes" }, "403": { description: "Invalid or expired transfer capability" }, "410": { description: "Expired transfer capability" } } } },
-      "/transfers/uploads/{id}/finalize": { post: { security: [{ transferAuth: [] }], responses: { "200": { description: "Finalized artifact" }, "403": { description: "Invalid or expired transfer capability" }, "410": { description: "Expired transfer capability" } } } },
-      "/transfers/artifacts/{id}/download": { get: { security: [{ transferAuth: [] }], responses: { "200": { description: "Artifact bytes" }, "403": { description: "Invalid or expired transfer capability" }, "410": { description: "Expired transfer capability" } } } },
-      "/mcp": { post: { security: [{ bearerAuth: [] }], responses: { "200": { description: "Authenticated MCP JSON-RPC response" } } } },
-      "/events": { get: { responses: { "200": { description: "Server-sent state events" } } } }
-    }
-  };
-}
-
 interface WorkspaceProject extends ApiProject {
   readonly workItems: readonly ApiWorkItem[];
   readonly bom: readonly ApiBomLine[];
@@ -1265,6 +689,8 @@ interface WorkspaceSnapshot {
   readonly source: "api";
   readonly fetchedAt: string;
   readonly capabilities: readonly string[];
+  /** Interpretation preferences that label availability (for example the stock receiving policy). */
+  readonly preferences: ApiWorkspacePreferences;
   readonly pagination: {
     readonly inventory: { readonly limit: number; readonly total?: number; readonly nextCursor?: string };
     readonly projects: { readonly limit: number; readonly total?: number; readonly nextCursor?: string };
@@ -1311,10 +737,11 @@ async function hydrateWorkspaceInventory(
 }
 
 async function workspaceSnapshot(service: ApplicationService, projectIds?: ReadonlySet<string>): Promise<WorkspaceSnapshot> {
-  const [inventory, projects, offers] = await Promise.all([
+  const [inventory, projects, offers, preferences] = await Promise.all([
     service.listInventory({ limit: 200 }),
     projectIds === undefined ? service.listProjects({ limit: 200 }) : scopedProjectPage(service, { limit: 200 }, projectIds),
-    service.listOffers(undefined, 200)
+    service.listOffers(undefined, 200),
+    service.getWorkspacePreferences()
   ]);
   const enrichedProjects = await Promise.all(projects.data.map(async (project): Promise<WorkspaceProject> => {
     const { presentation: _presentation, ...hydrated } = await hydrateProject(service, project, false);
@@ -1328,6 +755,7 @@ async function workspaceSnapshot(service: ApplicationService, projectIds?: Reado
     source: "api",
     fetchedAt: new Date().toISOString(),
     capabilities: [...(service.assemblies.supports() ? ["assembly.read", "assembly.write", "pcb.read"] : []), ...(service.inventoryImages.supports() ? ["inventory.images.read", "inventory.images.write"] : []), ...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : []), ...(service.makerWorkflows.supports() ? ["maker_workflows.read", "maker_workflows.write", "project_library.read", "project_presentation.read", "project_presentation.write"] : [])],
+    preferences,
     pagination: {
       inventory: { limit: inventory.limit, ...(inventory.total === undefined ? {} : { total: inventory.total }), ...(inventory.nextCursor === undefined ? {} : { nextCursor: inventory.nextCursor }) },
       projects: { limit: projects.limit, ...(projects.total === undefined ? {} : { total: projects.total }), ...(projects.nextCursor === undefined ? {} : { nextCursor: projects.nextCursor }) },
@@ -1353,6 +781,9 @@ async function scopedProjectPage(service: ApplicationService, query: ProjectList
 }
 
 function errorStatus(error: ApplicationError): number {
+  // `internal` may be introduced by the application layer for unknown
+  // failures; compare as a string so this host compiles either way.
+  if ((error.code as string) === "internal") return 500;
   switch (error.code) {
     case "not_found": return 404;
     case "project_removed": return 410;
@@ -1390,11 +821,23 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   // it out of createApp's environment reads allows durable state to become the
   // source of truth after the first startup.
   const adminPasswordHash = options.auth?.adminPasswordHash;
-  const sessionSecret = options.auth?.sessionSecret ?? process.env.BENCHLEDGER_SESSION_SECRET ?? (demo ? randomSecret() : "");
+  const environmentSessionSecret = options.auth?.sessionSecret === undefined ? process.env.BENCHLEDGER_SESSION_SECRET : undefined;
+  // Operator-supplied secrets are checked strictly at startup so the
+  // documented placeholder or a trivially guessable value never signs sessions.
+  if (environmentSessionSecret !== undefined) assertStrongSessionSecret(environmentSessionSecret, "BENCHLEDGER_SESSION_SECRET");
+  const sessionSecret = options.auth?.sessionSecret ?? environmentSessionSecret ?? (demo ? randomSecret() : "");
   const publicBaseUrl = publicBaseUrlFromEnvironment(options.publicBaseUrl ?? process.env.BENCHLEDGER_PUBLIC_BASE_URL, demo);
+  const publicOrigin = new URL(publicBaseUrl);
+  const allowedHosts = new Set<string>([publicOrigin.hostname.toLowerCase(), ...LOOPBACK_HOSTS, ...(options.allowedHosts ?? []).map((host) => host.toLowerCase())]);
+  const uploadBodyLimit = options.maxUploadBytes ?? positiveIntegerFromEnvironment(process.env, "BENCHLEDGER_MAX_UPLOAD_BYTES") ?? DEFAULT_UPLOAD_BODY_LIMIT;
   const artifactTransfer = options.artifactTransferManager ?? new ArtifactTransferManager(publicBaseUrl);
   let activePasswordHashes = 0;
-  const runtime: RuntimeHandle | undefined = options.runtime ?? (options.ports ? undefined : demo ? createSyntheticRuntime() : await createProductionRuntime({
+  // Demo mode runs the real SQLite runtime on a disposable in-memory
+  // database and temporary artifact directory, seeded with synthetic data.
+  const runtime: RuntimeHandle | undefined = options.runtime ?? (options.ports ? undefined : demo ? await createDemoRuntime({
+    ...(options.maxUploadBytes === undefined ? {} : { maxUploadBytes: options.maxUploadBytes }),
+    ...(options.maxStorageBytes === undefined ? {} : { maxStorageBytes: options.maxStorageBytes })
+  }) : await createProductionRuntime({
     dataDir: options.dataDir ?? process.env.BENCHLEDGER_DATA_DIR ?? "",
     ...(options.maxUploadBytes === undefined ? {} : { maxUploadBytes: options.maxUploadBytes }),
     ...(options.maxStorageBytes === undefined ? {} : { maxStorageBytes: options.maxStorageBytes }),
@@ -1434,11 +877,20 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     },
     ...(demo ? { demo: true, demoPassword: options.auth?.demoPassword ?? process.env.BENCHLEDGER_DEMO_PASSWORD ?? "demo-password-please-change" } : {}),
     ...(suppliedBearerTokens.length > 0 ? { bearerTokens: suppliedBearerTokens } : {}),
-    secureCookies: options.auth?.secureCookies ?? false,
+    // Secure cookies by default whenever the public origin is HTTPS.
+    secureCookies: options.auth?.secureCookies ?? publicOrigin.protocol === "https:",
     sessionTtlSeconds: options.auth?.sessionTtlSeconds ?? 8 * 60 * 60
   };
   const auth = new AuthManager(authConfig);
-  const app = Fastify({ logger: options.logger ?? false, trustProxy: options.trustProxy ?? false, bodyLimit: 100 * 1024 * 1024 });
+  // A hop count trusts only the nearest N proxies (the right-most forwarded
+  // addresses), so a client-supplied X-Forwarded-For prefix is never used.
+  const configuredTrustProxy = options.trustProxy;
+  const trustProxy: FastifyHttpOptions<HttpServer>["trustProxy"] = configuredTrustProxy === undefined ? false
+    : typeof configuredTrustProxy === "number" ? (_address: string, hop: number) => hop < configuredTrustProxy
+    : typeof configuredTrustProxy === "boolean" || typeof configuredTrustProxy === "string" ? configuredTrustProxy
+    : [...configuredTrustProxy];
+  const serverOptions: FastifyHttpOptions<HttpServer> = { logger: options.logger ?? false, trustProxy, bodyLimit: DEFAULT_BODY_LIMIT };
+  const app = Fastify(serverOptions);
   if (runtime?.close !== undefined) app.addHook("onClose", async () => runtime.close?.());
   await app.register(cookie);
   await app.register(swagger, { openapi: jsonOpenApi(service.getVersion()) });
@@ -1451,12 +903,20 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   // an attacker cannot bypass the limit by alternating the two endpoints.
   const passwordAttempts = new Map<string, AttemptWindow>();
   const passwordHashAttempts = new Map<string, AttemptWindow>();
+  // Workspace-wide ceiling on failed logins, independent of client address.
+  // Exceeding it never blocks a login (that would let anyone lock out every
+  // user with a burst of wrong guesses); instead every attempt is delayed and
+  // still verified, which bounds guessing throughput from rotating addresses.
+  // Counters live in memory and are cleared by a restart.
+  const globalLoginFailures = new Map<string, AttemptWindow>();
+  const GLOBAL_LOGIN_KEY = "*";
+  const loginSlowdownMs = Math.max(0, options.loginSlowdownMs ?? DEFAULT_LOGIN_SLOWDOWN_MS);
   let activePasswordVerifications = 0;
 
-  const rateLimitWindow = (attempts: Map<string, AttemptWindow>, key: string, label: string): void => {
+  const rateLimitWindow = (attempts: Map<string, AttemptWindow>, key: string, label: string, limit = AUTH_ATTEMPT_LIMIT): void => {
     const current = attempts.get(key);
     const now = Date.now();
-    if (current?.resetAt !== undefined && current.resetAt > now && current.count >= AUTH_ATTEMPT_LIMIT) {
+    if (current?.resetAt !== undefined && current.resetAt > now && current.count >= limit) {
       throw new WorkspaceSecurityRateLimitError(`Too many ${label} attempts; try again later`, Math.max(1, Math.ceil((current.resetAt - now) / 1000)));
     }
     if (current !== undefined && current.resetAt <= now) attempts.delete(key);
@@ -1466,6 +926,20 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const current = attempts.get(key);
     const now = Date.now();
     attempts.set(key, { count: (current?.resetAt !== undefined && current.resetAt > now ? current.count : 0) + 1, resetAt: current?.resetAt !== undefined && current.resetAt > now ? current.resetAt : now + AUTH_ATTEMPT_WINDOW_MS });
+  };
+
+  const checkLoginBudget = async (clientKey: string): Promise<void> => {
+    rateLimitWindow(passwordAttempts, clientKey, "login");
+    const global = globalLoginFailures.get(GLOBAL_LOGIN_KEY);
+    const now = Date.now();
+    if (global !== undefined && global.resetAt <= now) globalLoginFailures.delete(GLOBAL_LOGIN_KEY);
+    else if (global !== undefined && global.count >= GLOBAL_LOGIN_FAILURE_LIMIT && loginSlowdownMs > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, loginSlowdownMs));
+    }
+  };
+  const recordLoginFailure = (clientKey: string): void => {
+    recordFailedAttempt(passwordAttempts, clientKey);
+    recordFailedAttempt(globalLoginFailures, GLOBAL_LOGIN_KEY);
   };
 
   const verifyPasswordWithThrottle = async (operation: () => Promise<boolean>, label: string): Promise<boolean> => {
@@ -1507,13 +981,46 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     }
   };
 
+  /**
+   * Browser requests carry Origin (and Sec-Fetch-Site). Accept a missing
+   * Origin for non-browser clients, but reject any browser request whose
+   * Origin is neither the configured public origin nor this request's Host.
+   */
+  const sameOriginRequest = (request: FastifyRequest): boolean => {
+    const fetchSite = request.headers["sec-fetch-site"];
+    if (fetchSite === "cross-site") return false;
+    const origin = request.headers.origin;
+    if (origin === undefined) return true;
+    if (origin === publicOrigin.origin) return true;
+    let parsed: URL;
+    try { parsed = new URL(origin); } catch { return false; }
+    if (parsed.origin === "null" || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) return false;
+    return parsed.host.toLowerCase() === (request.headers.host ?? "").trim().toLowerCase();
+  };
+
   app.addHook("onRequest", async (request, reply) => {
     const correlationId = validCorrelation(Array.isArray(request.headers["x-correlation-id"]) ? request.headers["x-correlation-id"][0] : request.headers["x-correlation-id"]);
     request.correlationId = correlationId;
     reply.header("x-correlation-id", correlationId);
-    const contentType = request.headers["content-type"] ?? "";
+    // DNS-rebinding defence: a browser tricked into resolving another name to
+    // this server still sends that name in Host. Only the configured public
+    // host, explicit extra hosts and loopback names are served.
+    const host = hostName(request.headers.host);
+    if (host === undefined || !allowedHosts.has(host)) {
+      await reply.code(421).send({ error: { code: "host_not_allowed", message: "This Host is not configured for BenchLedger. Use the configured public address or add it to BENCHLEDGER_ALLOWED_HOSTS.", correlationId } });
+      return reply;
+    }
     const contentLength = Number(request.headers["content-length"] ?? 0);
     const path = request.url.split("?")[0] ?? request.url;
+    const bodyLimit = request.routeOptions.bodyLimit ?? DEFAULT_BODY_LIMIT;
+    if (Number.isFinite(contentLength) && contentLength > bodyLimit) {
+      await reply.code(413).send({ error: { code: "quota_exceeded", message: "Request body is too large", correlationId } });
+      return reply;
+    }
+    if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && request.headers.authorization === undefined && !sameOriginRequest(request)) {
+      await reply.code(403).send({ error: { code: "forbidden", message: "Cross-origin requests are not allowed", correlationId } });
+      return reply;
+    }
     // Capability endpoints authenticate with their single-purpose transfer
     // header, so they intentionally bypass the session/bearer + CSRF hook.
     if (path.startsWith("/api/v1/transfers/")) {
@@ -1525,10 +1032,6 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
         artifactTransfer.preflight(transfer.action, request.headers[TRANSFER_TOKEN_HEADER], transfer.resourceId);
       }
       return;
-    }
-    if (contentType.toLowerCase().startsWith("application/json") && Number.isFinite(contentLength) && contentLength > 2 * 1024 * 1024) {
-      await reply.code(413).send({ error: { code: "quota_exceeded", message: "JSON request body is too large", correlationId } });
-      return reply;
     }
     if (!request.url.startsWith("/api/v1")) return;
     teamState = await service.team.sessionState();
@@ -1553,20 +1056,64 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   });
 
   app.setErrorHandler((error, request, reply) => {
+    const correlationId = request.correlationId;
     if (error instanceof ApplicationError) {
       const applicationError = error as ApplicationError;
-      return reply.code(errorStatus(applicationError)).send({ error: { code: applicationError.code, message: applicationError.message, ...(applicationError.details ? { details: applicationError.details } : {}), correlationId: request.correlationId } });
+      const status = errorStatus(applicationError);
+      if (status >= 500) {
+        request.log.error({ err: error, code: applicationError.code, correlationId }, "request failed");
+        return reply.code(status).send({ error: { code: "internal", message: "An unexpected server error occurred", correlationId } });
+      }
+      request.log.info({ code: applicationError.code, status, correlationId }, "request rejected");
+      return reply.code(status).send({ error: { code: applicationError.code, message: applicationError.message, ...(applicationError.details ? { details: applicationError.details } : {}), correlationId } });
+    }
+    if (error instanceof PreconditionRequiredError) {
+      request.log.info({ code: "precondition_required", status: 428, correlationId }, "request rejected");
+      return reply.code(428).send({ error: { code: "precondition_required", message: error.message, correlationId } });
     }
     const securityError = workspaceSecurityError(error);
     if (securityError !== null) {
+      request.log.info({ code: securityError.code, status: securityError.status, correlationId }, "request rejected");
       if (securityError.retryAfterSeconds !== undefined) reply.header("retry-after", String(securityError.retryAfterSeconds));
-      return reply.code(securityError.status).send({ error: { code: securityError.code, message: securityError.message, ...(securityError.details ? { details: securityError.details } : {}), correlationId: request.correlationId } });
+      return reply.code(securityError.status).send({ error: { code: securityError.code, message: securityError.message, ...(securityError.details ? { details: securityError.details } : {}), correlationId } });
+    }
+    // HTTP-layer request parsing (parseBody, query/If-Match parsers) raises
+    // ApplicationError "validation". The application layer still parses its
+    // command input with Zod, so a raw ZodError reaching here is reported as
+    // client validation; values the HTTP layer builds itself are checked with
+    // shapeResponse, whose failure is a logged 500 instead.
+    const issues = zodIssues(error);
+    if (issues !== null) {
+      request.log.info({ code: "validation", status: 400, correlationId }, "request rejected");
+      return reply.code(400).send({ error: { code: "validation", message: "Request is invalid", details: { issues }, correlationId } });
     }
     if (error && typeof error === "object" && "validation" in error) {
-      return reply.code(400).send({ error: { code: "validation", message: "Request is invalid", correlationId: request.correlationId } });
+      return reply.code(400).send({ error: { code: "validation", message: "Request is invalid", correlationId } });
+    }
+    // Fastify framework errors (body too large, bad JSON, unsupported media)
+    // carry a 4xx status; report them as such rather than as server faults.
+    const frameworkStatus = error instanceof Error && typeof (error as Error & { statusCode?: unknown }).statusCode === "number" && typeof (error as Error & { code?: unknown }).code === "string" && String((error as Error & { code?: unknown }).code).startsWith("FST_")
+      ? (error as Error & { statusCode: number }).statusCode : undefined;
+    if (frameworkStatus !== undefined && frameworkStatus >= 400 && frameworkStatus < 500) {
+      const code = frameworkStatus === 413 ? "quota_exceeded" : frameworkStatus === 415 ? "unsupported_media" : "validation";
+      const message = frameworkStatus === 413 ? "Request body is too large" : frameworkStatus === 415 ? "Unsupported request media type" : "Request is invalid";
+      request.log.info({ code, status: frameworkStatus, correlationId }, "request rejected");
+      return reply.code(frameworkStatus).send({ error: { code, message, correlationId } });
     }
     request.log.error({ err: error, correlationId: request.correlationId }, "request failed");
     return reply.code(500).send({ error: { code: "internal", message: "An unexpected server error occurred", correlationId: request.correlationId } });
+  });
+
+  app.addHook("onSend", async (request, reply, payload) => {
+    reply.header("x-content-type-options", "nosniff");
+    reply.header("referrer-policy", "no-referrer");
+    reply.header("x-frame-options", "DENY");
+    if (!reply.hasHeader("content-security-policy")) {
+      const path = request.url.split("?", 1)[0] ?? request.url;
+      const contentType = String(reply.getHeader("content-type") ?? "");
+      reply.header("content-security-policy", !path.startsWith("/api/") && contentType.startsWith("text/html") ? SPA_CSP : API_CSP);
+    }
+    return payload;
   });
 
   const route = (path: string) => `/api/v1${path}`;
@@ -1581,26 +1128,30 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   app.get(route("/health"), async () => {
     const result = await service.health();
     const { checks: _checks, ...health } = result;
-    return healthSchema.parse({ ...health, demo });
+    return shapeResponse(healthSchema, { ...health, demo });
   });
-  app.get(route("/ready"), async (_request, reply) => {
+  app.get(route("/ready"), async (request, reply) => {
     const result = await service.health();
     const ready = result.status === "ok";
-    if (!ready) return reply.code(503).send({ ...result, demo });
-    return { ...result, demo };
+    // Internal dependency checks are diagnostic detail for operators only.
+    const { checks: _checks, ...summary } = result;
+    const body = auth.authenticate(request) === null ? { ...summary, demo } : { ...result, demo };
+    if (!ready) return reply.code(503).send(body);
+    return body;
   });
   app.get(route("/capabilities"), async () => ({
     name: "BenchLedger", version: service.getVersion(), protocol: "rest-v1", demo,
     authentication: { accessModes: ["lan_open", "password"], access: "/api/v1/auth/access", explicitLanSession: "/api/v1/auth/lan-session", bearerRequiredForMcp: true },
-    vocabulary: { confirmed: "physically counted or commissioned stock", inspect_first: "recorded stock requiring a physical count", missing: "no confirmed or inspect-first candidate" },
-    actions: [...(service.assemblies.supports() ? ["assembly.read", "assembly.write", "pcb.read"] : []), ...(service.inventoryImages.supports() ? ["inventory.images.read", "inventory.images.write"] : []), "inventory.read", "inventory.write", "inventory.categories.read", "inventory.categories.write", "catalog.read", "catalog.write", "inventory.product_profile.read", "inventory.product_profile.write", "projects.read", "projects.write", "projects.remove", "projects.removed_history", "build_configurations.read", "build_configurations.create", "bom.evaluate", "artifacts.version", "offers.compare", "events.subscribe", ...(service.makerWorkflows.supports() ? ["project_library.read", "project_presentation.read", "project_presentation.write", "project_setup.guided", "requirement_offers.read", "requirement_offers.write", "build_plan.read", "build_plan.write", "workstreams.read", "workstreams.write", "bom.import"] : []), ...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : [])],
+    vocabulary: { confirmed: "physically counted or commissioned stock", assumed: "delivered or ordered stock that counts as in stock only because the workspace stock receiving policy trusts it; evidence is unchanged", inspect_first: "recorded stock requiring a physical count", ordered: "ordered stock not yet counted as in stock", missing: "no confirmed or inspect-first candidate" },
+    stockReceivingPolicy: { policies: ["on_purchase", "on_delivery", "on_receipt"], default: "on_receipt", read: "/api/v1/workspace/preferences", impact: "/api/v1/workspace/preferences/stock-receiving-impact", change: "human workspace administrator browser session only" },
+    actions: [...(service.assemblies.supports() ? ["assembly.read", "assembly.write", "pcb.read"] : []), ...(service.inventoryImages.supports() ? ["inventory.images.read", "inventory.images.write"] : []), "inventory.read", "inventory.write", "workspace.preferences.read", "inventory.categories.read", "inventory.categories.write", "catalog.read", "catalog.write", "inventory.product_profile.read", "inventory.product_profile.write", "projects.read", "projects.write", "projects.remove", "projects.removed_history", "build_configurations.read", "build_configurations.create", "bom.evaluate", "artifacts.version", "offers.compare", "events.subscribe", ...(service.makerWorkflows.supports() ? ["project_library.read", "project_presentation.read", "project_presentation.write", "project_setup.guided", "requirement_offers.read", "requirement_offers.write", "build_plan.read", "build_plan.write", "workstreams.read", "workstreams.write", "bom.import"] : []), ...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : [])],
     approvalBoundaries: ["purchasing", "external publication", "permanent deletion", "credential changes", "printer control"]
   }));
   app.get(route("/openapi.json"), async () => jsonOpenApi(service.getVersion()));
   app.get(route("/docs"), async (_request, reply) => reply.type("text/html; charset=utf-8").send(`<!doctype html><title>BenchLedger API</title><p>OpenAPI: <a href="/api/v1/openapi.json">/api/v1/openapi.json</a></p>`));
 
   app.get(route("/auth/access"), async () => { const access = await readWorkspaceSecurity(); return teamState.enabled ? { ...access, mode: "password", passwordConfigured: true, teamEnabled: true } : access; });
-  app.post(route("/auth/lan-session"), async (_request, reply) => {
+  app.post(route("/auth/lan-session"), { bodyLimit: AUTH_BODY_LIMIT }, async (_request, reply) => {
     const access = await readWorkspaceSecurity();
     if (teamState.enabled) throw new ApplicationError("forbidden", "Sign in with a named account. Shared LAN sessions are disabled.");
     if (access.mode !== "lan_open") return reply.code(403).send({ error: { code: "password_required", message: "Workspace password protection is enabled", correlationId: _request.correlationId } });
@@ -1608,7 +1159,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     return { ...access, authenticated: true, actor: "workspace-admin", csrfToken: session.csrf, expiresAt: new Date(session.expiresAt).toISOString(), credentialRevision: session.credentialRevision, correlationId: _request.correlationId };
   });
 
-  app.route({ method: ["POST", "GET", "DELETE"], url: route("/mcp"), handler: async (request, reply) => {
+  app.route({ method: ["POST", "GET", "DELETE"], url: route("/mcp"), bodyLimit: MCP_BODY_LIMIT, handler: async (request, reply) => {
     const principal = requireScope(request, "read", auth);
     if (principal.via !== "bearer") {
       return reply.code(401).send({ error: { code: "unauthenticated", message: "A scoped bearer token is required for MCP", correlationId: request.correlationId } });
@@ -1622,17 +1173,21 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     // private; MCP artifact transfer remains fail-closed until a transactional
     // trusted-host bridge is implemented.
     const protocol = createApplicationMcpProtocol(service, { context, serverInfo: { name: "benchledger", version: service.getVersion() } });
-    const handler = createMcpHttpHandler(protocol, { context, maxBodyBytes: 1_000_000, maxInventoryImageBodyBytes: 3 * 1024 * 1024 });
+    const handler = createMcpHttpHandler(protocol, { context, maxBodyBytes: 1_000_000, maxInventoryImageBodyBytes: MCP_BODY_LIMIT });
     const headers = Object.fromEntries(Object.entries(request.headers).map(([key, value]) => [key, Array.isArray(value) ? value[0] : value]));
     const result = await handler({ method: request.method, headers, body: request.body });
     reply.code(result.status);
-    for (const [name, value] of Object.entries(result.headers)) reply.header(name, value);
-    return reply.send(result.body);
+    for (const [name, value] of Object.entries(result.headers)) if (name.toLowerCase() !== "content-type") reply.header(name, value);
+    // The bridge only produces JSON documents (or an empty 202). Fix the media
+    // type here so an echoed JSON-RPC id/tool name can never be served as a
+    // sniffable or HTML response.
+    if (result.body === "") return reply.send();
+    return reply.type("application/json; charset=utf-8").send(result.body);
   } });
 
-  app.post(route("/auth/login"), async (request, reply) => {
+  app.post(route("/auth/login"), { bodyLimit: AUTH_BODY_LIMIT }, async (request, reply) => {
     const clientKey = request.ip;
-    rateLimitWindow(passwordAttempts, clientKey, "login");
+    await checkLoginBudget(clientKey);
     const body = request.body as { password?: unknown };
     const valid = await verifyPasswordWithThrottle(async () => {
       const access = await readWorkspaceSecurity();
@@ -1640,18 +1195,18 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
         && await auth.verifyPassword(body.password as string);
     }, "login verification");
     if (!valid) {
-      recordFailedAttempt(passwordAttempts, clientKey);
+      recordLoginFailure(clientKey);
       return reply.code(401).send({ error: { code: "invalid_credentials", message: "Email or password is invalid", correlationId: request.correlationId } });
     }
     passwordAttempts.delete(clientKey);
     const session = auth.issueSession(reply);
     return { authenticated: true, actor: "workspace-admin", csrfToken: session.csrf, expiresAt: new Date(session.expiresAt).toISOString(), credentialRevision: session.credentialRevision, correlationId: request.correlationId };
   });
-  app.post(route("/auth/member-login"), async (request, reply) => {
-    const key = request.ip; rateLimitWindow(passwordAttempts, key, "login");
+  app.post(route("/auth/member-login"), { bodyLimit: AUTH_BODY_LIMIT }, async (request, reply) => {
+    const key = request.ip; await checkLoginBudget(key);
     const body = memberLoginSchema.safeParse(request.body); let member: TeamMember | null = null;
     const valid = await verifyPasswordWithThrottle(async () => { member = await service.team.verifyMember(body.success ? body.data.username : "invalid-member", body.success ? body.data.password : "invalid-password"); return member !== null; }, "login verification");
-    if (!valid || !member) { recordFailedAttempt(passwordAttempts, key); return reply.code(401).send({ error: { code: "invalid_credentials", message: "Username or password is invalid", correlationId: request.correlationId } }); }
+    if (!valid || !member) { recordLoginFailure(key); return reply.code(401).send({ error: { code: "invalid_credentials", message: "Username or password is invalid", correlationId: request.correlationId } }); }
     passwordAttempts.delete(key); const verified = member as TeamMember; const session = auth.issueSession(reply, `member:${verified.id}`, verified);
     return { authenticated: true, actor: `member:${verified.id}`, csrfToken: session.csrf, expiresAt: new Date(session.expiresAt).toISOString() };
   });
@@ -1736,9 +1291,9 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
       throw error;
     }
   };
-  app.patch(route("/auth/access"), securityMutation);
-  app.post(route("/auth/security"), securityMutation);
-  app.post(route("/auth/logout"), async (request, reply) => { requirePrincipal(request); auth.clearSession(reply); return { authenticated: false, correlationId: request.correlationId }; });
+  app.patch(route("/auth/access"), { bodyLimit: AUTH_BODY_LIMIT }, securityMutation);
+  app.post(route("/auth/security"), { bodyLimit: AUTH_BODY_LIMIT }, securityMutation);
+  app.post(route("/auth/logout"), { bodyLimit: AUTH_BODY_LIMIT }, async (request, reply) => { requirePrincipal(request); auth.clearSession(reply); return { authenticated: false, correlationId: request.correlationId }; });
   app.get(route("/auth/session"), async (request) => { const principal = requirePrincipal(request); return { authenticated: true, actor: principal.actor, source: principal.source, scopes: [...principal.scopes], projectIds: principal.projectIds ? [...principal.projectIds] : undefined, ...(principal.memberId ? { memberId: principal.memberId, memberVersion: principal.memberVersion } : {}), teamEnabled: teamState.enabled }; });
 
   app.get(route("/workspace"), async (request) => { const principal = requireScope(request, "read", auth); if (principal.via === "bearer") rejectScopedGlobalAccess(request); return workspaceSnapshot(service, principal.projectIds); });
@@ -1746,6 +1301,35 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const principal = requireScope(request, "read", auth);
     const query = request.query as Record<string, unknown>;
     return service.makerWorkflows.projectLibrary({ ...query, ...(query.limit === undefined ? {} : { limit: Number(query.limit) }) }, principal.projectIds === undefined ? undefined : [...principal.projectIds]);
+  });
+  app.get(route("/workspace/preferences"), async (request, reply) => {
+    requireScope(request, "read", auth);
+    const preferences = await service.getWorkspacePreferences();
+    reply.header("etag", `"${preferences.version}"`);
+    return preferences;
+  });
+  app.get(route("/workspace/preferences/stock-receiving-impact"), async (request) => {
+    requireScope(request, "read", auth);
+    rejectScopedGlobalAccess(request);
+    const query = parseBody(stockReceivingPolicyImpactQuerySchema, request.query);
+    return service.previewStockReceivingPolicy(query.stockReceivingPolicy);
+  });
+  app.put(route("/workspace/preferences"), async (request, reply) => {
+    // Interpretation of stock evidence is a human workspace decision. Bearer
+    // tokens (including MCP agents) and project-scoped sessions cannot change it.
+    const principal = requireScope(request, "admin", auth);
+    if (principal.via !== "session" || principal.source !== "ui" || principal.projectIds !== undefined) {
+      throw new ApplicationError("forbidden", "Only a workspace administrator browser session may change workspace preferences");
+    }
+    const headerVersion = parseExpectedVersion(request);
+    const body = parseBody(updateWorkspacePreferencesSchema, request.body);
+    if (headerVersion !== undefined && body.expectedVersion !== undefined && headerVersion !== body.expectedVersion) {
+      throw new ApplicationError("validation", "If-Match and expectedVersion must agree");
+    }
+    const expectedVersion = body.expectedVersion ?? headerVersion;
+    const mutation = await service.updateWorkspacePreferences({ stockReceivingPolicy: body.stockReceivingPolicy, ...(expectedVersion === undefined ? {} : { expectedVersion }) }, requestContext(request));
+    reply.header("etag", `"${mutation.data.version}"`);
+    return mutationBody(mutation);
   });
   app.get(route("/catalog/products"), async (request) => {
     requireScope(request, "read", auth);
@@ -1814,7 +1398,8 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const params = request.params as { id: string };
     const item = await service.getInventoryItem(params.id);
     const body = parsePhysicalCount(request.body);
-    const mutation = await service.recordPhysicalCount(params.id, body.quantity, requestContext(request), item.unit, body.note);
+    const expectedVersion = optionalStockVersion(request, request.body);
+    const mutation = await service.recordPhysicalCount(params.id, body.quantity, requestContext(request), item.unit, body.note, expectedVersion);
     return reply.code(201).send(mutation);
   });
   app.post(route("/inventory/:id/commission"), async (request, reply) => {
@@ -1846,28 +1431,30 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const mutation = await service.putInventoryProductProfile(params.id, parseInventoryProductProfileBody(request.body), parseExpectedVersion(request), requestContext(request));
     return mutation;
   });
-  app.get(route("/inventory/:id/stock-events"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; const query = request.query as { limit?: string; cursor?: string }; return service.listStockEvents(params.id, Number(query.limit ?? 50), query.cursor); });
-  app.post(route("/inventory/:id/stock-events"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; const input = parseBody(stockEventInputSchema, { ...(request.body as Record<string, unknown>), itemId: params.id }); const mutation = await service.recordStockEvent(input, requestContext(request)); return reply.code(201).send(mutation); });
+  app.get(route("/inventory/:id/stock-events"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; const page = parsePageQuery(request.query); return service.listStockEvents(params.id, page.limit, page.cursor); });
+  app.post(route("/inventory/:id/stock-events"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; const expectedVersion = optionalStockVersion(request, request.body); const input = parseBody(stockEventInputSchema, { ...withoutExpectedVersion(request.body), itemId: params.id }); const mutation = await service.recordStockEvent(input, requestContext(request), expectedVersion); return reply.code(201).send(mutation); });
 
   app.get(route("/projects"), async (request) => {
     requireScope(request, "read", auth);
     const query = request.query as { q?: string; status?: ProjectListOptions["status"]; limit?: string; cursor?: string };
     const parsedStatus = query.status === undefined ? undefined : projectStatusSchema.safeParse(query.status);
     if (parsedStatus !== undefined && !parsedStatus.success) throw new ApplicationError("validation", "Project status must be one of the canonical lifecycle values");
-    const parsed = { ...(query.q === undefined ? {} : { q: query.q }), ...(parsedStatus === undefined ? {} : { status: parsedStatus.data }), limit: Math.min(Math.max(Number(query.limit ?? 50), 1), 200), ...(query.cursor === undefined ? {} : { cursor: query.cursor }) } satisfies ProjectListOptions;
+    if (query.q !== undefined && (typeof query.q !== "string" || query.q.length > 200)) throw new ApplicationError("validation", "Query parameters are invalid", { issues: [{ path: ["q"], message: "q must be at most 200 characters" }] });
+    const page = parsePageQuery(request.query);
+    const parsed = { ...(query.q === undefined ? {} : { q: query.q }), ...(parsedStatus === undefined ? {} : { status: parsedStatus.data }), limit: page.limit, ...(page.cursor === undefined ? {} : { cursor: page.cursor }) } satisfies ProjectListOptions;
     return request.principal?.projectIds === undefined ? service.listProjects(parsed) : scopedProjectPage(service, parsed, request.principal.projectIds);
   });
   app.get(route("/projects/removed"), async (request) => {
     requireScope(request, "read", auth);
     rejectScopedGlobalAccess(request);
-    const query = request.query as { limit?: string; cursor?: string };
-    return service.listRemovedProjectPage(Number(query.limit ?? 50), query.cursor);
+    const page = parsePageQuery(request.query);
+    return service.listRemovedProjectPage(page.limit, page.cursor);
   });
   app.post(route("/projects"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const mutation = await service.createProject(parseBody(createProjectSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });
   app.post(route("/projects/with-initial-revision"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const mutation = await service.createProjectWithInitialRevision(parseBody(createProjectWithInitialRevisionSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });
   app.post(route("/project-setup/previews"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const preview = await service.previewProjectSetup(parseBody(projectSetupProposalSchema, request.body), requestContext(request)); return reply.code(201).send(preview); });
   app.post(route("/project-setup/previews/:id/commit"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); if (requestIdempotencyKey(request) === undefined) throw new ApplicationError("validation", "Idempotency-Key is required for project setup commit"); const params = request.params as { id: string }; const body = parseBody(commitProjectSetupBodySchema, request.body); const command = { ...body, previewId: params.id }; return service.commitProjectSetup(command, requestContext(request, command)); });
-  app.get(route("/projects/:id/removed-history"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); const query = request.query as { limit?: string; cursor?: string }; return service.readRemovedProjectHistory(params.id, Number(query.limit ?? 50), query.cursor); });
+  app.get(route("/projects/:id/removed-history"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); const page = parsePageQuery(request.query); return service.readRemovedProjectHistory(params.id, page.limit, page.cursor); });
   app.get(route("/projects/:id"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); const project = await service.getProject(params.id); return { project, workItems: await service.listWorkItems(params.id) }; });
   app.patch(route("/projects/:id"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); return service.updateProject(params.id, parseBody(updateProjectSchema, request.body) as never, parseExpectedVersion(request), requestContext(request)); });
   app.post(route("/projects/:id/restore"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); return service.restoreProject(params.id, parseExpectedVersion(request), requestContext(request)); });
@@ -1953,7 +1540,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const body = parseBody(commitInspectionCompletionBodySchema, request.body);
     return service.commitInspectionCompletion(params.revisionId, { ...body, actionId: params.inspectionId }, requestContext(request));
   });
-  app.patch(route("/bom-lines/:id"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireBomReferenceScope(request, service, params.id); return service.updateBomLine(params.id, parseBody(updateBomLineSchema, request.body) as never, parseExpectedVersion(request), requestContext(request)); });
+  app.patch(route("/bom-lines/:id"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireBomReferenceScope(request, service, params.id); const expectedVersion = parseMandatoryIfMatch(request); return service.updateBomLine(params.id, parseBody(updateBomLineSchema, request.body) as never, expectedVersion, requestContext(request)); });
   app.delete(route("/bom-lines/:id"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireBomReferenceScope(request, service, params.id); return service.retireBomLine(params.id, parseRequiredExpectedVersion(request), requestContext(request)); });
   app.post(route("/bom-lines/:id/restore"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireBomReferenceScope(request, service, params.id); return service.restoreBomLine(params.id, parseRequiredExpectedVersion(request), requestContext(request)); });
   app.get(route("/project-revisions/:id/gaps"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireRevisionScope(request, service, params.id); return service.evaluateBomGaps(params.id); });
@@ -2006,7 +1593,9 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     requireScope(request, "read", auth);
     const query = request.query as { itemId?: string; limit?: string; cursor?: string };
     if (request.principal?.projectIds !== undefined && query.itemId === undefined) throw new ApplicationError("forbidden", "A project-scoped token must provide an inventory item when reading global offers");
-    return service.listOffers(query.itemId, Number(query.limit ?? 50), query.cursor);
+    if (query.itemId !== undefined && (typeof query.itemId !== "string" || !UUID_OR_ID.test(query.itemId) || query.itemId.length > 200)) throw new ApplicationError("validation", "Query parameters are invalid", { issues: [{ path: ["itemId"], message: "itemId must be an inventory identifier" }] });
+    const page = parsePageQuery(request.query);
+    return service.listOffers(query.itemId, page.limit, page.cursor);
   });
   app.post(route("/offers"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const mutation = await service.createOffer(parseBody(createOfferSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });
 
@@ -2028,9 +1617,9 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     return reply.code(201).send(mutation);
   });
   app.get(route("/artifacts/uploads/:id"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id, true); return (await service.getUploadSessionDetails(params.id)).session; });
-  app.put(route("/artifacts/uploads/:id"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id, true); const body = request.body; if (!(body instanceof Uint8Array)) throw new ApplicationError("validation", "Upload body must be binary"); const offset = request.headers["upload-offset"]; if (offset !== undefined && (typeof offset !== "string" || !/^(0|[1-9]\d*)$/u.test(offset) || !Number.isSafeInteger(Number(offset)))) throw new ApplicationError("validation", "Upload-Offset must be a non-negative integer"); return service.writeArtifactUpload(params.id, body, offset === undefined ? undefined : Number(offset)); });
+  app.put(route("/artifacts/uploads/:id"), { bodyLimit: uploadBodyLimit }, async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id, true); const body = request.body; if (!(body instanceof Uint8Array)) throw new ApplicationError("validation", "Upload body must be binary"); const offset = request.headers["upload-offset"]; if (offset !== undefined && (typeof offset !== "string" || !/^(0|[1-9]\d*)$/u.test(offset) || !Number.isSafeInteger(Number(offset)))) throw new ApplicationError("validation", "Upload-Offset must be a non-negative integer"); return service.writeArtifactUpload(params.id, body, offset === undefined ? undefined : Number(offset)); });
   app.post(route("/artifacts/uploads/:id/finalize"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id, true); return service.finalizeArtifactUpload(params.id, requestContext(request)); });
-  app.put(route("/transfers/uploads/:id"), async (request, reply) => {
+  app.put(route("/transfers/uploads/:id"), { bodyLimit: uploadBodyLimit }, async (request, reply) => {
     const params = request.params as { id: string };
     const body = request.body;
     if (!(body instanceof Uint8Array)) throw new ApplicationError("validation", "Upload body must be binary");
@@ -2064,14 +1653,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     return mutation;
   });
   app.get(route("/artifacts/:id"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id); return service.getArtifact(params.id); });
-  app.get(route("/artifacts/:id/download"), async (request, reply) => {
-    requireScope(request, "read", auth);
-    const params = request.params as { id: string };
-    await requireArtifactReferenceScope(request, service, params.id);
-    const downloaded = await service.readArtifact(params.id);
-    for (const [name, value] of Object.entries(ARTIFACT_DOWNLOAD_HEADERS)) reply.header(name, value);
-    return reply.type(downloaded.artifact.mediaType).header("content-disposition", artifactContentDisposition(downloaded.artifact.filename)).send(Buffer.from(downloaded.body));
-  });
+  app.get(route("/artifacts/:id/download"), async (request, reply) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id); const downloaded = await service.readArtifact(params.id); for (const [name, value] of Object.entries(ARTIFACT_DOWNLOAD_HEADERS)) reply.header(name, value); return reply.type(artifactResponseType(downloaded.artifact.mediaType)).header("content-disposition", artifactContentDisposition(downloaded.artifact.filename)).send(Buffer.from(downloaded.body)); });
   app.get(route("/transfers/artifacts/:id/download"), async (request, reply) => {
     const params = request.params as { id: string };
     const token = request.headers[TRANSFER_TOKEN_HEADER];
@@ -2086,16 +1668,16 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
       throw error;
     }
     for (const [name, value] of Object.entries(ARTIFACT_DOWNLOAD_HEADERS)) reply.header(name, value);
-    return reply.type(downloaded.artifact.mediaType).header("content-disposition", artifactContentDisposition(downloaded.artifact.filename)).send(Buffer.from(downloaded.body));
+    return reply.type(artifactResponseType(downloaded.artifact.mediaType)).header("content-disposition", artifactContentDisposition(downloaded.artifact.filename)).send(Buffer.from(downloaded.body));
   });
   app.delete(route("/artifacts/:id"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.retireArtifact(params.id, parseExpectedVersion(request), requestContext(request)); });
 
-  app.get(route("/audit"), async (request) => { requireScope(request, "admin", auth); rejectScopedGlobalAccess(request); const query = request.query as { limit?: string; cursor?: string }; return ports.audit.list(Math.min(Math.max(Number(query.limit ?? 50), 1), 200), query.cursor); });
+  app.get(route("/audit"), async (request) => { requireScope(request, "admin", auth); rejectScopedGlobalAccess(request); const page = parsePageQuery(request.query); return ports.audit.list(page.limit, page.cursor); });
   app.get(route("/events"), async (request, reply) => {
     requireScope(request, "read", auth);
     rejectScopedGlobalAccess(request);
     reply.hijack();
-    reply.raw.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
+    reply.raw.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no", "x-content-type-options": "nosniff" });
     reply.raw.write(`event: ready\ndata: ${JSON.stringify({ correlationId: request.correlationId })}\n\n`);
     const unsubscribe = service.subscribe((event) => { if (!reply.raw.destroyed) reply.raw.write(`id: ${event.id}\nevent: state\ndata: ${JSON.stringify(event)}\n\n`); });
     const heartbeat = setInterval(() => { if (reply.raw.destroyed) clearInterval(heartbeat); else reply.raw.write(": heartbeat\n\n"); }, 25_000);

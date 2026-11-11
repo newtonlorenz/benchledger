@@ -9,13 +9,19 @@ export interface InventoryStockRecord {
   availableQuantity?: number | undefined;
   allocatedQuantity?: number | undefined;
   evidence: { state: string };
+  /** Policy-aware availability from the API; when present it decides what counts as in stock. */
+  availability?: string | undefined;
   unitStatus?: string | undefined;
   condition?: string | undefined;
   retiredAt?: string | undefined;
 }
 
 export function inventoryStockAssessment(item: InventoryStockRecord) {
-  const confirmed = ["physically_counted", "commissioned"].includes(item.evidence.state);
+  // The stock receiving policy may count delivered or ordered stock as in
+  // stock ("assumed"); honour it when the record carries its availability.
+  const confirmed = item.availability !== undefined
+    ? item.availability === "confirmed" || item.availability === "assumed"
+    : ["physically_counted", "commissioned"].includes(item.evidence.state);
   const unitNeedsCorrection = item.unitStatus === "needs_correction";
   const needsRepair = item.condition === "needs_repair";
   const retired = item.retiredAt !== undefined;

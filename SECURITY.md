@@ -25,6 +25,12 @@ reasonable opportunity to investigate before disclosure.
 
 - Runtime data and secrets live outside the source checkout.
 - Browser writes require an authenticated session and CSRF protection.
+  State-changing browser requests must also be same-origin (`Origin` check),
+  and the server only answers requests whose `Host` is the configured public
+  host, a loopback name or an explicit `BENCHLEDGER_ALLOWED_HOSTS` entry, which
+  blocks DNS rebinding against `lan_open` mode.
+- The session secret must be random; startup rejects the documented
+  placeholder and obviously low-entropy values.
 - MCP writes require revocable, scoped personal access tokens. Deployments using
   structured token configuration can also enforce expiry.
 - Tokens are stored hashed server-side; plaintext belongs in a client secret
@@ -32,22 +38,70 @@ reasonable opportunity to investigate before disclosure.
 - Uploaded files are size- and quota-limited, hash-checked, and bound to an
   authorised project or work-item revision. Browser Files and the supported host
   helper share the 100 MiB limit and format policy, including JSON, ZIP and SVG.
+  BenchLedger never executes or slices them. It does parse some uploads
+  server-side: inventory images are decoded and re-encoded (metadata stripped)
+  with `sharp`, and GLB, STL, STEP and KiCad PCB assembly sources are read and
+  parsed to inspect their geometry. Those parsers are part of the attack
+  surface; keep dependencies current.
 - ZIP archives are stored opaquely for download and are never extracted or
   executed. SVG previews display verified, escaped source through the 1 MiB text
   preview, never SVG image Blob URLs, inline markup, objects or iframes.
-  Supported CAD and image previews do not execute uploaded code or slice files.
-- Both authenticated artifact download routes serve attachments with
-  `Cache-Control: no-store`, `Referrer-Policy: no-referrer`,
-  `X-Content-Type-Options: nosniff`, and
+- Both authenticated artifact download routes serve attachments
+  (`Content-Disposition: attachment`) with `Cache-Control: no-store`,
+  `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, and
   `Content-Security-Policy: sandbox allow-downloads; default-src 'none'`. The
   download permission preserves ordinary attachment navigation without enabling
-  scripts or same-origin access. Other excluded file
-  types remain excluded.
+  scripts or same-origin access. The recorded media type is used only for an
+  allow-list of safe types; others, including SVG, become
+  `application/octet-stream`. Other excluded file types remain excluded.
+- Request bodies are size-limited before authentication (16 KiB on login
+  routes, 2 MiB by default, `BENCHLEDGER_MAX_UPLOAD_BYTES` on upload routes).
+- Responses carry `nosniff`, `Referrer-Policy: no-referrer`, frame denial and
+  a Content-Security-Policy restricting the web app to same-origin scripts.
 - File operations accept logical identifiers, not arbitrary absolute paths.
 - Supplier URLs are recorded but not fetched by the server.
 - Every state mutation is attributable and audited.
 - Purchase execution, printer control, and permanent artifact purge are not MCP
   capabilities.
+
+## Browser sessions
+
+Browser sessions are stateless signed cookies (HMAC with the session secret)
+that expire after eight hours. Logging out clears the cookies in that browser
+but does not revoke a copied cookie value before it expires. Changing the
+workspace password or access mode bumps a durable credential revision and
+invalidates every existing shared session; rotating the session secret
+invalidates all sessions, including named-member sessions. Cookies are
+`HttpOnly` and `SameSite=Lax`, and `Secure` by default whenever the public base
+URL is HTTPS.
+
+Login attempts are rate-limited per client address: after five failures in 15
+minutes that address receives `429` until the window ends. A workspace-wide
+ceiling (50 failures in 15 minutes, from any address) does not block anyone,
+because a hard global limit would let a burst of wrong guesses lock out every
+user, including one with the correct password. Instead, while the ceiling is
+exceeded every login attempt is delayed by a fixed second before the password
+is checked, and is still checked; correct and wrong passwords are delayed alike.
+These counters are kept in memory, so a server restart clears them. Client
+addresses come from `X-Forwarded-For` only when `BENCHLEDGER_TRUST_PROXY` names
+the trusted proxy hops or addresses (the legacy value `true` means one hop);
+invalid entries are rejected at startup.
+
+Plain-HTTP access and `Secure` cookies: when `BENCHLEDGER_PUBLIC_BASE_URL` is
+`https://`, cookies are `Secure` by default, so a browser that reaches the same
+server over plain HTTP (for example a LAN IP listed in
+`BENCHLEDGER_ALLOWED_HOSTS`) will not keep a session there. Prefer HTTPS for
+every address. Setting `BENCHLEDGER_SECURE_COOKIES=false` makes plain-HTTP
+sessions work but lets session cookies travel unencrypted on every connection,
+including over HTTPS-capable addresses; only do this on a trusted network.
+
+Reverse proxies and the Host check: the server answers only Hosts on its
+allow-list (`421 host_not_allowed` otherwise). A proxy must forward the
+original `Host` (nginx: `proxy_set_header Host $host;`; Caddy does this by
+default), or the upstream name it uses must be listed in
+`BENCHLEDGER_ALLOWED_HOSTS`. Health probes that address the container by a
+Docker service name need the same entry; the bundled container healthcheck
+uses `127.0.0.1`, which is always allowed.
 
 ## Deployment
 

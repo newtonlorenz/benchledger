@@ -2,10 +2,10 @@ import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
 import { ApplicationService } from "@benchledger/application";
-import { createSyntheticRuntime } from "./memory-store.js";
+import { createDemoRuntime } from "@benchledger/runtime";
 import { createApp, bearerRecord } from "./app.js";
 it("inspects native PCB through authenticated HTTP/MCP without changing source, stock or saved assembly", async () => {
-  const runtime = createSyntheticRuntime(), service = new ApplicationService(runtime.ports);
+  const runtime = await createDemoRuntime(), service = new ApplicationService(runtime.ports);
   const projectId = "synthetic-project-lamp", revisionId = "synthetic-revision-lamp-r01";
   const bytes = await readFile("packages/artifacts/testfiles/synthetic-board.kicad_pcb");
   const context = { actor: "synthetic", source: "api" as const, correlationId: "synthetic-pcb", scopes: new Set(["read", "write"]), idempotencyKey: "synthetic-pcb-upload" };
@@ -28,5 +28,5 @@ it("inspects native PCB through authenticated HTTP/MCP without changing source, 
     expect(Buffer.from((await runtime.ports.artifacts.readArtifact(file.id)).body)).toEqual(bytes);
     await runtime.ports.artifacts.retireArtifact(file.id, file.version, context);
     const historical = await request("reader"); expect(historical.json().warnings.join()).toMatch(/retired/);
-  } finally { await app.close(); }
+  } finally { await app.close(); await runtime.close(); }
 });

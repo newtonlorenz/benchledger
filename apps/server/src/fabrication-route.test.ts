@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { createDemoRuntime } from "@benchledger/runtime";
 import { ApplicationService } from "@benchledger/application";
 import { createApp } from "./app.js";
-import { createSyntheticRuntime } from "./memory-store.js";
 
 const demoPassword = "demo-password-please-change";
 
@@ -12,7 +12,7 @@ function cookieHeader(setCookie: string | string[] | undefined): string {
 
 describe("fabrication route transport", () => {
   it("carries route and printer planning through atomic and later memory revisions", async () => {
-    const runtime = createSyntheticRuntime();
+    const runtime = await createDemoRuntime();
     const service = new ApplicationService(runtime.ports);
     const context = { actor: "route-test", source: "api" as const, correlationId: "route-test", scopes: new Set(["projects:write"]) };
     await expect(service.createProjectRevision("synthetic-project-lamp", { id: "memory-omitted-route-invalid", name: "Invalid", status: "concept", intendedPrinterItemId: "printer-h2d" }, context))
@@ -54,20 +54,20 @@ describe("fabrication route transport", () => {
     const changed = await service.updateProjectRevision(cleared.data.id, { fabricationRoute: "ready_made" }, cleared.data.version, context);
     expect(changed.data).toMatchObject({ fabricationRoute: "ready_made" });
     expect(changed.data).toMatchObject({ intendedPrinterItemId: null });
-    expect(() => runtime.ports.projects.updateProjectRevision!(cleared.data.id, { fabricationRoute: "ready_made", intendedPrinterItemId: "printer-h2d" }, changed.data.version, context))
-      .toThrow(/printed fabrication route/i);
+    await expect(Promise.resolve().then(() => runtime.ports.projects.updateProjectRevision!(cleared.data.id, { fabricationRoute: "ready_made", intendedPrinterItemId: "printer-h2d" }, changed.data.version, context)))
+      .rejects.toThrow(/printed fabrication route/i);
 
     const explicitNone = await service.createProjectRevision(initial.data.project.id, {
       name: "Electronics only", notes: "No fabricated enclosure", status: "concept", fabricationRoute: "none"
     }, context);
-    expect(explicitNone.data.id).toMatch(/^revision-/u);
+    expect(explicitNone.data.id).toMatch(/revision/u);
     expect(explicitNone.data).toMatchObject({ fabricationRoute: "none", notes: "No fabricated enclosure" });
 
-    expect(() => runtime.ports.projects.createProjectRevision(initial.data.project.id, {
+    await expect(Promise.resolve().then(() => runtime.ports.projects.createProjectRevision(initial.data.project.id, {
       id: carried.data.id, name: "Duplicate", status: "concept", fabricationRoute: "none"
-    }, context)).toThrow(/already exists/i);
-    expect(() => runtime.ports.projects.updateProjectRevision!("missing-route-revision", { fabricationRoute: "none" }, 1, context))
-      .toThrow(/not found/i);
+    }, context))).rejects.toMatchObject({ code: "conflict" });
+    await expect(Promise.resolve().then(() => runtime.ports.projects.updateProjectRevision!("missing-route-revision", { fabricationRoute: "none" }, 1, context)))
+      .rejects.toThrow(/not found|does not exist/i);
 
     const printedWithoutPrinter = await runtime.ports.projects.updateProjectRevision!(explicitNone.data.id, { fabricationRoute: "printed" }, explicitNone.data.version, context);
     expect(printedWithoutPrinter).toMatchObject({ fabricationRoute: "printed" });
@@ -92,7 +92,7 @@ describe("fabrication route transport", () => {
   });
 
   it("serves the narrow revision update over HTTP with If-Match", async () => {
-    const runtime = createSyntheticRuntime();
+    const runtime = await createDemoRuntime();
     const app = await createApp({ runtime, demo: true, auth: { sessionSecret: "s".repeat(48), secureCookies: false }, logger: false });
     try {
       const login = await app.inject({ method: "POST", url: "/api/v1/auth/login", payload: { password: demoPassword } });

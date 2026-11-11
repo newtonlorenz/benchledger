@@ -8,6 +8,8 @@ import type { AuditedWorkflowWriter } from "./maker-workflows.js";
 export interface InventoryImagePort {
   gallery(itemId: string): Promise<InventoryImageGallery>;
   content(itemId: string, imageId: string): Promise<{ image: InventoryImage; bytes: Uint8Array } | undefined>;
+  /** Optional batch lookup of each item's first (cover) image for list rows. */
+  primaryImages?(itemIds: readonly string[]): Promise<ReadonlyMap<string, InventoryImage>>;
   add(image: InventoryImage, bytes: Uint8Array, expectedVersion: number): Promise<InventoryImageGallery>;
   normalize(bytes: Uint8Array, mediaType: string): Promise<{ bytes: Uint8Array; width: number; height: number }>;
 }
@@ -59,4 +61,9 @@ export class InventoryImageService {
       return { value, entityId: itemId, version: value.version };
     });
   }
+}
+
+/** Authenticated path of an image's normalized bytes (served by the image content route). */
+export function inventoryImageContentPath(itemId: string, imageId: string): string {
+  return `/api/v1/inventory/${encodeURIComponent(itemId)}/images/${encodeURIComponent(imageId)}/content`;
 }

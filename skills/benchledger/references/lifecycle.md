@@ -23,7 +23,8 @@ the next decision. Do not fabricate dimensions or electrical requirements.
 
 ## 2. Discover inventory and exact equipment
 
-Call `refresh_context`, then read the bounded inventory summary and pages. Read
+Read the inventory summary and bounded pages (`refresh_context` is an optional
+small live snapshot of counts and project version). Read
 individual items when dimensions, condition, location, stock history, or links
 affect the decision.
 
@@ -98,12 +99,12 @@ For a complete graph, prefer the review-first atomic setup pair:
 2. Inspect normalized IDs, semantic errors, unresolved specifications, gap
    candidates/totals, inventory basis, and planned reservations
 3. `commit_project_setup` with the same preview ID/version/hash and
-   `confirmReservations: true` when reservations are planned; use a distinct
-   8–200 character idempotency key
+   `confirmReservations: true` when reservations are planned; an optional
+   `idempotencyKey` argument is derived from the arguments when omitted
 
 Preview persists only actor-owned bounded metadata for 30 minutes. Commit
-rechecks identity and inventory basis in one transaction; a stale 409 requires
-a fresh preview. Identical same-actor retries replay safely.
+rechecks identity and inventory basis in one transaction; a stale-basis
+`rule_conflict` requires a fresh preview. Identical same-actor retries replay safely.
 - Create work items and their revisions only for independently versioned
   deliverables. Do not create a new project revision merely to edit an
   unchanged draft.
@@ -151,8 +152,8 @@ affected-line before/after changes, unit coverage, basis/version, and resulting
 state, then ask for explicit human confirmation before
 `POST .../inspections/{inspectionId}/completion-commit`. A commit must carry
 the returned preview ID/version/content hash and `confirmed: true`. The MCP
-list/read/preview/commit tools expose the same result with nested REST `each`
-quantities and conversions mapped to MCP `piece`, including before/after
+list/read/preview/commit tools expose the same result with canonical `each`
+quantities and conversions, including before/after
 items/gaps, affected and reevaluated gaps, refreshed inspections, and evidence.
 Preview needs `bom:write`; completion commit also needs `inventory:write`.
 A project-scoped token cannot perform that inventory mutation. Use a separately
@@ -265,9 +266,8 @@ normal post-project settlement.
    remaining uncertainty. Ask for explicit confirmation.
 7. Only after confirmation, call `commit_reconciliation` with the returned
    draft ID/version. A draft save and its later commit are distinct commands
-   and must not share an idempotency key. If the client or transport exposes
-   command idempotency, retry an ambiguous save or commit with that command's
-   own original key and identical payload. The commit is atomic and cannot be
+   and must not share an idempotency key. Retry an ambiguous save or commit
+   with that command's own original `idempotencyKey` and identical payload. The commit is atomic and cannot be
    replaced by a loose series of usage and release calls.
 8. Refresh project and inventory context. If refresh fails after a successful
    commit, report the commit as successful and the refresh as a separate issue.

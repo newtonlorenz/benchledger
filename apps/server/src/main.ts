@@ -1,6 +1,6 @@
 import { createApp } from "./app.js";
 import { bearerTokensFromEnvironment, secureCookiesFromEnvironment } from "./auth.js";
-import { positiveIntegerFromEnvironment } from "./config.js";
+import { allowedHostsFromEnvironment, positiveIntegerFromEnvironment, trustProxyFromEnvironment } from "./config.js";
 
 const host = process.env.BENCHLEDGER_HOST ?? "127.0.0.1";
 const port = Number(process.env.BENCHLEDGER_PORT ?? 8792);
@@ -14,15 +14,19 @@ if (!demo && !process.env.BENCHLEDGER_DATA_DIR) {
 }
 
 const bearerTokens = demo ? [] : bearerTokensFromEnvironment();
+const secureCookies = secureCookiesFromEnvironment();
+const trustProxy = trustProxyFromEnvironment();
+const allowedHosts = allowedHostsFromEnvironment();
 const app = await createApp({
   demo,
   ...(process.env.BENCHLEDGER_DATA_DIR === undefined ? {} : { dataDir: process.env.BENCHLEDGER_DATA_DIR }),
   ...(maxUploadBytes === undefined ? {} : { maxUploadBytes }),
   ...(maxStorageBytes === undefined ? {} : { maxStorageBytes }),
   logger: true,
-  trustProxy: process.env.BENCHLEDGER_TRUST_PROXY === "true",
+  trustProxy: trustProxy === false ? false : typeof trustProxy === "number" ? trustProxy : [...trustProxy],
+  allowedHosts,
   auth: {
-    secureCookies: secureCookiesFromEnvironment(),
+    ...(secureCookies === undefined ? {} : { secureCookies }),
     ...(adminPasswordHash === undefined ? {} : { adminPasswordHash }),
     ...(bearerTokens.length === 0 ? {} : { bearerTokens })
   }

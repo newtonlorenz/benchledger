@@ -192,7 +192,7 @@ export class InventoryCategoryRepository {
     const expectedValue = expectedVersion(expected);
     if (current.version !== expectedValue) conflict(id, expectedValue, current.version);
     const children = this.database.all<SqliteRow>("SELECT id FROM inventory_categories WHERE parent_id = ? AND archived = 0 LIMIT 1", [id]);
-    if (children.length > 0) throw new DomainError("category_has_children", `inventory category ${id} has active subcategories`);
+    if (children.length > 0) throw new DomainError("category_has_children", `Inventory category '${id}' has active subcategories`);
     const ids = [id];
     const marks = ids.map(() => "?").join(",");
     const references = this.database.get<SqliteRow>(`SELECT a.item_id FROM inventory_item_category_assignments a JOIN inventory_items i ON i.id = a.item_id WHERE i.retired_at IS NULL AND a.category_node_id IN (${marks}) LIMIT 1`, ids);
@@ -201,6 +201,15 @@ export class InventoryCategoryRepository {
     this.database.run("UPDATE inventory_categories SET archived = 1, updated_at = ?, version = ? WHERE id = ? AND version = ?", [updatedAt, current.version + 1, id, expectedValue]);
     if (this.get(id)?.version !== current.version + 1) conflict(id, expectedValue, this.get(id)?.version ?? expectedValue);
     return { ...current, archived: true, updatedAt, version: current.version + 1 };
+  }
+
+  /** Every item's assigned category node, for batch inventory reads. */
+  public listItemCategoryNodes(): ReadonlyMap<string, string> {
+    const assignments = new Map<string, string>();
+    for (const row of this.database.all<SqliteRow>("SELECT item_id, category_node_id FROM inventory_item_category_assignments", [])) {
+      if (typeof row.item_id === "string" && typeof row.category_node_id === "string") assignments.set(row.item_id, row.category_node_id);
+    }
+    return assignments;
   }
 
   public getItemCategoryNode(itemId: string): string | undefined {

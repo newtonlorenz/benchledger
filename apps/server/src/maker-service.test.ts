@@ -1,15 +1,14 @@
 import { expect, it } from "vitest";
 import { ApplicationService } from "@benchledger/application";
 import type { RequestContext } from "@benchledger/application";
-import { createProductionRuntime } from "@benchledger/runtime";
-import { createSyntheticRuntime } from "./memory-store.js";
+import { createDemoRuntime, createProductionRuntime } from "@benchledger/runtime";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 for (const durable of [false, true]) it(`retains maker planning and sourced requirements consistently in ${durable ? "SQLite" : "memory"}`, async () => {
   const dir = await mkdtemp(join(tmpdir(), "benchledger-maker-unit-"));
-  const runtime = durable ? await createProductionRuntime({ dataDir: dir }) : createSyntheticRuntime();
+  const runtime = durable ? await createProductionRuntime({ dataDir: dir }) : await createDemoRuntime();
   const service = new ApplicationService(runtime.ports); let sequence = 0;
   const context = (key?: string): RequestContext => ({ actor: "synthetic-reviewer", source: "api", scopes: new Set(["read", "write", "admin"]), correlationId: "maker-test", idempotencyKey: key ?? `maker-command-${++sequence}` });
   try {

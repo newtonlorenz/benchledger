@@ -1,12 +1,14 @@
-import type { RefObject } from "react";
+import type { ReactNode, RefObject } from "react";
 import { Button } from "./components/ui/button";
 import { Icon } from "./icons";
 
 type WorkspacePage = "overview" | "inventory" | "projects" | "settings" | "capabilities";
 type NavigationProps = { page: WorkspacePage; onNavigate(page: WorkspacePage): void };
 
-export function WorkspaceNavigation({ page, onNavigate, onCommands, searchRef }: NavigationProps & {
+export function WorkspaceNavigation({ page, onNavigate, onCommands, searchRef, syncStatus }: NavigationProps & {
   onCommands(): void; searchRef: RefObject<HTMLButtonElement | null>;
+  /** Real connection state and last successful sync. */
+  syncStatus?: ReactNode;
 }) {
   const projectsActive = page === "overview" || page === "projects";
   return <header className="topbar workspace-header">
@@ -18,7 +20,8 @@ export function WorkspaceNavigation({ page, onNavigate, onCommands, searchRef }:
       <Button variant="ghost" aria-current={page === "inventory" ? "page" : undefined} onClick={() => onNavigate("inventory")}>Inventory</Button>
     </nav>
     <div className="topbar-actions">
-      <Button ref={searchRef} variant="ghost" size="icon" className="icon-button command-launcher" aria-label="Open workspace commands" title="Search and commands (Control or Command + Shift + K)" onClick={onCommands}><Icon name="search" size={20} /></Button>
+      {syncStatus}
+      <Button ref={searchRef} variant="ghost" size="icon" className="icon-button command-launcher" aria-label="Open workspace commands" title="Search and commands (Control or Command + Shift + K)" aria-keyshortcuts="Control+Shift+K Meta+Shift+K" onClick={onCommands}><Icon name="search" size={20} /></Button>
       <Button variant="ghost" size="icon" className="icon-button" aria-label="Open workspace settings" aria-current={page === "settings" ? "page" : undefined} onClick={() => onNavigate("settings")}><Icon name="settings" size={20} /></Button>
     </div>
   </header>;

@@ -1,0 +1,90 @@
+{
+  "expo": {
+    "name": "BenchLedger",
+    "slug": "benchledger",
+    "version": "1.0.0",
+    "icon": "./assets/icon.png",
+    "scheme": "benchledger",
+    "orientation": "default",
+    "userInterfaceStyle": "automatic",
+    "backgroundColor": "#f5f4f1",
+    "ios": {
+      "bundleIdentifier": "app.benchledger.mobile",
+      "buildNumber": "2",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "Connect to the BenchLedger server you choose on your local network.",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true,
+          "NSExceptionDomains": {
+            "lan": {
+              "NSIncludesSubdomains": true,
+              "NSExceptionAllowsInsecureHTTPLoads": true
+            },
+            "home.arpa": {
+              "NSIncludesSubdomains": true,
+              "NSExceptionAllowsInsecureHTTPLoads": true
+            }
+          }
+        },
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "app.benchledger.mobile",
+      "permissions": [
+        "android.permission.INTERNET"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#aa3e0d"
+      },
+      "userInterfaceStyle": "automatic",
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ]
+    },
+    "plugins": [
+      "expo-secure-store",
+      "./plugins/with-local-network.cjs",
+      "./plugins/with-scene-lifecycle.cjs",
+      "expo-status-bar",
+      "expo-sqlite",
+      "expo-image",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/icon.png",
+          "imageWidth": 120,
+          "resizeMode": "contain",
+          "backgroundColor": "#f5f4f1",
+          "dark": {
+            "image": "./assets/icon.png",
+            "backgroundColor": "#111210"
+          }
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "BenchLedger uses the camera to scan item labels and pairing codes, and to photograph items you choose to add.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": true
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Choose a photo to add to an inventory item. Only the photo you pick is used.",
+          "cameraPermission": "BenchLedger uses the camera to scan item labels and pairing codes, and to photograph items you choose to add.",
+          "microphonePermission": false
+        }
+      ]
+    ]
+  }
+}

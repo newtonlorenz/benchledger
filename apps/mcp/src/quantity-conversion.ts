@@ -41,8 +41,9 @@ export function parseMcpQuantityConversion(value: unknown, label: string): Quant
   keys(inventory, ["quantity", "unit"], `${label}.inventory`);
   const requirement = record(input.requirement, `${label}.requirement`);
   keys(requirement, ["quantity", "unit"], `${label}.requirement`);
-  if (requirement.unit !== "piece") {
-    throw new McpAdapterError("INVALID_ARGUMENT", `${label}.requirement.unit must be 'piece' at the MCP boundary.`);
+  // Canonical `each`; the legacy MCP alias `piece` is still accepted.
+  if (requirement.unit !== "each" && requirement.unit !== "piece") {
+    throw new McpAdapterError("INVALID_ARGUMENT", `${label}.requirement.unit must be 'each' (legacy alias 'piece').`);
   }
   const evidence = record(input.evidence, `${label}.evidence`);
   keys(evidence, ["basis", "observedAt", "source", "sourceId", "note"], `${label}.evidence`);
@@ -57,7 +58,7 @@ export function parseMcpQuantityConversion(value: unknown, label: string): Quant
   }
   return {
     inventory: { quantity: 1, unit: "set" },
-    requirement: { quantity: parsed.data.requirement.quantity, unit: "piece" },
+    requirement: { quantity: parsed.data.requirement.quantity, unit: "each" },
     evidence: parsed.data.evidence,
   };
 }
@@ -79,7 +80,7 @@ export function fromApiQuantityConversion(value: unknown, label: string): BomAlt
   }
   return {
     inventory: { quantity: 1, unit: "set" },
-    requirement: { quantity: parsed.data.requirement.quantity, unit: "piece" },
+    requirement: { quantity: parsed.data.requirement.quantity, unit: "each" },
     evidence: parsed.data.evidence,
   };
 }

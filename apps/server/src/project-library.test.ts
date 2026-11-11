@@ -2,12 +2,16 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApplicationService, type ApplicationPorts, type RequestContext } from "@benchledger/application";
 import type { Artifact, ProjectPresentation } from "@benchledger/api-contract";
-import { createProductionRuntime } from "@benchledger/runtime";
+import { createDemoRuntime, createProductionRuntime } from "@benchledger/runtime";
 import { createApp, bearerRecord } from "./app.js";
-import { createMemoryRuntime, createSyntheticRuntime } from "./memory-store.js";
+
+// Demo runtimes are disposable SQLite workspaces; close every one after each test.
+const openRuntimes: { close(): Promise<void> }[] = [];
+afterEach(async () => { await Promise.all(openRuntimes.splice(0).map((runtime) => runtime.close())); });
+async function demoRuntime(seed: "synthetic" | "empty" = "synthetic") { const runtime = await createDemoRuntime({ seed }); openRuntimes.push(runtime); return runtime; }
 
 const image = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAIAAABxZ0isAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEUlEQVQImWMw6piAFTEMpAQAEKQ94TX+ea8AAAAASUVORK5CYII=", "base64");
 let serial = 0;
@@ -19,9 +23,9 @@ async function attachImage(service: ApplicationService, ports: ApplicationPorts,
 }
 
 describe("revision-scoped project presentations", () => {
-  for (const durable of [false, true]) it(`keeps versioned covers, clear history and idempotency in ${durable ? "SQLite" : "memory"} without physical changes`, async () => {
+  for (const durable of [false, true]) it(`keeps versioned covers, clear history and idempotency in ${durable ? "durable SQLite" : "demo SQLite"} without physical changes`, async () => {
     const dir = await mkdtemp(join(tmpdir(), "benchledger-project-library-"));
-    const runtime = durable ? await createProductionRuntime({ dataDir: dir }) : createSyntheticRuntime();
+    const runtime = durable ? await createProductionRuntime({ dataDir: dir }) : await demoRuntime();
     const service = new ApplicationService(runtime.ports);
     try {
       const project = (await service.createProject({ name: "Synthetic product", status: "planned" }, context())).data;
@@ -55,7 +59,7 @@ describe("revision-scoped project presentations", () => {
   });
 
   it("rejects cross-project and historical covers, invalidates changed hashes/workstream revisions, and checks file limits", async () => {
-    const runtime = createSyntheticRuntime(), service = new ApplicationService(runtime.ports);
+    const runtime = await demoRuntime(), service = new ApplicationService(runtime.ports);
     const projectId = "synthetic-project-lamp", revisionId = "synthetic-revision-lamp-r01";
     const work = await service.makerWorkflows.createWorkstream(projectId, { name: "Product assembly", kind: "assembly" }, context());
     const workFile = await attachImage(service, runtime.ports, projectId, { workItemId: work.data.item.id, workItemRevisionId: work.data.revision.id });
@@ -85,7 +89,7 @@ describe("revision-scoped project presentations", () => {
   });
 
   it("rejects corrupted current and historical presentation identities", async () => {
-    const runtime = createSyntheticRuntime(), service = new ApplicationService(runtime.ports);
+    const runtime = await demoRuntime(), service = new ApplicationService(runtime.ports);
     const projectId = "synthetic-project-lamp", revisionId = "synthetic-revision-lamp-r01";
     await service.makerWorkflows.saveProjectPresentation(projectId, revisionId, { expectedVersion: 0, coverArtifactId: null, imageKind: "render" }, context());
     const store = runtime.ports.makerWorkflows!;
@@ -109,7 +113,7 @@ describe("revision-scoped project presentations", () => {
 
 describe("project library HTTP/MCP parity and paging", () => {
   it("reads and saves the same presentation via HTTP and MCP with scoped authorisation", async () => {
-    const runtime = createSyntheticRuntime(), service = new ApplicationService(runtime.ports);
+    const runtime = await demoRuntime(), service = new ApplicationService(runtime.ports);
     const projectId = "synthetic-project-lamp", revisionId = "synthetic-revision-lamp-r01";
     const file = await attachImage(service, runtime.ports, projectId, { projectRevisionId: revisionId });
     const work = await service.makerWorkflows.createWorkstream(projectId, { name: "Gallery workstream", kind: "part" }, context());
@@ -154,7 +158,7 @@ describe("project library HTTP/MCP parity and paging", () => {
   });
 
   it("exhausts more than 200 projects without truncation and preserves completed/archived/scoped filters", async () => {
-    const runtime = createMemoryRuntime(), service = new ApplicationService(runtime.ports);
+    const runtime = await demoRuntime("empty"), service = new ApplicationService(runtime.ports);
     for (let index = 0; index < 205; index++) await runtime.ports.projects.createProject({ id: `library-product-${String(index).padStart(3, "0")}`, name: `Synthetic product ${index}`, status: index === 204 ? "complete" : "planned" }, context());
     const archived = await runtime.ports.projects.createProject({ id: "library-archived", name: "Synthetic archived product", status: "archived" }, context());
     const readAll = async (status: "active" | "archived" | "all", projectIds?: readonly string[]) => {

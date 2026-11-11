@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { countsAsInStock } from "@benchledger/domain";
 import {
   inspectionActionSchema,
   quantityConversionSchema,
@@ -6,9 +7,9 @@ import {
   type BomLine,
   type InspectionAction,
   type InventoryItem,
+  type StockReceivingPolicy,
 } from "@benchledger/api-contract";
 
-const CONFIRMED_EVIDENCE = new Set(["physically_counted", "commissioned"]);
 const PHYSICAL_COMPATIBILITY_CONSTRAINT_KEYS = new Set([
   "kind", "manufacturer", "model", "sku", "tag", "nameIncludes", "specification",
 ]);
@@ -128,6 +129,8 @@ export function deriveInspectionActions(
   gaps: readonly BomGap[],
   lines: readonly BomLine[],
   inventory: readonly InventoryItem[],
+  /** Stock the policy already counts as in stock never gets a count action. */
+  policy: StockReceivingPolicy,
 ): readonly InspectionAction[] {
   const lineById = new Map(lines.map((line) => [line.id, line]));
   const itemById = new Map(inventory.map((item) => [item.id, item]));
@@ -148,7 +151,7 @@ export function deriveInspectionActions(
       const item = itemById.get(candidate.itemId);
       if (item === undefined || item.retiredAt !== undefined) continue;
       const crossUnit = item.unit !== line.unit;
-      const uncertainQuantity = !CONFIRMED_EVIDENCE.has(item.evidence.state);
+      const uncertainQuantity = !countsAsInStock(item.evidence.state, policy);
 
       if (uncertainQuantity && candidate.inspectQuantity > 0) {
         addDraft(

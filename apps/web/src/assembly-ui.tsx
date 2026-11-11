@@ -65,9 +65,9 @@ export function AssemblyWorkspace({ project, onFiles }: { project: Project; onFi
   const preset = (value: number, direction: typeof view = view) => { setExplosion(value); setView(direction); setFit(v => v + 1); };
   if (!root) return <section className="assembly-empty"><h2>Assembly explorer</h2><p>Create a project revision to attach an assembly.</p></section>;
   return <section ref={workspace} className="assembly-workspace" aria-label="Assembly explorer">
-    <header className="assembly-heading"><div><h2>{draft?.name ?? "Assembly guide"}</h2><p>{draft ? `${draft.parts.length} parts · ${dirty ? "Unsaved changes" : `Saved version ${draft.expectedVersion}`}` : "Review how the parts fit together and record the build order for this revision."}</p></div>
+    <header className="assembly-heading"><div><h2>{draft?.name ?? "Assembly guide"}</h2><p>{draft ? `${draft.parts.length} ${draft.parts.length === 1 ? "part" : "parts"} · ${dirty ? "Unsaved changes" : draft.expectedVersion === 0 ? "Not saved yet" : `Saved version ${draft.expectedVersion}`}` : "Review how the parts fit together and record the build order for this revision."}</p></div>
       <div className="assembly-heading-actions">{draft && !locked && <Button variant="outline" type="button" className="button button-secondary" disabled={loading} onClick={() => setEditing(!editing)}>{editing ? "Done editing" : "Edit assembly"}</Button>}
-      {draft && (editing || dirty) && <Button variant="default" type="button" className="button button-primary" disabled={command.busy || loading || project.status === "archived"} onClick={() => void save()}>{command.busy ? "Saving…" : command.uncertain ? "Retry unchanged assembly" : "Save assembly"}</Button>}
+      {draft && (editing || dirty || draft.expectedVersion === 0) && <Button variant="default" type="button" className="button button-primary" disabled={command.busy || loading || project.status === "archived"} onClick={() => void save()}>{command.busy ? "Saving…" : command.uncertain ? "Retry unchanged assembly" : "Save assembly"}</Button>}
       </div>
     </header>
     {(error || command.error || read.error) && <Alert asChild><div className="assembly-message" role="alert"><p>{error ?? command.error ?? read.error}</p>{!command.uncertain && <Button variant="ghost" type="button" onClick={() => { sequence.current++; setLoading(false); setDraft(undefined); setGeometry([]); setBaseline(""); setError(undefined); command.clear(); initialised.current = undefined; read.reload(); }}>Discard edits and reload saved assembly</Button>}</div></Alert>}
@@ -91,7 +91,7 @@ export function AssemblyWorkspace({ project, onFiles }: { project: Project; onFi
           <Button variant="ghost" type="button" onClick={() => setFit(v => v + 1)}>Fit view</Button>
         </div>
         {geometry.length > 0 ? <Canvas geometry={geometry} parts={draft.parts} hidden={hidden} selected={selected} explosion={explosion} view={view} fit={fit} onSelect={setSelected} /> : <div className="assembly-canvas"><p>The parts guide is available while the model loads.</p></div>}
-        <p className="assembly-gestures">Drag to rotate · scroll or pinch to zoom · click a part to inspect</p>
+        <p className="assembly-gestures">Z up · drag to rotate · scroll or pinch to zoom · click a part to inspect</p>
         <div className="assembly-slider"><Label htmlFor="assembly-explosion">Pull the assembly apart <output>{explosion}%</output></Label><Slider id="assembly-explosion" aria-label="Assembly separation" min={0} max={100} value={[explosion]} onValueChange={values => setExplosion(values[0] ?? 0)} onPointerUp={() => setFit(v => v + 1)} onKeyUp={() => setFit(v => v + 1)} /><p>Separation shows relationships, not a verified removal path.</p></div>
       </div><aside className="assembly-guide" aria-label="Parts and build guide">
         <div className="assembly-guide-switch"><Button variant="ghost" type="button" aria-pressed={panel === "parts"} onClick={() => setPanel("parts")}>Parts & details</Button><Button variant="ghost" type="button" aria-pressed={panel === "steps"} onClick={() => setPanel("steps")}>Build order</Button></div>

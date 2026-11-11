@@ -15,24 +15,26 @@ dependency on an MCP server named `benchledger`.
 
 Connect the BenchLedger MCP endpoint, then provide the `SKILL.md` body as
 project/workspace instructions. Preserve the reference files or inline only the
-section relevant to the current task. Always start live work by reading
-`benchledger://capabilities`; do not copy a static tool list into permanent
+section relevant to the current task. Read `benchledger://capabilities` once
+when a session starts (or when the server's tools change); `tools/list` is the
+authoritative input contract. Do not copy a static tool list into permanent
 instructions and assume it will never change.
 
 ## Credential and scope setup
 
 - Store bearer tokens in the client's secret/connector storage, never in this
   skill, a prompt, source control, logs, URLs, or artifact metadata.
-- Prefer the least scope needed. Read-only project planning should not receive
-  global write authority.
-- Use project allow-listing for a project agent. Shared catalog/profile and
-  inventory mutations remain global operations and require their own scopes.
-- Physical inventory product-profile reads are also workspace-global and are
-  rejected for project-scoped tokens, even with `catalog:read`. If exact
-  linkage matters, use a separate authorized global catalog reader or ask the
-  user to confirm it; do not expand a project token automatically.
-- A project-scoped close-out uses `bom:read`/`bom:write`; it does not grant
-  general `inventory:write`.
+- Server bearer tokens carry one of three coarse scopes: `read`, `write`
+  (which implies read) or `admin`. MCP maps `read` to every `*:read` tool scope
+  and `write` to every `*:read` and `*:write` scope; finer MCP scope names such
+  as `bom:write` or `catalog:read` describe tool families but cannot be issued
+  on their own. Give read-only planning agents a `read` token.
+- The enforced narrowing is the project allow-list. Use it for a project
+  agent: an allow-listed `write` token can change only its projects and
+  cannot mutate shared inventory, categories, catalog products or offers, or
+  read physical product profiles. If exact profile linkage matters, use a
+  separate unscoped reader or ask the user; do not widen a project token
+  automatically.
 - Human approval is still required at the moment of purchase, publication,
   printer control, destructive deletion, credential change, deployment, or
   reconciliation commit. A capable client does not imply permission.
@@ -41,7 +43,7 @@ instructions and assume it will never change.
 
 Before calling an integration ready, use synthetic data to check that the agent:
 
-1. refreshes context and separates confirmed stock from inspect-first evidence;
+1. reads current state and separates confirmed stock from inspect-first evidence;
 2. does not turn a catalog match or delivery record into physical availability;
 3. creates a revisioned BOM and explains gaps before proposing purchases;
 4. preserves exact printer/filament/build configuration and artifact hashes;
@@ -80,17 +82,20 @@ the [MCP quickstart](https://github.com/newtonlorenz/benchledger/blob/main/apps/
 and [maker workflow contract](https://github.com/newtonlorenz/benchledger/blob/main/docs/maker-workflows.md)
 as references, verifying availability against the connected server.
 
-### Build-plan writes and retry keys
+### Write retry keys
 
-`save_build_plan` requires an 8–200 character idempotency key in the transport
-context. Use the shipped `scripts/mcp-http-client.mjs` bridge (or its exported
-`createForwarder` / `runStdioBridge`) for host clients; it supplies the required
-HTTP header and retains the same key for unchanged unconfirmed retries. A raw
-stdio-to-HTTP proxy that only forwards JSON can omit this context and cause an
-opaque `INVALID_ARGUMENT` even when the plan satisfies its schema. Do not add
-an unsupported key field to the tool arguments or invent a different payload.
-Check the host transport and read the current plan before any retry; do not
-recreate a plan that already committed.
+Every mutating tool accepts an optional `idempotencyKey` argument (8–200
+printable characters). A host `Idempotency-Key` header is equivalent; if both
+are sent they must be identical. Commands that need a key (for example
+`save_build_plan`, `commission_inventory_item`, `remove_project`,
+`commit_project_setup` and `commit_inspection_completion`) derive a
+deterministic key from the tool, actor and canonical arguments when neither is
+supplied, so an identical retry replays instead of duplicating. To repeat the
+same logical write on purpose, pass a fresh `idempotencyKey`. Reusing a key with
+a different payload returns `error.reason: "idempotency_conflict"`. The shipped
+`scripts/mcp-http-client.mjs` bridge also supplies a header and keeps it for
+unchanged unconfirmed retries. Read the current record before any retry; do not
+recreate a write that already committed.
 
 Unsliced plans can omit plate material rows and times, leaving estimates
 unknown. Structured material rows require positive grams and filament inventory
@@ -117,11 +122,14 @@ not provide generic MCP filesystem access. After interrupted finalization,
 inspect the revision before repeating an upload; there are no automatic retries.
 Without host access, use the authenticated browser Files surface.
 
-## Schema dialects
+## Vocabulary
 
-Use the advertised schema for each tool. Legacy item and quantity tools use
-`piece` and evidence labels such as `physical_count`, `delivery` and `order`.
-The atomic setup, quote, build-plan and close-out contracts use canonical
-application units such as `each`. A delivery is not counted stock. Do not copy
-REST evidence labels into legacy MCP input fields, or infer compatibility from
-a name or catalogue record. Generic documents are not validation evidence.
+MCP outputs use the canonical application vocabulary everywhere: units `each`,
+`gram`, `millimetre`, `millilitre`, `metre`, `set`; evidence
+`physically_counted`, `commissioned`, `delivered_uncounted`,
+`ordered_unverified`, `allocated`, `consumed`, `unknown`; condition `new`,
+`good`, `worn`, `needs_repair`, `unknown`. Inputs also accept legacy aliases
+(`piece` = each, `roll` = set, `physical_count`, `delivery`, `order`, `used` =
+good, `opened` = worn) so older agents keep working. A delivery is not counted
+stock. Do not infer compatibility from a name or catalogue record. Generic
+documents are not validation evidence.

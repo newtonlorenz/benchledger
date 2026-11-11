@@ -8,17 +8,118 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Actions are pinned by commit SHA; the comment names the release. Update both
+# together (gh api repos/<owner>/<repo>/git/ref/tags/<tag>).
 jobs:
-  test:
+  static:
+    name: public check, typecheck and audit
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run public:check
+      # Workspace typechecks resolve sibling packages through their built
+      # declarations. Includes the mobile app's tsc --noEmit (no Expo export).
+      - run: npm run build:packages
+      # The server imports the MCP adapter's declarations.
+      - run: npm run build --workspace=@benchledger/mcp
+      - run: npm run typecheck
+      # Strict: every production dependency that can reach the server image.
+      - name: audit server runtime dependencies (strict)
+        run: npm audit --omit=dev --workspace=@benchledger/server --workspace=@benchledger/web --workspace=@benchledger/mcp --workspace=@benchledger/import-cli --workspace=packages
+      # Whole tree, including the Expo mobile toolchain that never ships in the
+      # server image: high and critical advisories still fail the build.
+      - name: audit all production dependencies (high and above)
+        run: npm audit --omit=dev --audit-level=high
+
+  unit:
+    name: unit tests and coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build:server
+      - run: npm test -- --reporter=default --reporter=junit --outputFile.junit=test-results/vitest-junit.xml
+      - name: upload unit results and coverage
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unit-results
+          path: |
+            test-results/vitest-junit.xml
+            coverage/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  e2e:
+    name: browser end-to-end
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - run: npm run check
-      - run: npm audit --omit=dev
+      - run: npm run build:server
+      - run: npx playwright test
+      - name: upload Playwright report and traces
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  docker:
+    name: container image build and smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: docker build -f deploy/Dockerfile -t benchledger:ci .
+      - name: start demo container
+        run: docker run -d --name benchledger-ci -e BENCHLEDGER_HOST=0.0.0.0 -e BENCHLEDGER_DEMO=true -p 127.0.0.1:8792:8792 benchledger:ci
+      - name: health endpoint answers
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8792/api/v1/health; then exit 0; fi
+            sleep 2
+          done
+          docker logs benchledger-ci
+          exit 1
+      - name: image healthcheck becomes healthy
+        run: |
+          for attempt in $(seq 1 30); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' benchledger-ci)
+            [ "$status" = healthy ] && exit 0
+            sleep 2
+          done
+          echo "health status: $status"; docker logs benchledger-ci
+          exit 1
+      - name: runtime image runs as non-root and excludes sources and mobile
+        run: |
+          test "$(docker exec benchledger-ci id -u)" = 10001
+          docker exec benchledger-ci sh -c '! test -e apps/mobile && ! test -e apps/server/src && ! test -e node_modules/vite'
+          docker exec benchledger-ci node scripts/benchledger-backup.mjs --help
+      - if: ${{ always() }}
+        run: docker rm -f benchledger-ci || true

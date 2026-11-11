@@ -4,6 +4,13 @@ export type IconName =
   | "pin"
   | "command"
   | "panel-left"
+  | "bench"
+  | "bolt"
+  | "brush"
+  | "bulb"
+  | "droplet"
+  | "nut"
+  | "printer"
   | "arrow-left"
   | "arrow-right"
   | "arrow-up-right"
@@ -31,6 +38,7 @@ export type IconName =
   | "layers"
   | "link"
   | "menu"
+  | "more"
   | "minus"
   | "package"
   | "plus"
@@ -51,6 +59,13 @@ const paths: Record<IconName, ReactNode> = {
   pin: <><path d="m9 3 7 1-2 5 4 4-1 1-5-1-3 3-1-1 2-5-3-4 2-3ZM9 15l-5 5" /></>,
   command: <><path d="M8 8H5a3 3 0 1 1 3-3v14a3 3 0 1 1-3-3h14a3 3 0 1 1-3 3V5a3 3 0 1 1 3 3H8Z" /></>,
   "panel-left": <><rect x="3" y="4" width="18" height="16" rx="1" /><path d="M9 4v16" /></>,
+  bench: <><path d="M3 9h18M5 9v11M19 9v11M5 15h14" /><path d="M8 9V5h3v4M14 9V6h3v3" /></>,
+  bolt: <path d="M13 3 5 13.5h6L10 21l8-10.5h-6L13 3Z" />,
+  brush: <><path d="M14.5 4.5 19.5 9.5 12 17l-5-5 7.5-7.5Z" /><path d="M7 12c-2.5 0-4 1.8-4 4v4h4c2.2 0 4-1.5 4-4" /></>,
+  bulb: <><path d="M9 18h6M10 21h4" /><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.4 1 1.1 1 1.9V16h5v-.2c0-.8.4-1.5 1-1.9A6 6 0 0 0 12 3Z" /></>,
+  droplet: <path d="M12 3s6 6.6 6 11a6 6 0 0 1-12 0c0-4.4 6-11 6-11Z" />,
+  nut: <><path d="m12 3 7.8 4.5v9L12 21l-7.8-4.5v-9L12 3Z" /><circle cx="12" cy="12" r="3.2" /></>,
+  printer: <><path d="M4 4h16v16H4z" /><path d="M4 8h16M8 8v4h8V8M9 16h6M12 12v2" /></>,
   "arrow-left": <path d="M19 12H5m6 6-6-6 6-6" />,
   "arrow-right": <path d="M5 12h14m-6-6 6 6-6 6" />,
   "arrow-up-right": <><path d="M7 17 17 7" /><path d="M7 7h10v10" /></>,
@@ -79,6 +94,7 @@ const paths: Record<IconName, ReactNode> = {
   link: <><path d="M10 13.5a4 4 0 0 0 5.7.1l2-2a4 4 0 0 0-5.7-5.6l-1.1 1.1" /><path d="M14 10.5a4 4 0 0 0-5.7-.1l-2 2A4 4 0 0 0 12 18l1.1-1.1" /></>,
   menu: <><path d="M4 7h16M4 12h16M4 17h16" /></>,
   minus: <path d="M5 12h14" />,
+  more: <><circle cx="5" cy="12" r="1.4" /><circle cx="12" cy="12" r="1.4" /><circle cx="19" cy="12" r="1.4" /></>,
   package: <><path d="m4 7 8-4 8 4-8 4-8-4Z" /><path d="M4 7v10l8 4 8-4V7M12 11v10" /></>,
   plus: <><path d="M12 5v14M5 12h14" /></>,
   refresh: <><path d="M20 11a8 8 0 0 0-14.8-3L3 11" /><path d="M3 5v6h6M4 13a8 8 0 0 0 14.8 3L21 13" /><path d="M21 19v-6h-6" /></>,

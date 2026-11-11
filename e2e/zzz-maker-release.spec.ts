@@ -38,7 +38,7 @@ for (const width of [1440, 390]) test(`reviewed setup, append and quotes are usa
   const row = page.locator(".sourcing-requirement").filter({ has: page.getByRole("heading", { name: "M3 mounting screw", exact: true }) });
   await row.getByRole("button", { name: "Record quote for M3 mounting screw", exact: true }).click();
   await row.getByLabel("Supplier", { exact: true }).fill("Synthetic supplier"); await row.getByLabel("Supplier source URL").fill("https://supplier.example/fasteners");
-  await row.getByLabel("Quantity per pack", { exact: true }).fill("4"); await row.getByLabel("Pack price", { exact: true }).fill("2.50");
+  await row.getByLabel("Quantity per pack", { exact: true }).fill("4"); await row.getByLabel("Pack price", { exact: true }).fill("2.50"); /* The default currency follows the browser locale; this fixture quotes in euros. */ await row.getByLabel("Quoted currency", { exact: true }).selectOption("EUR");
   await row.getByLabel("Shipping for this quote, blank if unknown").fill("2.00"); await row.getByLabel("Quoted tax included").selectOption("yes");
   await row.getByRole("button", { name: "Save quote", exact: true }).click();
   await row.getByLabel("I checked that this quoted item meets the current requirement").check(); await row.getByRole("button", { name: "Use reviewed quote", exact: true }).click();

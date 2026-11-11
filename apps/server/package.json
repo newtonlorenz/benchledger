@@ -13,13 +13,13 @@
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
-    "@fastify/cookie": "^11.0.2",
-    "@fastify/swagger": "^9.5.1",
     "@benchledger/api-contract": "0.1.0",
     "@benchledger/application": "0.1.0",
     "@benchledger/mcp": "0.1.0",
     "@benchledger/runtime": "0.1.0",
-    "fastify": "^5.12.3"
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/swagger": "^9.5.1",
+    "fastify": "^5.12.8"
   },
   "devDependencies": {
     "tsx": "^4.20.5"

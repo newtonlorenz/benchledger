@@ -34,6 +34,13 @@ describe("project file previews", () => {
     expect(html).not.toMatch(/<script|<img|javascript:|href="\/api/u);
     expect(html).toContain('rel="noopener noreferrer"');
   });
+  it("renders GitHub-flavoured tables in a scrollable region and keeps raw HTML inert", () => {
+    const html = renderToStaticMarkup(<MarkdownPreview text={"| Part | Qty |\n| --- | ---: |\n| M3 insert | 4 |\n| <b>x</b> | ~~2~~ |\n\n- [x] Printed\n- [ ] Assembled"} />);
+    expect(html).toMatch(/<div class="markdown-table-scroll"[^>]*>[^]*?<table/u);
+    expect(html).toContain("<th>Part</th>"); expect(html).toContain("<td>M3 insert</td>");
+    expect(html).toContain("<del>2</del>"); expect(html).toContain('type="checkbox"');
+    expect(html).not.toContain("<b>");
+  });
   it("uses verified, bounded bytes and supports Escape", async () => {
     vi.mocked(fetchArtifactDownload).mockResolvedValue({ text: async () => "# Assembly\n\nRead this first." } as Blob);
     const close = vi.fn(); const view = render(<ArtifactPreview file={file} onClose={close} />);

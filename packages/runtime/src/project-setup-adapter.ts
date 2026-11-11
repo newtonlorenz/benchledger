@@ -37,7 +37,7 @@ export class ProductionProjectSetupAdapter implements ProjectSetupPort {
     const intendedPrinterItemId = preview.proposal.revision.intendedPrinterItemId;
     if (intendedPrinterItemId !== undefined && intendedPrinterItemId !== null) {
       if (preview.proposal.revision.fabricationRoute !== "printed") throw new ApplicationError("validation", "The intended printer requires the printed fabrication route");
-      await assertOwnedPrinter({ inventory: this.inventory, catalog: this.catalog }, intendedPrinterItemId);
+      await assertOwnedPrinter({ inventory: this.inventory, catalog: this.catalog }, intendedPrinterItemId, this.inventory.stockReceivingPolicy());
     }
     for (const reservation of preview.proposal.reservations) {
       const line = preview.proposal.bomLines.find((candidate) => candidate.localRef === reservation.bomLineLocalRef);

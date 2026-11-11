@@ -301,7 +301,7 @@ export function CatalogFacetPicker({ kind, products, selected, onSelect, onAddUn
 
   return ( <section className="catalog-facet-picker" aria-labelledby={`${selectionId}-heading`}>
     <div className="catalog-facet-heading"><div><span className="eyebrow">Choose by details</span><h3 id={`${selectionId}-heading`}>{isFilament ? "Find the exact filament" : "Find the exact printer"}</h3></div><span className="catalog-facet-count">{products.filter((product) => product.kind === kind).length} catalog entries</span></div>
-    <p className="catalog-facet-note">Catalog entries describe products only. They do not indicate that you own, have available, or can use a product.</p>
+    <p className="catalog-facet-note">Catalog entries describe products only, not the stock you own.</p>
     {partial && ( <p className="catalog-facet-partial" role="status">{partialMessage}</p> )}
     <div className={`catalog-facet-grid ${isFilament ? "is-filament" : "is-printer"}`}>
       <CatalogFacetSelect id={`${selectionId}-manufacturer`} facet="manufacturer" label="Manufacturer / brand" value={facets.manufacturer ?? ""} values={valuesFor("manufacturer")} onChange={(value) => changeFacet("manufacturer", value)} />

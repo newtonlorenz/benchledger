@@ -18,6 +18,8 @@ export function slugify(value: string): string {
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+    // Separator runs are already collapsed to one "-", so trimming needs no
+    // quantifier (and no backtracking on long dash runs).
+    .replace(/^-|-$/g, "");
   return slug || "project";
 }

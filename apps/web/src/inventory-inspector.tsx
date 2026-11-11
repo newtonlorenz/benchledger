@@ -36,14 +36,18 @@ export function InventoryThumbnail({ item, sampleMode = true, large = false }: {
   useEffect(() => {
     let active = true;
     setImage(undefined); setFailed(false);
+    // The list already carries the primary image; only the large inspector
+    // view needs the gallery (for the image's source label).
+    if (!sampleMode && item.primaryImage && !large) return () => { active = false; };
     if (!sampleMode) void workflowRequest<InventoryImageGallery>(`/inventory/${encodeURIComponent(item.id)}/images`)
       .then(gallery => { if (active) setImage(gallery.images.find(candidate => candidate.sourceKind === "item_photo") ?? gallery.images[0]); })
       .catch(() => { if (active) setFailed(true); });
     return () => { active = false; };
-  }, [item.id, sampleMode]);
+  }, [item.id, item.primaryImage, sampleMode, large]);
+  const imageId = image?.id ?? (!sampleMode && !large ? item.primaryImage?.id : undefined);
   const role = image?.sourceKind === "item_photo" ? "Item photo" : image?.sourceKind === "reference" ? "Reference image" : image?.sourceKind === "generated" ? "AI-generated image" : "Image source unknown";
   return <span className={`inventory-thumbnail${large ? " is-large" : ""}`}>
-    {image && !failed ? <><img src={inventoryImageUrl(item.id, image.id)} alt="" loading="lazy" onError={() => setFailed(true)} />{large && <small>{role}</small>}</> : <><Icon name="box" size={large ? 36 : 22} />{large && <small>{failed ? "Image unavailable" : "No image"}</small>}</>}
+    {imageId && !failed ? <><img src={inventoryImageUrl(item.id, imageId)} alt="" loading="lazy" onError={() => setFailed(true)} />{large && <small>{role}</small>}</> : <><Icon name="box" size={large ? 36 : 22} />{large && <small>{failed ? "Image unavailable" : "No image"}</small>}</>}
   </span>;
 }
 
@@ -71,7 +75,7 @@ export function InventoryInspector({ item, category, sampleMode = true, projects
           <strong className="inventory-available-summary">{assessment.check ? inventoryStockLabel(item) : item.availableQuantity === undefined ? "Availability not reported" : `${formatQuantity(item.availableQuantity, item.unit)} available`}</strong>
           <p>{assessment.confirmed ? `${formatQuantity(item.quantity, item.unit)} confirmed` : `${formatQuantity(item.quantity, item.unit)} recorded, unconfirmed`} · {formatQuantity(item.reserved, item.unit)} reserved</p>
           <dl className="inventory-stock-facts"><div><dt>Location</dt><dd>{item.location && item.location !== "Unassigned" ? item.location : "Not recorded"}</dd></div><div><dt>Last physical count</dt><dd>{lastCount ? lastCount.slice(0, 10) : "Not recorded"}</dd></div></dl>
-          <Button variant="outline" onClick={() => (onCountStock ?? onOpen)(item.id)} disabled={assessment.unitNeedsCorrection}>Count stock</Button>
+          <Button variant="outline" onClick={() => (onCountStock ?? onOpen)(item.id)} disabled={assessment.unitNeedsCorrection}>{item.evidence === "delivered" || item.evidence === "ordered" ? "Receive and count" : "Count stock"}</Button>
         </div>
       </div>
       <p className="inventory-stock-explanation">{assessment.unitNeedsCorrection ? item.unitCorrectionReason ?? "Correct the unit before using this quantity." : assessment.needsRepair ? "Repair is needed. This item is excluded from available stock." : !assessment.confirmed ? "The recorded quantity has not been physically confirmed. Check the item before planning its use." : "A physical count does not confirm compatibility. Check the exact item against the project requirements."}</p>

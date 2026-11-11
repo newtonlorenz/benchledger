@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, workflowRequest, workflowCommandKey } from "./api";
+import { browserLocale } from "./domain";
 export function useWorkflowRead<T>(path: string | undefined, dependency = "") {
   const identity = JSON.stringify([path, dependency]);
   const [state, setState] = useState<{ identity: string; data?: T; loading: boolean; error?: string }>({ identity, loading: Boolean(path) });
@@ -42,7 +43,7 @@ export function mutationValue<T>(value: unknown, required: readonly string[]): T
   if (!data || typeof data !== "object" || required.some((key) => !(key in data))) throw new ApiError("The service did not confirm the saved record.", { kind: "server", status: 502 });
   return data as T;
 }
-export function quotedMoney(minor: number, currency: string): string { const digits = new Intl.NumberFormat("en-GB", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2; return new Intl.NumberFormat("en-GB", { style: "currency", currency }).format(minor / 10 ** digits); }
+export function quotedMoney(minor: number, currency: string, locale: string | undefined = browserLocale()): string { const digits = new Intl.NumberFormat("en-GB", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2; return new Intl.NumberFormat(locale, { style: "currency", currency }).format(minor / 10 ** digits); }
 export function quotedMinor(input: string, currency: string): number {
   const digits = new Intl.NumberFormat("en-GB", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2;
   if (!/^\d+(?:\.\d+)?$/u.test(input.trim()) || (input.split(".")[1]?.length ?? 0) > digits) throw new Error(`Use a non-negative price with at most ${digits} decimal places for ${currency}.`);

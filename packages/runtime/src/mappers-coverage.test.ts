@@ -103,16 +103,26 @@ describe("inventory and dimension mapper edges", () => {
     for (const [index, sourceStatus] of sourceStatuses.entries()) {
       const { dimensions: _dimensions, notes: _notes, ...itemWithoutOptionalFields } = nativeItem;
       const item = { ...itemWithoutOptionalFields, id: `fallback-${index}`, category: index === 0 ? "printer" : index === 1 ? "tool" : index === 2 ? "filament" : index === 3 ? "electrical" : index === 4 ? "adhesive" : "other", sourceStatus, confidence: "unknown" as const, reportedQuantity: 7, purchasedQuantity: 11 };
-      const projected = apiInventoryFromNative(item, { onHand: 3, available: 2 }, 4);
+      const projected = apiInventoryFromNative(item, { onHand: 3, available: 2 }, 4, "on_receipt");
+      const confirmed = sourceStatus === "commissioned_available" || sourceStatus === "physically_confirmed";
+      const ledgerBacked = sourceStatus !== "other";
       expect(projected.evidence.state).toBe(expected[index]);
-      expect(projected.quantity).toBe(sourceStatus === "commissioned_available" || sourceStatus === "physically_confirmed" ? 3 : 7);
-      expect(projected.availableQuantity).toBe(sourceStatus === "commissioned_available" || sourceStatus === "physically_confirmed" ? 2 : 0);
-      expect(projected.allocatedQuantity).toBe(sourceStatus === "commissioned_available" || sourceStatus === "physically_confirmed" ? 1 : 0);
+      expect(projected.quantity).toBe(ledgerBacked ? 3 : 7);
+      expect(projected.availableQuantity).toBe(confirmed ? 2 : 0);
+      expect(projected.allocatedQuantity).toBe(confirmed ? 1 : 0);
+      expect(projected.availability).toBe(confirmed ? "confirmed" : sourceStatus === "ordered_unverified" ? "ordered" : sourceStatus === "other" ? "unknown" : "inspect_first");
     }
-    const projected = apiInventoryFromNative({ ...nativeItem, source: { benchLedger: { kind: "filament", description: "metadata description", sku: "S", location: "L", condition: "new", tags: ["petg"], links: [], evidence: { state: "commissioned" } } } }, { onHand: 8, available: 6 }, 2);
+    // The receiving policy changes derived availability only, never the evidence.
+    const delivered = { ...nativeItem, id: "policy-delivered", sourceStatus: "delivered_uncounted", source: { benchLedger: { kind: "electronic", tags: [], links: [], evidence: { state: "delivered_uncounted" } } } };
+    const ordered = { ...delivered, id: "policy-ordered", sourceStatus: "ordered_unverified", source: { benchLedger: { kind: "electronic", tags: [], links: [], evidence: { state: "ordered_unverified" } } } };
+    expect(apiInventoryFromNative(delivered, { onHand: 5, available: 3, allocated: 2 }, 1, "on_delivery")).toMatchObject({ quantity: 5, availableQuantity: 3, allocatedQuantity: 2, availability: "assumed", evidence: { state: "delivered_uncounted" } });
+    expect(apiInventoryFromNative(delivered, { onHand: 5, available: 3, allocated: 2 }, 1, "on_receipt")).toMatchObject({ quantity: 5, availableQuantity: 0, allocatedQuantity: 2, availability: "inspect_first" });
+    expect(apiInventoryFromNative(ordered, { onHand: 5, available: 5 }, 1, "on_delivery")).toMatchObject({ availableQuantity: 0, availability: "ordered", evidence: { state: "ordered_unverified" } });
+    expect(apiInventoryFromNative(ordered, { onHand: 5, available: 5 }, 1, "on_purchase")).toMatchObject({ availableQuantity: 5, allocatedQuantity: 0, availability: "assumed" });
+    const projected = apiInventoryFromNative({ ...nativeItem, source: { benchLedger: { kind: "filament", description: "metadata description", sku: "S", location: "L", condition: "new", tags: ["petg"], links: [], evidence: { state: "commissioned" } } } }, { onHand: 8, available: 6 }, 2, "on_receipt");
     expect(projected).toMatchObject({ kind: "filament", description: "metadata description", sku: "S", location: "L", condition: "new", tags: ["petg"], quantity: 8, availableQuantity: 6, allocatedQuantity: 2, unit: "metre", dimensions: { lengthMm: 200 } });
     expect(projected.unitStatus).toBe("compatible");
-    expect(apiInventoryFromNative(nativeItem, { onHand: 3, available: 2 }, 4)).toMatchObject({ kind: "electronic", unit: "metre", unitStatus: "needs_correction", unitCorrectionReason: expect.stringMatching(/electronic items use/i) });
+    expect(apiInventoryFromNative(nativeItem, { onHand: 3, available: 2 }, 4, "on_receipt")).toMatchObject({ kind: "electronic", unit: "metre", unitStatus: "needs_correction", unitCorrectionReason: expect.stringMatching(/electronic items use/i) });
   });
 });
 

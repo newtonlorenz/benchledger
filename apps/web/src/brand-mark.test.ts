@@ -20,8 +20,8 @@ describe("BenchLedger brand mark", () => {
     expect(stylesSource).toMatch(/\.brand-mark span\s*\{[^}]*background: var\(--primary\);/u);
 
     expect(faviconSource).toContain('viewBox="0 0 28 28"');
-    expect(faviconSource).toContain('fill="#1F4A40"');
-    expect(faviconSource).toContain('fill="#A5D5AF"');
+    expect(faviconSource).toContain('fill="#352820"');
+    expect(faviconSource).toContain('fill="#F59C6D"');
     expect(faviconSource).not.toContain("<path");
     expect(faviconSource.match(/<rect\b/gu)).toHaveLength(4);
     expect(faviconSource).toContain('x="6" y="14.3" width="3.33" height="7.7"');

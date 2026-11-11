@@ -5,8 +5,9 @@ import { Icon, type IconName } from "./icons";
 const iconNames: IconName[] = [
   "arrow-left", "arrow-right", "arrow-up-right", "archive", "box", "check", "check-circle",
   "chevron-down", "chevron-right", "circle", "clipboard", "clock", "close", "code", "copy", "circuit", "download", "external", "file", "filter", "folder", "grid", "help", "info", "layers", "link",
-  "menu", "minus", "package", "plus", "refresh", "search", "settings", "sliders", "spark", "spool", "tag",
-  "tool", "trash", "upload", "warning", "wrench"
+  "menu", "minus", "more", "package", "plus", "refresh", "search", "settings", "sliders", "spark", "spool", "tag",
+  "tool", "trash", "upload", "warning", "wrench",
+  "bench", "bolt", "brush", "bulb", "droplet", "nut", "printer"
 ];
 
 describe("Icon", () => {

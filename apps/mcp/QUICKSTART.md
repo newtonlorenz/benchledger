@@ -2,8 +2,11 @@
 
 This document is the short technical contract for an agent discovering the
 BenchLedger MCP adapter. It is intentionally model-neutral: an MCP client may
-be a coding agent, a local assistant, or a scripted workflow. Read the
-capability resource before making a recommendation or write.
+be a coding agent, a local assistant, or a scripted workflow. `tools/list` is
+the authoritative input contract (schemas plus `readOnlyHint`,
+`destructiveHint`, `idempotentHint` and `openWorldHint` annotations); read the
+capability resource once per session for evidence, error and approval
+semantics.
 
 ## 1. Discover the server (minute 0–1)
 
@@ -51,16 +54,21 @@ tool list, refresh or reconnect the MCP client. Some hosts cache `tools/list`
 for an agent session; do not replace an available atomic operation with dozens
 of writes because the client is stale.
 
-## 2. Refresh before deciding (minute 1–2)
+## 2. Read current state before deciding (minute 1–2)
 
-Start a project conversation with:
+Read `benchledger://inventory/summary` (or `read_inventory_summary`, which takes
+no arguments and always counts the whole inventory) and use `list_inventory`
+with a small page (normally `limit: 25`). `refresh_context` is optional: it
+returns a small live snapshot (server time, the workspace
+`stockReceivingPolicy`, attention counts over the first 100 items and, with
+`projectId`, the project's status, version, current revision and blocked
+state). It has no expiry; call it again when freshness
+matters:
 
 ```json
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"refresh_context","arguments":{"includeInventory":true}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"refresh_context","arguments":{"projectId":"project-desk-sensor"}}}
 ```
-
-Then read `benchledger://inventory/summary` and use `list_inventory` with a
-small page (normally `limit: 25`). Use the exact item resource when a candidate
+ Use the exact item resource when a candidate
 needs dimensions, compatibility, provenance, or stock history.
 
 For stock planning, `list_inventory` accepts `stockView: "available" | "check" |
@@ -137,8 +145,9 @@ a bounded workspace-global tombstone page and project-scoped tokens are denied.
 Use `read_removed_project_history` for the bounded, explicitly scoped audit
 history of one removed project. `remove_project` is irreversible and requires
 explicit human approval, the current `expectedVersion`, exact case-sensitive
-`projectName`, and a stable 8–200 character idempotency key in the MCP request
-context. Retry an ambiguous response with the same key and identical input.
+`projectName`; it carries `destructiveHint`, so the host must ask the human
+first. Retry an ambiguous response with identical input (and the same
+`idempotencyKey`, if you supplied one).
 Removal releases active reservations and makes the project and descendants
 unavailable through ordinary read tools; there is no restore or purge tool.
 
@@ -151,8 +160,8 @@ benchledger://projects/{projectId}/artifacts
 
 Every project list, detail, context and mutation uses the same lifecycle:
 `idea`, `planned`, `ready`, `building`, `validating`, `complete`, `archived`.
-Use `archive_project` to reversibly archive a project; `retire_project` is a
-compatibility alias for the same application command. Archived projects are
+Use `archive_project` to reversibly archive a project (the former
+`retire_project` alias has been removed). Archived projects are
 hidden from default lists, release active reservations with stock evidence,
 and retain all revisions, artifacts, BOM, and audits. Use `restore_project` to
 return one to `idea`; released reservations are never recreated. Never send legacy values such as
@@ -185,7 +194,16 @@ For a beginner, use plain language and explain one next action:
 The agent should call `calculate_bom_gaps` and explain every required result as
 one of four decisions:
 
-- **Ready:** physically confirmed or commissioned stock meets the line.
+- **Ready:** stock that counts as in stock meets the line. By default that is
+  physically confirmed or commissioned stock. If the human chose a stock
+  receiving policy of `on_delivery` or `on_purchase` (Settings → “When does
+  stock count as in stock?”), delivered or ordered stock also counts; gap
+  candidates then report `availability: "assumed"` with the unchanged
+  `evidenceState`, and inventory rows report `inStock: true` with
+  `policyAvailability: "assumed"`. Say so when you report readiness (“ready,
+  relying on delivered but uncounted inserts”). The policy is read-only for
+  agents: there is no MCP tool to change it; ask the human to change it in
+  Settings.
 - **Check:** a relevant item exists but its quantity, condition, identity, or
   compatibility still needs inspection. Partial confirmed coverage is Check
   only while an inspect-first candidate may cover the remaining quantity.
@@ -198,8 +216,8 @@ one of four decisions:
 
 Structured alternatives preserve `compatible`, `reason`, and optional
 evidence-backed `quantityConversion`: one inventory `set` covers a positive
-whole number of requirement-side MCP `piece`s. MCP maps `piece` losslessly to
-the REST/application unit `each`. Candidate available, supplied, and inspect
+whole number of requirement-side `each` (legacy input alias `piece`).
+Candidate available, supplied, and inspect
 quantities stay in requirement units, while candidate reasons retain conversion
 capacity, allocation, and overage diagnostics. Missing/invalid conversions and
 conditional or unknown alternatives remain Check and are never buyable or
@@ -233,10 +251,13 @@ total even when an optional line happens to be supplied or needs inspection.
 
 Never turn an order, delivery message, or old price into a present stock count.
 When a delivery or order has been physically checked, use
-`commission_inventory_item` with the observed quantity, commissioned evidence,
-the current `expectedVersion`, and a distinct idempotency key in the request
-context. Do not change evidence through `update_inventory_item`; commissioning
-creates the append-only count event that retains the prior provenance.
+`commission_inventory_item` with the observed quantity, commissioned evidence
+and the current `expectedVersion` (an `idempotencyKey` is derived when
+omitted), or complete an inspection. Do not change evidence through
+`update_inventory_item`, and do not use a `count_correction` stock event: it
+adjusts already-counted stock and never makes delivered or ordered stock
+counted. Commissioning creates the append-only count event that retains the
+prior provenance.
 
 ## 4. Give experts the evidence (minute 4–6)
 
@@ -258,8 +279,8 @@ An expert prompt might be:
 
 The normal sequence is:
 
-1. `create_project_with_initial_revision` (one atomic command; reuse that
-   command's key only for an ambiguous identical retry), or `read_project` for
+1. `create_project_with_initial_revision` (one atomic command; pass an
+   `idempotencyKey` and reuse it only for an ambiguous identical retry), or `read_project` for
    an existing workspace
 2. `create_work_item` for each independently revised part, assembly, electronics
    module, firmware unit, or document
@@ -276,16 +297,34 @@ The normal sequence is:
    preview → `commit_reconciliation` only after explicit confirmation
 
 Each write is one atomic application-service operation and returns IDs, versions,
-audit information when available, and the resulting state. Pass the returned
-`expectedVersion` on the next mutable update. A conflict means another surface
-changed the record; read again rather than overwriting it.
+audit information when available, and the resulting state. Every update of an
+existing record requires the returned version as `expectedVersion`.
+
+### Errors and conflicts
+
+A failed call returns `isError: true` with `error.code`, the application's own
+`error.message`, `error.reason`, optional `error.details` and a
+`correlationId` that matches the audit trail. Act on `reason`:
+
+- `version_conflict` (`details.expectedVersion`/`actualVersion` when known):
+  another surface changed the record; read it again and retry with its current
+  version rather than overwriting it.
+- `rule_conflict`: a business rule rejected the request (for example a stale
+  preview basis with `details.recoveryAction`); change the request — an
+  unchanged retry fails again.
+- `idempotency_conflict`: the key was used for a different payload; resend the
+  identical payload or choose a new `idempotencyKey`.
+- `validation`: fix the arguments; `details.issues` lists up to ten
+  `{path, message}` field problems.
+- `not_found` and `forbidden`: the record is missing or outside the token.
 
 `create_project_with_initial_revision` accepts optional caller-provided
 `projectId` and `revisionId` values as stable record identities, never as replay
 keys. An ambiguous retry replays exactly once only when the idempotency key and
 the complete canonical project/revision payload are identical. Reusing the key
-with a changed payload returns a safe idempotency conflict. A 409 collision
-response exposes only bounded details (`reason`, `field`, `id`,
+with a changed payload returns a safe idempotency conflict. This is the
+canonical description of the setup-collision response; other documents link
+here. A collision response exposes only bounded details (`reason`, `field`, `id`,
 `retryable: false`, `commitState: "not_committed"`) and distinguishes
 `project_id_exists`, `revision_id_exists`, `project_name_exists`, and
 `idempotency_key_reused`. Read the existing project, choose a different project
@@ -296,7 +335,7 @@ its normalized IDs, gaps, unresolved specifications, and inventory basis, then
 call `commit_project_setup` with the same preview ID/version/hash and explicit
 reservation confirmation when needed. The preview is actor-owned metadata only
 for 30 minutes; commit is one transaction with one aggregate audit and an
-8–200-character idempotency key. This command remains available for the
+optional `idempotencyKey` (derived from the arguments when omitted). This command remains available for the
 incremental project-plus-initial-revision path.
 
 For bounded catalog corrections, use `bulk_update_inventory_items` with 1–100
@@ -308,14 +347,29 @@ one atomic operation. The response separates deterministic `updated` and
 correlation metadata. No-op rows do not increment versions or create
 audit/events, and an idempotent retry returns the stored result without
 repeating them.
-When the host has no HTTP idempotency header (for example, stdio), the
-application bridge derives a bounded actor/action/payload key; an explicit
-host key remains authoritative. Stable project and revision IDs never imply
-replay, and a reused key with changed project/revision fields is rejected.
+### Idempotency keys
+
+Every mutating tool accepts an optional `idempotencyKey` argument (8–200
+printable characters). A host `Idempotency-Key` header is equivalent; if both
+are sent they must be identical. Commands that need a key —
+`commission_inventory_item`, `remove_project`, `commit_project_setup`,
+`commit_inspection_completion`, `bulk_update_inventory_items`,
+`add_inventory_image` and the maker-workflow writes — derive a deterministic
+key from (tool, actor, canonical arguments) when neither is supplied, so an
+identical retry replays instead of duplicating. To repeat the same logical
+write deliberately, pass a fresh key. Stable project and revision IDs never
+imply replay, and a reused key with a changed payload is rejected with
+`idempotency_conflict`.
 The single-item `update_inventory_item` command accepts a full replacement
 `tags` array (normalized and deduplicated). Quantity, evidence, identity,
 profile, retirement, partial, undo, and import changes remain unsupported by
 these metadata tools.
+
+`create_inventory_item` accepts the same normalized `tags` list. Retire an item
+that should leave ordinary lists and matching with `retire_inventory_item`
+(`itemId`, `expectedVersion`); its stock events and audit history are kept.
+`calculate_bom_gaps` returns whole-revision `totals` but pages `lines`
+(`limit` up to 100, default 50; continue with `nextCursor` while `hasMore`).
 
 Use `record_usage` directly only for a deliberate narrow event outside normal
 project close-out. Do not replace the atomic reconciliation command with a loose
@@ -451,13 +505,19 @@ and `returned`/`usable_leftover` leave on-hand quantity intact so it becomes
 available again. A converted asset must satisfy the live create-item schema;
 its enclosing BOM line, reservation, and source item preserve reconciliation
 lineage. Draft save and commit are different commands and use different
-idempotency keys; reuse a key only for an ambiguous retry of the identical
+`idempotencyKey` values; reuse a key only for an ambiguous retry of the identical
 command and payload. The server preview remains authoritative.
 
 ## Scopes and boundaries
 
-Read and write scopes are separate (`inventory:*`, `projects:*`, `bom:*`,
-`artifacts:*`, `offers:*`, and `context:read`). A project-scoped token can only
+Tools declare a family scope (`inventory:*`, `catalog:*`, `projects:*`,
+`bom:*`, `artifacts:*`, `offers:*`, `context:read`), but HTTP bearer tokens are
+issued with only `read`, `write` (implies read) or `admin`: `read` grants every
+`*:read` scope and `write` grants every read and write scope. Finer per-family
+tokens cannot be issued. The enforced narrowing is the project allow-list.
+Destructive tools (`destructiveHint: true`: `remove_project`, `retire_*`,
+`archive_*`) are not gated beyond scopes, versions and confirmations; the host
+must ask the human before calling them. A project-scoped token can only
 read or mutate its allow-listed projects; indirect IDs (revision, BOM line,
 reservation, work-item, and artifact) are checked against their project
 ancestry before dispatch. Inventory is a shared workspace catalog: scoped
@@ -523,9 +583,13 @@ physical execution authority. Named-account activation remains gated off.
 
 Discovery is checked against the official MCP SDK and a JSON Schema validator
 for every advertised tool. Atomic project setup accepts project/revision/BOM
-properties directly, not a second schema wrapper. Object unions retain an
-object root for strict clients. Legacy evidence and quantity enums are explicit;
-canonical setup and maker commands retain their separate application vocabulary.
+properties directly, not a second schema wrapper. Every input schema is one
+flat object (no root `oneOf`/`anyOf`); variant rules such as artifact scope or
+catalog `kind` are stated in descriptions and enforced by the validator. All
+outputs use the canonical application vocabulary (`each`, `physically_counted`,
+`good`, ...); legacy input aliases (`piece`, `roll`, `physical_count`,
+`delivery`, `order`, `used`, `opened`) are still accepted. `category` is a
+closed enum and unknown values are rejected.
 
 The authenticated HTTP transport supports JSON request/response MCP. It returns
 202 without a body for notifications and 405 for unsupported GET/SSE and DELETE

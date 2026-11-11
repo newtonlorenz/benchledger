@@ -151,6 +151,27 @@ export class ReservationRepository {
     return rows.map(reservationFromRow);
   }
 
+  /** Reservations of one project revision, in the same order as list(). */
+  listForRevision(revisionId: string): readonly Reservation[] {
+    return this.database.all<SqliteRow>("SELECT * FROM reservations WHERE project_revision_id = ? ORDER BY created_at, id", [revisionId]).map(reservationFromRow);
+  }
+
+  /** Active reservations of the given revisions, in the same order as list(). */
+  listActiveForRevisions(revisionIds: readonly string[]): readonly Reservation[] {
+    if (revisionIds.length === 0) return [];
+    const placeholders = revisionIds.map(() => "?").join(", ");
+    return this.database.all<SqliteRow>(`SELECT * FROM reservations WHERE status = 'active' AND project_revision_id IN (${placeholders}) ORDER BY created_at, id`, revisionIds).map(reservationFromRow);
+  }
+
+  /** Active reservations held for one BOM line of one revision. */
+  listActiveForLine(revisionId: string, bomLineId: string): readonly Reservation[] {
+    return this.database.all<SqliteRow>("SELECT * FROM reservations WHERE project_revision_id = ? AND bom_line_id = ? AND status = 'active' ORDER BY created_at, id", [revisionId, bomLineId]).map(reservationFromRow);
+  }
+
+  hasActiveForLine(bomLineId: string): boolean {
+    return this.database.get<SqliteRow>("SELECT 1 AS found FROM reservations WHERE bom_line_id = ? AND status = 'active' LIMIT 1", [bomLineId]) !== undefined;
+  }
+
   get(id: string): Reservation | undefined {
     const row = this.database.get<SqliteRow>("SELECT * FROM reservations WHERE id = ?", [id]);
     return row === undefined ? undefined : reservationFromRow(row);
@@ -210,6 +231,9 @@ export class ReservationRepository {
       });
       const release = this.inventory.appendStockEvent(releaseEvent);
       const usage = this.inventory.appendStockEvent(usageEvent);
+      // An active reservation cannot already have a consumption event; a
+      // replayed key here would mark it consumed without consuming stock.
+      if (!usage.inserted) throw new DomainError("idempotency_conflict", "The idempotency key was already used for a different usage");
       const consumed = consumeReservation(current);
       this.database.run("UPDATE reservations SET status = ?, released_at = ? WHERE id = ?", [consumed.status, null, id]);
       return { reservation: consumed, releaseEvent: release.event, usage };

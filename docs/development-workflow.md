@@ -51,12 +51,39 @@ npm run public:check
 
 # Mandatory before requesting review
 npm run check
+
+# Only when the mobile app, API contract or lockfile changed (slow Expo export)
+npm run check:mobile
 ```
 
-`npm run check` builds every package and app, typechecks all workspaces, enforces
-the Vitest coverage thresholds, and runs the Playwright flows. Review the final
-diff and status as a separate step; a green test does not prove private files
-were excluded.
+`npm run check` runs the public-source checks, builds every package and the
+server apps (`build:server`: web, MCP, import CLI and server), typechecks all
+workspaces including the mobile app, enforces the Vitest coverage thresholds,
+and runs the Playwright flows. It no longer runs the Expo mobile export; use
+`npm run check:mobile` (or `npm run build`, which builds everything) for that.
+Review the final diff and status as a separate step; a green test does not
+prove private files were excluded.
+
+`npm run public:check` scans the files Git would publish: tracked files plus
+untracked files that are not ignored by `.gitignore`, `.git/info/exclude` or a
+global excludes file. Keep private notes in an ignored or locally excluded
+path. Without Git (for example in an exported archive) it falls back to scanning
+the whole directory tree.
+
+Demo mode and most server integration tests run the real SQLite runtime
+(`createDemoRuntime` in `@benchledger/runtime`): an in-memory SQLite database
+and a temporary artifact directory that is removed on close, seeded with the
+synthetic workspace in `packages/runtime/src/demo-seed.ts`. There is no
+separate in-memory rule implementation; add demo content to that seed. The
+only demo-specific behaviour is presentation order: demo projects are listed
+in creation order so the reference project opens first.
+
+Playwright runs two projects. `desktop-chromium` is the full suite on one worker
+against a shared in-memory demo server; specs depend on file-name ordering
+(the `zz-` prefixes), so do not rename them casually. `mobile-chromium-smoke`
+runs a small read-mostly subset under Pixel 7 emulation against its own demo
+server on port 8795. On CI each test is retried once and the retry records a
+trace.
 
 ## 3. Test the remote Docker integration
 
@@ -114,13 +141,34 @@ Push the reviewed branch only when authorized, then open a pull request into
 - schema, migration, deployment, and rollback considerations; and
 - UI/MCP/capability-map documentation changes where relevant.
 
-GitHub's required `test` and `dependency-review` checks must pass. Merge and
+GitHub CI runs these workflows:
+
+| Workflow / job | What it proves | Required |
+|---|---|---|
+| `check / public check, typecheck and audit` | privacy and public-release scan, package build, all workspace typechecks (including mobile `tsc --noEmit`), strict `npm audit --omit=dev` for every workspace in the server image, and a whole-tree production audit that fails on high or critical advisories | yes |
+| `check / unit tests and coverage` | Vitest with the 80% coverage thresholds; uploads JUnit and coverage | yes |
+| `check / browser end-to-end` | Playwright desktop suite and mobile smoke; uploads the report and traces on failure | yes |
+| `check / container image build and smoke` | `deploy/Dockerfile` builds, the demo container answers `/api/v1/health`, the image `HEALTHCHECK` turns healthy, it runs as UID 10001 and ships no sources, mobile app or Vite | yes |
+| `dependency-review` | no new moderate-or-worse advisories in the PR's dependency diff | yes |
+| `codeql / analyze (javascript-typescript)` | CodeQL `security-extended` queries; also weekly | recommended |
+| `mobile / expo export` | Expo export for iOS and Android; runs only when `apps/mobile`, the API contract, `package.json` or the lockfile change | no (path-filtered) |
+
+The single `test` job was split into the four `check` jobs above; update branch
+protection to require them instead of `test`. Expo/mobile build tooling
+advisories below high severity are reported by the whole-tree audit but do not
+fail CI, because that toolchain never ships in the server image; high and
+critical advisories anywhere in production dependencies still fail. All
+actions are pinned by commit SHA with a release comment; Dependabot proposes
+action and base-image updates.
+
+The required checks must pass. Merge and
 deployment are separate decisions; merging a contribution does not authorize a
 remote deployment or package release.
 
 ## Dependency updates
 
-Keep Vite and its React plugin in one update, and Vitest and its coverage provider
+Vite and its React plugin are build-time `devDependencies` of `apps/web`; the
+server image ships only the compiled `apps/web/dist`. Keep them in one update, and Vitest and its coverage provider
 in another coordinated update. Node type definitions stay on major 24 to match
 the supported runtime. Dependabot groups these toolchains and ignores Node type
 major updates until the runtime is deliberately upgraded.

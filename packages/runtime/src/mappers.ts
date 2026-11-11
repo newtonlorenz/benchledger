@@ -1,5 +1,6 @@
 import { bomSpecificationSchema, unitCorrectionReason } from "@benchledger/api-contract";
-import { canonicalProjectStatus } from "@benchledger/domain";
+import { canonicalProjectStatus, classifyEvidenceAvailability, isCommissionableEvidence, isConfirmedEvidence } from "@benchledger/domain";
+import type { StockReceivingPolicy } from "@benchledger/domain";
 import type {
   CreateInventoryItem, InventoryItem as ApiInventoryItem, StockEvent as ApiStockEvent,
   StockEventInput, Project as ApiProject, WorkItem as ApiWorkItem, ProjectRevision as ApiProjectRevision,
@@ -250,9 +251,8 @@ function fallbackEvidence(item: InventoryItem): ApiInventoryItem["evidence"]["st
   }
 }
 
-export function isConfirmedEvidence(state: ApiInventoryItem["evidence"]["state"]): boolean {
-  return state === "physically_counted" || state === "commissioned";
-}
+/** Re-exported for adapters; the rule itself lives in `@benchledger/domain`. */
+export { isConfirmedEvidence };
 
 export function nativeItemFromApi(input: CreateInventoryItem, id: string, now: string, existing?: InventoryItem): InventoryItem {
   const evidence = nativeEvidence(input.evidence.state);
@@ -287,12 +287,24 @@ export function nativeItemFromApi(input: CreateInventoryItem, id: string, now: s
   };
 }
 
-export function apiInventoryFromNative(item: InventoryItem, balance: { readonly onHand: number; readonly available: number }, version: number): ApiInventoryItem {
+/**
+ * Project a stored row for API callers. `policy` (the workspace stock
+ * receiving policy) decides only the derived `availability` and
+ * `availableQuantity`; the stored evidence is reported unchanged.
+ */
+export function apiInventoryFromNative(item: InventoryItem, balance: { readonly onHand: number; readonly available: number; readonly allocated?: number }, version: number, policy: StockReceivingPolicy): ApiInventoryItem {
   const metadata = readInventoryMetadata(item.source);
   const state = metadata.evidence?.state ?? fallbackEvidence(item);
-  const quantity = isConfirmedEvidence(state) ? balance.onHand : (item.reportedQuantity ?? item.purchasedQuantity);
-  const availableQuantity = isConfirmedEvidence(state) ? Math.max(0, balance.available) : 0;
-  const allocatedQuantity = isConfirmedEvidence(state) ? Math.max(0, Math.min(quantity, quantity - availableQuantity)) : 0;
+  const availability = classifyEvidenceAvailability(state, policy);
+  const inStock = availability === "confirmed" || availability === "assumed";
+  // Counted rows and delivered/ordered rows (whose ledger starts from the
+  // recorded quantity) both have a meaningful ledger balance.
+  const ledgerBacked = isConfirmedEvidence(state) || isCommissionableEvidence(state);
+  const quantity = ledgerBacked ? balance.onHand : (item.reportedQuantity ?? item.purchasedQuantity);
+  const availableQuantity = inStock ? Math.max(0, Math.min(quantity, balance.available)) : 0;
+  const allocatedQuantity = inStock
+    ? Math.max(0, Math.min(quantity, quantity - availableQuantity))
+    : ledgerBacked ? Math.max(0, Math.min(quantity, balance.allocated ?? 0)) : 0;
   const evidence = metadata.evidence ?? { state };
   const kind = metadata.kind ?? mapCategoryToKind(item.category);
   const unit = mapNativeUnitToApi(item.unit);
@@ -318,6 +330,7 @@ export function apiInventoryFromNative(item: InventoryItem, balance: { readonly 
     tags: metadata.tags?.slice() ?? [],
     links: metadata.links?.slice() ?? [],
     evidence,
+    availability,
     ...(item.retiredAt === undefined ? {} : { retiredAt: item.retiredAt }),
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
@@ -378,6 +391,23 @@ export function nativeStockEventFromApi(input: StockEventInput, ctx: RequestCont
   });
 }
 
+/**
+ * Stored keys are scoped by item (and actor for usage) so a caller key cannot
+ * collide across items; show callers the key they supplied.
+ */
+function callerIdempotencyKey(event: StockEvent): string | undefined {
+  const key = event.idempotencyKey;
+  if (key === undefined) return undefined;
+  const item = encodeURIComponent(event.itemId);
+  const stockPrefix = `stock-event:${item}:`;
+  if (key.startsWith(stockPrefix)) return key.slice(stockPrefix.length);
+  if (event.actor !== undefined) {
+    const usagePrefix = `usage:${encodeURIComponent(event.actor.id)}:${item}:`;
+    if (key.startsWith(usagePrefix)) return key.slice(usagePrefix.length);
+  }
+  return key;
+}
+
 export function apiStockEventFromNative(event: StockEvent, fallbackVersion: number): ApiStockEvent {
   const version = typeof event.evidence?.apiItemVersion === "number" && Number.isInteger(event.evidence.apiItemVersion) ? event.evidence.apiItemVersion : fallbackVersion;
   const visibleEvidence = event.evidence === undefined ? undefined : Object.fromEntries(Object.entries(event.evidence).filter(([key]) => key !== "apiItemVersion" && key !== "bootstrap"));
@@ -391,7 +421,7 @@ export function apiStockEventFromNative(event: StockEvent, fallbackVersion: numb
     ...(stringValue(event.evidence?.projectId) === undefined ? {} : { projectId: stringValue(event.evidence?.projectId) }),
     ...(stringValue(event.evidence?.note) === undefined ? {} : { note: stringValue(event.evidence?.note) }),
     ...(event.correlationId === undefined ? {} : { correlationId: event.correlationId }),
-    ...(event.idempotencyKey === undefined ? {} : { idempotencyKey: event.idempotencyKey }),
+    ...(event.idempotencyKey === undefined ? {} : { idempotencyKey: callerIdempotencyKey(event) }),
     actor: event.actor?.id ?? "system",
     source,
     ...(visibleEvidence !== undefined && Object.keys(visibleEvidence).length > 0 ? { evidence: visibleEvidence } : {}),

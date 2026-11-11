@@ -5,16 +5,15 @@ import { describe, expect, it } from "vitest";
 import { ApplicationService } from "@benchledger/application";
 import type { RequestContext } from "@benchledger/application";
 import { inventoryListQuerySchema } from "@benchledger/api-contract";
-import { createProductionRuntime } from "@benchledger/runtime";
+import { createDemoRuntime, createProductionRuntime } from "@benchledger/runtime";
 import { createApplicationBackend } from "@benchledger/mcp";
-import { createMemoryRuntime } from "./memory-store.js";
 
 const context: RequestContext = { actor: "inventory-test", source: "api", correlationId: "inventory-test", scopes: new Set(["read", "write"]) };
 const mcpContext = { actorId: "inventory-test", scopes: ["inventory:read" as const] };
-for (const mode of ["memory", "durable"] as const) describe(`${mode} inventory workspace`, () => {
+for (const mode of ["demo", "durable"] as const) describe(`${mode} inventory workspace`, () => {
   it("filters before pagination and gives AI clients the same queues, sort and repair condition", async () => {
     const dataDir = await mkdtemp(join(tmpdir(), "benchledger-inventory-test-"));
-    const runtime = mode === "memory" ? createMemoryRuntime() : await createProductionRuntime({ dataDir });
+    const runtime = mode === "demo" ? await createDemoRuntime({ seed: "empty" }) : await createProductionRuntime({ dataDir });
     try {
       const service = new ApplicationService(runtime.ports);
       for (let index = 0; index < 31; index++) await service.createInventoryItem({
@@ -37,7 +36,7 @@ for (const mode of ["memory", "durable"] as const) describe(`${mode} inventory w
       const checks = await backend.inventory.list({ stockView: "check", sort: "name_desc", location: "Drawer B", limit: 1 }, mcpContext);
       expect(checks.items[0]).toMatchObject({ id: "fixture-29", stockCondition: "needs_repair", stockViews: ["check"] });
     } finally {
-      if ("close" in runtime) await runtime.close();
+      await runtime.close();
       await rm(dataDir, { recursive: true, force: true });
     }
   });

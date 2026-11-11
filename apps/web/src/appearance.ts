@@ -2,6 +2,8 @@ export type ColourMode = "system" | "light" | "dark";
 export type Density = "comfortable" | "compact";
 export interface Appearance { colourMode: ColourMode; density: Density; collapsed: boolean }
 export const appearanceKey = "benchledger.appearance.v1";
+/** Top bar surface colours (--surface-strong) used for the browser theme-color. */
+export const themeColour = { light: "#ffffff", dark: "#191f28" } as const;
 export const defaultAppearance: Appearance = { colourMode: "system", density: "comfortable", collapsed: false };
 export function parseAppearance(value: string | null): Appearance {
   try {
@@ -21,6 +23,9 @@ export function applyAppearance(value: Appearance): void {
   document.documentElement.dataset.theme = dark ? "dark" : "light";
   document.documentElement.dataset.density = value.density;
   document.documentElement.dataset.nav = value.collapsed ? "rail" : "full";
+  // Keep the browser chrome on the chosen theme even when it differs from the system scheme.
+  const chrome = dark ? themeColour.dark : themeColour.light;
+  document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]').forEach((meta) => { meta.content = chrome; });
 }
 export function storeAppearance(value: Appearance): void {
   try { window.localStorage.setItem(appearanceKey, JSON.stringify(value)); } catch { /* Browser preferences remain usable without storage. */ }

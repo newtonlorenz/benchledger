@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDemoRuntime } from "@benchledger/runtime";
 import { ApplicationService } from "@benchledger/application";
 import type { RequestContext } from "@benchledger/application";
 import { McpAdapter, createApplicationBackend } from "@benchledger/mcp";
-import { createSyntheticRuntime } from "./memory-store.js";
 import { createApp, bearerRecord } from "./app.js";
 const demoPassword = "demo-password-please-change";
 const imageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAIAAABxZ0isAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEUlEQVQImWMw6piAFTEMpAQAEKQ94TX+ea8AAAAASUVORK5CYII=";
@@ -10,7 +10,7 @@ const upload = { expectedVersion: 0, filename: "synthetic.png", mediaType: "imag
 const ctx: RequestContext = { actor: "test", source: "api", correlationId: "image-test", scopes: new Set(["read", "write"]), idempotencyKey: "image-command-1" };
 describe("inventory images across application, HTTP and MCP", () => {
   it("adds to printers and electronics without changing stock, replays and rejects stale/malformed commands", async () => {
-    const runtime = createSyntheticRuntime(), service = new ApplicationService(runtime.ports);
+    const runtime = await createDemoRuntime(), service = new ApplicationService(runtime.ports);
     const before = await service.getInventoryItem("printer-h2d");
     const result = await service.inventoryImages.add("printer-h2d", upload, ctx);
     expect(result.data).toMatchObject({ version: 1, images: [{ width: 8, height: 6, mediaType: "image/webp", sourceKind: "reference" }] });
@@ -32,7 +32,7 @@ describe("inventory images across application, HTTP and MCP", () => {
     expect((await service.inventoryImages.gallery("board-esp32", ctx)).version).toBe(1);
   });
   it("rolls back images when audit fails and limits the gallery", async () => {
-    const runtime = createSyntheticRuntime(), service = new ApplicationService(runtime.ports);
+    const runtime = await createDemoRuntime(), service = new ApplicationService(runtime.ports);
     const spy = vi.spyOn(runtime.ports.audit, "append").mockRejectedValueOnce(new Error("synthetic audit failure"));
     await expect(service.inventoryImages.add("printer-h2d", upload, ctx)).rejects.toThrow("synthetic audit failure");
     expect((await service.inventoryImages.gallery("printer-h2d", ctx)).images).toHaveLength(0);
@@ -58,6 +58,10 @@ describe("inventory images across application, HTTP and MCP", () => {
       const content = await app.inject({ url: contentUrl, headers });
       expect(content.statusCode).toBe(200); expect(content.headers["content-type"]).toBe("image/webp"); expect(content.headers["cache-control"]).toBe("private, no-store");
       expect((await app.inject({ url: contentUrl.replace("printer-h2d", "board-esp32"), headers })).statusCode).toBe(404);
+      // List rows carry the cover image reference; items without images omit it.
+      const listed = (await app.inject({ url: "/api/v1/inventory?limit=50", headers })).json() as { data: Array<{ id: string; primaryImage?: unknown }> };
+      expect(listed.data.find((row) => row.id === "printer-h2d")?.primaryImage).toEqual({ id: imageId, url: contentUrl, mediaType: "image/webp", width: expect.any(Number), height: expect.any(Number) });
+      expect(listed.data.find((row) => row.id === "board-esp32")).not.toHaveProperty("primaryImage");
       const login = await app.inject({ method: "POST", url: "/api/v1/auth/login", payload: { password: demoPassword } });
       const cookies = login.headers["set-cookie"] as string[];
       expect((await app.inject({ method: "POST", url, headers: { cookie: cookies.map(c => c.split(";")[0]).join("; ") }, payload: upload })).statusCode).toBe(403);
@@ -74,7 +78,7 @@ describe("inventory images across application, HTTP and MCP", () => {
     } finally { await app.close(); }
   });
   it("lets MCP add exact host-encoded images and replay headerless retries with no byte leakage", async () => {
-    const service = new ApplicationService(createSyntheticRuntime().ports), adapter = new McpAdapter(createApplicationBackend(service));
+    const service = new ApplicationService((await createDemoRuntime()).ports), adapter = new McpAdapter(createApplicationBackend(service));
     const context = { actorId: "image-agent", scopes: ["inventory:read", "inventory:write"] as const };
     expect(await adapter.callTool("list_inventory_images", { itemId: "printer-h2d" }, context)).toMatchObject({ structuredContent: { version: 0, images: [] } });
     const input = { itemId: "printer-h2d", image: upload };

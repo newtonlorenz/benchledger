@@ -30,7 +30,7 @@ it("a real MCP SDK connects, validates discovery and uses atomic setup without a
     const stockId = (stock.structuredContent as { id: string }).id;
     const line = await client.callTool({ name: "create_bom_line", arguments: { projectRevisionId: "sdk-revision", description: "Uncounted part", quantity: 1, unit: "piece", role: "consumed", itemId: stockId } }); expect(line.isError).toBe(false);
     const gaps = await client.callTool({ name: "calculate_bom_gaps", arguments: { projectRevisionId: "sdk-revision" } });
-    expect(gaps.structuredContent).toMatchObject({ lines: expect.arrayContaining([expect.objectContaining({ description: "Uncounted part", decision: "check", matches: expect.arrayContaining([expect.objectContaining({ availability: "inspect_first", suppliedQuantity: { value: 0, unit: "piece" } })]) })]) });
+    expect(gaps.structuredContent).toMatchObject({ lines: expect.arrayContaining([expect.objectContaining({ description: "Uncounted part", decision: "check", matches: expect.arrayContaining([expect.objectContaining({ availability: "inspect_first", suppliedQuantity: { value: 0, unit: "each" } })]) })]) });
     const read = await client.callTool({ name: "read_project", arguments: { projectId: "sdk-project" } }); expect(read.isError).toBe(false); expect(JSON.stringify(read.structuredContent)).toContain("SDK integration project");
   } finally { await client.close(); await app.close(); await rm(directory, { recursive: true, force: true }); }
 });

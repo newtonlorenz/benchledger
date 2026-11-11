@@ -4,8 +4,6 @@ import { projectFabricationRoute, projectIntendedPrinterId, isUsableOwnedPrinter
 export { isUsableOwnedPrinter } from "./project-build-readiness";
 import "./maker-experience.css";
 import { Popover, PopoverTrigger, PopoverContent } from "./components/ui/popover";
-import { Toaster } from "./components/ui/sonner";
-import { toast as notify } from "sonner";
 import { Progress } from "./components/ui/progress";
 import { Switch } from "./components/ui/switch";
 import { Alert } from "./components/ui/alert";
@@ -34,6 +32,9 @@ import { parseInventoryView, stockViewOptions, readSavedInventoryViews, saveInve
 import type { InventoryViewState, SavedInventoryView } from "./inventory-workspace-state";
 import { DeferredPcbWorkspace as PcbWorkspace, DeferredAssemblyWorkspace as AssemblyWorkspace } from "./deferred-views";
 import { InventoryImages } from "./inventory-images";
+import { inventoryItemHash, readInventoryItemRoute, refetchLimit } from "./inventory-list";
+import { isAmbiguousMutation, isSyncFailure, SyncBanner, SyncStatusNote, ToastRegion, useNow, useRevalidateOnFocus, useToast, writeFailureMessage } from "./app-feedback";
+import type { ToastTone } from "./app-feedback";
 import { ArtifactPreview, artifactPreviewKind } from "./artifact-preview";
 import { UnsavedWorkContext, useNavigationGuard, useUnsavedWork } from "./unsaved-work";
 import { WorkbenchHome } from "./workbench-home";
@@ -41,12 +42,13 @@ import { ProductImage, ProjectProductImageEditor } from "./project-product-image
 import { currentBuildFiles } from "./project-library";
 import { recordOpenedProject } from "./workbench-state";
 import type { HomeTask } from "./workbench-state";
-import { ExistingBomImport } from "./bom-import-ui";
 import { useAppearance, AppearanceSettings } from "./workspace-controls";
 import { WorkspaceCommands } from "./workspace-commands";
 import type { WorkspaceCommand } from "./workspace-commands";
 import { StockReceiptReference, ReceivedStockNextStep, receiptRequirement, type StockReceiptContext } from "./stock-receipt";
-import { MakerPlanningTools, ProjectQuoteTools } from "./maker-planning-ui";
+import { MakerPlanningTools, ProjectQuoteTools, ReconciliationUI } from "./lazy-panels";
+// Dialog content stays eager so the dialog can focus its first field on open.
+import { ExistingBomImport } from "./bom-import-ui";
 import { GuidedSetup } from "./guided-setup";
 import { ProjectEditingContext, ProjectManagementBar, RequirementEditAction, RemovedRequirements, RequirementEditForm, ProjectEditForm, matchesRequirementFilter } from "./project-editing";
 import type { RequirementFilter } from "./project-editing";
@@ -76,7 +78,6 @@ import {
 import { fabricationRouteLabel, fabricationRouteOptions } from "./domain"; import type { BomDecision, BomLineStatus, FabricationRoute, InventoryCategory, InventoryCondition, InventoryEvidenceState, InventoryItem, Project, StockLabelTone, StockState } from "./domain";
 import { offers as fixtureOffers } from "./mock-data";
 import { Icon } from "./icons";
-import { ReconciliationUI } from "./reconciliation-ui";
 import type { ReconciliationViewModel } from "./reconciliation-ui";
 import { CategoryManager, CategorySelection, inventoryCategoryFilterOptions, managedCategoryForId, selectedCategoryLabel } from "./category-ui";
 import type { CategoryCreateInput, CategoryUpdateInput, ManagedInventoryCategory } from "./category-ui";
@@ -91,6 +92,9 @@ import { defaultUnitForItemKind, validUnitsForItemKind } from "@benchledger/api-
 import { projectNextAction, requirementStockReason } from "./requirement-journey";
 import { RequirementOwnedItems, type OwnedItemSearch } from "./requirement-owned-items";
 import { inventoryCandidateLabel, inventoryCandidateText, inventoryDiscriminator } from "./inventory-identity";
+import { PrintItemLabel } from "./item-label";
+import { StockReceivingPolicySection, assumedStockLabel, stockReceivingPolicyLabel } from "./stock-receiving-policy";
+import type { WorkspacePreferencesView } from "./stock-receiving-policy";
 export { inventoryCandidateLabel, inventoryDiscriminator } from "./inventory-identity";
 
 type Page = "overview" | "inventory" | "projects" | "capabilities" | "settings";
@@ -100,7 +104,7 @@ type NavigationHistoryState = { readonly projectView?: ProjectView };
 type ConnectionState = "loading" | "ready" | "sample" | "unauthenticated" | "offline" | "error";
 type PendingRevisionSetup = { readonly projectId: string; readonly revisionId: string; readonly input: BuildConfigInput; };
 type ProjectCreateOutcome = "created" | "failed" | "ambiguous" | { error: string };
-type ToastTone = "success" | "error"; type VersionedInventoryItem = InventoryItem & { version: number };
+type VersionedInventoryItem = InventoryItem & { version: number };
 type BulkInventorySelection = { readonly items: VersionedInventoryItem[]; readonly onResult: (result: InventoryBulkUpdateResult) => void; };
 type InspectionProject = Project & { readonly inspectionActions?: readonly InspectionAction[]; };
 type InspectionContextValue = {
@@ -147,7 +151,7 @@ function replaceNavigationHistory(state: unknown, title: string, url?: string | 
   const record = state !== null && typeof state === "object" ? state as Record<string, unknown> : {};
   window.history.replaceState({ ...record, benchledgerIndex: navigationEntryIndex(record) ?? navigationEntryIndex(window.history.state) ?? 0, benchledgerEpoch: navigationEntryEpoch(record) ?? navigationEntryEpoch(window.history.state) ?? navigationEpoch() }, title, url);
 }
-function readNavigationUrlState(): { page: Page; projectId?: string; tab: ProjectTab; projectView?: ProjectView; } {
+function readNavigationUrlState(): { page: Page; projectId?: string; tab: ProjectTab; projectView?: ProjectView; itemId?: string; } {
   if (typeof window === "undefined") return { page: "overview", tab: "overview" };
   let parts: string[];
   try {
@@ -162,7 +166,10 @@ function readNavigationUrlState(): { page: Page; projectId?: string; tab: Projec
     const tab = (["overview", "plan", "files", "offers", "build", "assembly", "pcb", "reconciliation"] as ProjectTab[]).includes(parts[2] as ProjectTab) ? (parts[2] as ProjectTab) : "overview";
     return { page, ...(parts[1] ? { projectId: parts[1] } : {}), tab, ...(projectView ? { projectView } : {}) };
   }
-  if (page === "inventory" || page === "capabilities" || page === "settings" || page === "overview") return { page, tab: "overview" };
+  // An item opened from another page keeps its id in history state, so Back closes it.
+  const stateItemId = typeof (historyState as { itemId?: unknown } | null)?.itemId === "string" ? (historyState as { itemId: string }).itemId : undefined;
+  if (page === "inventory") { const itemId = readInventoryItemRoute(window.location.hash) ?? stateItemId; return { page, tab: "overview", ...(itemId ? { itemId } : {}) }; }
+  if (page === "capabilities" || page === "settings" || page === "overview") return { page, tab: "overview", ...(stateItemId ? { itemId: stateItemId } : {}) };
   return { page: "overview", tab: "overview" };
 } function navigationHash( page: Page, projectId?: string, tab: ProjectTab = "overview" ): string { if (page === "overview") return "#/"; if (page !== "projects") return `#/${page}`; if (!projectId) return "#/projects"; return `#/projects/${encodeURIComponent(projectId)}/${tab}`; } const pageCopy: Record<Page, { label: string; icon: Parameters<typeof Icon>[0]["name"] }> = {
   overview: { label: "Projects", icon: "folder" },
@@ -276,7 +283,7 @@ export function formatSourceReadyMessage(count: number): string {
   const [projectEditDraft, setProjectEditDraft] = useState({ dirty: false, unresolved: false });
   const applyProjectCorrection = (project: Project, message: string) => {
     setProjects((current) => current.map((entry) => entry.id === project.id ? project : entry));
-    setToast(project.readinessUnavailable ? `${message} Stock status could not refresh; reload before sourcing.` : message, project.readinessUnavailable ? "error" : "success");
+    setToast(project.readinessUnavailable ? `${message} Stock status could not refresh; reload before sourcing.` : message, project.readinessUnavailable ? "warning" : "success");
   };
   const [archivedProjects, setArchivedProjects] = useState<Project[]>([]);
   const projectViewRef = useRef<ProjectView>("active");
@@ -292,7 +299,8 @@ export function formatSourceReadyMessage(count: number): string {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [offers, setOffers] = useState(fixtureOffers);
   const [selectedProjectId, setSelectedProjectId] = useState( initialNavigation.projectId ?? "project-lamp");
-  const [selectedItemId, setSelectedItemId] = useState<string>();
+  const [selectedItemId, setSelectedItemId] = useState<string | undefined>(initialNavigation.itemId);
+  const closingItemRef = useRef(false);
   const [countStockItemId, setCountStockItemId] = useState<string>();
   // In-memory recovery only: authenticated rendering resumes the original review.
   const [pendingStockObservation, setPendingStockObservation] = useState<PendingStockObservation>();
@@ -311,12 +319,16 @@ export function formatSourceReadyMessage(count: number): string {
   const [search, setSearch] = useState(() => readInventoryUrlState().search);
   const [inventoryCategoryNodeId, setInventoryCategoryNodeId] = useState(() => readInventoryUrlState().categoryNodeId);
   const [expert, setExpert] = useState(readTechnicalDetailsPreference);
-  const setToast = (message: string, tone: ToastTone = "success") => { notify[tone](<span role={tone === "error" ? "alert" : "status"}>{message}</span>, { id: "workspace-notification" }); }; const [loading, setLoading] = useState(true);
+  const toastApi = useToast(page === "projects" ? `projects:${selectedProjectId}` : page); const setToast = toastApi.show; const [loading, setLoading] = useState(true);
   const [connection, setConnection] = useState<ConnectionState>("loading");
   const [connectionError, setConnectionError] = useState<ApiError>();
+  const [lastSyncedAt, setLastSyncedAt] = useState<number>();
+  const [syncRetrying, setSyncRetrying] = useState(false);
+  const now = useNow();
   const [demoAvailable, setDemoAvailable] = useState(false);
   const [sampleMode, setSampleMode] = useState(false);
   const [workspaceAccess, setWorkspaceAccess] = useState<WorkspaceAccess>();
+  const [workspacePreferences, setWorkspacePreferences] = useState<WorkspacePreferencesView>(); const [sessionScopes, setSessionScopes] = useState<{ admin: boolean; scoped: boolean }>({ admin: false, scoped: false });
   const [serviceCapabilities, setServiceCapabilities] = useState< readonly string[] >([]); const [reloadNonce, setReloadNonce] = useState(0);
   const [categoryReloadNonce, setCategoryReloadNonce] = useState(0);
   const [inventoryRefreshNonce, setInventoryRefreshNonce] = useState(0);
@@ -396,11 +408,12 @@ export function formatSourceReadyMessage(count: number): string {
       const requestedNavigation = readNavigationUrlState();
       const initialProjectView: ProjectView = requestedNavigation.projectView ?? (requestedNavigation.projectId && archived.some( (project) => project.id === requestedNavigation.projectId ) ? "archived" : snapshot.projects.length > 0 || archived.length === 0 ? "active" : "archived");
       setProjectView(initialProjectView);
-      setOffers(snapshot.offers); setServiceCapabilities(snapshot.capabilities ?? []); const requestedProjectId = requestedNavigation.projectId; const selectedId = requestedProjectId ? requestedProjectId : (initialProjectView === "archived" ? (archived[0]?.id ?? "") : (snapshot.projects[0]?.id ?? archived[0]?.id ?? "")); setSelectedProjectId(selectedId); if ( requestedNavigation.page === "projects" && selectedId !== requestedProjectId ) { replaceNavigationHistory( { projectView: initialProjectView }, "", navigationHash("projects", selectedId, requestedNavigation.tab) ); } setSampleMode(snapshot.source === "synthetic");
+      setOffers(snapshot.offers); setServiceCapabilities(snapshot.capabilities ?? []); setWorkspacePreferences(snapshot.preferences); setSessionScopes({ admin: snapshot.session?.scopes.includes("admin") ?? false, scoped: (snapshot.session?.projectIds?.length ?? 0) > 0 }); const requestedProjectId = requestedNavigation.projectId; const selectedId = requestedProjectId ? requestedProjectId : (initialProjectView === "archived" ? (archived[0]?.id ?? "") : (snapshot.projects[0]?.id ?? archived[0]?.id ?? "")); setSelectedProjectId(selectedId); if ( requestedNavigation.page === "projects" && selectedId !== requestedProjectId ) { replaceNavigationHistory( { projectView: initialProjectView }, "", navigationHash("projects", selectedId, requestedNavigation.tab) ); } setSampleMode(snapshot.source === "synthetic");
       setWorkspaceAccess((current) => current ? { ...current, demo: current.demo || Boolean(snapshot.health?.demo) } : current);
       setDemoAvailable(Boolean(snapshot.health?.demo));
       setConnection(snapshot.source === "synthetic" ? "sample" : "ready");
       setConnectionError(undefined);
+      setLastSyncedAt(Date.now());
       setLoading(false);
     }).catch((error: unknown) => {
       if (!active) return;
@@ -439,6 +452,10 @@ export function formatSourceReadyMessage(count: number): string {
     const focusSearch = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === "k") {
         event.preventDefault();
+        // docs/ui-design.md: Control/Command + K opens the existing inventory
+        // search (Shift adds workspace commands). An open dialog keeps its
+        // focus boundary, so the shortcut does not navigate away from it.
+        if (overlayOpenRef.current) return;
         if (page === "inventory") { if (mainFocusFrameRef.current !== undefined) { window.cancelAnimationFrame(mainFocusFrameRef.current); mainFocusFrameRef.current = undefined; } searchInputRef.current?.focus(); } else {
           searchLauncherRef.current?.focus();
           launchInventorySearch();
@@ -467,6 +484,7 @@ export function formatSourceReadyMessage(count: number): string {
   useEffect(() => { if (page === "projects" && selectedProject?.id === selectedProjectId) recordOpenedProject(selectedProjectId, sampleMode); }, [page, selectedProject?.id, selectedProjectId, sampleMode]);
   const referencedInventory = useReferencedInventory(page === "projects" ? selectedProject : undefined, items, adapter.readInventoryItem, mergeReferencedItems);
   const selectedItem = items.find((item) => item.id === selectedItemId) ?? (pendingStockObservation && pendingStockObservation.item.id === selectedItemId ? pendingStockObservation.item : undefined);
+  const overlayOpenRef = useRef(false);
   const overlayOpen = Boolean(navigationGuard.pending || showBomImport || commandsOpen || showGuidedSetup || editingProject || editingRequirement || selectedItem || showNewProject || showNewRevision || showEditBuildApproach || showAddBom || showNewItem || bulkInventorySelection);
   useEffect(() => {
     const commands = (event: KeyboardEvent) => {
@@ -476,6 +494,24 @@ export function formatSourceReadyMessage(count: number): string {
     };
     window.addEventListener("keydown", commands); return () => window.removeEventListener("keydown", commands);
   }, [overlayOpen]);
+  overlayOpenRef.current = overlayOpen;
+
+  // Deep link to an item that is not in the loaded pages: fetch it by id.
+  useEffect(() => {
+    if (!selectedItemId || items.some((item) => item.id === selectedItemId) || (connection !== "ready" && connection !== "sample")) return;
+    const controller = new AbortController();
+    adapter.readInventoryItem(selectedItemId, { signal: controller.signal }).then((item) => {
+      if (!controller.signal.aborted) setItems((current) => current.some((entry) => entry.id === item.id) ? current : [...current, item]);
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted) return;
+      const normalized = normalizeApiError(error);
+      if (normalized.kind === "unauthenticated" || normalized.kind === "csrf") { handleSessionExpiry(normalized); return; }
+      setToast(normalized.status === 404 ? "That inventory item is not available. It may have been deleted." : `That inventory item could not be loaded. ${normalized.message}`, normalized.status === 404 ? "warning" : "error");
+      dismissItem();
+    });
+    return () => controller.abort();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedItemId, connection, adapter]);
 
   const resetMainScrollAndFocus = () => { if (typeof window !== "undefined") window.scrollTo({ top: 0, left: 0, behavior: "auto" }); const main = mainRef.current; if (!main) return; main.scrollTop = 0; main.scrollLeft = 0; if (mainFocusFrameRef.current !== undefined) { window.cancelAnimationFrame(mainFocusFrameRef.current); mainFocusFrameRef.current = undefined; } main.focus({ preventScroll: true }); window.setTimeout(() => { if (!document.querySelector('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]')) main.focus({ preventScroll: true }); }, 0);
   }; useLayoutEffect(() => {
@@ -483,7 +519,11 @@ export function formatSourceReadyMessage(count: number): string {
   }, [page, selectedProjectId, projectTab, projectView]); useEffect(() => {
     const restoreNavigation = () => {
       const restored = readNavigationUrlState(), destination = { url: window.location.href, state: window.history.state as unknown };
-      const apply = () => { replaceNavigationHistory(destination.state, "", destination.url); lastNavigation.current = { ...destination, state: window.history.state }; pendingMainFocusRef.current = true; const restoredView: ProjectView = restored.projectView ?? (restored.projectId && archivedProjects.some((project) => project.id === restored.projectId) ? "archived" : restored.page === "projects" && projects.length === 0 && archivedProjects.length > 0 ? "archived" : "active"); setProjectView(restoredView); setPage(restored.page); setProjectTab(restored.tab); setSelectedProjectId(restored.projectId ?? (restoredView === "archived" ? archivedProjects : projects)[0]?.id ?? ""); setSelectedItemId(undefined); };
+      const withoutItem = (url: string) => url.replace(/#\/inventory\/[^/?#]+$/u, "#/inventory");
+      // Opening or closing an item must not reset the list scroll or focus.
+      const itemOnly = withoutItem(destination.url) === withoutItem(lastNavigation.current.url);
+      const apply = () => { replaceNavigationHistory(destination.state, "", destination.url); lastNavigation.current = { ...destination, state: window.history.state }; pendingMainFocusRef.current = !itemOnly; const restoredView: ProjectView = restored.projectView ?? (restored.projectId && archivedProjects.some((project) => project.id === restored.projectId) ? "archived" : restored.page === "projects" && projects.length === 0 && archivedProjects.length > 0 ? "archived" : "active"); setProjectView(restoredView); setPage(restored.page); setProjectTab(restored.tab); setSelectedProjectId(restored.projectId ?? (restoredView === "archived" ? archivedProjects : projects)[0]?.id ?? ""); setSelectedItemId(restored.itemId); };
+      if (closingItemRef.current) { closingItemRef.current = false; apply(); return; }
       const travel = historyTravel.current;
       if (travel) {
         if (travel.phase === "restore") {
@@ -514,10 +554,37 @@ export function formatSourceReadyMessage(count: number): string {
     };
     window.addEventListener("popstate", restoreNavigation); window.addEventListener("hashchange", restoreNavigation);
     return () => { window.removeEventListener("popstate", restoreNavigation); window.removeEventListener("hashchange", restoreNavigation); };
-  }, [archivedProjects, projects, navigationGuard.registry]); const recordNavigation = ( nextPage: Page, projectId = selectedProjectId, tab = projectTab, view: ProjectView = projectViewRef.current ) => { const intraProjectTabNavigation = nextPage === "projects" && projectId === selectedProjectId && tab !== projectTab; if (intraProjectTabNavigation) pendingMainFocusRef.current = false; const nextView = nextPage === "projects" ? archivedProjects.some((project) => project.id === projectId) ? "archived" : projects.some((project) => project.id === projectId) ? "active" : view : view; const nextHash = navigationHash(nextPage, projectId, tab); const currentState = window.history.state as NavigationHistoryState | null; const nextState: NavigationHistoryState = nextPage === "projects" ? { projectView: nextView } : {}; const sameView = nextPage !== "projects" || currentState?.projectView === nextView; if (window.location.hash !== nextHash || !sameView) window.history.pushState({ ...nextState, benchledgerIndex: (navigationEntryIndex(window.history.state) ?? 0) + 1, benchledgerEpoch: navigationEntryEpoch(window.history.state) ?? navigationEpoch() }, "", nextHash); lastNavigation.current = { url: window.location.href, state: window.history.state };
+  }, [archivedProjects, projects, navigationGuard.registry]); const recordNavigation = ( nextPage: Page, projectId = selectedProjectId, tab = projectTab, view: ProjectView = projectViewRef.current ) => { const intraProjectTabNavigation = nextPage === "projects" && projectId === selectedProjectId && tab !== projectTab; if (intraProjectTabNavigation) pendingMainFocusRef.current = false; const nextView = nextPage === "projects" ? archivedProjects.some((project) => project.id === projectId) ? "archived" : projects.some((project) => project.id === projectId) ? "active" : view : view; const nextHash = navigationHash(nextPage, projectId, tab); const currentState = window.history.state as NavigationHistoryState | null; const projectRoute = nextPage === "projects"; const nextState: NavigationHistoryState = projectRoute ? { projectView: nextView } : {}; const sameView = !projectRoute || currentState?.projectView === nextView; if (window.location.hash !== nextHash || !sameView) window.history.pushState({ ...nextState, benchledgerIndex: (navigationEntryIndex(window.history.state) ?? 0) + 1, benchledgerEpoch: navigationEntryEpoch(window.history.state) ?? navigationEpoch() }, "", nextHash); lastNavigation.current = { url: window.location.href, state: window.history.state };
   };
 
   const navigate = (nextPage: Page) => navigationGuard.registry.request(() => { pendingMainFocusRef.current = !searchHandoffRef.current; recordNavigation(nextPage); setPage(nextPage); setSelectedItemId(undefined); if (nextPage === page) resetMainScrollAndFocus(); });
+  /** Open an item as its own history entry so Back closes it. On the
+   * inventory page the entry is a shareable #/inventory/<id> deep link. */
+  const openItem = (itemId: string) => navigationGuard.registry.request(() => {
+    if (itemId === selectedItemId) return;
+    const current = window.history.state as Record<string, unknown> | null;
+    const base = current && typeof current === "object" ? { ...current } : {};
+    const hash = page === "inventory" ? inventoryItemHash(itemId) : window.location.hash || "#/";
+    window.history.pushState({ ...base, itemId, itemPushed: true, benchledgerIndex: (navigationEntryIndex(current) ?? 0) + 1, benchledgerEpoch: navigationEntryEpoch(current) ?? navigationEpoch() }, "", `${window.location.pathname}${window.location.search}${hash}`);
+    lastNavigation.current = { url: window.location.href, state: window.history.state };
+    setSelectedItemId(itemId);
+  });
+  /** Remove the item without leaving a dead #/inventory/<id> entry behind. */
+  const dismissItem = () => {
+    setSelectedItemId(undefined);
+    const current = window.history.state as Record<string, unknown> | null;
+    if (current && typeof current === "object" && "itemId" in current) {
+      const { itemId: _itemId, itemPushed: _pushed, ...rest } = current;
+      replaceNavigationHistory(rest, "", `${window.location.pathname}${window.location.search}${page === "inventory" ? inventoryItemHash(undefined) : window.location.hash}`);
+      lastNavigation.current = { url: window.location.href, state: window.history.state };
+    }
+  };
+  /** Close via Back when the item pushed its own entry, so history stays linear. */
+  const closeItemHistory = () => {
+    const current = window.history.state as Record<string, unknown> | null;
+    if (current?.itemPushed === true && current.itemId === selectedItemId) { closingItemRef.current = true; setSelectedItemId(undefined); window.history.back(); }
+    else dismissItem();
+  };
   const openProject = (projectId: string, tab: ProjectTab = "overview", options?: { showImages?: boolean }) => navigationGuard.registry.request(() => { setProjectImageIntent(options?.showImages ? { projectId, request: ++projectImageRequest.current } : undefined); recordOpenedProject(projectId, sampleMode); setProjectView(archivedProjects.some(project => project.id === projectId) ? "archived" : "active"); setHomeTask(undefined); setAddedPart(undefined); pendingMainFocusRef.current = !options?.showImages; recordNavigation("projects", projectId, tab); setSelectedProjectId(projectId); setProjectTab(tab); setPage("projects"); });
   const openProjectPart = (projectId: string, lineId: string) => navigationGuard.registry.request(() => {
     const project = projects.find(candidate => candidate.id === projectId);
@@ -553,18 +620,21 @@ export function formatSourceReadyMessage(count: number): string {
       setArchivedProjects(archived);
       setProjectView((current) => snapshot.projects.length > 0 || archived.length === 0 ? current : "archived");
       setSelectedProjectId((current) => current || (snapshot.projects[0] ?? archived[0])?.id || "");
-      setOffers(snapshot.offers); setServiceCapabilities(snapshot.capabilities ?? []); setSampleMode(snapshot.source === "synthetic");
+      setOffers(snapshot.offers); setServiceCapabilities(snapshot.capabilities ?? []); setWorkspacePreferences(snapshot.preferences); setSampleMode(snapshot.source === "synthetic");
       setWorkspaceAccess((current) => current ? { ...current, demo: current.demo || Boolean(snapshot.health?.demo) } : current);
       setDemoAvailable(Boolean(snapshot.health?.demo));
       setConnection(snapshot.source === "synthetic" ? "sample" : "ready");
       setConnectionError(undefined);
+      setLastSyncedAt(Date.now());
       setInventoryRefreshNonce((current) => current + 1);
       return true;
     } catch (error: unknown) {
       // A close-out commit is already durable by the time this refresh runs.
       // Keep the current project/reconciliation visible and let the caller
       // report refresh trouble separately from the successful commit.
-      setConnectionError(normalizeApiError(error));
+      const normalized = normalizeApiError(error);
+      if (!sampleMode && (normalized.kind === "unauthenticated" || normalized.kind === "csrf")) handleSessionExpiry(normalized);
+      else setConnectionError(normalized);
       return false;
     }
   };
@@ -643,6 +713,13 @@ export function formatSourceReadyMessage(count: number): string {
     }
   };
 
+  const retrySync = async () => {
+    setSyncRetrying(true);
+    try { await refreshWorkspace(); } finally { setSyncRetrying(false); }
+  };
+
+  useRevalidateOnFocus(() => { if (!navigationGuard.registry.hasDraft()) void refreshWorkspace(); }, { enabled: connection === "ready" && !sampleMode });
+
   const signOut = async () => {
     try {
       await adapter.logout();
@@ -684,23 +761,32 @@ export function formatSourceReadyMessage(count: number): string {
     const normalized = normalizeApiError(error);
     if (!sampleMode && (normalized.kind === "unauthenticated" || normalized.kind === "csrf")) {
       handleSessionExpiry(normalized);
-    } else {
+    } else if (isSyncFailure(normalized)) {
       setConnectionError(normalized);
     }
-    setToast(writeFailureMessage(normalized, action), "error");
+    const reload = normalized.kind === "conflict" || isAmbiguousMutation(normalized) ? { label: "Reload", run: () => { void refreshWorkspace().then((ok) => { if (ok) setProjectRefreshNonce((value) => value + 1); }); } } : undefined;
+    setToast(writeFailureMessage(normalized, action), "error", reload);
   };
 
   const refreshProjectReadiness = async (): Promise<boolean> => {
-    setProjects((current) => current.map(({ gapEvaluation: _stale, readinessUnavailable: _previousFailure, ...project }) => ({ ...project, readinessUnavailable: true })));
+    // Keep current results visible until each project's replacement arrives;
+    // only active projects are refreshed, and archived ones never enter the list.
     try {
-      const refreshed = await adapter.refreshProjectReadiness();
-      setProjects(refreshed);
+      const refreshed = await adapter.refreshProjectReadiness(projects.map((project) => project.id));
+      setProjects((current) => mergeRefreshedProjects(current, refreshed));
+      if (refreshed.some((project) => project.readinessUnavailable)) {
+        setToast("Saved, but stock results for some projects could not be refreshed. Reload before preparing a Source proposal.", "warning", { label: "Reload", run: () => { void refreshWorkspace(); } });
+        return false;
+      }
       return true;
     } catch (error: unknown) {
       const normalized = normalizeApiError(error);
       if (!sampleMode && (normalized.kind === "unauthenticated" || normalized.kind === "csrf")) handleSessionExpiry(normalized);
       else setConnectionError(normalized);
-      setToast("Inventory was saved, but the latest stock results could not be loaded. Reload before preparing a Source proposal.");
+      // Stock just changed, so the previous results may be wrong: keep them for
+      // context but mark them unavailable so nothing sources from stale data.
+      setProjects((current) => current.map((project) => ({ ...project, readinessUnavailable: true })));
+      setToast("Inventory was saved, but the latest stock results could not be loaded. Reload before preparing a Source proposal.", "warning", { label: "Reload", run: () => { void refreshWorkspace(); } });
       return false;
     }
   };
@@ -786,7 +872,7 @@ export function formatSourceReadyMessage(count: number): string {
       const normalized = normalizeApiError(error);
       if (isAmbiguousMutation(normalized)) {
         setConnectionError(normalized);
-        setToast(ambiguousProjectCreationMessage);
+        setToast(ambiguousProjectCreationMessage, "warning");
         return "ambiguous";
       }
       handleMutationError(normalized, "creating that project");
@@ -816,7 +902,7 @@ export function formatSourceReadyMessage(count: number): string {
           setPendingRevisionSetup({ projectId: project.id, revisionId: project.serverRevisionId, input: buildConfig });
           setShowNewRevision(false);
           setConnectionError(normalized);
-          setToast("Revision created. The setup save was not confirmed. Retry setup; BenchLedger will check the saved result before creating anything twice.");
+          setToast("Revision created. The setup save was not confirmed. Retry setup; BenchLedger will check the saved result before creating anything twice.", "warning");
           return true;
         }
       } else {
@@ -838,7 +924,7 @@ export function formatSourceReadyMessage(count: number): string {
     const project = projects.find((candidate) => candidate.id === pending.projectId);
     if (!project || project.serverRevisionId !== pending.revisionId) {
       setPendingRevisionSetup(undefined);
-      setToast("That revision is no longer the current project revision. Reload before retrying its setup.");
+      setToast("That revision is no longer the current project revision. Reload before retrying its setup.", "warning", { label: "Reload", run: () => { void refreshWorkspace(); } });
       return;
     }
     try {
@@ -850,7 +936,7 @@ export function formatSourceReadyMessage(count: number): string {
       const normalized = normalizeApiError(error);
       if (isAmbiguousMutation(normalized)) {
         setConnectionError(normalized);
-        setToast("The setup save was not confirmed. Retry setup; BenchLedger will check the saved result before creating anything twice.");
+        setToast("The setup save was not confirmed. Retry setup; BenchLedger will check the saved result before creating anything twice.", "warning");
       } else {
         handleMutationError(normalized, "saving that revision setup");
       }
@@ -1015,24 +1101,26 @@ export function formatSourceReadyMessage(count: number): string {
     { id: "new-project", label: "New project", detail: "Add a project and its first revision", group: "Actions", icon: "plus", run: () => setShowNewProject(true) },
     { id: "add-item", label: "Add inventory item", detail: "Record a part, material or tool", group: "Actions", icon: "box", run: () => { setReplacementFor(undefined); setShowNewItem(true); } },
     ...projects.map((project) => ({ id: `project:${project.id}`, label: project.name, detail: project.currentRevision, group: "Projects" as const, icon: "folder" as const, run: () => { setProjectView("active"); openProject(project.id); } })),
-    ...items.map((item) => ({ id: `item:${item.id}`, label: item.name, detail: [item.variant, item.location].filter(Boolean).join(" · "), group: "Loaded inventory" as const, icon: "box" as const, run: () => setSelectedItemId(item.id) }))
+    ...items.map((item) => ({ id: `item:${item.id}`, label: item.name, detail: [item.variant, item.location].filter(Boolean).join(" · "), group: "Loaded inventory" as const, icon: "box" as const, run: () => openItem(item.id) }))
   ];
+
   return (
     <OwnedInventorySearchContext.Provider value={searchBuildInventory}><UnsavedWorkContext.Provider value={navigationGuard.registry}><div className="app-shell">
       <a className="skip-link" inert={overlayOpen || undefined} aria-hidden={overlayOpen || undefined} href="#main-content" onClick={(event) => { event.preventDefault(); mainRef.current?.focus(); }}>Skip to workspace</a>
       <div className="app-background">
         <div className="app-main">
-          <WorkspaceNavigation page={page} onNavigate={navigate} onCommands={() => setCommandsOpen(true)} searchRef={searchLauncherRef} />
+          <WorkspaceNavigation page={page} onNavigate={navigate} onCommands={() => setCommandsOpen(true)} searchRef={searchLauncherRef} syncStatus={<SyncStatusNote sampleMode={sampleMode} error={connectionError} lastSyncedAt={lastSyncedAt} now={now} />} />
 
           {sampleMode && <SampleBanner onReturn={returnToPrivateWorkspace} />}
+          {!sampleMode && <SyncBanner error={connectionError} lastSyncedAt={lastSyncedAt} now={now} retrying={syncRetrying} onRetry={() => { void retrySync(); }} />}
 
           <main ref={mainRef} className="content" id="main-content" tabIndex={-1} >
-            {page === "overview" && ( <OverviewPage archivedProjects={archivedProjects} archivedCount={archivedProjects.length} onOpenArchive={() => changeProjectView("archived")} onTask={openHomeTask} onRefresh={refreshWorkspace} onImport={sampleMode ? undefined : () => { setGuidedDraft(undefined); setGuidedMode("import"); setShowGuidedSetup(true); }} onAddItem={() => { setReplacementFor(undefined); setShowNewItem(true); }} items={items} projects={projects} expert={expert} sampleMode={sampleMode} onNavigate={navigate} onOpenProject={openProject} onSelectItem={setSelectedItemId} onNewProject={openNewProject} onAddPrinter={openNewPrinter} /> )}{" "}
-            {page === "inventory" && ( <InventoryPage projects={projects} onOpenProjectPart={openProjectPart} onCountStock={checkRequirementStock} key={sampleMode ? "sample" : "workspace"} categoryNodeId={inventoryCategoryNodeId} setCategoryNodeId={setInventoryCategoryNodeId} sampleMode={sampleMode} adapter={adapter} categories={categories} expert={expert} search={search} searchInputRef={searchInputRef} refreshKey={inventoryRefreshNonce} bulkSelectionResetKey={bulkSelectionResetNonce} onSearch={(value) => setSearch(value.slice(0, MAX_INVENTORY_SEARCH_LENGTH))} onSessionExpired={handleSessionExpiry} onPageItems={(pageItems) => setItems((current) => { const byId = new Map(current.map((item) => [item.id, item] as const)); pageItems.forEach((item) => byId.set(item.id, item)); return [...byId.values()]; })} onSelectItem={setSelectedItemId} onNewItem={() => { setReplacementFor(undefined); setShowNewItem(true); }} onBulkSelectionChange={(selection, onResult) => setBulkInventorySelection(selection.length ? { items: [...selection], onResult } : undefined)} /> )}{" "}
-            {page === "projects" && selectedProject && ( <ProjectEditingContext.Provider value={{ project: selectedProject, refreshProject: async () => { const refreshed = await refreshWorkspace(); if (refreshed) { setProjectRefreshNonce((value) => value + 1); setToast("Project refreshed from the workspace."); } return refreshed; }, selectedLineId: editingRequirement?.line.id, editRequirement: (line, initialFocus) => { if (editingRequirement?.line.id === line.id) return; navigationGuard.registry.request(() => { recordNavigation("projects", selectedProject.id, "plan"); setProjectTab("plan"); setEditingRequirement({ projectId: selectedProject.id, line, initialFocus }); }); }, editProject: () => setEditingProject(selectedProject), listRemoved: () => adapter.listRetiredBomLines(selectedProject.id), restore: async (line) => { applyProjectCorrection(await adapter.restoreBomLine(selectedProject.id, line.id, line.version), "Requirement restored. No stock was reserved."); } }}><ProjectInventoryStatus state={referencedInventory} /><ProjectPage hasPartInspector={Boolean(editingRequirement)} onPartInspectorHost={setPartInspectorHost} imageIntent={projectImageIntent} onImageIntentHandled={consumeProjectImageIntent} addedPart={addedPart} pcbSupported={serviceCapabilities.includes("pcb.read")} assemblySupported={serviceCapabilities.includes("assembly.read")} key={projectRefreshNonce} onImportBom={() => setShowBomImport(true)} onNewInventory={(context) => { setReplacementFor(undefined); setReceivingStock(context); setShowNewItem(true); }} homeTask={homeTask?.projectId === selectedProject.id ? homeTask : undefined} makerWorkflowsSupported={!sampleMode && serviceCapabilities.includes("maker_workflows.read")} project={selectedProject} projects={visibleProjects} projectView={projectView} archivedProjectCount={archivedProjects.length} items={items} offers={offers} tab={projectTab} expert={expert} sampleMode={sampleMode} reconciliationSupported={ serviceCapabilities.includes("reconciliation.read") && serviceCapabilities.includes("reconciliation.write") } onTabChange={selectProjectTab} onSelectProject={selectProject} onProjectViewChange={changeProjectView} onOpenItem={setSelectedItemId} onNavigate={navigate} onToast={setToast} onNewProject={openNewProject} onArchive={archiveProject} onRestore={restoreProject} onRemove={removeProject} onNewRevision={() => navigationGuard.registry.request(() => setShowNewRevision(true))} onEditBuildApproach={() => setShowEditBuildApproach(true)} onRetrySetup={pendingRevisionSetup?.projectId === selectedProject.id && pendingRevisionSetup.revisionId === selectedProject.serverRevisionId ? retryRevisionSetup : undefined} onAddBom={() => setShowAddBom(true)} onResolveBomRole={resolveBomLineRole} onUpload={uploadArtifact} onReadReconciliation={adapter.readReconciliation} onSaveReconciliation={adapter.saveReconciliationDraft} onCommitReconciliation={adapter.commitReconciliation} onRefreshWorkspace={refreshWorkspace} onListInspections={adapter.listInspections} onReadInspection={adapter.readInspection} onPreviewInspection={adapter.previewInspectionCompletion} onConfirmInspection={adapter.commitInspectionCompletion} /></ProjectEditingContext.Provider> )}{" "}
+            {page === "overview" && ( <OverviewPage archivedProjects={archivedProjects} archivedCount={archivedProjects.length} onOpenArchive={() => changeProjectView("archived")} onTask={openHomeTask} onRefresh={refreshWorkspace} onImport={sampleMode ? undefined : () => { setGuidedDraft(undefined); setGuidedMode("import"); setShowGuidedSetup(true); }} onAddItem={() => { setReplacementFor(undefined); setShowNewItem(true); }} items={items} projects={projects} expert={expert} sampleMode={sampleMode} onNavigate={navigate} onOpenProject={openProject} onSelectItem={openItem} onNewProject={openNewProject} onAddPrinter={openNewPrinter} /> )}{" "}
+            {page === "inventory" && ( <InventoryPage projects={projects} onOpenProjectPart={openProjectPart} onCountStock={checkRequirementStock} key={sampleMode ? "sample" : "workspace"} categoryNodeId={inventoryCategoryNodeId} setCategoryNodeId={setInventoryCategoryNodeId} sampleMode={sampleMode} adapter={adapter} categories={categories} expert={expert} search={search} searchInputRef={searchInputRef} refreshKey={inventoryRefreshNonce} bulkSelectionResetKey={bulkSelectionResetNonce} onSearch={(value) => setSearch(value.slice(0, MAX_INVENTORY_SEARCH_LENGTH))} onSessionExpired={handleSessionExpiry} onPageItems={(pageItems) => setItems((current) => { const byId = new Map(current.map((item) => [item.id, item] as const)); pageItems.forEach((item) => byId.set(item.id, item)); return [...byId.values()]; })} onSelectItem={openItem} onNewItem={() => { setReplacementFor(undefined); setShowNewItem(true); }} onBulkSelectionChange={(selection, onResult) => setBulkInventorySelection(selection.length ? { items: [...selection], onResult } : undefined)} /> )}{" "}
+            {page === "projects" && selectedProject && ( <ProjectEditingContext.Provider value={{ project: selectedProject, refreshProject: async () => { const refreshed = await refreshWorkspace(); if (refreshed) { setProjectRefreshNonce((value) => value + 1); setToast("Project refreshed from the workspace."); } return refreshed; }, selectedLineId: editingRequirement?.line.id, editRequirement: (line, initialFocus) => { if (editingRequirement?.line.id === line.id) return; navigationGuard.registry.request(() => { recordNavigation("projects", selectedProject.id, "plan"); setProjectTab("plan"); setEditingRequirement({ projectId: selectedProject.id, line, initialFocus }); }); }, editProject: () => setEditingProject(selectedProject), listRemoved: () => adapter.listRetiredBomLines(selectedProject.id), restore: async (line) => { applyProjectCorrection(await adapter.restoreBomLine(selectedProject.id, line.id, line.version), "Requirement restored. No stock was reserved."); } }}><ProjectInventoryStatus state={referencedInventory} /><ProjectPage hasPartInspector={Boolean(editingRequirement)} onPartInspectorHost={setPartInspectorHost} imageIntent={projectImageIntent} onImageIntentHandled={consumeProjectImageIntent} addedPart={addedPart} pcbSupported={serviceCapabilities.includes("pcb.read")} assemblySupported={serviceCapabilities.includes("assembly.read")} key={projectRefreshNonce} onImportBom={() => setShowBomImport(true)} onNewInventory={(context) => { setReplacementFor(undefined); setReceivingStock(context); setShowNewItem(true); }} homeTask={homeTask?.projectId === selectedProject.id ? homeTask : undefined} makerWorkflowsSupported={!sampleMode && serviceCapabilities.includes("maker_workflows.read")} project={selectedProject} projects={visibleProjects} projectView={projectView} archivedProjectCount={archivedProjects.length} items={items} offers={offers} tab={projectTab} expert={expert} sampleMode={sampleMode} reconciliationSupported={ serviceCapabilities.includes("reconciliation.read") && serviceCapabilities.includes("reconciliation.write") } onTabChange={selectProjectTab} onSelectProject={selectProject} onProjectViewChange={changeProjectView} onOpenItem={openItem} onNavigate={navigate} onToast={setToast} onNewProject={openNewProject} onArchive={archiveProject} onRestore={restoreProject} onRemove={removeProject} onNewRevision={() => navigationGuard.registry.request(() => setShowNewRevision(true))} onEditBuildApproach={() => setShowEditBuildApproach(true)} onRetrySetup={pendingRevisionSetup?.projectId === selectedProject.id && pendingRevisionSetup.revisionId === selectedProject.serverRevisionId ? retryRevisionSetup : undefined} onAddBom={() => setShowAddBom(true)} onResolveBomRole={resolveBomLineRole} onUpload={uploadArtifact} onReadReconciliation={adapter.readReconciliation} onSaveReconciliation={adapter.saveReconciliationDraft} onCommitReconciliation={adapter.commitReconciliation} onRefreshWorkspace={refreshWorkspace} onListInspections={adapter.listInspections} onReadInspection={adapter.readInspection} onPreviewInspection={adapter.previewInspectionCompletion} onConfirmInspection={adapter.commitInspectionCompletion} /></ProjectEditingContext.Provider> )}{" "}
             {page === "projects" && !selectedProject && selectedProjectId && <Card asChild><section className="surface workflow-unavailable"><h1>Project unavailable</h1><p>This project is not in the loaded workspace. It may have been removed or be unavailable to this account. No other project was opened.</p><Button variant="default" type="button" className="button button-primary" onClick={() => navigate("overview")}>Open project register</Button><Button variant="ghost" type="button" className="button button-quiet" onClick={() => { void refreshWorkspace(); }}>Retry project lookup</Button></section></Card>}{page === "projects" && !selectedProject && !selectedProjectId && ( <section><EmptyState icon="folder" title={projectView === "archived" ? "No archived projects" : "No projects yet"} description={projectView === "archived" ? "Archived projects will appear here with their retained history." : "Enter a project name and goal. Then add requirements and files."} {...(projectView === "active" ? { action: "Create first project", onAction: () => setShowNewProject(true) } : {})} /></section> )}{" "}
             {page === "capabilities" && ( <CapabilitiesPage expert={expert} onCopy={setToast} /> )}{" "}
-            {page === "settings" && ( <><div className={workspaceAccess?.mode === "lan_open" ? "settings-page-lan-open" : undefined}><SettingsPage appearanceControls={<AppearanceSettings value={appearance.value} onChange={appearance.change} />} onOpenAgents={() => navigate("capabilities")} expert={expert} sampleMode={sampleMode} connection={connection} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} onRetryCategories={() => setCategoryReloadNonce((current) => current + 1)} onCreateCategory={createInventoryCategory} onUpdateCategory={updateInventoryCategory} onArchiveCategory={archiveInventoryCategory} hideLogout={workspaceAccess?.mode === "lan_open"} onExpert={() => setExpert((current) => !current)} onLogout={sampleMode ? returnToPrivateWorkspace : signOut} /></div>{workspaceAccess && !sampleMode && !workspaceAccess.demo && ( <div className="settings-layout"><WorkspaceAccessSection access={workspaceAccess} pendingRetry={adapter.getWorkspaceAccessRetry()} onUpdate={adapter.updateWorkspaceAccess} onChanged={setWorkspaceAccess} onClearRetry={adapter.clearWorkspaceAccessRetry} onRebootstrap={() => { setReloadNonce((current) => current + 1); }} /></div> )}</> )}
+            {page === "settings" && ( <><div className={workspaceAccess?.mode === "lan_open" ? "settings-page-lan-open" : undefined}><SettingsPage appearanceControls={<AppearanceSettings value={appearance.value} onChange={appearance.change} />} onOpenAgents={() => navigate("capabilities")} expert={expert} sampleMode={sampleMode} connection={connection} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} onRetryCategories={() => setCategoryReloadNonce((current) => current + 1)} onCreateCategory={createInventoryCategory} onUpdateCategory={updateInventoryCategory} onArchiveCategory={archiveInventoryCategory} hideLogout={workspaceAccess?.mode === "lan_open"} onExpert={() => setExpert((current) => !current)} onLogout={sampleMode ? returnToPrivateWorkspace : signOut} /></div>{(workspacePreferences || sampleMode) && ( <div className="settings-layout"><StockReceivingPolicySection preferences={workspacePreferences ?? { stockReceivingPolicy: "on_receipt", version: 1 }} canChange={!sampleMode && sessionScopes.admin && !sessionScopes.scoped} readOnlyReason={sampleMode ? "The sample workspace uses the default setting." : undefined} onPreview={adapter.previewStockReceivingPolicy} onSave={adapter.updateStockReceivingPolicy} onSaved={async (saved) => { setWorkspacePreferences(saved); await refreshWorkspace(); setInventoryRefreshNonce((value) => value + 1); setProjectRefreshNonce((value) => value + 1); }} /></div> )}{workspaceAccess && !sampleMode && !workspaceAccess.demo && ( <div className="settings-layout"><WorkspaceAccessSection access={workspaceAccess} pendingRetry={adapter.getWorkspaceAccessRetry()} onUpdate={adapter.updateWorkspaceAccess} onChanged={setWorkspaceAccess} onClearRetry={adapter.clearWorkspaceAccessRetry} onRebootstrap={() => { setReloadNonce((current) => current + 1); }} /></div> )}</> )}
           </main>
           <WorkspaceBottomNavigation page={page} onNavigate={navigate} />
         </div>
@@ -1041,19 +1129,19 @@ export function formatSourceReadyMessage(count: number): string {
       {navigationGuard.pending && <Dialog title={navigationGuard.pending.unresolved ? "Finish the pending save" : "Leave without saving?"} role="alertdialog" onClose={navigationGuard.cancel}><p className="dialog-intro">{navigationGuard.pending.unresolved ? "A save or upload is still running or has not been confirmed. Stay on this page and resolve it before leaving." : `You have unsaved changes in ${navigationGuard.pending.labels.join(", ")}. Keep editing, or discard this draft.`}</p><div className="dialog-actions"><Button variant="default" data-autofocus type="button" className="button button-primary" onClick={navigationGuard.cancel}>Keep editing</Button>{!navigationGuard.pending.unresolved && <Button variant="destructive" type="button" className="button button-danger" onClick={navigationGuard.discard}>Discard changes and leave</Button>}</div></Dialog>}
       {commandsOpen && <Dialog title="Workspace commands" onClose={() => setCommandsOpen(false)}><WorkspaceCommands commands={commandItems} onRun={(command) => { setCommandsOpen(false); command.run(); }} onSearchInventory={() => { setCommandsOpen(false); launchInventorySearch(); }} /></Dialog>}
       {editingRequirement && <RequirementEditForm key={`${editingRequirement.projectId}:${editingRequirement.line.id}`} presentation={{ host: partInspectorHost, suspended: Boolean(navigationGuard.pending || selectedItem || showNewItem), context: `${selectedProject?.name ?? "Project"} · ${selectedProject?.currentRevision ?? ""}` }} onCheckStock={checkRequirementStock} onAddOwnedItem={(name) => { setNewItemRequirementName(name); setReplacementFor(undefined); setNewInventoryDraft(undefined); setShowNewItem(true); }} initialItemId={editingRequirement.initialItemId} onSearchOwnedItems={searchOwnedItems} initialFocus={editingRequirement.initialFocus} line={editingRequirement.line} items={items} onBusy={setCorrectionBusy} onClose={() => navigationGuard.registry.request(() => setEditingRequirement(undefined))} onSave={async (input) => { applyProjectCorrection(await adapter.updateBomLine(editingRequirement.projectId, editingRequirement.line.id, input, editingRequirement.line.version), "Requirement saved."); if (receivedStock?.itemId === editingRequirement.initialItemId) setReceivedStock(undefined); setEditingRequirement(undefined); }} onRetire={async () => { applyProjectCorrection(await adapter.retireBomLine(editingRequirement.projectId, editingRequirement.line.id, editingRequirement.line.version), "Requirement removed from the plan. Its history is retained."); setEditingRequirement(undefined); }} />}
-      {selectedItem && ( <InventoryDrawer returnContext={editingRequirement ? `${projects.find(project => project.id === editingRequirement.projectId)?.name ?? "Project"} · ${projects.find(project => project.id === editingRequirement.projectId)?.currentRevision ?? ""} · ${editingRequirement.line.label}` : createdInventory?.returnToRequirement && selectedProject ? `${selectedProject.name} · ${selectedProject.currentRevision} · ${requirementDraft.name}` : undefined} projects={projects} onOpenProjectPart={editingRequirement ? undefined : openProjectPart} initialCountExpanded={countStockItemId === selectedItem.id} key={selectedItem.id} nested={Boolean(editingRequirement || (createdInventory?.item.id === selectedItem.id && createdInventory.returnToRequirement))} doneLabel={editingRequirement ? `Return to ${editingRequirement.line.label}` : createdInventory?.item.id === selectedItem.id && createdInventory.returnToRequirement ? `Return to ${requirementDraft.name || "part"}` : "Done"} initialCountQuantity={createdInventory?.item.id === selectedItem.id ? createdInventory.initialCountQuantity : undefined} onCountIntentConsumed={() => setCreatedInventory((current) => { if (!current || current.item.id !== selectedItem.id) return current; const { initialCountQuantity: _intent, ...rest } = current; return rest; })} countReceipt={createdInventory?.item.id === selectedItem.id ? createdInventory.countReceipt : undefined} onCountSaved={(countReceipt) => setCreatedInventory((current) => { if (current?.item.id !== selectedItem.id) return current; const { countReceipt: _previous, ...rest } = current; return countReceipt ? { ...rest, countReceipt } : rest; })} onAddAnother={createdInventory?.item.id === selectedItem.id && !createdInventory.returnToRequirement && !receivedStock ? () => navigationGuard.registry.request(() => { setSelectedItemId(undefined); setCreatedInventory(undefined); setShowNewItem(true); }) : undefined} resumeObservation={pendingStockObservation?.item.id === selectedItem.id ? pendingStockObservation : undefined} onPendingObservation={rememberStockObservation} nextStepHasAction={Boolean(!editingRequirement && receivedStock?.itemId === selectedItem.id && receiptRequirement(receivedStock.context, projects.find(project => project.id === receivedStock.context.projectId)))} nextStep={!editingRequirement && receivedStock?.itemId === selectedItem.id ? <ReceivedStockNextStep context={receivedStock.context} item={selectedItem} project={projects.find((project) => project.id === receivedStock.context.projectId)} onReview={() => navigationGuard.registry.request(() => { const project = projects.find((candidate) => candidate.id === receivedStock.context.projectId); const line = receiptRequirement(receivedStock.context, project); if (!line || !project) return; setSelectedItemId(undefined); setCountStockItemId(undefined); setProjectView("active"); setSelectedProjectId(project.id); setProjectTab("plan"); setPage("projects"); recordNavigation("projects", project.id, "plan", "active"); setEditingRequirement({ projectId: project.id, line, initialFocus: "stock", initialItemId: selectedItem.id }); })} /> : undefined} suspended={Boolean(navigationGuard.pending)} sampleMode={sampleMode} item={selectedItem} items={items} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} expert={expert} onClose={() => { const close = () => { setSelectedItemId(undefined); setCountStockItemId(undefined); setCreatedInventory(undefined); }; if (editingRequirement || (createdInventory?.item.id === selectedItem.id && createdInventory.returnToRequirement)) close(); else navigationGuard.registry.request(close); }} onCount={recordCount} onCommission={commissionInventoryItem} onUpdate={updateInventoryItem} onDelete={async (item) => {
+      {selectedItem && ( <InventoryDrawer returnContext={editingRequirement ? `${projects.find(project => project.id === editingRequirement.projectId)?.name ?? "Project"} · ${projects.find(project => project.id === editingRequirement.projectId)?.currentRevision ?? ""} · ${editingRequirement.line.label}` : createdInventory?.returnToRequirement && selectedProject ? `${selectedProject.name} · ${selectedProject.currentRevision} · ${requirementDraft.name}` : undefined} projects={projects} onOpenProjectPart={editingRequirement ? undefined : openProjectPart} initialCountExpanded={countStockItemId === selectedItem.id} key={selectedItem.id} nested={Boolean(editingRequirement || (createdInventory?.item.id === selectedItem.id && createdInventory.returnToRequirement))} doneLabel={editingRequirement ? `Return to ${editingRequirement.line.label}` : createdInventory?.item.id === selectedItem.id && createdInventory.returnToRequirement ? `Return to ${requirementDraft.name || "part"}` : "Done"} initialCountQuantity={createdInventory?.item.id === selectedItem.id ? createdInventory.initialCountQuantity : undefined} onCountIntentConsumed={() => setCreatedInventory((current) => { if (!current || current.item.id !== selectedItem.id) return current; const { initialCountQuantity: _intent, ...rest } = current; return rest; })} countReceipt={createdInventory?.item.id === selectedItem.id ? createdInventory.countReceipt : undefined} onCountSaved={(countReceipt) => setCreatedInventory((current) => { if (current?.item.id !== selectedItem.id) return current; const { countReceipt: _previous, ...rest } = current; return countReceipt ? { ...rest, countReceipt } : rest; })} onAddAnother={createdInventory?.item.id === selectedItem.id && !createdInventory.returnToRequirement && !receivedStock ? () => navigationGuard.registry.request(() => { dismissItem(); setCreatedInventory(undefined); setShowNewItem(true); }) : undefined} resumeObservation={pendingStockObservation?.item.id === selectedItem.id ? pendingStockObservation : undefined} onPendingObservation={rememberStockObservation} nextStepHasAction={Boolean(!editingRequirement && receivedStock?.itemId === selectedItem.id && receiptRequirement(receivedStock.context, projects.find(project => project.id === receivedStock.context.projectId)))} nextStep={!editingRequirement && receivedStock?.itemId === selectedItem.id ? <ReceivedStockNextStep context={receivedStock.context} item={selectedItem} project={projects.find((project) => project.id === receivedStock.context.projectId)} onReview={() => navigationGuard.registry.request(() => { const project = projects.find((candidate) => candidate.id === receivedStock.context.projectId); const line = receiptRequirement(receivedStock.context, project); if (!line || !project) return; dismissItem(); setCountStockItemId(undefined); setProjectView("active"); setSelectedProjectId(project.id); setProjectTab("plan"); setPage("projects"); recordNavigation("projects", project.id, "plan", "active"); setEditingRequirement({ projectId: project.id, line, initialFocus: "stock", initialItemId: selectedItem.id }); })} /> : undefined} suspended={Boolean(navigationGuard.pending)} sampleMode={sampleMode} item={selectedItem} items={items} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} expert={expert} onClose={() => { const close = () => { closeItemHistory(); setCountStockItemId(undefined); setCreatedInventory(undefined); }; if (editingRequirement || (createdInventory?.item.id === selectedItem.id && createdInventory.returnToRequirement)) close(); else navigationGuard.registry.request(close); }} onCount={recordCount} onCommission={commissionInventoryItem} onUpdate={updateInventoryItem} onDelete={async (item) => {
         if (item.version === undefined) throw new Error("Reload this item before deleting it.");
         await adapter.deleteInventoryItem(item.id, item.version);
         setItems((current) => current.filter((candidate) => candidate.id !== item.id));
         setCreatedInventory((current) => current?.item.id === item.id ? undefined : current);
         setRequirementDraft((draft) => draft.itemId === item.id ? { ...draft, itemId: "" } : draft);
-        setSelectedItemId(undefined);
+        dismissItem();
         setBulkInventorySelection(undefined);
         setBulkSelectionResetNonce((value) => value + 1);
         setInventoryRefreshNonce((value) => value + 1);
         await refreshWorkspace();
         setToast(`${item.name} deleted. Its history is retained.`);
-      }} onLinkProduct={(record) => navigationGuard.registry.request(() => { setSelectedItemId(undefined); setReplacementFor(record); setShowNewItem(true); })} onCreateReplacement={(record) => navigationGuard.registry.request(() => { setSelectedItemId(undefined); setReplacementFor(record); setShowNewItem(true); })} /> )}{" "}
+      }} onLinkProduct={(record) => navigationGuard.registry.request(() => { dismissItem(); setReplacementFor(record); setShowNewItem(true); })} onCreateReplacement={(record) => navigationGuard.registry.request(() => { dismissItem(); setReplacementFor(record); setShowNewItem(true); })} /> )}{" "}
       {showBomImport && selectedProject && <Dialog title="Import requirements from CSV" suspended={Boolean(navigationGuard.pending)} onClose={() => navigationGuard.registry.request(() => setShowBomImport(false))}><ExistingBomImport project={selectedProject} onRefresh={refreshWorkspace} /></Dialog>}
       {showGuidedSetup && <Dialog title="Guided project setup" suspended={Boolean(navigationGuard.pending)} onClose={() => { if (!guidedBusy) navigationGuard.registry.request(() => {
         setShowGuidedSetup(false);
@@ -1061,12 +1149,12 @@ export function formatSourceReadyMessage(count: number): string {
       }); }}><GuidedSetup initialDraft={guidedDraft} initialMode={guidedMode} adapter={adapter} items={items} onBusy={setGuidedBusy} onDone={async (projectId) => { if (!await refreshWorkspace()) throw new Error("The project is saved, but the workspace could not refresh. Open it again when the connection recovers."); setShowGuidedSetup(false); recordOpenedProject(projectId, sampleMode); pendingMainFocusRef.current = true; recordNavigation("projects", projectId, "plan"); setSelectedProjectId(projectId); setProjectTab("plan"); setPage("projects"); }} /></Dialog>}
       {showNewProject && ( <NewProjectDialog onGuided={sampleMode ? undefined : (draft, mode) => { setGuidedDraft(draft); setGuidedMode(mode); setShowNewProject(false); setShowGuidedSetup(true); }} items={items} suspended={showNewItem} dismissalPending={Boolean(navigationGuard.pending)} onClose={() => navigationGuard.registry.request(closeNewProject)} onAddPrinter={openNewPrinter} onCreate={createProject} /> )}{" "}
       {showNewRevision && selectedProject && ( <NewRevisionDialog dismissalPending={Boolean(navigationGuard.pending)} project={selectedProject} items={items} expert={expert} suspended={showNewItem} onClose={() => setShowNewRevision(false)} onAddPrinterDetails={openNewPrinterDetails} onAddPrinter={openNewPrinter} onCreate={createRevision} /> )}{" "} {showEditBuildApproach && selectedProject && ( <EditBuildApproachDialog dismissalPending={Boolean(navigationGuard.pending)} project={selectedProject} items={items} expert={expert} suspended={showNewItem} onClose={() => setShowEditBuildApproach(false)} onAddPrinter={openNewPrinter} onSave={updateBuildApproach} /> )}{" "}
-      {editingProject && <ScopedDraftDialog title="Edit project" dirty={projectEditDraft.dirty} unresolved={projectEditDraft.unresolved || correctionBusy} suspended={Boolean(navigationGuard.pending)} onClose={() => setEditingProject(undefined)}>{(requestClose) => <ProjectEditForm project={editingProject} onDraftChange={setProjectEditDraft} onBusy={setCorrectionBusy} onClose={requestClose} onSave={async (input) => { if (editingProject.version === undefined) throw new ApiError("Reload this project to obtain its current version before editing.", { kind: "validation", status: 409 }); applyProjectCorrection(await adapter.updateProject(editingProject.id, input, editingProject.version), "Project updated. Stock and validation evidence are unchanged."); setEditingProject(undefined); }} />}</ScopedDraftDialog>}
+      {editingProject && <ScopedDraftDialog title="Edit project" dirty={projectEditDraft.dirty} unresolved={projectEditDraft.unresolved || correctionBusy} suspended={Boolean(navigationGuard.pending)} onClose={() => setEditingProject(undefined)}>{(requestClose) => <ProjectEditForm project={editingProject} onDraftChange={setProjectEditDraft} onBusy={setCorrectionBusy} onClose={requestClose} onSave={async (input) => { if (editingProject.version === undefined) throw new ApiError("Reload this project to obtain its current version before editing.", { kind: "conflict", status: 428, code: "precondition_required" }); applyProjectCorrection(await adapter.updateProject(editingProject.id, input, editingProject.version), "Project updated. Stock and validation evidence are unchanged."); setEditingProject(undefined); }} />}</ScopedDraftDialog>}
 
       {showAddBom && selectedProject && ( <AddBomDialog draft={requirementDraft} onDraftChange={setRequirementDraft} suspended={showNewItem || Boolean(createdInventory?.returnToRequirement && selectedItem)} onAddOwnedItem={(name) => { setNewItemRequirementName(name); setReplacementFor(undefined); setNewInventoryDraft(undefined); setShowNewItem(true); }} onSearchOwnedItems={searchOwnedItems} items={items} project={selectedProject} expert={expert} dismissalPending={Boolean(navigationGuard.pending)} onClose={() => navigationGuard.registry.request(() => { setShowAddBom(false); setRequirementDraft(emptyRequirementDraft()); })} onCreate={addBomLine} /> )}{" "}
       {showNewItem && ( <NewInventoryDialog initialDraft={newInventoryDraft} onDraftChange={setNewInventoryDraft} requirementName={newItemRequirementName} receiving={receivingStock} dismissalPending={Boolean(navigationGuard.pending)} expert={expert} replacementFor={replacementFor} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} catalogQuery={catalogQuery} catalogProducts={catalogProducts} onCatalogQuery={setCatalogQuery} onResetCatalog={resetCatalogSelection} onSearchCatalog={searchCatalogProducts} onSearchCatalogPage={listCatalogProductPage} onCreateCatalogProduct={addCatalogProduct} onCreateExact={addExactInventoryItem} onLinkExact={linkExactInventoryItem} onClose={closeNewItem} onGoSettings={() => navigationGuard.registry.request(() => { closeNewItem(); setShowNewRevision(false); setShowNewProject(false); setShowEditBuildApproach(false); setShowAddBom(false); setRequirementDraft(emptyRequirementDraft()); navigate("settings"); })} onCreate={addInventoryItem} /> )}{" "}
       {bulkInventorySelection && ( <BulkInventoryDialog selectedItems={bulkInventorySelection.items} onClose={closeBulkInventory} onDone={closeBulkInventory} onApply={applyBulkInventory} /> )}{" "}
-      <Toaster theme={appearance.value.colourMode} closeButton duration={4200} position="bottom-right" toastOptions={{ className: "workspace-notification", closeButtonAriaLabel: "Dismiss notification" }} />
+      <ToastRegion toast={toastApi.toast} onDismiss={toastApi.dismiss} />
     </div></UnsavedWorkContext.Provider></OwnedInventorySearchContext.Provider>
   );
 }
@@ -1075,6 +1163,11 @@ function BrandMark() { return ( <div className="brand-mark" aria-hidden="true"> 
 
 function LoadingScreen() {
   return ( <div className="loading-screen" role="status" aria-live="polite"><div className="loading-brand"><BrandMark /><span>Loading workspace</span></div><Skeleton className="skeleton-line wide" /><Skeleton className="skeleton-line" /><div className="skeleton-table"><Skeleton /><Skeleton /><Skeleton /><Skeleton /></div></div> );
+}
+
+export function mergeRefreshedProjects(current: readonly Project[], refreshed: readonly Project[]): Project[] {
+  const byId = new Map(refreshed.filter((project) => project.status !== "archived").map((project) => [project.id, project] as const));
+  return current.filter((project) => project.status !== "archived").map((project) => byId.get(project.id) ?? project);
 }
 
 function normalizeApiError(error: unknown): ApiError {
@@ -1098,13 +1191,6 @@ function observedAtFromLocalDateTime(value: string): string | undefined {
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
-function writeFailureMessage(error: ApiError, action: string): string {
-  if (error.kind === "offline") return `Cannot complete ${action}. The private service is offline. Nothing was saved.`;
-  if (error.kind === "unauthenticated" || error.kind === "csrf") return `Cannot complete ${action}. Sign in again. Nothing was saved.`;
-  if (error.kind === "validation") return `Cannot complete ${action}. Check the values and try again.`;
-  return `Cannot complete ${action}. Nothing was saved.`;
-}
-
 /** Keep service/runtime terminology out of the beginner finish-build screen. */
 export function reconciliationLoadErrorMessage(message: string, expert: boolean): string {
   if (expert) return message;
@@ -1112,10 +1198,6 @@ export function reconciliationLoadErrorMessage(message: string, expert: boolean)
     return "Used-stock updates are not available on this service version. Update the service, then try again.";
   }
   return "The used-stock update could not be loaded. Try again or return to the plan.";
-}
-
-function isAmbiguousMutation(error: ApiError): boolean {
-  return !["validation", "forbidden", "unauthenticated", "csrf"].includes(error.kind);
 }
 
 export function ConnectionScreen({ state, error, demoAvailable, recoveryNotice, onDiscardRecovery, onLogin, onRetry, onSample }: { recoveryNotice?: string | undefined; onDiscardRecovery?: (() => void) | undefined; state: Exclude<ConnectionState, "loading" | "ready" | "sample">; error: ApiError | undefined; demoAvailable: boolean; onLogin: (password: string) => Promise<void>; onRetry: () => void; onSample: () => void; }) {
@@ -1209,6 +1291,8 @@ export function InventoryPage({ categoryNodeId, setCategoryNodeId, sampleMode, a
   const [error, setError] = useState<ApiError>();
   const [loadMoreError, setLoadMoreError] = useState<ApiError>();
   const [retryNonce, setRetryNonce] = useState(0);
+  const loadedCountRef = useRef(0);
+  const fetchedFilterKeyRef = useRef<string | undefined>(undefined);
   const [selectedTargets, setSelectedTargets] = useState<Map<string, number>>(() => new Map());
   const [selectionNotice, setSelectionNotice] = useState<string>();
   const selectAllRef = useRef<HTMLButtonElement>(null);
@@ -1246,7 +1330,10 @@ export function InventoryPage({ categoryNodeId, setCategoryNodeId, sampleMode, a
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterKey]);
 
-  useEffect(() => {
+  // A layout effect: the reset must land before the next input event. Rows
+  // stay mounted while the list refreshes, so a passive effect would let a
+  // fresh selection made right after "Done" be wiped by the stale reset.
+  useLayoutEffect(() => {
     if (bulkSelectionResetKey === 0) return;
     setSelectedTargets(new Map());
     setSelectionNotice(undefined);
@@ -1343,18 +1430,22 @@ export function InventoryPage({ categoryNodeId, setCategoryNodeId, sampleMode, a
     searchInputRef.current?.focus();
   }, [search, searchInputRef]);
 
+  loadedCountRef.current = pageItems.length;
   useEffect(() => {
     const sequence = ++requestSequence.current;
     let active = true;
-    setPageItems([]);
-    setNextCursor(undefined);
-    setTotal(undefined);
+    // Keep the rows on screen (marked busy) until their replacement arrives.
+    // A filter change starts from the first page; a mutation or retry reloads
+    // every row already loaded so "Load more" pages and scroll survive.
+    const sameFilter = fetchedFilterKeyRef.current === filterKey;
+    const query: InventoryListQuery = sameFilter ? { ...baseQuery, limit: refetchLimit(loadedCountRef.current, baseQuery.limit) } : baseQuery;
     setError(undefined);
     setLoadMoreError(undefined);
     setLoading(true);
     setLoadingMore(false);
     const timeout = window.setTimeout(() => {
-      adapter.listInventory(baseQuery).then((result) => {
+      adapter.listInventory(query).then((result) => {
+        fetchedFilterKeyRef.current = filterKey;
         if (!active || sequence !== requestSequence.current) return;
         setPageItems(result.items);
         setNextCursor(result.nextCursor);
@@ -2060,7 +2151,7 @@ export function BomLineRow({ line, highlighted = false, expert, onOpenItem, onRe
   const matchedItemLabel = line.item ? inventoryCandidateLabel(line.item, line.items ?? [line.item], expert) : undefined;
   const availableLabel = needsUnitCorrection ? "No safe match" : line.decision === "decide" ? "Needs detail" : line.decision === "check" && line.supplied === 0 ? "Not confirmed" : formatQuantity(line.supplied, unit);
   return ( <div data-requirement-id={line.line.id} tabIndex={-1} className={`bom-row ${highlighted ? "is-new-part" : ""} ${editing?.selectedLineId === line.line.id ? "is-selected" : ""} bom-${line.state} ${needsUnitCorrection ? "bom-unit-mismatch" : ""}`}>
-    <div className="bom-main"><div><strong>{editing && editing.project.status !== "archived" ? <Button variant="ghost" className="part-name-button" onClick={() => editing.editRequirement(line.line)}>{line.line.label}</Button> : line.line.label}</strong>{line.line.note && <span className="part-note">{line.line.note}</span>}<Disclosure className="bom-stock-details"><DisclosureTrigger>Stock details</DisclosureTrigger><DisclosureContent><p className="requirement-stock-reason">{requirementStockReason(line)}</p>{line.item && matchedItemLabel && !needsUnitCorrection && <Button variant="ghost" className="match-link" onClick={() => onOpenItem(line.item!.id)}><span>{matchedItemLabel.name}</span>{matchedItemLabel.discriminator && <small> · {matchedItemLabel.discriminator}</small>}<Icon name="arrow-up-right" size={13}/></Button>}{!line.item && <p className="match-none">{line.line.itemId || line.gap?.matchedItemIds.length ? "Referenced stock details unavailable" : "No matching stock"}</p>}{line.remaining > 0 && <p>{formatQuantity(line.remaining, unit)} still needed.</p>}</DisclosureContent></Disclosure>{roleNeedsReview && onResolveRole && ( <div className="bom-role-choice" role="group" aria-label={`Choose how ${line.line.label} is used`} > <small>How will you use this?</small> <Button variant="ghost" type="button" className="text-button" onClick={() => onResolveRole(line.line.id, "consumed", line.line.version) } > {" "}
+    <div className="bom-main"><div><strong>{editing && editing.project.status !== "archived" ? <Button variant="ghost" className="part-name-button" onClick={() => editing.editRequirement(line.line)}>{line.line.label}</Button> : line.line.label}</strong>{line.line.note && <span className="part-note">{line.line.note}</span>}{line.supplied > 0 && line.item && assumedStockLabel(line.item) && <span className="part-note bom-assumed-stock">{assumedStockLabel(line.item)}</span>}<Disclosure className="bom-stock-details"><DisclosureTrigger>Stock details</DisclosureTrigger><DisclosureContent><p className="requirement-stock-reason">{requirementStockReason(line)}</p>{line.item && matchedItemLabel && !needsUnitCorrection && <Button variant="ghost" className="match-link" onClick={() => onOpenItem(line.item!.id)}><span>{matchedItemLabel.name}</span>{matchedItemLabel.discriminator && <small> · {matchedItemLabel.discriminator}</small>}<Icon name="arrow-up-right" size={13}/></Button>}{!line.item && <p className="match-none">{line.line.itemId || line.gap?.matchedItemIds.length ? "Referenced stock details unavailable" : "No matching stock"}</p>}{line.remaining > 0 && <p>{formatQuantity(line.remaining, unit)} still needed.</p>}</DisclosureContent></Disclosure>{roleNeedsReview && onResolveRole && ( <div className="bom-role-choice" role="group" aria-label={`Choose how ${line.line.label} is used`} > <small>How will you use this?</small> <Button variant="ghost" type="button" className="text-button" onClick={() => onResolveRole(line.line.id, "consumed", line.line.version) } > {" "}
                 Part or material{" "} </Button> <Button variant="ghost" type="button" className="text-button" onClick={() => onResolveRole(line.line.id, "reusable", line.line.version) } > {" "}
                 Reusable tool{" "} </Button> </div> )}{" "} {expert && ( <small className={`bom-role-state ${roleNeedsReview ? "is-review" : ""}`} > <strong>{roleLabel}</strong> {roleNeedsReview ? " · Use is not recorded; review before planning stock consumption." : " · Recorded for planning."} </small> )}{" "} {expert && needsUnitCorrection && ( <small className="bom-unit-warning"><strong>Fix unit</strong> {correctionItem.unitCorrectionReason ?? "Stock is not matched or reserved until its unit is corrected from observed evidence."}</small> )}{" "}{expert && line.missingDecisions?.length ? ( <small className="bom-missing-decisions"> {" "}Decide: {" "} {line.missingDecisions.map(humanizeSpecificationDecision) .join(", ")}</small> ) : null}</div></div>
     <div className="bom-quantity"><span className="bom-mobile-label">Needed</span><strong>{formatQuantity(required, unit)}</strong></div>
@@ -2543,8 +2634,8 @@ function InventoryDrawerContent({ returnContext, item, resumeObservation, initia
         {countSaved ? <section ref={receiptRef} tabIndex={-1} className="drawer-quantity inventory-count-receipt" aria-labelledby="count-saved-heading" role="status">
           <div className="inventory-receipt-result"><span className="inventory-receipt-check" aria-hidden="true"><Icon name="check" size={30} /></span><strong id="count-saved-heading">Physical count saved</strong><p>{countSaved}</p><p>{itemIdentity} · {inventoryLocationLabel(item.location)}</p><p className="form-hint">Compatibility with a project is checked separately. Check its exact variant and specification before use.</p></div>
           <div className="drawer-form-actions">{!nextStepHasAction && <Button type="button" onClick={onClose}>{doneLabel}</Button>}{onAddAnother && <Button variant="outline" type="button" onClick={onAddAnother}>Add another item</Button>}<Button variant="ghost" type="button" onClick={() => { setCountSaved(undefined); onCountSaved?.(undefined); setCountExpanded(true); }}>Update count</Button></div>
-        </section> : <section className="drawer-quantity" aria-labelledby="physical-count-heading"><div><strong id="physical-count-heading">{item.unitStatus === "needs_correction" ? "Quantity blocked" : countExpanded ? "Count stock" : "Stock on hand"}</strong><span>{item.unitStatus === "needs_correction" ? "Create and count a corrected replacement before reusing this stock." : unverifiedQuantity ? `Recorded quantity: ${formatQuantity(item.quantity, item.unit)}.` : `${formatQuantity(item.quantity, item.unit)} on hand.`}</span>{item.unitStatus !== "needs_correction" && item.reserved > 0 && <span>{`${formatQuantity(item.reserved, item.unit)} reserved${availableForReuse === undefined ? "; availability not reported" : `; ${formatQuantity(availableForReuse, item.unit)} currently available for reuse`}.`}</span>}<p>{item.unitStatus === "needs_correction" ? "The recorded quantity is retained as history until its unit is corrected." : countExpanded ? "Count the pieces or measure the remaining amount, including reserved stock." : evidenceLabel(item.evidence, item.serverEvidence)}</p></div>
-          {item.unitStatus !== "needs_correction" && (countExpanded ? <form className="count-form" onSubmit={reviewCount}><p className="inventory-count-condition">Recorded condition: <strong>{item.condition?.replaceAll("_", " ") ?? "Unknown"}</strong>. A count changes quantity only.</p><Label htmlFor="count-quantity">Counted quantity</Label><div><Input autoFocus id="count-quantity" type="number" min="0" step="any" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={countSaving} /><span>{inventoryUnitLabel(item.unit, expert, item.serverUnit)}</span></div><Button variant="outline" type="submit" className="button button-secondary" disabled={countSaving}>{countSaving ? "Saving…" : "Review physical count"}</Button>{countError && <Alert asChild><p className="form-error" role="alert">{countError}</p></Alert>}</form> : <Button variant="outline" type="button" onClick={() => setCountExpanded(true)}>Count stock</Button>)}
+        </section> : <section className="drawer-quantity" aria-labelledby="physical-count-heading"><div><strong id="physical-count-heading">{item.unitStatus === "needs_correction" ? "Quantity blocked" : countExpanded ? (unverifiedQuantity ? "Receive and count" : "Count stock") : "Stock on hand"}</strong><span>{item.unitStatus === "needs_correction" ? "Create and count a corrected replacement before reusing this stock." : unverifiedQuantity ? `Recorded quantity: ${formatQuantity(item.quantity, item.unit)}.` : `${formatQuantity(item.quantity, item.unit)} on hand.`}</span>{item.unitStatus !== "needs_correction" && item.reserved > 0 && <span>{`${formatQuantity(item.reserved, item.unit)} reserved${availableForReuse === undefined ? "; availability not reported" : `; ${formatQuantity(availableForReuse, item.unit)} currently available for reuse`}.`}</span>}<p>{item.unitStatus === "needs_correction" ? "The recorded quantity is retained as history until its unit is corrected." : countExpanded ? "Count the pieces or measure the remaining amount, including reserved stock." : assumedStockLabel(item) ? `${assumedStockLabel(item)}. This counts as in stock because of your stock setting. Count it to record that you received it.` : evidenceLabel(item.evidence, item.serverEvidence)}</p></div>
+          {item.unitStatus !== "needs_correction" && (countExpanded ? <form className="count-form" onSubmit={reviewCount}><p className="inventory-count-condition">Recorded condition: <strong>{item.condition?.replaceAll("_", " ") ?? "Unknown"}</strong>. A count changes quantity only.</p><Label htmlFor="count-quantity">Counted quantity</Label><div><Input autoFocus id="count-quantity" type="number" min="0" step="any" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={countSaving} /><span>{inventoryUnitLabel(item.unit, expert, item.serverUnit)}</span></div><Button variant="outline" type="submit" className="button button-secondary" disabled={countSaving}>{countSaving ? "Saving…" : "Review physical count"}</Button>{countError && <Alert asChild><p className="form-error" role="alert">{countError}</p></Alert>}</form> : <Button variant="outline" type="button" onClick={() => setCountExpanded(true)}>{unverifiedQuantity ? "Receive and count" : "Count stock"}</Button>)}
         </section>}
 
         {!countSaved && doneLabel !== "Done" && <Button variant="outline" type="button" onClick={onClose}>{doneLabel}</Button>}
@@ -2588,6 +2679,7 @@ function InventoryDrawerContent({ returnContext, item, resumeObservation, initia
 
 
         <InventoryImages key={item.id} itemId={item.id} sampleMode={sampleMode} />
+        {!editing && <PrintItemLabel key={`label-${item.id}`} item={{ id: item.id, name: item.name, variant: item.variant, location: item.location }} />}
         <div className="drawer-maintenance">{onDelete && <Button variant="destructive" type="button" className="button button-danger" disabled={editing || countSaving || commissionSaving} onClick={() => { setDeleteError(undefined); setDeleteOpen(true); }}><Icon name="trash" size={16} />{item.kind === "printer" ? "Delete printer" : "Delete item"}</Button>}</div>
         {expert && ( <section className="provenance-panel" aria-labelledby="provenance-heading"><div><span className="eyebrow" id="provenance-heading"> {" "}Provenance{" "} </span><strong>{evidenceLabel(item.evidence, item.serverEvidence)}</strong></div><dl><div><dt>Source</dt><dd>{item.provenance?.source ?? "Not recorded"}</dd></div><div><dt>Observed</dt><dd>{item.provenance?.observedAt ? item.provenance.observedAt.slice(0, 10) : "Not recorded"}</dd></div>{item.provenance?.sourceId && ( <div><dt>Source record</dt><dd><code>{item.provenance.sourceId}</code></dd></div> )}{" "}{item.provenance?.note && ( <div><dt>Note</dt><dd>{item.provenance.note}</dd></div> )}</dl></section> )}{" "}
 

@@ -1,3 +1,4 @@
+import { DomainError } from "@benchledger/domain";
 import type {
   BuildConfigurationSnapshot, CatalogProduct, CreateBuildConfigurationSnapshot,
   CreateCatalogProduct, CreateInventoryProductProfile, InventoryProductProfile,
@@ -91,7 +92,7 @@ export class ProductionCatalogAdapter implements CatalogPort {
   async updateProduct(id: string, input: UpdateCatalogProduct, expectedVersion: number | undefined, _ctx: RequestContext): Promise<CatalogProduct> {
     return this.unitOfWork.exclusive(() => attempt(() => {
       const current = this.products.get(id);
-      if (current === undefined) throw new Error(`catalog product ${id} does not exist`);
+      if (current === undefined) throw new DomainError("catalog_product_not_found", `catalog product ${id} does not exist`);
       const expected = expectedVersion ?? current.version;
       const updated = this.database.transaction(() => this.products.update(id, input as never, expected));
       this.state.setVersion(CATALOG_PRODUCT, id, updated.version);
@@ -132,10 +133,10 @@ export class ProductionCatalogAdapter implements CatalogPort {
     await this.unitOfWork.exclusive(() => attempt(() => {
       const current = this.profiles.get(profileId);
       if (current === undefined) return;
-      if (current.itemId !== itemId || current.version !== 1) throw new Error("created inventory profile is no longer compensatable");
+      if (current.itemId !== itemId || current.version !== 1) throw new DomainError("integrity_error", "created inventory profile is no longer compensatable");
       const result = this.database.run("DELETE FROM inventory_product_profiles WHERE id = ? AND item_id = ? AND version = 1", [profileId, itemId]) as { readonly changes?: number | bigint };
       const removed = typeof result.changes === "number" ? result.changes === 1 : typeof result.changes === "bigint" ? result.changes === 1n : this.profiles.get(profileId) === undefined;
-      if (!removed) throw new Error("created inventory profile compensation did not remove the profile");
+      if (!removed) throw new DomainError("integrity_error", "created inventory profile compensation did not remove the profile");
       this.state.deleteMetadata(INVENTORY_PROFILE, profileId);
       this.state.deleteVersion(INVENTORY_PROFILE, profileId);
     }));

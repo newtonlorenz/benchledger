@@ -86,7 +86,9 @@ function expectProtectedDownload(response: Response, input: BeginUpload, bytes: 
   expect(response.statusCode, response.body).toBe(200);
   expect(response.rawPayload).toEqual(bytes);
   expect(digest(response.rawPayload)).toBe(input.sha256);
-  expect(response.headers["content-type"]).toContain(input.mediaType);
+  // SVG originals are never served as an image document: the download allow-list
+  // maps them to application/octet-stream in addition to the sandbox CSP below.
+  expect(response.headers["content-type"]).toContain(input.mediaType === "image/svg+xml" ? "application/octet-stream" : input.mediaType);
   expect(response.headers["content-disposition"]).toBe(`attachment; filename="${input.filename}"; filename*=UTF-8''${input.filename}`);
   expect(response.headers["x-content-type-options"]).toBe("nosniff");
   expect(response.headers["cache-control"]).toBe("no-store");

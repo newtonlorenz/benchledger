@@ -11,7 +11,7 @@ const schemas = {
 export type InventoryImageToolName = keyof typeof schemas;
 export const INVENTORY_IMAGE_TOOLS: readonly McpToolDefinition[] = Object.entries(schemas).map(([name, schema]) => ({
   name, description: name === "list_inventory_images" ? "Read image metadata and gallery version for any inventory item, including printers. Requires workspace-wide inventory:read. Returns no image bytes."
-    : "Attach a still PNG/JPEG/WebP image (max 2 MiB, 16 megapixels) to inventory or a printer. Use exact base64 encoded by a trusted host from the user-approved image, never invented bytes, local paths or remote URLs. Read gallery expectedVersion first. Label item_photo, reference, generated or unknown honestly. Images are normalized, metadata stripped; stock and verification unchanged. Identical retries replay safely. Requires workspace-wide inventory:write.",
+    : "Attach a still PNG/JPEG/WebP image (max 2 MiB, 16 MP) to an item. Use exact base64 from a user-approved image, never invented bytes, paths or URLs. Read the gallery expectedVersion first; label item_photo, reference, generated or unknown honestly. Metadata is stripped; stock is unchanged. Identical retries replay. Needs workspace-wide inventory:write.",
   requiredScope: name === "list_inventory_images" ? "inventory:read" : "inventory:write", mutating: name === "add_inventory_image", inputSchema: commandJsonSchema(schema) as JsonObject
 }));
 export function parseInventoryImageTool(name: InventoryImageToolName, raw: unknown): Record<string, unknown> {

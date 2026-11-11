@@ -1,6 +1,18 @@
 # BenchLedger production runtime
 
-`@benchledger/runtime` composes the domain repositories and the content-addressed artifact store behind `ApplicationPorts`. It is intentionally separate from the demo in-memory server adapter.
+`@benchledger/runtime` composes the domain repositories and the content-addressed artifact store behind `ApplicationPorts`. It is the only runtime: demo mode and tests use the same adapters.
+
+## Demo and test runtime
+
+`createDemoRuntime()` opens the production runtime on an in-memory SQLite
+database (`databasePath: ":memory:"`) with a private `mkdtemp` artifact
+directory, writes the synthetic workspace from `demo-seed.ts` through the
+ports (no audit events), and removes the directory on `close()`. Pass
+`{ seed: "empty" }` for a blank workspace and `{ seedStarterCatalog: true }` to
+include the reviewed starter catalog (off by default so demo catalog content
+stays stable). Demo project listings use creation order; everything else is the
+production behaviour. `createProductionRuntime({ seedStarterCatalog: false })`
+is available for the same purpose.
 
 Application mutations run through a required unit-of-work port. The production
 implementation serializes mutations, consistent reads, uploads, and backups

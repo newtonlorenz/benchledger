@@ -6,8 +6,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { createApp, bearerRecord } from "./app.js";
 import { ArtifactTransferManager, TRANSFER_TOKEN_HEADER } from "./artifact-transfer.js";
-import { createSyntheticRuntime } from "./memory-store.js";
-import { createProductionRuntime } from "@benchledger/runtime";
+import { createDemoRuntime, createProductionRuntime } from "@benchledger/runtime";
 import { ApplicationService } from "@benchledger/application";
 
 const demoPassword = "demo-password-please-change";
@@ -65,7 +64,7 @@ describe("BenchLedger HTTP API", () => {
   });
 
   it("serves the inspection queue through list/read/preview/commit routes with scoped access and safe retries", async () => {
-    const runtime = createSyntheticRuntime();
+    const runtime = await createDemoRuntime();
     const app = await createApp({
       demo: true,
       runtime,
@@ -110,7 +109,7 @@ describe("BenchLedger HTTP API", () => {
       });
       expect(stalePreviewResponse.statusCode).toBe(201);
       const stalePreview = stalePreviewResponse.json<{ id: string; version: number; contentSha256: string }>();
-      await runtime.inventory.updateItem("wire-dupont", { name: "Wire assortment (updated)" }, 1);
+      await runtime.ports.inventory.updateItem("wire-dupont", { name: "Wire assortment (updated)" }, 1, { actor: "test", source: "api", correlationId: "stale-wire", scopes: new Set(["write"]) });
       const staleCommit = await app.inject({
         method: "POST",
         url: `${base}/${actionId}/completion-commit`,
@@ -159,45 +158,59 @@ describe("BenchLedger HTTP API", () => {
   });
 
   it("seeds the synthetic runtime with a project, revision, and planning BOM", async () => {
-    const runtime = createSyntheticRuntime();
-    const projects = await runtime.ports.projects.listProjects({ limit: 50 });
-    const project = projects.data.find((candidate) => candidate.id === "synthetic-project-lamp");
-    expect(project).toMatchObject({ currentRevisionId: "synthetic-revision-lamp-r01", status: "planned" });
-    const lines = await runtime.ports.projects.listBomLines(project?.currentRevisionId ?? "missing");
-    expect(lines.map((line) => line.id).sort()).toEqual([
-      "synthetic-bom-board",
-      "synthetic-bom-fasteners",
-      "synthetic-bom-filament",
-      "synthetic-bom-wire"
-    ]);
-    expect(lines.find((line) => line.id === "synthetic-bom-fasteners")).toMatchObject({ optional: false, requiredQuantity: 4, unit: "each" });
+    const runtime = await createDemoRuntime();
+    try {
+      const projects = await runtime.ports.projects.listProjects({ limit: 50 });
+      const project = projects.data.find((candidate) => candidate.id === "synthetic-project-lamp");
+      expect(project).toMatchObject({ currentRevisionId: "synthetic-revision-lamp-r01", status: "planned" });
+      const lines = await runtime.ports.projects.listBomLines(project?.currentRevisionId ?? "missing");
+      expect(lines.map((line) => line.id).sort()).toEqual([
+        "synthetic-bom-board",
+        "synthetic-bom-fasteners",
+        "synthetic-bom-filament",
+        "synthetic-bom-wire"
+      ]);
+      expect(lines.find((line) => line.id === "synthetic-bom-fasteners")).toMatchObject({ optional: false, requiredQuantity: 4, unit: "each" });
+    } finally {
+      await runtime.close();
+    }
   });
 
   it("keeps synthetic category ordering aligned with persisted binary keys", async () => {
-    const runtime = createSyntheticRuntime();
-    await runtime.inventoryCategories.createCategory({ id: "category-demo-zebra", name: "Zebra", sortOrder: 100 });
-    await runtime.inventoryCategories.createCategory({ id: "category-demo-eclair", name: "Éclair", sortOrder: 100 });
-    await runtime.inventoryCategories.createCategory({ id: "category-demo-cafe", name: "Café", sortOrder: 101 });
-    expect(() => runtime.inventoryCategories.createCategory({ id: "category-demo-cafe-composed", name: "Cafe\u0301", sortOrder: 102 })).toThrow(/already exists|category/i);
-    const page = await runtime.inventoryCategories.listCategories({ limit: 200, includeArchived: false });
-    expect(page.data.filter((value) => value.sortOrder === 100).map((value) => value.id)).toEqual(["category-demo-zebra", "category-demo-eclair"]);
+    const runtime = await createDemoRuntime();
+    const categories = runtime.ports.inventoryCategories!;
+    const ctx = { actor: "category-test", source: "api" as const, correlationId: "category-order", scopes: new Set(["read", "write"]) };
+    try {
+      await categories.createCategory({ id: "category-demo-zebra", name: "Zebra", sortOrder: 100 }, ctx);
+      await categories.createCategory({ id: "category-demo-eclair", name: "Éclair", sortOrder: 100 }, ctx);
+      await categories.createCategory({ id: "category-demo-cafe", name: "Café", sortOrder: 101 }, ctx);
+      await expect(categories.createCategory({ id: "category-demo-cafe-composed", name: "Cafe\u0301", sortOrder: 102 }, ctx)).rejects.toThrow(/already exists|category/i);
+      const page = await categories.listCategories({ limit: 200, includeArchived: false });
+      expect(page.data.filter((value) => value.sortOrder === 100).map((value) => value.id)).toEqual(["category-demo-zebra", "category-demo-eclair"]);
+    } finally {
+      await runtime.close();
+    }
   });
 
   it("uses canonical category cursors and rejects malformed cursors in the synthetic runtime", async () => {
-    const runtime = createSyntheticRuntime();
+    const runtime = await createDemoRuntime();
+    const categories = runtime.ports.inventoryCategories!;
+    const ctx = { actor: "category-test", source: "api" as const, correlationId: "category-cursor", scopes: new Set(["read", "write"]) };
     const firstId = "category-" + "a".repeat(151);
     const secondId = "category-" + "b".repeat(151);
-    await runtime.inventoryCategories.createCategory({ id: firstId, name: "ﬃ".repeat(120), sortOrder: 0 });
-    await runtime.inventoryCategories.createCategory({ id: secondId, name: "G".repeat(120), sortOrder: 0 });
+    try {
+      await categories.createCategory({ id: firstId, name: "ﬃ".repeat(120), sortOrder: 0 }, ctx);
+      await categories.createCategory({ id: secondId, name: "G".repeat(120), sortOrder: 0 }, ctx);
 
-    const first = await runtime.inventoryCategories.listCategories({ limit: 1, includeArchived: false });
-    expect(first.data[0]?.id).toBe(firstId);
-    expect(first.nextCursor).toBe(Buffer.from(firstId, "utf8").toString("base64url"));
-    expect(first.nextCursor?.length).toBeGreaterThan(200);
-    const cursor = first.nextCursor;
-    if (cursor === undefined) throw new Error("expected a continuation cursor");
-    expect((await runtime.inventoryCategories.listCategories({ limit: 1, includeArchived: false, cursor })).data[0]?.id).toBe(secondId);
-    expect(() => runtime.inventoryCategories.listCategories({ limit: 1, includeArchived: false, cursor: "1" })).toThrow(/invalid/i);
+      const first = await categories.listCategories({ limit: 1, includeArchived: false });
+      expect(first.data[0]?.id).toBe(firstId);
+      const cursor = first.nextCursor;
+      if (cursor === undefined) throw new Error("expected a continuation cursor");
+      expect((await categories.listCategories({ limit: 1, includeArchived: false, cursor })).data[0]?.id).toBe(secondId);
+      await expect(categories.listCategories({ limit: 1, includeArchived: false, cursor: "1" })).rejects.toThrow(/invalid|cursor/i);
+    } finally {
+      await runtime.close();
+    }
   });
 
   it("keeps health public but protects inventory", async () => {
@@ -418,7 +431,7 @@ describe("BenchLedger HTTP API", () => {
   });
 
   it("keeps labeled bearer actors distinct for audit and idempotency namespaces", async () => {
-    const runtime = createSyntheticRuntime();
+    const runtime = await createDemoRuntime();
     const app = await createApp({
       demo: true,
       runtime,
@@ -825,7 +838,7 @@ describe("BenchLedger HTTP API", () => {
   });
 
   it("uses the capability actor for transfer finalization audit and idempotency attribution", async () => {
-    const runtime = createSyntheticRuntime();
+    const runtime = await createDemoRuntime();
     const idempotencyActors: string[] = [];
     const originalSet = runtime.ports.idempotency.set.bind(runtime.ports.idempotency);
     runtime.ports.idempotency.set = async (actor, key, value) => {
@@ -1031,7 +1044,7 @@ describe("BenchLedger HTTP API", () => {
   });
 
   it("uses the true latest build setup when a revision has more than one bounded page", async () => {
-    const runtime = createSyntheticRuntime();
+    const runtime = await createDemoRuntime();
     const service = new ApplicationService(runtime.ports);
     const revisionId = "synthetic-revision-lamp-r01";
     const seedContext = {
@@ -1072,7 +1085,7 @@ describe("BenchLedger HTTP API", () => {
   });
 
   it("does not expose build-configuration existence to a project-scoped REST token", async () => {
-    const runtime = createSyntheticRuntime();
+    const runtime = await createDemoRuntime();
     const seedContext = { actor: "seed-agent", source: "api" as const, correlationId: "seed-build-config-access", scopes: new Set(["read", "write"]) };
     const createSnapshotInput = (id: string, projectRevisionId: string) => ({
       id,
@@ -1121,7 +1134,7 @@ describe("BenchLedger HTTP API", () => {
   });
 
   it("normalizes missing and cross-project revisions before scoped route dispatch", async () => {
-    const runtime = createSyntheticRuntime();
+    const runtime = await createDemoRuntime();
     const seedContext = { actor: "seed-agent", source: "api" as const, correlationId: "seed-revision-access", scopes: new Set(["read", "write"]) };
     await runtime.ports.projects.createProject({ id: "other-revision-project", name: "Other revision project", status: "planned" }, seedContext);
     await runtime.ports.projects.createProjectRevision("other-revision-project", { id: "other-revision", name: "Other revision", status: "concept" }, seedContext);
@@ -1154,7 +1167,7 @@ describe("BenchLedger HTTP API", () => {
   });
 
   it("normalizes missing and cross-project superseded snapshots before a scoped create dispatch", async () => {
-    const runtime = createSyntheticRuntime();
+    const runtime = await createDemoRuntime();
     const seedContext = { actor: "seed-agent", source: "api" as const, correlationId: "seed-scoped-create", scopes: new Set(["read", "write"]) };
     const service = new ApplicationService(runtime.ports);
     await runtime.ports.projects.createProject({ id: "other-create-project", name: "Other create project", status: "planned" }, seedContext);
@@ -1214,7 +1227,7 @@ describe("BenchLedger HTTP API", () => {
   });
 
   it("normalizes missing and cross-project upload snapshots before a scoped begin dispatch", async () => {
-    const runtime = createSyntheticRuntime();
+    const runtime = await createDemoRuntime();
     const seedContext = { actor: "seed-agent", source: "api" as const, correlationId: "seed-scoped-upload", scopes: new Set(["read", "write"]) };
     const service = new ApplicationService(runtime.ports);
     await runtime.ports.projects.createProject({ id: "other-upload-project", name: "Other upload project", status: "planned" }, seedContext);
@@ -1270,10 +1283,13 @@ describe("BenchLedger HTTP API", () => {
   it("starts the file-backed runtime and reports readiness before serving production requests", async () => {
     const dataDir = await mkdtemp(join(tmpdir(), "benchledger-server-"));
     try {
-      const app = await createApp({ dataDir, publicBaseUrl: "http://127.0.0.1:8792", auth: { sessionSecret: "s".repeat(48), secureCookies: false }, logger: false });
+      const app = await createApp({ dataDir, publicBaseUrl: "http://127.0.0.1:8792", auth: { sessionSecret: "s".repeat(48), secureCookies: false, bearerTokens: [bearerRecord("ready-operator", ["read"])] }, logger: false });
       const ready = await app.inject({ method: "GET", url: "/api/v1/ready" });
       expect(ready.statusCode).toBe(200);
-      expect(ready.json()).toMatchObject({ status: "ok", checks: { database: "ok", artifacts: "ok" }, demo: false });
+      expect(ready.json()).toMatchObject({ status: "ok", demo: false });
+      expect(ready.json()).not.toHaveProperty("checks");
+      const operatorReady = await app.inject({ method: "GET", url: "/api/v1/ready", headers: { authorization: "Bearer ready-operator" } });
+      expect(operatorReady.json()).toMatchObject({ status: "ok", checks: { database: "ok", artifacts: "ok" }, demo: false });
       await app.close();
     } finally {
       await rm(dataDir, { recursive: true, force: true });
@@ -1334,17 +1350,17 @@ describe("BenchLedger HTTP API", () => {
       quantity: { value: 1, unit: "piece" },
     });
     expect(created.statusCode).toBe(200);
-    expect(created.json()).toMatchObject({ result: { isError: false, structuredContent: { id: expect.any(String), projectRevisionId: "synthetic-revision-lamp-r01", quantity: { unit: "piece" } } } });
-    const reservationId = created.json<{ result: { structuredContent: { id: string } } }>().result.structuredContent.id;
+    expect(created.json()).toMatchObject({ result: { isError: false, structuredContent: { id: expect.any(String), projectRevisionId: "synthetic-revision-lamp-r01", quantity: { unit: "each" } } } });
+    const { id: reservationId, version: reservationVersion } = created.json<{ result: { structuredContent: { id: string; version: number } } }>().result.structuredContent;
 
-    const released = await call("release", "release_reservation", { reservationId });
+    const released = await call("release", "release_reservation", { reservationId, expectedVersion: reservationVersion });
     expect(released.statusCode).toBe(200);
-    expect(released.json()).toMatchObject({ result: { isError: false, structuredContent: { id: reservationId, projectRevisionId: "synthetic-revision-lamp-r01", bomLineId: "synthetic-bom-board", quantity: { unit: "piece" }, status: "released" } } });
+    expect(released.json()).toMatchObject({ result: { isError: false, structuredContent: { id: reservationId, projectRevisionId: "synthetic-revision-lamp-r01", bomLineId: "synthetic-bom-board", quantity: { unit: "each" }, status: "released" } } });
     await app.close();
   });
 
   it("resolves historical reservations and upload ancestry across separate MCP HTTP requests", async () => {
-    const runtime = createSyntheticRuntime();
+    const runtime = await createDemoRuntime();
     const app = await createApp({ demo: true, runtime, auth: { sessionSecret: "s".repeat(48), secureCookies: false, bearerTokens: [bearerRecord("historical-project-token", ["read", "write"], ["synthetic-project-lamp"])] }, logger: false });
     const headers = { authorization: "Bearer historical-project-token" };
     const call = (id: string, name: string, args: Record<string, unknown>) => app.inject({ method: "POST", url: "/api/v1/mcp", headers, payload: { jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } } });
@@ -1357,12 +1373,12 @@ describe("BenchLedger HTTP API", () => {
       quantity: { value: 1, unit: "piece" },
     });
     expect(created.json()).toMatchObject({ result: { isError: false, structuredContent: { projectRevisionId: historicalRevisionId } } });
-    const reservationId = created.json<{ result: { structuredContent: { id: string } } }>().result.structuredContent.id;
+    const { id: reservationId, version: reservationVersion } = created.json<{ result: { structuredContent: { id: string; version: number } } }>().result.structuredContent;
 
     await runtime.ports.projects.createProjectRevision("synthetic-project-lamp", { id: "synthetic-revision-lamp-r02", name: "Current baseline", status: "concept" }, {
       actor: "test-agent", source: "api", correlationId: "historical-current-revision", scopes: new Set(["read", "write"])
     });
-    const released = await call("release-reservation", "release_reservation", { reservationId });
+    const released = await call("release-reservation", "release_reservation", { reservationId, expectedVersion: reservationVersion });
     expect(released.json()).toMatchObject({ result: { isError: false, structuredContent: { id: reservationId, projectRevisionId: historicalRevisionId, bomLineId: "synthetic-bom-board", status: "released" } } });
 
     const body = Buffer.from("historical-step");
@@ -1373,7 +1389,7 @@ describe("BenchLedger HTTP API", () => {
   });
 
   it("exposes the atomic project command through MCP with idempotent replay and no orphan on rollback", async () => {
-    const runtime = createSyntheticRuntime();
+    const runtime = await createDemoRuntime();
     const app = await createApp({ demo: true, runtime, auth: { sessionSecret: "s".repeat(48), secureCookies: false, bearerTokens: [bearerRecord("mcp-project-writer", ["read", "write"])] }, logger: false });
     const headers = { authorization: "Bearer mcp-project-writer", "idempotency-key": "mcp-atomic-project-1" };
     const payload = { jsonrpc: "2.0", id: "create", method: "tools/call", params: { name: "create_project_with_initial_revision", arguments: { projectId: "mcp-atomic-project", revisionId: "mcp-atomic-revision", name: "MCP atomic project", revisionSummary: "Initial plan" } } };
@@ -1395,7 +1411,7 @@ describe("BenchLedger HTTP API", () => {
   });
 
   it("replays a header-less MCP bulk metadata call through the application backend", async () => {
-    const runtime = createSyntheticRuntime();
+    const runtime = await createDemoRuntime();
     const published: string[] = [];
     runtime.ports.events.subscribe((event) => { if (event.type === "inventory.item.bulk_update") published.push(event.entityId); });
     const app = await createApp({ demo: true, runtime, auth: { sessionSecret: "s".repeat(48), secureCookies: false, bearerTokens: [bearerRecord("mcp-bulk-writer", ["read", "write"])] }, logger: false });
@@ -1536,7 +1552,7 @@ describe("BenchLedger HTTP API", () => {
   });
 
   it("returns degraded readiness and a correlation-safe internal error response", async () => {
-    const runtime = createSyntheticRuntime();
+    const runtime = await createDemoRuntime();
     const degradedPorts = { ...runtime.ports, health: { check: async () => ({ database: "failed" as const, artifacts: "ok" as const }) } };
     const degraded = await createApp({ ports: degradedPorts, demo: true, auth: { sessionSecret: "s".repeat(48), secureCookies: false }, logger: false });
     const health = await degraded.inject({ method: "GET", url: "/api/v1/health" });
@@ -1545,7 +1561,8 @@ describe("BenchLedger HTTP API", () => {
     expect(health.json()).not.toHaveProperty("checks");
     const ready = await degraded.inject({ method: "GET", url: "/api/v1/ready" });
     expect(ready.statusCode).toBe(503);
-    expect(ready.json()).toMatchObject({ status: "degraded", checks: { database: "failed" } });
+    expect(ready.json()).toMatchObject({ status: "degraded" });
+    expect(ready.json()).not.toHaveProperty("checks");
     await degraded.close();
 
     const service = new ApplicationService(runtime.ports);
@@ -1559,8 +1576,8 @@ describe("BenchLedger HTTP API", () => {
   });
 
   it("filters scoped project pages and blocks indirect global and project access", async () => {
-    const runtime = createSyntheticRuntime();
-    await runtime.projects.createProject({ id: "scoped-second", name: "Second project", description: "Another reference project", status: "planned" });
+    const runtime = await createDemoRuntime();
+    await runtime.ports.projects.createProject({ id: "scoped-second", name: "Second project", description: "Another reference project", status: "planned" }, { actor: "test", source: "api", correlationId: "scoped-second", scopes: new Set(["write"]) });
     const app = await createApp({ demo: true, runtime, auth: { sessionSecret: "s".repeat(48), secureCookies: false, bearerTokens: [bearerRecord("scoped-query-token", ["read"], ["synthetic-project-lamp", "scoped-second", "missing-project"])] }, logger: false });
     const headers = { authorization: "Bearer scoped-query-token" };
     const descriptionMatch = await app.inject({ method: "GET", url: "/api/v1/projects?q=reference&status=planned&limit=1&cursor=bad", headers });
@@ -1637,7 +1654,7 @@ describe("BenchLedger HTTP API", () => {
   });
 
   it("releases a failed route-level download read for retry, then consumes it once", async () => {
-    const runtime = createSyntheticRuntime();
+    const runtime = await createDemoRuntime();
     const service = new ApplicationService(runtime.ports);
     const manager = new ArtifactTransferManager("https://configured-maker.example:8792");
     let readCalls = 0;

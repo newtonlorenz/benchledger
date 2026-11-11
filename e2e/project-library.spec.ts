@@ -2,9 +2,6 @@ import { navigateWorkspace } from "./workspace-controls";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createApp, bearerRecord } from "../apps/server/dist/app.js";
 
 const token = randomBytes(32).toString("hex");
@@ -108,9 +105,7 @@ async function syntheticProductImage(page: Page): Promise<Buffer> {
     ctx.font = "16px sans-serif"; ctx.fillText("Test fixture only", 38, 443);
     return canvas.toDataURL("image/png").split(",")[1]!;
   });
-  const bytes = Buffer.from(base64, "base64");
-  await writeFile(join(tmpdir(), "benchledger-project-render-fixture.png"), bytes);
-  return bytes;
+  return Buffer.from(base64, "base64");
 }
 
 test("a chosen project render survives reload and stays visible in gallery and compact list", async ({ page, request }, testInfo) => {
@@ -133,7 +128,7 @@ test("a chosen project render survives reload and stays visible in gallery and c
   await expectDecodedImage(editor.getByRole("img", { name: "Synthetic enclosure design render", exact: true }));
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-  await page.screenshot({ path: join(tmpdir(), "benchledger-project-image-editor-phone.png"), fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath("benchledger-project-image-editor-phone.png"), fullPage: true });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await editor.getByRole("button", { name: "Save project image", exact: true }).click();
   await expect(editor).toContainText("Project image saved.");
@@ -144,7 +139,7 @@ test("a chosen project render survives reload and stays visible in gallery and c
   await page.getByRole("textbox", { name: "Find a project", exact: true }).fill(project.name);
   await expectDecodedImage(card.getByRole("img", { name: "Synthetic enclosure design render", exact: true }));
   await expect(card).toContainText("Design render");
-  await page.screenshot({ path: join(tmpdir(), "benchledger-project-gallery-desktop.png"), fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath("benchledger-project-gallery-desktop.png"), fullPage: true });
   expect((await new AxeBuilder({ page }).include(".home-projects").withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze()).violations).toEqual([]);
 
   await page.setViewportSize({ width: 1536, height: 1024 });
@@ -163,7 +158,7 @@ test("a chosen project render survives reload and stays visible in gallery and c
   await expectDecodedImage(card.getByRole("img", { name: "Synthetic enclosure design render", exact: true }));
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-  await page.screenshot({ path: join(tmpdir(), "benchledger-project-list-phone.png"), fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath("benchledger-project-list-phone.png"), fullPage: true });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.reload();
   await expect(layout.getByRole("button", { name: "List", exact: true })).toHaveAttribute("aria-pressed", "true");
@@ -176,7 +171,7 @@ test("a chosen project render survives reload and stays visible in gallery and c
     await page.setViewportSize({ width, height: 844 });
     await expectDecodedImage(card.getByRole("img", { name: "Synthetic enclosure design render", exact: true }));
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
-    if (width === 390) await page.screenshot({ path: join(tmpdir(), "benchledger-project-gallery-phone.png"), fullPage: true });
+    if (width === 390) await page.screenshot({ path: testInfo.outputPath("benchledger-project-gallery-phone.png"), fullPage: true });
   }
   await card.locator(".product-image-open").focus();
   await page.keyboard.press("Enter");

@@ -48,7 +48,7 @@ describe("AuthManager", () => {
     const records = bearerTokensFromEnvironment({ BENCHLEDGER_BEARER_TOKENS_JSON: JSON.stringify([{ hash, scopes: ["write"], projectIds: ["project-1"] }]) });
     expect(records[0]).toMatchObject({ hash, projectIds: new Set(["project-1"]) });
     expect(records[0]?.scopes).toEqual(new Set(["read", "write"]));
-    expect(secureCookiesFromEnvironment({})).toBe(false);
+    expect(secureCookiesFromEnvironment({})).toBeUndefined();
     expect(secureCookiesFromEnvironment({ BENCHLEDGER_SECURE_COOKIES: "true" })).toBe(true);
     expect(() => secureCookiesFromEnvironment({ BENCHLEDGER_SECURE_COOKIES: "yes" })).toThrow(/exactly true or false/);
   });

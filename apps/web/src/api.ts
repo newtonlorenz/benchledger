@@ -29,7 +29,6 @@ import type {
   ProjectWorkItem
 } from "./domain";
 import { filterArtifactsForScope } from "./artifact-scope";
-import { sha256 } from "@noble/hashes/sha2.js";
 import type { ArtifactUploadTarget } from "./artifact-scope";
 import type {
   ReconciliationEvidenceState,
@@ -46,7 +45,9 @@ import type {
 import { DEFAULT_MANAGED_INVENTORY_CATEGORIES } from "./category-ui";
 import type { CategoryCreateInput, CategoryUpdateInput, ManagedInventoryCategory } from "./category-ui";
 import type { InspectionAction, InspectionCompletionInput, InspectionCompletionPreview, InspectionCompletionResult } from "./inspection-ui";
-import { inspectionActionSchema, inspectionCompletionCommitSchema, inspectionCompletionPreviewSchema } from "@benchledger/api-contract";
+import { inspectionActionSchema, inspectionCompletionCommitSchema, inspectionCompletionPreviewSchema, stockReceivingPolicyImpactSchema, workspacePreferencesSchema } from "@benchledger/api-contract";
+import { DEFAULT_STOCK_RECEIVING_POLICY } from "./stock-receiving-policy";
+import type { StockReceivingImpact, StockReceivingPolicy, WorkspacePreferencesView } from "./stock-receiving-policy";
 
 type ServerHealth = { status: "ok" | "degraded"; service: string; version: string; demo: boolean; now: string };
 type ServerInventoryItem = {
@@ -57,6 +58,9 @@ type ServerInventoryItem = {
   tags: string[];
   links: Array<{ supplier: string; url: string; label?: string; currentPriceMinor?: number; currency?: string; observedAt?: string; packageQuantity?: number }>;
   evidence: { state: string; source?: string; sourceId?: string; observedAt?: string; note?: string };
+  /** Server-derived availability under the workspace stock receiving policy. */
+  availability?: string;
+  primaryImage?: { id?: unknown; url?: unknown; width?: unknown; height?: unknown };
   catalogProduct?: unknown;
   product?: unknown;
   productProfile?: unknown;
@@ -88,7 +92,7 @@ type ServerRevision = { id: string; projectId: string; number: number; name: str
 type ServerProject = { id: string; name: string; description?: string; status: string; currentRevisionId?: string; createdAt: string; updatedAt: string; version: number; removedAt?: string; removedBy?: string; lastLifecycleStatus?: string; workItems?: ServerWorkItem[]; projectRevisions?: ServerRevision[]; revisions?: ServerRevision[]; workItemRevisions?: ServerRevision[]; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; currentRevision?: ServerRevision; presentation?: import("@benchledger/api-contract").ProjectPresentation | null };
 type ServerProjectTombstone = { id: string; name: string; removedAt: string; removedBy: string; lastLifecycleStatus: string; releasedReservationIds: string[]; version: number; auditId?: string };
 type ServerOffer = { id: string; itemId?: string; name: string; supplier: string; url: string; priceMinor: number; currency: CurrencyCode; packageQuantity?: number; observedAt: string; staleAfterDays?: number; version: number };
-type ServerWorkspace = { inventory: ServerInventoryItem[]; projects: ServerProject[]; offers: ServerOffer[]; source: "api"; fetchedAt: string; capabilities?: unknown };
+type ServerWorkspace = { inventory: ServerInventoryItem[]; projects: ServerProject[]; offers: ServerOffer[]; source: "api"; fetchedAt: string; capabilities?: unknown; preferences?: unknown };
 type ServerUploadSession = { receivedBytes?: number; id: string; artifactId: string; expiresAt: string; maxBytes: number; uploadUrl: string; status: "pending" | "finalized" | "expired" };
 type ServerReconciliationEvidence = { state: string; source?: string; sourceId?: string; observedAt?: string; note?: string; condition?: string; uncertainty?: number };
 type ServerReconciliationConvertedAsset = { id?: string; name: string; kind: string; quantity: number; unit: string; location?: string; tags?: string[]; links?: unknown[]; evidence?: ServerReconciliationEvidence };
@@ -160,7 +164,29 @@ export type ExactInventoryInput = {
   printer?: InventoryProductProfile["printer"];
 };
 
-export type ApiErrorKind = "unauthenticated" | "forbidden" | "csrf" | "offline" | "server" | "validation";
+export type ApiErrorKind = "unauthenticated" | "forbidden" | "csrf" | "offline" | "server" | "validation" | "conflict";
+
+/**
+ * How a 409 conflict should be explained. `stale` means the record changed
+ * elsewhere (reload), `idempotency` means a retry key was reused for a
+ * different request, and `rule` is a business-rule refusal whose server
+ * message is the useful explanation.
+ */
+export type ConflictReason = "stale" | "idempotency" | "rule";
+
+export function conflictReason(error: ApiError): ConflictReason | undefined {
+  if (error.kind !== "conflict") return undefined;
+  if (error.code === "idempotency_conflict") return "idempotency";
+  if (error.code === "version_conflict" || error.code === "precondition_required" || error.status === 428 || error.reason === "stale_basis" || error.reason === "version_conflict") return "stale";
+  if (/\b(version|changed (?:since|elsewhere)|stale|out of date|modified)\b/iu.test(error.message)) return "stale";
+  return "rule";
+}
+
+/** Default request timeouts. Uploads get a longer budget in their own path. */
+export const REQUEST_TIMEOUT_MS = 20_000;
+
+/** One field-level problem from a 400 `validation` response. */
+export interface ApiValidationIssue { readonly path: string; readonly message: string; readonly code?: string }
 
 export class ApiError extends Error {
   readonly kind: ApiErrorKind;
@@ -168,8 +194,10 @@ export class ApiError extends Error {
   readonly code: string | undefined;
   readonly correlationId: string | undefined;
   readonly demo: boolean | undefined;
+  readonly reason: string | undefined;
+  readonly issues: readonly ApiValidationIssue[] | undefined;
 
-  constructor(message: string, options: { kind: ApiErrorKind; status?: number; code?: string; correlationId?: string; demo?: boolean }) {
+  constructor(message: string, options: { kind: ApiErrorKind; status?: number; code?: string; correlationId?: string; demo?: boolean; reason?: string; issues?: readonly ApiValidationIssue[] }) {
     super(message);
     this.name = "ApiError";
     this.kind = options.kind;
@@ -177,6 +205,8 @@ export class ApiError extends Error {
     this.code = options.code;
     this.correlationId = options.correlationId;
     this.demo = options.demo;
+    this.reason = options.reason;
+    this.issues = options.issues;
   }
 }
 
@@ -199,7 +229,7 @@ export interface WorkspaceAccessUpdateResult {
   session?: LoginResult;
 }
 export interface SessionResult { authenticated: true; actor: string; source?: string; scopes: string[]; projectIds?: string[]; memberId?: string; memberVersion?: number; teamEnabled?: boolean }
-export interface WorkspaceSnapshot { inventory: InventoryItem[]; projects: Project[]; offers: Offer[]; source: "api" | "synthetic"; fetchedAt: string; health?: ServerHealth; capabilities?: readonly string[]; session?: SessionResult }
+export interface WorkspaceSnapshot { inventory: InventoryItem[]; projects: Project[]; offers: Offer[]; source: "api" | "synthetic"; fetchedAt: string; health?: ServerHealth; capabilities?: readonly string[]; session?: SessionResult; preferences?: WorkspacePreferencesView }
 export interface InventoryCategoryPage { data: readonly ManagedInventoryCategory[]; nextCursor?: string; limit: number; total?: number }
 export type InventoryKindQuery = "printer" | "tool" | "accessory" | "consumable" | "electronic" | "fastener" | "filament" | "wire" | "adhesive" | "other";
 export interface InventoryListQuery {
@@ -262,9 +292,21 @@ export interface WorkspaceAdapter {
   login(password: string, username?: string): Promise<LoginResult>;
   logout(): Promise<void>;
   loadWorkspace(): Promise<WorkspaceSnapshot>;
+  /** Stock receiving policy and other interpretation preferences (readable by every member). */
+  getWorkspacePreferences(): Promise<WorkspacePreferencesView>;
+  /** Read-only preview of which items would start or stop counting as in stock. */
+  previewStockReceivingPolicy(policy: StockReceivingPolicy): Promise<StockReceivingImpact>;
+  /** Administrator-only, versioned and audited. Never rewrites evidence. */
+  updateStockReceivingPolicy(policy: StockReceivingPolicy, expectedVersion: number): Promise<WorkspacePreferencesView>;
   listArchivedProjects(): Promise<Project[]>;
-  refreshProjectReadiness(): Promise<Project[]>;
+  /**
+   * Re-evaluate stock readiness for active projects (optionally only the
+   * given ids). Never returns archived projects. A project whose refresh
+   * failed keeps its previous evaluation with `readinessUnavailable: true`.
+   */
+  refreshProjectReadiness(projectIds?: readonly string[]): Promise<Project[]>;
   listInventory(query: InventoryListQuery, options?: { signal?: AbortSignal }): Promise<InventoryPage>;
+  /** One inventory record by id (also used for deep links to an item that is not loaded). */
   readInventoryItem(itemId: string, options?: { signal?: AbortSignal }): Promise<InventoryItem>;
   bulkUpdateInventory(input: InventoryBulkUpdateInput): Promise<InventoryBulkUpdateResult>;
   recordCount(itemId: string, quantity: number): Promise<InventoryItem>;
@@ -303,7 +345,7 @@ export interface WorkspaceAdapter {
   updateBomLineRole(projectId: string, lineId: string, role: NonNullable<BomLine["role"]>, expectedVersion: number): Promise<Project>;
   /** Read one exact scope, or all project artifacts when scope is omitted. */
   listArtifacts(projectId: string, scope?: ArtifactUploadTarget): Promise<Artifact[]>;
-  uploadArtifact(projectId: string, file: File, role: string, target?: ArtifactUploadTarget): Promise<Project>;
+  uploadArtifact(projectId: string, file: File, role: string, target?: ArtifactUploadTarget, options?: UploadOptions): Promise<Project>;
   readReconciliation(projectId: string, revisionId: string): Promise<ReconciliationViewModel>;
   saveReconciliationDraft(projectId: string, revisionId: string, model: ReconciliationViewModel): Promise<ReconciliationViewModel>;
   commitReconciliation(projectId: string, revisionId: string, model: ReconciliationViewModel): Promise<ReconciliationViewModel>;
@@ -322,11 +364,32 @@ function cookieValue(name: string): string | undefined {
   return document.cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith(prefix))?.slice(prefix.length);
 }
 
+function validationIssues(value: unknown): ApiValidationIssue[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const issues = value.flatMap((entry): ApiValidationIssue[] => {
+    if (!entry || typeof entry !== "object") return [];
+    const record = entry as Record<string, unknown>;
+    if (typeof record.message !== "string" || !record.message.trim()) return [];
+    const path = typeof record.path === "string" ? record.path : Array.isArray(record.path) ? record.path.map(String).join(".") : "";
+    return [{ path, message: record.message, ...(typeof record.code === "string" ? { code: record.code } : {}) }];
+  });
+  return issues.length ? issues.slice(0, 20) : undefined;
+}
+
+/** A write must carry its version precondition; without one, ask for a reload. */
+function requireExpectedVersion(version: number | undefined, what: string): number {
+  if (version === undefined || !Number.isSafeInteger(version) || version <= 0) throw new ApiError(`Reload ${what} before changing it; its current version is not known.`, { kind: "conflict", status: 428, code: "precondition_required" });
+  return version;
+}
+
 function errorKind(status: number, code?: string): ApiErrorKind {
   if (status === 401) return "unauthenticated";
   if (status === 403 && code === "csrf") return "csrf";
   if (status === 403) return "forbidden";
-  if ([400, 409, 413, 415].includes(status)) return "validation";
+  // 428: the write was sent without a version precondition. Like a 409 the
+  // fix is to reload the record and try again.
+  if (status === 409 || status === 428) return "conflict";
+  if ([400, 413, 415].includes(status)) return "validation";
   return "server";
 }
 
@@ -335,6 +398,7 @@ async function request<T>(path: string, init: RequestInit = {}, csrfToken?: stri
   try {
     response = await fetch(`${apiRoot()}${path}`, {
       ...init,
+      signal: init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       credentials: "include",
       headers: {
         Accept: "application/json",
@@ -344,7 +408,8 @@ async function request<T>(path: string, init: RequestInit = {}, csrfToken?: stri
       }
     });
   } catch (error) {
-    throw new ApiError(error instanceof Error ? error.message : "The BenchLedger service could not be reached", { kind: "offline" });
+    const timedOut = error instanceof Error && error.name === "TimeoutError";
+    throw new ApiError(timedOut ? "BenchLedger did not respond in time" : error instanceof Error ? error.message : "The BenchLedger service could not be reached", { kind: "offline" });
   }
   let payload: unknown;
   try { payload = await response.json(); } catch { payload = undefined; }
@@ -353,7 +418,10 @@ async function request<T>(path: string, init: RequestInit = {}, csrfToken?: stri
     const detail = envelope && typeof envelope === "object" && "message" in envelope && typeof envelope.message === "string" ? envelope.message : `BenchLedger returned HTTP ${response.status}`;
     const code = envelope && typeof envelope === "object" && "code" in envelope && typeof envelope.code === "string" ? envelope.code : undefined;
     const correlationId = envelope && typeof envelope === "object" && "correlationId" in envelope && typeof envelope.correlationId === "string" ? envelope.correlationId : response.headers.get("x-correlation-id") ?? undefined;
-    throw new ApiError(detail, { kind: errorKind(response.status, code), status: response.status, ...(code ? { code } : {}), ...(correlationId ? { correlationId } : {}) });
+    const details = envelope && typeof envelope === "object" && "details" in envelope && envelope.details && typeof envelope.details === "object" ? envelope.details as Record<string, unknown> : undefined;
+    const reason = typeof details?.reason === "string" ? details.reason : undefined;
+    const issues = validationIssues(details?.issues);
+    throw new ApiError(detail, { kind: errorKind(response.status, code), status: response.status, ...(code ? { code } : {}), ...(correlationId ? { correlationId } : {}), ...(reason ? { reason } : {}), ...(issues ? { issues } : {}) });
   }
   return payload as T;
 }
@@ -398,7 +466,39 @@ function mapInventoryCondition(value: string | undefined): InventoryCondition | 
   return value === "new" || value === "good" || value === "worn" || value === "needs_repair" || value === "unknown" ? value : undefined;
 }
 
+/** Server availability under the receiving policy; absent on older services. */
+function mapPolicyAvailability(value: unknown): InventoryItem["policyAvailability"] {
+  return value === "confirmed" || value === "assumed" || value === "inspect_first" || value === "ordered" || value === "unknown" ? value : undefined;
+}
+
+/** In stock under the workspace policy: counted/commissioned, or policy-trusted. */
+function countsAsInStock(item: ServerInventoryItem): boolean {
+  const availability = mapPolicyAvailability(item.availability);
+  if (availability !== undefined) return availability === "confirmed" || availability === "assumed";
+  return item.evidence.state === "physically_counted" || item.evidence.state === "commissioned";
+}
+
+/** Accept only the same-origin image content route for this exact item. */
+function mapPrimaryImage(itemId: string, value: ServerInventoryItem["primaryImage"]): { primaryImage: NonNullable<InventoryItem["primaryImage"]> } | undefined {
+  if (value === undefined || typeof value.id !== "string" || typeof value.url !== "string") return undefined;
+  const expected = `/api/v1/inventory/${encodeURIComponent(itemId)}/images/${encodeURIComponent(value.id)}/content`;
+  if (value.url !== expected) return undefined;
+  const width = typeof value.width === "number" && value.width > 0 ? value.width : 1;
+  const height = typeof value.height === "number" && value.height > 0 ? value.height : 1;
+  return { primaryImage: { id: value.id, url: value.url, width, height } };
+}
+
+/** Older services omit preferences; callers then keep the conservative default. */
+function mapWorkspacePreferences(value: unknown): WorkspacePreferencesView | undefined {
+  const parsed = workspacePreferencesSchema.safeParse(value);
+  return parsed.success ? { stockReceivingPolicy: parsed.data.stockReceivingPolicy, version: parsed.data.version } : undefined;
+}
+
 function mapStockState(item: ServerInventoryItem): InventoryItem["state"] {
+  if (countsAsInStock(item)) {
+    if (item.availableQuantity > 0) return "available";
+    return item.quantity > 0 ? "reserved" : "depleted";
+  }
   if (item.evidence.state === "ordered_unverified") return "ordered-unverified";
   if (item.evidence.state === "physically_counted" || item.evidence.state === "commissioned") {
     if (item.availableQuantity > 0) return "available";
@@ -943,7 +1043,8 @@ export function mapInventoryItem(item: ServerInventoryItem): InventoryItem {
   const category = mapCategory(item.kind);
   const state = mapStockState(item);
   const condition = mapInventoryCondition(item.condition);
-  const confirmed = item.evidence.state === "physically_counted" || item.evidence.state === "commissioned";
+  const confirmed = countsAsInStock(item);
+  const policyAvailability = mapPolicyAvailability(item.availability);
   const catalogProduct = mapCatalogProduct(item.catalogProduct ?? item.product, category === "Filament" ? "filament" : category === "Printers" ? "printer" : undefined);
   const mappedProfile = mapInventoryProductProfile(item.productProfile, item.id);
   const productProfile = mappedProfile ?? (item.catalogProductId || item.linkState
@@ -962,7 +1063,7 @@ export function mapInventoryItem(item: ServerInventoryItem): InventoryItem {
     ...(item.model ? { model: item.model } : {}),
     description: item.description?.trim() || "", quantity: item.quantity, availableQuantity: item.availableQuantity, unit: mapUnit(item.unit),
     reserved: confirmed ? Math.max(item.quantity - item.availableQuantity, 0) : 0,
-    state, evidence: mapEvidence(item.evidence.state), serverEvidence: mapServerEvidence(item.evidence.state), location: item.location?.trim() || "Unassigned",
+    state, evidence: mapEvidence(item.evidence.state), serverEvidence: mapServerEvidence(item.evidence.state), ...(policyAvailability === undefined ? {} : { policyAvailability }), ...(mapPrimaryImage(item.id, item.primaryImage) ?? {}), location: item.location?.trim() || "Unassigned",
     ...(dimensions ? { dimensions } : {}), ...(item.manufacturer ? { manufacturer: item.manufacturer } : {}), ...(item.sku ? { sku: item.sku } : {}),
     ...(condition ? { condition } : {}),
     tags: [...item.tags], compatibility: [],
@@ -973,7 +1074,7 @@ export function mapInventoryItem(item: ServerInventoryItem): InventoryItem {
       ...(item.evidence.note ? { note: item.evidence.note } : {})
     },
     version: item.version,
-    ...(item.evidence.observedAt ? { lastCounted: item.evidence.observedAt.slice(0, 10) } : {}), accent: mapAccent(category), serverUnit: item.unit,
+    ...(item.evidence.observedAt ? { lastCounted: item.evidence.observedAt.slice(0, 10) } : {}), ...(typeof item.updatedAt === "string" ? { updatedAt: item.updatedAt } : {}), accent: mapAccent(category), serverUnit: item.unit,
     ...(item.unitStatus ? { unitStatus: item.unitStatus } : {}),
     ...(item.unitCorrectionReason ? { unitCorrectionReason: item.unitCorrectionReason } : {}),
     ...(catalogProduct ? { catalogProduct } : {}), ...(productProfile ? { productProfile } : {})
@@ -1147,7 +1248,9 @@ function mapGapCandidate(value: unknown): BomGapCandidate | undefined {
     availableQuantity,
     suppliedQuantity,
     inspectQuantity,
-    reason
+    reason,
+    ...(record?.evidenceState === undefined ? {} : { evidenceState: mapServerEvidence(String(record.evidenceState)) }),
+    ...(mapPolicyAvailability(record?.availability) === undefined ? {} : { availability: mapPolicyAvailability(record?.availability)! })
   };
 }
 
@@ -1759,15 +1862,18 @@ function inspectionCompletionCommandId(revisionId: string, inspectionId: string,
 function mutationFailureIsAmbiguous(error: unknown): boolean {
   // An offline/server failure can occur after the server committed but before
   // the browser received its response. Keep the key for an explicit retry.
-  // Validation/auth/CSRF failures settle this attempt only; they do not
-  // resolve an earlier ambiguous attempt using the same command key.
-  return !(error instanceof ApiError && error.status < 500 && ["validation", "forbidden", "unauthenticated", "csrf"].includes(error.kind));
+  // Validation/auth/CSRF failures have a known outcome and can release it.
+  return !(error instanceof ApiError && error.status < 500 && ["validation", "conflict", "forbidden", "unauthenticated", "csrf"].includes(error.kind));
 }
 
-export async function sha256Hex(file: Blob): Promise<string> {
-  // Plain HTTP LAN origins do not expose crypto.subtle. Hashing still needs
-  // to work there without weakening the server's byte-integrity check.
-  const digest = sha256(new Uint8Array(await file.arrayBuffer()));
+export async function sha256Hex(file: Blob | ArrayBuffer): Promise<string> {
+  const bytes = file instanceof ArrayBuffer ? file : await file.arrayBuffer();
+  // Secure contexts hash off the main thread with WebCrypto. Plain HTTP LAN
+  // origins do not expose crypto.subtle, so they fall back to a JS digest
+  // without weakening the server's byte-integrity check.
+  const subtle = typeof crypto === "undefined" ? undefined : crypto.subtle;
+  // The JS fallback loads on demand so secure contexts never download it.
+  const digest = subtle ? new Uint8Array(await subtle.digest("SHA-256", bytes)) : (await import("@noble/hashes/sha2.js")).sha256(new Uint8Array(bytes));
   return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
@@ -2183,7 +2289,54 @@ function reconciliationInitialModel(project: Project, reservations: readonly Ser
   };
 }
 
-export async function binaryRequest<T>(url: string, body: ArrayBuffer, csrfToken: string, expectedOffset?: number): Promise<T> {
+export interface UploadOptions {
+  /** Called with the uploaded fraction (0..1) while bytes are sent. */
+  onProgress?: (fraction: number) => void;
+  /** Aborts the byte transfer; the promise rejects with an AbortError. */
+  signal?: AbortSignal;
+  /** Resume offset sent as Upload-Offset when continuing an earlier attempt. */
+  expectedOffset?: number;
+}
+
+export const UPLOAD_TIMEOUT_MS = 10 * 60_000;
+
+function uploadFailure(status: number, payload: unknown): ApiError {
+  const envelope = payload && typeof payload === "object" && "error" in payload ? payload.error : undefined;
+  const code = envelope && typeof envelope === "object" && "code" in envelope && typeof envelope.code === "string" ? envelope.code : undefined;
+  const detail = envelope && typeof envelope === "object" && "message" in envelope && typeof envelope.message === "string" ? envelope.message : `BenchLedger returned HTTP ${status}`;
+  return new ApiError(detail, { kind: errorKind(status, code), status, ...(code ? { code } : {}) });
+}
+
+function xhrUpload<T>(target: string, body: ArrayBuffer, csrfToken: string, options: UploadOptions): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const abort = () => xhr.abort();
+    const cleanup = () => options.signal?.removeEventListener("abort", abort);
+    xhr.open("PUT", target);
+    xhr.withCredentials = true;
+    xhr.timeout = UPLOAD_TIMEOUT_MS;
+    xhr.setRequestHeader("Accept", "application/json");
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.setRequestHeader("X-CSRF-Token", csrfToken);
+    if (options.expectedOffset !== undefined) xhr.setRequestHeader("Upload-Offset", String(options.expectedOffset));
+    xhr.upload.onprogress = (event: ProgressEvent) => { if (event.lengthComputable && event.total > 0) options.onProgress?.(event.loaded / event.total); };
+    xhr.onload = () => {
+      cleanup();
+      let payload: unknown;
+      try { payload = xhr.responseText ? JSON.parse(xhr.responseText) : undefined; } catch { payload = undefined; }
+      if (xhr.status >= 200 && xhr.status < 300) { options.onProgress?.(1); resolve(payload as T); }
+      else reject(uploadFailure(xhr.status, payload));
+    };
+    xhr.onerror = () => { cleanup(); reject(new ApiError("The BenchLedger service could not be reached", { kind: "offline" })); };
+    xhr.ontimeout = () => { cleanup(); reject(new ApiError("BenchLedger did not respond in time", { kind: "offline" })); };
+    xhr.onabort = () => { cleanup(); reject(new DOMException("Upload cancelled", "AbortError")); };
+    if (options.signal?.aborted) { xhr.abort(); return; }
+    options.signal?.addEventListener("abort", abort, { once: true });
+    xhr.send(body);
+  });
+}
+
+export async function binaryRequest<T>(url: string, body: ArrayBuffer, csrfToken: string, options: UploadOptions = {}): Promise<T> {
   const configuredRoot = apiRoot();
   const target = url.startsWith("http")
     ? url
@@ -2197,20 +2350,19 @@ export async function binaryRequest<T>(url: string, body: ArrayBuffer, csrfToken
   if (uploadTarget.origin !== base.origin || uploadTarget.username || uploadTarget.password) {
     throw new ApiError("The service returned an unsafe upload destination.", { kind: "validation" });
   }
+  if (options.onProgress && typeof XMLHttpRequest !== "undefined") return xhrUpload<T>(target, body, csrfToken, options);
   let response: Response;
   try {
-    response = await fetch(target, { method: "PUT", body, credentials: "include", redirect: "error", signal: AbortSignal.timeout(120_000), headers: { "Accept": "application/json", "Content-Type": "application/octet-stream", "X-CSRF-Token": csrfToken, ...(expectedOffset === undefined ? {} : { "Upload-Offset": String(expectedOffset) }) } });
+    const timeout = AbortSignal.timeout(UPLOAD_TIMEOUT_MS);
+    response = await fetch(target, { method: "PUT", body, credentials: "include", redirect: "error", signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout, headers: { "Accept": "application/json", "Content-Type": "application/octet-stream", "X-CSRF-Token": csrfToken, ...(options.expectedOffset === undefined ? {} : { "Upload-Offset": String(options.expectedOffset) }) } });
   } catch (error) {
-    throw new ApiError(error instanceof Error ? error.message : "The BenchLedger service could not be reached", { kind: "offline" });
+    if (error instanceof Error && error.name === "AbortError" && options.signal?.aborted) throw error;
+    const timedOut = error instanceof Error && error.name === "TimeoutError";
+    throw new ApiError(timedOut ? "BenchLedger did not respond in time" : error instanceof Error ? error.message : "The BenchLedger service could not be reached", { kind: "offline" });
   }
   let payload: unknown;
   try { payload = await response.json(); } catch { payload = undefined; }
-  if (!response.ok) {
-    const envelope = payload && typeof payload === "object" && "error" in payload ? payload.error : undefined;
-    const code = envelope && typeof envelope === "object" && "code" in envelope && typeof envelope.code === "string" ? envelope.code : undefined;
-    const detail = envelope && typeof envelope === "object" && "message" in envelope && typeof envelope.message === "string" ? envelope.message : `BenchLedger returned HTTP ${response.status}`;
-    throw new ApiError(detail, { kind: errorKind(response.status, code), status: response.status, ...(code ? { code } : {}) });
-  }
+  if (!response.ok) throw uploadFailure(response.status, payload);
   return payload as T;
 }
 
@@ -2361,8 +2513,11 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     async login() { return { authenticated: true, actor: "sample", csrfToken: "sample", expiresAt: new Date(Date.now() + 3_600_000).toISOString() }; },
     async logout() {},
     async loadWorkspace() { return state; },
+    async getWorkspacePreferences() { return { stockReceivingPolicy: DEFAULT_STOCK_RECEIVING_POLICY, version: 1 }; },
+    async previewStockReceivingPolicy(policy) { return { from: DEFAULT_STOCK_RECEIVING_POLICY, to: policy, version: 1, gained: [], lost: [], blockedBy: [], truncated: false }; },
+    async updateStockReceivingPolicy() { throw new ApiError("Stock settings are unavailable in the sample workspace", { kind: "forbidden", status: 403 }); },
     async listArchivedProjects() { return structuredClone(state.projects.filter((project) => project.status === "archived")); },
-    async refreshProjectReadiness() { return structuredClone(state.projects); },
+    async refreshProjectReadiness(projectIds) { return structuredClone(state.projects.filter((project) => project.status !== "archived" && (projectIds === undefined || projectIds.includes(project.id)))); },
     async listInventory(query) { return sampleInventoryPage(state.inventory, query); },
     async readInventoryItem(itemId) { const item = state.inventory.find((entry) => entry.id === itemId); if (!item) throw new ApiError("Inventory item not found", { kind: "validation", status: 404 }); return structuredClone(item); },
     async bulkUpdateInventory(input) {
@@ -2371,7 +2526,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
       for (const target of prepared.targets) {
         const current = currentById.get(target.itemId);
         if (!current) throw new ApiError("Inventory item not found", { kind: "validation", status: 404 });
-        if (typeof current.version !== "number" || !Number.isSafeInteger(current.version) || current.version <= 0 || current.version !== target.expectedVersion) throw new ApiError("Inventory changed since it was selected; nothing was changed", { kind: "validation", status: 409, code: "version_conflict" });
+        if (typeof current.version !== "number" || !Number.isSafeInteger(current.version) || current.version <= 0 || current.version !== target.expectedVersion) throw new ApiError("Inventory changed since it was selected; nothing was changed", { kind: "conflict", status: 409, code: "version_conflict" });
       }
       const correlationId = `sample-bulk-${Date.now()}`;
       const updated: InventoryItem[] = [];
@@ -2482,7 +2637,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     async updateInventoryCategory(id, input, expectedVersion) {
       const current = categoryState.find((category) => category.id === id);
       if (!current) throw new ApiError("Inventory category not found.", { kind: "validation", status: 404 });
-      if (current.version !== expectedVersion) throw new ApiError("This category changed in another tab. Reload it and try again.", { kind: "validation", status: 409, code: "version_conflict" });
+      if (current.version !== expectedVersion) throw new ApiError("This category changed in another tab. Reload it and try again.", { kind: "conflict", status: 409, code: "version_conflict" });
       const nextName = input.name === undefined ? current.name : input.name.trim();
       const siblingNames = categoryState.filter((category) => category.id !== id && category.parentId === current.parentId && !category.archived).map((category) => category.name.toLocaleLowerCase());
       if (siblingNames.includes(nextName.toLocaleLowerCase())) throw new ApiError("A category with this name already exists beside it.", { kind: "validation", status: 409 });
@@ -2493,7 +2648,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     async archiveInventoryCategory(id, expectedVersion) {
       const current = categoryState.find((category) => category.id === id);
       if (!current) throw new ApiError("Inventory category not found.", { kind: "validation", status: 404 });
-      if (current.version !== expectedVersion) throw new ApiError("This category changed in another tab. Reload it and try again.", { kind: "validation", status: 409, code: "version_conflict" });
+      if (current.version !== expectedVersion) throw new ApiError("This category changed in another tab. Reload it and try again.", { kind: "conflict", status: 409, code: "version_conflict" });
       if (categoryState.some((category) => category.parentId === id && !category.archived)) throw new ApiError("Archive its active subcategories first.", { kind: "validation", status: 409 });
       if (state.inventory.some((item) => item.categoryNodeId === id)) throw new ApiError("This category is in use by active inventory. Reassign those items first.", { kind: "validation", status: 409 });
       const archived: ManagedInventoryCategory = { ...current, archived: true, updatedAt: new Date().toISOString(), version: current.version + 1 };
@@ -2665,7 +2820,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
       const current = state.projects.find((candidate) => candidate.serverRevisionId === revisionId);
       if (!current) throw new ApiError("Revision not found", { kind: "validation", status: 404 });
       const currentVersion = current.serverRevisionVersion ?? 1;
-      if (expectedVersion !== undefined && expectedVersion !== currentVersion) throw new ApiError("This revision changed; reload before updating its build approach", { kind: "validation", status: 409, code: "version_conflict" });
+      if (expectedVersion !== undefined && expectedVersion !== currentVersion) throw new ApiError("This revision changed; reload before updating its build approach", { kind: "conflict", status: 409, code: "version_conflict" });
       const route = input.fabricationRoute ?? current.fabricationRoute ?? (current.intendedPrinterItemId ? "printed" : "undecided");
       const hasPrinterField = Object.prototype.hasOwnProperty.call(input, "intendedPrinterItemId");
       if (hasPrinterField && input.intendedPrinterItemId !== undefined && input.intendedPrinterItemId !== null && route !== "printed") {
@@ -2707,7 +2862,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
       if (!project) throw new ApiError("Project not found", { kind: "validation", status: 404 });
       const line = project.bom.find((candidate) => candidate.id === lineId);
       if (!line) throw new ApiError("Requirement not found", { kind: "validation", status: 404 });
-      if (line.version !== expectedVersion) throw new ApiError("This requirement changed; reload and try again", { kind: "validation", status: 409, code: "version_conflict" });
+      if (line.version !== expectedVersion) throw new ApiError("This requirement changed; reload and try again", { kind: "conflict", status: 409, code: "version_conflict" });
       const updated = { ...project, bom: project.bom.map((candidate) => candidate.id === lineId ? { ...candidate, role, version: candidate.version + 1 } : candidate) };
       state.projects = state.projects.map((candidate) => candidate.id === projectId ? updated : candidate);
       return structuredClone(updated);
@@ -2995,7 +3150,30 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       const mappedProjects = (librarySupported ? await readLibraryProjects("active") : workspace.projects).map(mapProject);
       projectCache.clear();
       mappedProjects.forEach((project) => projectCache.set(project.id, project));
-      return { inventory: mappedInventory, projects: mappedProjects, offers: workspace.offers.map(mapOffer), source: "api", fetchedAt: workspace.fetchedAt || new Date().toISOString(), health: currentHealth, capabilities, session: currentSession };
+      const preferences = mapWorkspacePreferences(workspace.preferences);
+      return { inventory: mappedInventory, projects: mappedProjects, offers: workspace.offers.map(mapOffer), source: "api", fetchedAt: workspace.fetchedAt || new Date().toISOString(), health: currentHealth, capabilities, session: currentSession, ...(preferences === undefined ? {} : { preferences }) };
+    },
+    async getWorkspacePreferences() {
+      const preferences = mapWorkspacePreferences(await request<unknown>("/workspace/preferences"));
+      if (preferences === undefined) throw new ApiError("The service returned invalid workspace preferences", { kind: "server", status: 502, code: "invalid_preferences" });
+      return preferences;
+    },
+    async previewStockReceivingPolicy(policy) {
+      const parsed = stockReceivingPolicyImpactSchema.safeParse(await request<unknown>(`/workspace/preferences/stock-receiving-impact?stockReceivingPolicy=${encodeURIComponent(policy)}`));
+      if (!parsed.success) throw new ApiError("The service returned an invalid stock setting preview", { kind: "server", status: 502, code: "invalid_preferences_impact" });
+      return parsed.data;
+    },
+    async updateStockReceivingPolicy(policy, expectedVersion) {
+      const token = csrfToken ?? cookieValue("forge_csrf");
+      if (!token) throw new ApiError("Your session needs a fresh CSRF token before changing workspace settings", { kind: "csrf", status: 403 });
+      const payload = await request<unknown>("/workspace/preferences", {
+        method: "PUT",
+        headers: { "Idempotency-Key": idempotencyKey("stock-receiving-policy"), "If-Match": `"${expectedVersion}"` },
+        body: JSON.stringify({ stockReceivingPolicy: policy, expectedVersion })
+      }, token);
+      const preferences = mapWorkspacePreferences(responseValue(payload));
+      if (preferences === undefined) throw new ApiError("The service returned invalid workspace preferences", { kind: "server", status: 502, code: "invalid_preferences" });
+      return preferences;
     },
     async listArchivedProjects() {
       const values = librarySupported ? await readLibraryProjects("archived") : responseList(await request<unknown>("/projects?status=archived&limit=200"));
@@ -3003,8 +3181,12 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       archived.forEach((project) => projectCache.set(project.id, project));
       return archived;
     },
-    async refreshProjectReadiness() {
-      const refreshed = await Promise.all([...projectCache.values()].filter((project) => project.status !== "archived").map(async (project): Promise<Project> => {
+    async refreshProjectReadiness(projectIds) {
+      // Archived projects share the cache (for their own page) but must never
+      // be refreshed or returned as part of the active list.
+      const wanted = projectIds === undefined ? undefined : new Set(projectIds);
+      const active = [...projectCache.values()].filter((project) => project.status !== "archived" && (wanted === undefined || wanted.has(project.id)));
+      const settled = await Promise.allSettled(active.map(async (project): Promise<Project> => {
         const revisionId = project.serverRevisionId;
         if (revisionId === undefined) return project;
         const gaps = await request<ServerGapEvaluation>(`/project-revisions/${encodeURIComponent(revisionId)}/gaps`);
@@ -3012,6 +3194,10 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         if (gapEvaluation === undefined) return invalidGapEvaluation();
         return { ...project, gapEvaluation, readinessUnavailable: false };
       }));
+      const authFailure = settled.find((result): result is PromiseRejectedResult => result.status === "rejected" && result.reason instanceof ApiError && (result.reason.kind === "unauthenticated" || result.reason.kind === "csrf"));
+      if (authFailure) throw authFailure.reason;
+      if (settled.length > 0 && settled.every((result) => result.status === "rejected")) throw (settled[0] as PromiseRejectedResult).reason;
+      const refreshed = settled.map((result, index) => result.status === "fulfilled" ? result.value : { ...active[index]!, readinessUnavailable: true });
       refreshed.forEach((project) => projectCache.set(project.id, project));
       return refreshed;
     },
@@ -3156,9 +3342,10 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         ...(input.tags === undefined ? {} : { tags: [...input.tags] }),
         ...(input.categoryNodeId === undefined ? {} : { categoryNodeId: input.categoryNodeId })
       };
+      const version = requireExpectedVersion(expectedVersion ?? inventoryCache.get(itemId)?.version, "this item");
       const payload = await request<{ data?: ServerInventoryItem }>(`/inventory/${encodeURIComponent(itemId)}`, {
         method: "PATCH",
-        headers: expectedVersion === undefined ? {} : { "If-Match": String(expectedVersion) },
+        headers: { "If-Match": String(version) },
         body: JSON.stringify(body)
       }, token);
       const item = mutationData(payload);
@@ -3385,9 +3572,8 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       const token = csrfToken ?? cookieValue("forge_csrf");
       if (!token) throw new ApiError("Sign in again before archiving a project", { kind: "csrf", status: 403 });
       const current = projectCache.get(projectId);
-      const version = expectedVersion ?? current?.version;
-      const headers: Record<string, string> = { "Idempotency-Key": idempotencyKey("project-archive") };
-      if (version !== undefined) headers["If-Match"] = String(version);
+      const version = requireExpectedVersion(expectedVersion ?? current?.version, "this project");
+      const headers: Record<string, string> = { "Idempotency-Key": idempotencyKey("project-archive"), "If-Match": String(version) };
       const payload = await request<{ data?: ServerProject }>(`/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", headers, body: JSON.stringify({ status: "archived" }) }, token);
       const archived = await retainLibraryLifecycleState(mapProject(mutationData(payload)), current);
       if (librarySupported) projectCache.set(projectId, archived);
@@ -3676,14 +3862,14 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       const payload = await request<unknown>(`/projects/${encodeURIComponent(projectId)}/artifacts${query ? `?${query}` : ""}`);
       return responseList(payload).map((value) => mapArtifact(value as ServerArtifact));
     },
-    async uploadArtifact(projectId, file, role, target) {
+    async uploadArtifact(projectId, file, role, target, options) {
       const token = csrfToken ?? cookieValue("forge_csrf");
       if (!token) throw new ApiError("Your session needs a fresh CSRF token before uploading a file", { kind: "csrf", status: 403 });
       const current = projectCache.get(projectId);
       const selectedTarget = target ?? (current?.serverRevisionId === undefined ? undefined : { kind: "project" as const, projectRevisionId: current.serverRevisionId });
       if (selectedTarget === undefined) throw new ApiError("Create a project revision before uploading a file", { kind: "validation", status: 409 });
       const bytes = await file.arrayBuffer();
-      const sha256 = await sha256Hex(file);
+      const sha256 = await sha256Hex(bytes);
       const projectRevisionId = selectedTarget.kind === "project" ? selectedTarget.projectRevisionId : undefined;
       const buildConfigurationSnapshotId = projectRevisionId !== undefined && current?.buildConfigSnapshot
         && (current.buildConfigSnapshot.revisionId === projectRevisionId || current.buildConfigSnapshot.projectRevisionId === projectRevisionId)
@@ -3723,7 +3909,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
           }
           if (offset < bytes.byteLength) {
             pending.byteWriteAttempted = true;
-            await binaryRequest(uploadUrl, bytes.slice(offset), token, offset);
+            await binaryRequest(uploadUrl, bytes.slice(offset), token, { ...options, expectedOffset: offset });
           }
           pending.bytesUploaded = true;
         }

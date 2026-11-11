@@ -13,9 +13,21 @@ Subject to the token's scopes and project allow-list, an agent may:
 - create or update project metadata, work items, revisions, BOM requirements,
   inventory descriptions, and supplier observations;
 - record append-only stock events, reservations, releases, and actual usage;
-- begin and finalize an upload after bytes are transferred through a scoped HTTP
-  URL;
 - retire logical metadata or artifact records while retained history remains.
+
+Generic MCP does not transfer artifact bytes: `begin_artifact_upload`,
+`finalize_artifact_upload` and download tools fail closed with
+`HOST_TRANSFER_UNAVAILABLE`. Uploads use the authenticated browser Files
+surface or the host helper described below.
+
+## Destructive tools
+
+`tools/list` marks tools with MCP annotations. Tools with
+`destructiveHint: true` (`remove_project`, `retire_*`, `archive_*`) are
+enforced only by scopes, versions and confirmations, not by a server-side
+human gate. MCP hosts should require the human's confirmation before calling
+any of them, and agents should ask first. `remove_project` is irreversible.
+Annotations are hints; they never grant or widen authority.
 
 The application still validates inputs, versions, project scope, paths, hashes,
 quotas, and authorization. The agent must report the IDs and resulting state.
@@ -46,6 +58,9 @@ The following are intentionally not MCP tools:
 - fetching arbitrary supplier URLs or scraping live prices;
 - publishing a project, pushing a public repository, or deploying a service;
 - changing credentials, token scopes, or authentication configuration;
+- changing the workspace stock receiving policy (when bought, delivered or
+  received stock counts as in stock); agents may read it but a workspace
+  administrator changes it in Settings;
 - permanently purging records, blobs, backups, or audit history;
 - starting a printer, heating a machine, moving hardware, generating/submitting a
   print job, flashing firmware, or changing printer configuration;

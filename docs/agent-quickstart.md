@@ -77,9 +77,10 @@ If the capability document names a tool that the client does not expose, refresh
 or reconnect that MCP client before falling back to smaller writes. Some hosts
 cache `tools/list` for the lifetime of an agent session.
 
-## Minute 1–2: refresh and inspect
+## Minute 1–2: read current state
 
-Call `refresh_context` before a recommendation or write, then:
+Read current state before a recommendation or write (`refresh_context` is an
+optional small live snapshot with no expiry), then:
 
 1. `read_inventory_summary`
 2. `list_inventory` with `limit` no greater than 25 initially
@@ -170,8 +171,8 @@ all**, and reveals action/line/item versions, evidence, predicate, unit, and
 effects in expert mode. Confirmed compatibility and unit conversion require
 explicit values and evidence (source, basis, and observed time); never infer
 them. Preview exact per-line before/after changes and unit coverage. MCP
-list/read/preview/commit parity is complete, including nested each↔piece
-mapping, refreshed before/after state, and project-scoped fail-closed access.
+list/read/preview/commit parity is complete, including canonical `each`
+units (legacy `piece` accepted on input), refreshed before/after state, and project-scoped fail-closed access.
 There is no quick-complete path.
 Optional Check lines remain visible in the plan for explicit review, but they
 do not create default inspection actions.
@@ -237,17 +238,10 @@ usage, or reconciliation. Printers remain exact build-configuration selections,
 not BOM stock.
 
 `create_project_with_initial_revision` accepts optional caller-provided
-`projectId` and `revisionId` values as stable record identities. They are not
-idempotency or replay keys: an ambiguous retry replays exactly once only when
-the idempotency key and the complete canonical project/revision payload are
-identical; reusing the key with a changed payload returns an idempotency
-conflict. A 409 for this command has sanitized details with `reason`, `field`,
-`id`, `retryable: false`, and `commitState: "not_committed"`. Reasons are
-`project_id_exists`, `revision_id_exists`, `project_name_exists`, or
-`idempotency_key_reused`; read the existing project, choose a different project
-or revision ID, or choose a different project name as directed. Removed
-projects retain their IDs and generated names/slugs, so those identities are
-never reclaimed. For a bounded complete project graph, use
+`projectId` and `revisionId` values as stable record identities, never replay
+keys; its conflict reasons and recovery are described once in the
+[MCP quickstart](../apps/mcp/QUICKSTART.md#5-build-the-project-record-minute-68).
+For a bounded complete project graph, use
 `preview_project_setup` followed by the actor-owned, version/hash-checked
 `commit_project_setup` (with explicit reservation confirmation when needed).
 The shared application service is authoritative across HTTP and MCP; web UI

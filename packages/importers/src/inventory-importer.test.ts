@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildImportPlan, importInventory, parseInventoryDocument, type InventoryImportTarget } from "./inventory-importer.js";
+import { buildImportPlan, importInventory, InventoryDocumentError, parseInventoryDocument, type InventoryImportTarget } from "./inventory-importer.js";
 import type { InventoryItem, StockEvent } from "@benchledger/domain";
 
 const source = {
@@ -48,6 +48,23 @@ class MemoryTarget implements InventoryImportTarget {
 }
 
 describe("private inventory importer", () => {
+  it("reports the failing field path and item index without source values", () => {
+    const failure = (value: unknown): InventoryDocumentError => {
+      try { buildImportPlan(value); } catch (error: unknown) { if (error instanceof InventoryDocumentError) return error; throw error; }
+      throw new Error("expected the document to be rejected");
+    };
+    expect(failure({ ...source, schema_version: 0 })).toMatchObject({ path: "schema_version" });
+    expect(failure({ ...source, items: "none" })).toMatchObject({ path: "items" });
+    const badQuantity = failure({ ...source, items: [source.items[0], { ...source.items[1], purchased_qty: -1 }] });
+    expect(badQuantity).toMatchObject({ path: "items[1].purchased_qty", itemIndex: 1 });
+    expect(failure({ ...source, items: [source.items[0], "PRIVATE"] })).toMatchObject({ path: "items[1]", itemIndex: 1 });
+    expect(failure({ ...source, items: [{ ...source.items[0], source: "PRIVATE" }] })).toMatchObject({ path: "items[0].source", itemIndex: 0 });
+    const duplicate = failure({ ...source, items: [source.items[0], source.items[0]] });
+    expect(duplicate).toMatchObject({ path: "items[1].id", itemIndex: 1 });
+    expect(duplicate.message).not.toContain("board-a");
+  });
+
+
   it("validates and normalizes the documented source shape", () => {
     const parsed = parseInventoryDocument(source);
     expect(parsed.items).toHaveLength(2);

@@ -1,17 +1,22 @@
 import { execFileSync } from "node:child_process";
-import { readdir, readFile } from "node:fs/promises";
-import { extname, join, relative } from "node:path";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { basename, extname, join, relative, sep } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { generatedMobilePaths } from "./generated-mobile-paths.mjs";
 
-const root = new URL("../", import.meta.url);
-// This generated cache is excluded from both Git and container context. Never
-// exempt a tracked copy: an accidentally staged cache must still fail the scan.
-const generatedCache = ".impeccable/hook.cache.json";
-let omitUntrackedCache = false;
-try { omitUntrackedCache = execFileSync("git", ["ls-files", "--", generatedCache], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() === ""; } catch { /* Without Git, scan everything as before. */ }
-const textExtensions = new Set([
+// The scan covers what could be published: files tracked by Git plus untracked
+// files that are not ignored (.gitignore, .git/info/exclude, global excludes).
+// Locally excluded scratch files are never part of the public source, so they
+// must not fail the gate. Without Git, fall back to a filesystem walk.
+
+// Generated local caches (for example .impeccable/hook.cache.json) are ignored
+// by Git and so skipped; a tracked or staged copy is listed and still scanned.
+
+export const textExtensions = new Set([
   ".css",
   ".html",
   ".js",
+  ".cjs",
   ".json",
   ".md",
   ".mjs",
@@ -20,7 +25,7 @@ const textExtensions = new Set([
   ".yaml",
   ".yml"
 ]);
-const ignoredDirectories = new Set([
+export const ignoredDirectories = new Set([
   ".git",
   "coverage",
   "dist",
@@ -29,7 +34,7 @@ const ignoredDirectories = new Set([
   "data",
   "backups"
 ]);
-const extensionlessTextFiles = new Set([
+export const extensionlessTextFiles = new Set([
   ".dockerignore",
   ".env.example",
   ".gitignore",
@@ -37,7 +42,7 @@ const extensionlessTextFiles = new Set([
   "LICENSE"
 ]);
 
-const prohibited = [
+export const prohibited = [
   {
     label: "private Gmail message identifier",
     // Match a populated Gmail-style hexadecimal message ID, not the legacy
@@ -60,32 +65,87 @@ const prohibited = [
   }
 ];
 
-async function collect(directory) {
+export function isScannedTextFile(relativePath) {
+  const name = basename(relativePath);
+  return textExtensions.has(extname(name)) || extensionlessTextFiles.has(name);
+}
+
+/** Returns the labels of every prohibited pattern found in the content. */
+export function findProhibited(content) {
+  return prohibited.filter((rule) => rule.pattern.test(content)).map((rule) => rule.label);
+}
+
+/**
+ * Lists repository-relative paths Git would publish: tracked files plus
+ * untracked files that are not ignored. Returns null when Git is unavailable
+ * or the directory is not a work tree, so callers can fall back to a walk.
+ */
+export function gitCandidateFiles(rootPath) {
+  try {
+    const output = execFileSync(
+      "git",
+      ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+      { cwd: rootPath, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 }
+    );
+    return [...new Set(output.split("\0").filter(Boolean))];
+  } catch {
+    return null;
+  }
+}
+
+async function walk(rootPath, directory, generatedMobile) {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
     if (entry.isDirectory() && ignoredDirectories.has(entry.name)) continue;
     const path = join(directory, entry.name);
-    if (omitUntrackedCache && relative(root.pathname, path) === generatedCache) continue;
-    if (entry.isDirectory()) files.push(...(await collect(path)));
-    else if (textExtensions.has(extname(entry.name)) || extensionlessTextFiles.has(entry.name)) files.push(path);
+    const rel = relative(rootPath, path);
+    if (entry.isDirectory() && generatedMobile.has(rel)) continue;
+    if (entry.isDirectory()) files.push(...(await walk(rootPath, path, generatedMobile)));
+    else if (isScannedTextFile(rel)) files.push(rel);
   }
   return files;
 }
 
-const findings = [];
-for (const path of await collect(root.pathname)) {
-  const content = await readFile(path, "utf8");
-  for (const rule of prohibited) {
-    if (rule.pattern.test(content)) {
-      findings.push(`${relative(root.pathname, path)}: ${rule.label}`);
+/** Collects repository-relative text files to scan. */
+export async function collectFiles(rootPath, { useGit = true } = {}) {
+  const listed = useGit ? gitCandidateFiles(rootPath) : null;
+  if (listed) {
+    const files = [];
+    for (const rel of listed) {
+      if (!isScannedTextFile(rel)) continue;
+      // Tracked files deleted from the work tree have nothing to publish.
+      try {
+        if (!(await stat(join(rootPath, rel))).isFile()) continue;
+      } catch {
+        continue;
+      }
+      files.push(rel);
     }
+    return files.sort();
   }
+  // Without Git nothing proves the cache or native projects are untracked, so
+  // the walk scans them rather than risk hiding a file that would be published.
+  const generatedMobile = useGit ? generatedMobilePaths(rootPath) : new Set();
+  return (await walk(rootPath, rootPath, generatedMobile)).sort();
 }
 
-if (findings.length > 0) {
-  console.error("BenchLedger privacy scan failed:\n" + findings.map((finding) => `- ${finding}`).join("\n"));
-  process.exit(1);
+export async function scan(rootPath, options) {
+  const findings = [];
+  for (const rel of await collectFiles(rootPath, options)) {
+    const content = await readFile(join(rootPath, rel), "utf8");
+    for (const label of findProhibited(content)) findings.push(`${rel.split(sep).join("/")}: ${label}`);
+  }
+  return findings;
 }
 
-console.log("BenchLedger privacy scan passed.");
+const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (invokedDirectly) {
+  const rootPath = fileURLToPath(new URL("../", import.meta.url));
+  const findings = await scan(rootPath);
+  if (findings.length > 0) {
+    console.error("BenchLedger privacy scan failed:\n" + findings.map((finding) => `- ${finding}`).join("\n"));
+    process.exit(1);
+  }
+  console.log("BenchLedger privacy scan passed.");
+}

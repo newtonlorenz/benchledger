@@ -27,7 +27,91 @@ first public release; all current work is under **Unreleased**.
 
 ## Unreleased
 
+### Upgrade notes (read before deploying this release)
+
+- **Host allow-list.** Requests are accepted only when `Host` is the
+  `BENCHLEDGER_PUBLIC_BASE_URL` host, `localhost`, `127.0.0.1` or `[::1]`.
+  Any other name gets `421 host_not_allowed`. If people open BenchLedger by a
+  LAN IP address or mDNS name that differs from the public URL, list those in
+  the new `BENCHLEDGER_ALLOWED_HOSTS` (comma-separated, no scheme or port).
+- **Session secret.** Startup now refuses the `.env.example` placeholder and
+  other low-entropy `BENCHLEDGER_SESSION_SECRET` values; generate one with
+  `openssl rand -base64 48`.
+- **Trusted proxies.** `BENCHLEDGER_TRUST_PROXY` accepts `false` (default), a
+  hop count or proxy IPs/CIDRs. The legacy `true` now means exactly one hop.
+- **Secure cookies.** With `BENCHLEDGER_SECURE_COOKIES` unset, cookies are
+  `Secure` when the public base URL is `https://`. Remove an explicit `false`
+  if TLS now terminates in front of BenchLedger.
+- **Body limits.** Request bodies are capped per route (2 MiB default, 16 KiB
+  on authentication routes); only uploads accept up to
+  `BENCHLEDGER_MAX_UPLOAD_BYTES`.
+- **CI branch protection.** The single `test` job became the `check` jobs
+  listed in `docs/development-workflow.md`; update required checks.
+
+### Review fix pass (correctness, security and operations)
+
+- Summary: a multi-agent review fix pass covering security hardening (Host
+  allow-list, proxy trust, session-secret and cookie defaults, body limits),
+  data-integrity fixes, MCP ergonomics, web UX, mobile client resilience, and
+  CI/Docker/backup operations. Details are in the pull request.
+- Security: production dependencies updated so the server image audits clean
+  (Fastify 5.12.8, fast-uri, Zod 4.6.7, sharp 0.35.5, Vite 8.3.7; Expo tooling
+  patches for shell-quote, node-forge and decode-uri-component); MCP SDK test
+  dependency 1.32.2.
+- Operations: `benchledger-backup` CLI (`npm run backup -- backup|verify|restore`)
+  with in-use detection, non-overwriting restore and documented Docker
+  procedures in the deployment guide.
+- Container: runtime image ships only manifests, compiled output and production
+  dependencies (no sources, tests, mobile app or Vite), adds a `HEALTHCHECK`,
+  and pins the Node base image by digest.
+- CI: parallel static/unit/e2e/container-smoke jobs, strict server-image
+  audit, CodeQL, SHA-pinned actions, uploaded test results and Playwright
+  traces, a path-filtered Expo export workflow, and a mobile-viewport smoke
+  project with one CI retry.
+- Tooling: the privacy scan checks the files Git would publish (tracked plus
+  untracked-not-ignored) instead of every file on disk; `npm run check` no
+  longer runs the Expo export (`npm run check:mobile`).
+- Correctness and hardening fixes from the same review across the application,
+  runtime, server, MCP and web surfaces (see the pull request for details).
+
 ### Added
+
+- **Atomic version checks for stock commands.** `POST /inventory/{id}/count`
+  and `POST /inventory/{id}/stock-events` honour an optional `If-Match` or body
+  `expectedVersion` inside the audited command (409 `version_conflict` on
+  mismatch); omitting both keeps the previous behaviour.
+- **Inventory list thumbnails.** Inventory list rows carry an optional
+  `primaryImage` (`id`, same-origin `url` of the image content route,
+  `mediaType`, `width`, `height`) for the first gallery image; the web
+  inventory table shows it.
+- **Print item labels.** The item drawer previews and prints a label with a QR
+  code for `benchledger://item/<id>` (error correction M, four-module quiet
+  zone) plus name, variant and location, using a small built-in encoder and
+  print CSS (no new dependency, no inline script).
+
+- **Stock receiving policy.** Settings asks “When does stock count as in
+  stock?” — when it's bought (`on_purchase`), when it's delivered
+  (`on_delivery`) or when I've received and checked it (`on_receipt`, the
+  default and previous behaviour). The policy changes only derived
+  availability (BOM supply, reservations, available quantities, readiness,
+  shopping, inspect-first queue); stored evidence is never rewritten and the
+  web keeps it visible (“In stock · delivered, not counted”). The change is
+  previewed against current inventory, versioned (`If-Match`), audited
+  (actor, from/to), administrator-only, and refused while reserved stock would
+  stop counting. New `GET/PUT /api/v1/workspace/preferences`,
+  `GET /api/v1/workspace/preferences/stock-receiving-impact`, `preferences` in
+  the workspace snapshot, `availability` on inventory items and BOM gap
+  candidates, and read-only `stockReceivingPolicy`/`inStock`/
+  `policyAvailability` in MCP outputs. MCP cannot change the policy. Migration
+  `workspace_preferences_schema_version` 1 adds the
+  `forge_workspace_preferences` singleton.
+
+- iOS 27 design direction for the phone client, with native Liquid Glass tabs,
+  large titles, native search, inset lists, dark appearance and Dynamic Type.
+
+- Initial Expo native client for iPhone and Android: secure server connections,
+  inventory/project search, evidence and requirement views, versioned item
+  metadata edits and atomic project creation. See [mobile setup](docs/mobile-app.md).
 
 - Visual project Gallery and a remembered compact List with thumbnails, retaining
   search, pins, readiness and next actions.
@@ -73,6 +157,13 @@ first public release; all current work is under **Unreleased**.
 - LAN deployment, backup/restore, privacy scanning, and public-project community files
 
 ### Changed
+
+- A physical count of delivered or ordered stock is now documented and audited
+  as receiving it (`received: true`). Generic stock movements on delivered or
+  ordered rows are refused until they are received. Descriptive edits no
+  longer rewrite an item's recorded quantity.
+- Demo mode lists projects in the same order as production (most recently
+  updated first); the demo-only creation-order wrapper was removed.
 
 - Update Sharp to 0.35.5 and the transitive source-map-js dependency to 1.2.2
   to resolve the production dependency security audit findings.

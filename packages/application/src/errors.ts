@@ -9,14 +9,16 @@ export type ApplicationErrorCode =
   | "unsupported_media"
   | "upload_expired"
   | "project_removed"
-  | "integrity_error";
+  | "integrity_error"
+  /** Unexpected failure (bug, I/O, unclassified storage error); the original is kept as `cause`. */
+  | "internal";
 
 export class ApplicationError extends Error {
   readonly code: ApplicationErrorCode;
   readonly details: Readonly<Record<string, unknown>> | undefined;
 
-  constructor(code: ApplicationErrorCode, message: string, details?: Readonly<Record<string, unknown>>) {
-    super(message);
+  constructor(code: ApplicationErrorCode, message: string, details?: Readonly<Record<string, unknown>>, options?: { readonly cause?: unknown }) {
+    super(message, options?.cause === undefined ? undefined : { cause: options.cause });
     this.name = "ApplicationError";
     this.code = code;
     this.details = details;

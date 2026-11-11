@@ -130,15 +130,38 @@ export function bearerTokensFromEnvironment(env: NodeJS.ProcessEnv = process.env
 }
 
 /**
- * LAN deployments are HTTP by default. Set BENCHLEDGER_SECURE_COOKIES=true
- * only when TLS terminates in front of the app and forwards HTTPS requests.
+ * Explicit Secure-cookie override. When unset (undefined), the server derives
+ * the default from BENCHLEDGER_PUBLIC_BASE_URL: HTTPS origins get Secure
+ * cookies, plain-HTTP LAN origins do not.
  */
-export function secureCookiesFromEnvironment(env: NodeJS.ProcessEnv = process.env): boolean {
+export function secureCookiesFromEnvironment(env: NodeJS.ProcessEnv = process.env): boolean | undefined {
   const raw = env.BENCHLEDGER_SECURE_COOKIES;
-  if (raw === undefined || raw.trim() === "") return false;
+  if (raw === undefined || raw.trim() === "") return undefined;
   if (raw === "true") return true;
   if (raw === "false") return false;
   throw new Error("BENCHLEDGER_SECURE_COOKIES must be exactly true or false");
+}
+
+/** Placeholder values shipped in documentation; never valid secrets. */
+const KNOWN_PLACEHOLDER_SECRETS = new Set([
+  "replace-with-at-least-32-random-bytes"
+]);
+
+/**
+ * Reject the documented placeholder and obviously low-entropy session secrets.
+ * The session secret signs every browser session, so a guessable value lets
+ * anyone mint an administrator cookie.
+ */
+export function assertStrongSessionSecret(secret: string, source = "sessionSecret"): void {
+  if (typeof secret !== "string" || secret.length < 32) throw new Error(`${source} must contain at least 32 characters`);
+  const normalized = secret.trim().toLowerCase();
+  if (KNOWN_PLACEHOLDER_SECRETS.has(normalized) || /replace[-_ ]?with|change[-_ ]?me|placeholder|example/u.test(normalized)) {
+    throw new Error(`${source} is a documentation placeholder; generate one with \`openssl rand -base64 48\``);
+  }
+  const distinct = new Set(secret).size;
+  if (distinct < 12) {
+    throw new Error(`${source} is low-entropy (only ${distinct} distinct characters); generate a random value with \`openssl rand -base64 48\``);
+  }
 }
 
 export interface Principal {
@@ -256,6 +279,7 @@ export class AuthManager {
 
   constructor(private readonly config: AuthConfig) {
     if (!config.sessionSecret || config.sessionSecret.length < 32) throw new Error("sessionSecret must contain at least 32 characters");
+    if (KNOWN_PLACEHOLDER_SECRETS.has(config.sessionSecret.trim().toLowerCase())) throw new Error("sessionSecret is a documentation placeholder; generate a random value");
     this.sessionTtlMs = Math.max(300, config.sessionTtlSeconds ?? 8 * 60 * 60) * 1000;
     const actors = new Map<string, string>();
     const hashes = new Set<string>();

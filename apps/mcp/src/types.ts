@@ -1,5 +1,24 @@
-export const MCP_QUANTITY_UNITS = ["piece", "gram", "millimetre", "millilitre", "metre", "roll", "set"] as const;
-export const MCP_EVIDENCE_STATES = ["physical_count", "commissioned", "measured", "manufacturer", "order", "delivery", "user_reported", "inferred", "unknown"] as const;
+/** Canonical application units. Every MCP output uses these. */
+export const CANONICAL_QUANTITY_UNITS = ["each", "gram", "millimetre", "millilitre", "metre", "set"] as const;
+/** Input-only compatibility aliases: piece = each, roll = a packaged set. */
+export const LEGACY_QUANTITY_UNIT_ALIASES = ["piece", "roll"] as const;
+export const MCP_QUANTITY_UNITS = [...CANONICAL_QUANTITY_UNITS, ...LEGACY_QUANTITY_UNIT_ALIASES] as const;
+/** Canonical application evidence states. Every MCP output uses these. */
+export const CANONICAL_EVIDENCE_STATES = ["physically_counted", "commissioned", "delivered_uncounted", "ordered_unverified", "allocated", "consumed", "unknown"] as const;
+/**
+ * Input-only legacy aliases: physical_count = physically_counted, delivery =
+ * delivered_uncounted, order = ordered_unverified. measured, manufacturer,
+ * user_reported and inferred are not physical observations and store unknown.
+ */
+export const LEGACY_EVIDENCE_STATE_ALIASES = ["physical_count", "delivery", "order", "measured", "manufacturer", "user_reported", "inferred"] as const;
+export const MCP_EVIDENCE_STATES = [...CANONICAL_EVIDENCE_STATES, ...LEGACY_EVIDENCE_STATE_ALIASES] as const;
+/** Canonical inventory conditions; legacy used = good and opened = worn on input. */
+export const CANONICAL_CONDITIONS = ["new", "good", "worn", "needs_repair", "unknown"] as const;
+export const MCP_CONDITIONS = [...CANONICAL_CONDITIONS, "used", "opened"] as const;
+/** Closed semantic inventory kinds (the `category` field). */
+export const INVENTORY_KINDS = ["printer", "tool", "accessory", "consumable", "electronic", "fastener", "filament", "wire", "adhesive", "other"] as const;
+/** Input-only kind aliases kept for older agents. */
+export const INVENTORY_KIND_ALIASES: Readonly<Record<string, typeof INVENTORY_KINDS[number]>> = { printer_accessory: "accessory", printer_part: "accessory", electronics: "electronic", electrical: "electronic" };
 /**
  * Public, model-neutral contracts for the BenchLedger MCP adapter.
  *
@@ -84,7 +103,8 @@ export interface Page<T> {
 
 export interface Quantity {
   value: number;
-  unit: "piece" | "gram" | "millimetre" | "millilitre" | "metre" | "roll" | "set";
+  /** Outputs are canonical; piece and roll are accepted on input only. */
+  unit: typeof MCP_QUANTITY_UNITS[number];
 }
 
 export interface Dimensions {
@@ -106,16 +126,7 @@ export type Availability =
   | "depleted"
   | "retired";
 
-export type EvidenceState =
-  | "physical_count"
-  | "commissioned"
-  | "measured"
-  | "manufacturer"
-  | "order"
-  | "delivery"
-  | "user_reported"
-  | "inferred"
-  | "unknown";
+export type EvidenceState = typeof MCP_EVIDENCE_STATES[number];
 
 export interface EvidenceSummary {
   state: EvidenceState;
@@ -146,7 +157,17 @@ export interface InventoryItem {
   /** Derived semantic-unit state; legacy mismatches remain visible for correction. */
   unitStatus?: "compatible" | "needs_correction";
   unitCorrectionReason?: string;
+  /** Evidence-based bucket (unchanged by the receiving policy). */
   availability: Availability;
+  /**
+   * True when the row counts as in stock under the workspace stock receiving
+   * policy (reservable, eligible to supply BOM lines). It can be true for
+   * delivered_uncounted or ordered_unverified evidence when the human chose
+   * a policy that trusts delivery or purchase; the evidence is not upgraded.
+   */
+  inStock?: boolean;
+  /** Server classification under the policy: confirmed, assumed, inspect_first, ordered or unknown. */
+  policyAvailability?: "confirmed" | "assumed" | "inspect_first" | "ordered" | "unknown";
   /** Shared stock queues; available stock still needs project compatibility checks. */
   stockViews?: readonly import("@benchledger/domain/inventory-workspace").InventoryStockView[];
   /** Canonical condition, preserving repair needs hidden by legacy condition aliases. */
@@ -157,7 +178,7 @@ export interface InventoryItem {
   model?: string;
   sku?: string;
   dimensions?: Dimensions;
-  condition?: "new" | "used" | "opened" | "unknown";
+  condition?: typeof MCP_CONDITIONS[number];
   location?: string;
   /** Searchable tags; omitted by legacy hosts that do not expose tags. */
   tags?: readonly string[];
@@ -185,7 +206,11 @@ export interface InventorySummary {
     /** Retired records are retained for history but excluded from reuse. */
     retiredItems: number;
     missingItems: number;
+    /** Active records that count as in stock only because the receiving policy trusts unverified evidence. */
+    assumedInStockItems?: number;
   };
+  /** Workspace stock receiving policy used for availability (read-only for agents). */
+  stockReceivingPolicy?: StockReceivingPolicyName;
   categories: readonly { category: string; itemCount: number }[];
 }
 
@@ -365,6 +390,7 @@ export interface InventoryCreateInput {
   dimensions?: Dimensions;
   condition?: InventoryItem["condition"];
   location?: string;
+  tags?: readonly string[];
   links?: readonly InventoryLinkInput[];
 }
 
@@ -436,10 +462,14 @@ export interface StockEvent {
   id: string;
   itemId: string;
   kind: StockEventKind;
+  /** Exact stored application event type (kind is the coarser legacy label). */
+  type?: string;
   quantity: Quantity;
   recordedAt: string;
   actorId: string;
+  source?: string;
   note?: string;
+  /** Present only when the event itself recorded evidence. */
   evidence?: EvidenceSummary;
 }
 
@@ -684,7 +714,7 @@ export interface QuantityConversionEvidence {
 
 export interface BomAlternativeQuantityConversion {
   inventory: { quantity: 1; unit: "set" };
-  requirement: { quantity: number; unit: "piece" };
+  requirement: { quantity: number; unit: "each" | "piece" };
   evidence: QuantityConversionEvidence;
 }
 
@@ -999,15 +1029,26 @@ export interface ContextRefreshInput {
   maxAgeSeconds?: number;
 }
 
+export type StockReceivingPolicyName = "on_purchase" | "on_delivery" | "on_receipt";
+
 export interface RefreshedContext {
+  /** Server time when this snapshot was read. */
   generatedAt: string;
-  expiresAt: string;
+  /**
+   * When recorded stock counts as in stock. Set by a human in workspace
+   * Settings; there is no MCP tool to change it.
+   */
+  stockReceivingPolicy?: StockReceivingPolicyName;
+  /** Small live snapshot; omitted when the caller opted out. */
+  inventory?: { totalItems: number; scannedItems: number; truncated: boolean; inspectFirstItems: number; unverifiedItems: number; allocatedItems: number; assumedInStockItems?: number };
+  project?: { id: string; name: string; status: string; version: number; currentRevisionId?: string; blocked: boolean; blockedReasons: number };
   inventorySummaryUri: string;
   projectUris: readonly string[];
   note?: string;
 }
 
 export interface InventoryBackend {
+  /** Whole-inventory summary; the input is ignored (kept for older custom backends). */
   summary(input: PageInput, context: McpRequestContext): Promise<InventorySummary>;
   list(input: InventoryListInput, context: McpRequestContext): Promise<Page<InventoryItem>>;
   get(input: { itemId: string }, context: McpRequestContext): Promise<InventoryItem>;
@@ -1020,6 +1061,8 @@ export interface InventoryBackend {
   commission?(input: InventoryCommissionInput, context: McpRequestContext): Promise<WriteResult<InventoryItem>>;
   recordStockEvent(input: RecordStockEventInput, context: McpRequestContext): Promise<StockEventResult>;
   listStockEvents(input: StockEventsInput, context: McpRequestContext): Promise<Page<StockEvent>>;
+  /** Retire (soft-delete) one item with optimistic versioning; history is retained. */
+  retire?(input: { itemId: string; expectedVersion: number }, context: McpRequestContext): Promise<WriteResult<InventoryItem>>;
 }
 
 export type InventoryCategory = ApiInventoryCategory;
@@ -1178,6 +1221,15 @@ export interface McpToolResult {
   content: readonly McpContent[];
   structuredContent: JsonObject;
   isError: boolean;
+}
+
+/** MCP 2025-06-18 tool annotations; hints for hosts, never a security boundary. */
+export interface McpToolAnnotations {
+  title?: string;
+  readOnlyHint: boolean;
+  destructiveHint: boolean;
+  idempotentHint: boolean;
+  openWorldHint: boolean;
 }
 
 export interface McpToolDefinition {

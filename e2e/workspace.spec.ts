@@ -69,11 +69,13 @@ test("an upload notification never covers the next dialog's mobile save action",
   await page.getByLabel("Choose files to upload").setInputFiles({ name: "notification-review.txt", mimeType: "text/plain", buffer: Buffer.from("Synthetic notification regression") });
   await page.getByRole("button", { name: "Add 1 file", exact: true }).click();
   await expect(page.getByRole("button", { name: "Details for notification-review.txt", exact: true })).toBeVisible();
+  await expect(page.locator(".app-toast")).toHaveCount(1);
+  // A success notification stays with its project while sections change.
   await page.getByRole("tab", { name: /^Parts/u }).click();
   await page.getByRole("button", { name: "Add part", exact: true }).click();
   await page.getByLabel("Part name").fill("Requirement saved while a notification is present");
   const submit = page.getByRole("dialog").getByRole("button", { name: "Add part", exact: true });
-  await expect(page.locator("[data-sonner-toast]")).toHaveCount(1);
+  await expect(page.locator(".app-toast")).toHaveCount(1);
   await expect.poll(() => submit.evaluate((button) => {
     const bounds = button.getBoundingClientRect();
     return button.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
@@ -81,6 +83,10 @@ test("an upload notification never covers the next dialog's mobile save action",
   await submit.click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.locator(".bom-row").getByRole("button", { name: "Requirement saved while a notification is present", exact: true })).toBeVisible();
+  // Transient success notifications do not follow the maker to another page.
+  await expect(page.locator(".app-toast")).toHaveCount(1);
+  await navigateWorkspace(page, "Inventory");
+  await expect(page.locator(".app-toast")).toHaveCount(0);
 });
 
 test("long beginner forms keep their actions visible on small screens", async ({ page }) => {
@@ -373,18 +379,18 @@ test("loads server-backed continuation pages, resets filters, and ignores stale 
 test("copies on LAN with a legacy fallback and exposes text when all copy paths fail", async ({ page }) => {
   await signIn(page); await page .context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(page.url()).origin });
   await navigateWorkspace(page, "Settings"); await page .getByRole("switch", { name: "Technical details" }).click(); await page.getByRole("button", { name: /^Connection details/u }).click(); await page.getByRole("button", { name: "For agents", exact: true }).click();
-    const request = page.getByRole("button", { name: "Can I build this with what I have?", exact: true }); await request.click(); await expect(request).toBeFocused(); await expect(page.locator("[data-sonner-toast]")).toHaveText(/Request copied\./u); await expect(page.locator("[data-sonner-toast]")).toHaveAttribute("data-sonner-toast", "");
+    const request = page.getByRole("button", { name: "Can I build this with what I have?", exact: true }); await request.click(); await expect(request).toBeFocused(); await expect(page.locator(".app-toast")).toHaveText(/Request copied\./u); await expect(page.locator(".app-toast")).toHaveAttribute("role", "status");
     await page.evaluate(() => { Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined }); document.execCommand = () => true;
   }); const legacyRequest = page.getByRole("button", { name: "Prepare a sourced shopping list. Do not place an order.", exact: true }); await legacyRequest.click();
-  await expect(legacyRequest).toBeFocused(); await expect(page.locator("[data-sonner-toast]")).toHaveText("Request copied.");
+  await expect(legacyRequest).toBeFocused(); await expect(page.locator(".app-toast")).toHaveText("Request copied.");
   await expect(page.getByLabel("Request to copy manually")).toHaveCount(0);
   await page.evaluate(() => { document.execCommand = () => false; }); const failedRequest = page.getByRole("button", { name: "Which stock needs a physical count before I reserve it?", exact: true }); await failedRequest.click();
   await expect(failedRequest).toBeFocused();
-  await expect(page.locator("[data-sonner-toast][data-type=error]")).toHaveText( "Copy did not work. Select the request below and copy it manually." );
-  await expect(page.locator("[data-sonner-toast][data-type=error]")).toHaveAttribute( "data-type", "error" ); const manualRequest = page.getByLabel("Request to copy manually");
+  await expect(page.locator(".app-toast.toast-error")).toHaveText( "Copy did not work. Select the request below and copy it manually." );
+  await expect(page.locator(".app-toast.toast-error")).toHaveAttribute( "role", "alert" ); const manualRequest = page.getByLabel("Request to copy manually");
   await expect(manualRequest).toHaveValue( "Which stock needs a physical count before I reserve it?" ); await manualRequest.focus(); expect( await manualRequest.evaluate((element: HTMLTextAreaElement) => [ element.selectionStart, element.selectionEnd ])).toEqual([0, 55]);
   await openDemoProject(page);
-  await openProjectSection(page, "To source"); await page.getByText("Inventory-linked supplier records", { exact: true }).click(); await page.getByRole("button", { name: "Copy draft list" }).click(); await expect(page.getByLabel("Shopping list to copy manually")).toBeVisible(); await expect(page.locator("[data-sonner-toast][data-type=error]")).toContainText( "Select the shopping list below" ); }); test("reports reusable expert-value copy success and failure in place", async ({ page }) => { await signIn(page);
+  await openProjectSection(page, "To source"); await page.getByText("Inventory-linked supplier records", { exact: true }).click(); await page.getByRole("button", { name: "Copy draft list" }).click(); await expect(page.getByLabel("Shopping list to copy manually")).toBeVisible(); await expect(page.locator(".app-toast.toast-error")).toContainText( "Select the shopping list below" ); }); test("reports reusable expert-value copy success and failure in place", async ({ page }) => { await signIn(page);
     await page.context() .grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(page.url()).origin });
   await navigateWorkspace(page, "Settings");
     await page .getByRole("switch", { name: "Technical details" }) .click();
@@ -460,7 +466,9 @@ test("confirms bulk inventory changes and refreshes returned rows", async ({ pag
 
   await expect( page.getByRole("button", { name: "Open Tool 00" }) ).toBeVisible();
   await expect( page.locator(".inventory-table tbody tr").filter({ hasText: "Tool 00" }) ).toContainText("Bulk shelf");
-  expect(refreshes).toBeGreaterThan(1);
+  // Returned rows are applied in place and stay visible while the follow-up
+  // server refresh runs; wait for that refresh rather than racing it.
+  await expect.poll(() => refreshes).toBeGreaterThan(1);
 });
 
 test("reports bulk no-op and conflict states without discarding the edit", async ({ page }) => {
@@ -539,7 +547,7 @@ test("keeps inventory balances and status reachable in a bounded mobile register
   await openDemoProject(page); const rows = page.locator(".bom-row");
   await expect(rows.first()).toBeVisible();
   await rows .first().locator(".part-name-button").evaluate((element) => { element.textContent = "Addressable LED illumination assembly with extra-long strain-relief routing and service access clearance"; });
-  await rows .first() .locator(".part-note").evaluate((element) => { element.textContent = "Confirm voltage, connector orientation, cable bend radius, diffuser clearance, and mounting access before final assembly."; }); const assertNoCollisions = async () => { expect( await page.evaluate( () => document.documentElement.scrollWidth <= document.documentElement.clientWidth ) ).toBe(true); for (const row of await rows.all()) { const rowSize = await row.evaluate((element) => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth, text: element.textContent, children: [...element.children].map((child) => ({ className: child.className, clientWidth: (child as HTMLElement).clientWidth, scrollWidth: (child as HTMLElement).scrollWidth, left: child.getBoundingClientRect().left, right: child.getBoundingClientRect().right })) })); expect(rowSize.scrollWidth, JSON.stringify(rowSize)).toBeLessThanOrEqual( rowSize.clientWidth );
+  /* The seeded first part may have no note; add one so the longest realistic row is measured. */ await rows .first() .locator(".bom-main").evaluate((main) => { let note = main.querySelector(".part-note"); if (!note) { note = document.createElement("span"); note.className = "part-note"; main.querySelector(".part-name-button")?.closest("strong")?.after(note); } note.textContent = "Confirm voltage, connector orientation, cable bend radius, diffuser clearance, and mounting access before final assembly."; }); const assertNoCollisions = async () => { expect( await page.evaluate( () => document.documentElement.scrollWidth <= document.documentElement.clientWidth ) ).toBe(true); for (const row of await rows.all()) { const rowSize = await row.evaluate((element) => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth, text: element.textContent, children: [...element.children].map((child) => ({ className: child.className, clientWidth: (child as HTMLElement).clientWidth, scrollWidth: (child as HTMLElement).scrollWidth, left: child.getBoundingClientRect().left, right: child.getBoundingClientRect().right })) })); expect(rowSize.scrollWidth, JSON.stringify(rowSize)).toBeLessThanOrEqual( rowSize.clientWidth );
   const boxes = await Promise.all( [".bom-main", ".bom-quantity", ".bom-available", ".bom-status", ".bom-row-actions"].map( async (selector) => { const target = row.locator(selector); return (await target.count()) > 0 ? target.boundingBox() : null; } ) ); const visible = boxes.filter( (box): box is NonNullable<typeof box> => box !== null ); for (let left = 0; left < visible.length; left += 1) for (let right = left + 1; right < visible.length; right += 1) { const a = visible[left]!;
 
   const b = visible[right]!; const overlap = a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y; expect(overlap, JSON.stringify({ viewport: page.viewportSize(), first: a, second: b })).toBe(false); } } }; await assertNoCollisions(); await navigateWorkspace(page, "Settings");

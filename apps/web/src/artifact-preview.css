@@ -1,19 +1,46 @@
-.artifact-preview-backdrop { position: fixed; inset: 0; z-index: 1000; background: var(--overlay, #15212699); display: grid; place-items: center; padding: 20px; }
-.artifact-preview-dialog { background: var(--surface, #fff); color: var(--ink, #172a30); width: min(1100px, 100%); max-height: 90dvh; display: flex; flex-direction: column; border-radius: 12px; box-shadow: 0 20px 70px #0004; }
-.artifact-preview-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px; border-bottom: 1px solid var(--line, #dce3e4); }
-.artifact-preview-dialog h2 { font-size: 18px; overflow-wrap: anywhere; margin: 0; }
-.artifact-preview-content { overflow: auto; min-height: 160px; padding: 20px; }
+.artifact-preview-backdrop { position: fixed; inset: 0; z-index: 1000; background: var(--overlay); display: grid; place-items: center; padding: var(--space-5); }
+.artifact-preview-dialog { background: var(--surface-strong); color: var(--ink); width: min(1100px, 100%); max-height: 90dvh; display: flex; flex-direction: column; border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: var(--shadow); }
+.artifact-preview-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-3) var(--space-5); border-bottom: 1px solid var(--line); }
+.artifact-preview-dialog h2 { font: 500 var(--flow-text-base) var(--font-data); overflow-wrap: anywhere; margin: 0; }
+.artifact-preview-content { overflow: auto; min-height: 160px; padding: var(--space-5); font-size: var(--flow-text-base); }
 .artifact-preview-image { display: block; max-width: 100%; max-height: 70dvh; object-fit: contain; margin: auto; }
-.artifact-preview-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
-.artifact-preview-markdown { line-height: 1.65; overflow-wrap: anywhere; }
-.artifact-preview-markdown pre { overflow: auto; padding: 12px; background: var(--surface-soft, #f1f4f4); }
-.artifact-preview-markdown blockquote { border-left: 3px solid var(--line-strong, #9cabad); padding-left: 16px; margin-left: 0; }
-.artifact-preview-stl { width: 100%; height: min(55dvh, 520px); min-height: 240px; }
-.artifact-preview-stl canvas { display: block; width: 100%; height: 100%; touch-action: none; }
-.file-preview-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-@media (max-width: 600px) { .artifact-preview-backdrop { padding: 8px; } .artifact-preview-content { padding: 12px; } }
+.artifact-preview-text { white-space: pre-wrap; overflow-wrap: anywhere; font: var(--flow-text-sm)/1.55 var(--font-data); }
+.artifact-preview-markdown { max-width: 78ch; line-height: 1.65; overflow-wrap: anywhere; }
 .artifact-preview-markdown > * + * { margin-top: 1em; }
+.artifact-preview-markdown h1 { font-size: var(--flow-text-xl); }
+.artifact-preview-markdown h2 { font-size: var(--flow-text-lg); }
+.artifact-preview-markdown h3 { font-size: var(--flow-text-md); }
+.artifact-preview-markdown pre { overflow: auto; padding: var(--space-3); border-radius: var(--radius-md); background: var(--surface-soft); }
+.artifact-preview-markdown blockquote { border-left: 3px solid var(--line-strong); padding-left: var(--space-4); margin-left: 0; color: var(--ink-soft); }
 .artifact-preview-markdown ul { list-style: disc; padding-left: 1.5em; }
 .artifact-preview-markdown ol { list-style: decimal; padding-left: 1.5em; }
-.artifact-preview-markdown h2 { font-size: 1.4em; }
-.artifact-preview-markdown a { color: var(--slate, #216a7b); text-decoration: underline; }
+.artifact-preview-markdown a { color: var(--slate); text-decoration: underline; }
+.artifact-preview-markdown .markdown-table-scroll { overflow-x: auto; max-width: 100%; }
+.artifact-preview-markdown .markdown-table-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.artifact-preview-markdown table { border-collapse: collapse; font-size: var(--flow-text-sm); overflow-wrap: normal; }
+.artifact-preview-markdown th, .artifact-preview-markdown td { border: 1px solid var(--line); padding: var(--space-1) var(--space-2); text-align: left; vertical-align: top; }
+.artifact-preview-markdown th { background: var(--surface-soft); font-weight: 600; }
+.artifact-preview-markdown li:has(> input[type="checkbox"]) { list-style: none; margin-left: -1.25em; }
+.artifact-preview-markdown table { border-collapse: collapse; font-size: var(--flow-text-sm); }
+.artifact-preview-markdown th, .artifact-preview-markdown td { padding: 6px 10px; border: 1px solid var(--line); text-align: left; }
+
+/* Shared 3D viewer frame (STL preview). The assembly explorer uses the same --viewer-* tokens. */
+.viewer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-3); }
+.viewer-readout { display: grid; gap: 2px; min-width: 0; margin: 0; }
+.viewer-readout strong { font: 500 var(--flow-text-base) var(--font-data); font-variant-numeric: tabular-nums; }
+.viewer-readout span { color: var(--ink-muted); font-size: var(--flow-text-xs); }
+.viewer-stage { border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--viewer-stage); overflow: hidden; }
+.viewer-hint { margin-top: var(--space-2); color: var(--ink-muted); font-size: var(--flow-text-xs); }
+.artifact-preview-stl { width: 100%; height: min(55dvh, 520px); min-height: 240px; }
+.artifact-preview-stl canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+
+/* Preview and Download sit side by side in the Files table. */
+.file-preview-actions { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; }
+.file-preview-actions .button { min-height: 34px; padding-inline: 10px; white-space: nowrap; }
+@media (max-width: 600px) {
+  .artifact-preview-backdrop { padding: var(--space-2); }
+  .artifact-preview-content { padding: var(--space-3); }
+  .viewer-toolbar { flex-wrap: wrap; }
+  .file-preview-actions { flex-wrap: wrap; }
+}
+@media (hover: none), (pointer: coarse) { .file-preview-actions .button { min-height: 44px; } }

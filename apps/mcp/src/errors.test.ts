@@ -164,9 +164,51 @@ describe("MCP error boundary", () => {
     }
     const schemaError = new Error("private schema detail");
     Object.assign(schemaError, { name: "ZodError", issues: [{ path: ["project", "name"] }] });
-    expect(mapBackendError(schemaError)).toMatchObject({ code: "INVALID_ARGUMENT", message: "The request arguments are invalid." });
+    expect(mapBackendError(schemaError)).toMatchObject({ code: "INVALID_ARGUMENT", details: { issues: [{ path: "project.name", message: "Invalid value." }] } });
+    expect(mapBackendError(schemaError).message).not.toContain("private schema detail");
     expect(mapBackendError(new Error("secret SQL details"))).toMatchObject({ code: "BACKEND_ERROR", message: "The application service could not complete this operation." });
     expect(mapBackendError({ code: "FORBIDDEN" })).toMatchObject({ code: "BACKEND_ERROR" });
     expect(mapBackendError(null)).toMatchObject({ code: "BACKEND_ERROR" });
+  });
+});
+
+describe("MCP error recovery information", () => {
+  it("passes through the safe ApplicationError message and distinguishes rule conflicts from version conflicts", async () => {
+    const { ApplicationError } = await import("@benchledger/application");
+    const rule = mapBackendError(new ApplicationError("conflict", "Only physically confirmed stock can be reserved"));
+    expect(rule).toMatchObject({ code: "CONFLICT", reason: "rule_conflict", message: "Only physically confirmed stock can be reserved" });
+    expect(rule.message).not.toMatch(/read it again/i);
+
+    const version = mapBackendError(new ApplicationError("conflict", "inventory_item 'item-1' changed since it was read", { expectedVersion: 2, actualVersion: 3 }));
+    expect(version).toMatchObject({ code: "CONFLICT", reason: "version_conflict", details: { expectedVersion: 2, actualVersion: 3 } });
+    expect(version.message).toMatch(/changed since it was read/);
+    expect(version.message).toMatch(/version 3/);
+
+    const replay = mapBackendError(new ApplicationError("idempotency_conflict", "Idempotency key was reused for a different command"));
+    expect(replay).toMatchObject({ code: "CONFLICT", reason: "idempotency_conflict" });
+  });
+
+  it("returns validation messages and bounded zod field issues without stack traces or paths", async () => {
+    const { ApplicationError } = await import("@benchledger/application");
+    expect(mapBackendError(new ApplicationError("validation", "Only consumed BOM requirements may reserve or consume stock"))).toMatchObject({ code: "INVALID_ARGUMENT", reason: "validation", message: "Only consumed BOM requirements may reserve or consume stock" });
+
+    const issues = Array.from({ length: 40 }, (_, index) => ({ path: ["lines", index, "quantity"], message: "Expected number, received string", code: "invalid_type" }));
+    const zod = Object.assign(new Error("raw"), { name: "ZodError", issues });
+    const mapped = mapBackendError(zod);
+    expect(mapped.code).toBe("INVALID_ARGUMENT");
+    expect(mapped.message).toContain("lines.0.quantity: Expected number, received string");
+    const mappedIssues = (mapped.details as { issues: unknown[] }).issues;
+    expect(mappedIssues.length).toBeLessThanOrEqual(10);
+    expect(mappedIssues[0]).toEqual({ path: "lines.0.quantity", message: "Expected number, received string" });
+
+    // Built at runtime so the repository privacy scan sees no literal home path.
+    const homePath = ["", "Users", "synthetic-user", "app"].join("/");
+    for (const leaky of [`Error at ${homePath}/src/file.ts:10`, "Error at /srv/app/src/file.ts:10", "SQLITE_CONSTRAINT: UNIQUE failed\n    at Database.run (node_modules/x.js:1:1)", "x".repeat(2000)]) {
+      const unsafe = mapBackendError(new ApplicationError("conflict", leaky));
+      expect(unsafe.code).toBe("CONFLICT");
+      expect(unsafe.message).not.toContain("/Users/");
+      expect(unsafe.message).not.toContain("node_modules");
+      expect(unsafe.message.length).toBeLessThan(600);
+    }
   });
 });

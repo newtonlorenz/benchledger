@@ -1,4 +1,4 @@
-import { canonicalProjectStatus, isFabricationRoute } from "@benchledger/domain";
+import { DomainError, canonicalProjectStatus, isFabricationRoute } from "@benchledger/domain";
 import type { Dimensions, InventoryItem, InventoryProvenance, StockEvent, Project, WorkItem, ProjectRevision, WorkItemRevision, BomLine, BomAlternative, Reservation, Supplier, OfferSnapshot, AuditRecord, AuditActor } from "@benchledger/domain";
 import type { SqliteRow } from "./sqlite.js";
 
@@ -17,13 +17,13 @@ export function parseJson<T>(value: unknown): T | undefined {
 
 function text(row: SqliteRow, key: string): string {
   const value = row[key];
-  if (typeof value !== "string") throw new Error(`database row ${key} is not text`);
+  if (typeof value !== "string") throw new DomainError("integrity_error", `database row ${key} is not text`);
   return value;
 }
 
 function number(row: SqliteRow, key: string): number {
   const value = row[key];
-  if (typeof value !== "number") throw new Error(`database row ${key} is not numeric`);
+  if (typeof value !== "number") throw new DomainError("integrity_error", `database row ${key} is not numeric`);
   return value;
 }
 
@@ -118,7 +118,7 @@ export function workItemFromRow(row: SqliteRow): WorkItem {
 
 export function projectRevisionFromRow(row: SqliteRow): ProjectRevision {
   const storedRoute = optionalText(row, "fabrication_route") ?? "undecided";
-  if (!isFabricationRoute(storedRoute)) throw new Error(`database row fabrication route is unsupported: ${storedRoute}`);
+  if (!isFabricationRoute(storedRoute)) throw new DomainError("integrity_error", `database row fabrication route is unsupported: ${storedRoute}`);
   const intendedPrinterItemId = nullableText(row, "intended_printer_item_id");
   return {
     id: text(row, "id"), projectId: text(row, "project_id"), number: number(row, "revision_number"), label: text(row, "label"), status: text(row, "status") as ProjectRevision["status"], fabricationRoute: storedRoute,
@@ -145,7 +145,7 @@ export function bomLineFromRow(row: SqliteRow): BomLine {
   const constraints = parseJson<BomLine["constraints"]>(row["constraints_json"]);
   const storedRole = row["role"];
   if (storedRole !== null && storedRole !== undefined && storedRole !== "consumed" && storedRole !== "reusable") {
-    throw new Error(`database row role is unsupported: ${String(storedRole)}`);
+    throw new DomainError("integrity_error", `database row role is unsupported: ${String(storedRole)}`);
   }
   return {
     id: text(row, "id"), revisionId: text(row, "revision_id"), name: text(row, "name"), quantity: number(row, "quantity"), unit: text(row, "unit"),
@@ -189,6 +189,6 @@ export function offerFromRow(row: SqliteRow): OfferSnapshot {
 export function auditFromRow(row: SqliteRow): AuditRecord {
   const actor = parseJson<AuditActor>(row["actor_json"]);
   const metadata = parseJson<Record<string, unknown>>(row["metadata_json"]);
-  if (actor === undefined) throw new Error("audit record actor is malformed");
+  if (actor === undefined) throw new DomainError("integrity_error", "audit record actor is malformed");
   return { id: text(row, "id"), action: text(row, "action"), entityType: text(row, "entity_type"), entityId: text(row, "entity_id"), actor, sourceSurface: text(row, "source_surface") as AuditRecord["sourceSurface"], occurredAt: text(row, "occurred_at"), correlationId: text(row, "correlation_id"), ...(optionalNumber(row, "before_version") === undefined ? {} : { beforeVersion: optionalNumber(row, "before_version") as number }), ...(optionalNumber(row, "after_version") === undefined ? {} : { afterVersion: optionalNumber(row, "after_version") as number }), ...(metadata === undefined ? {} : { metadata }) };
 }

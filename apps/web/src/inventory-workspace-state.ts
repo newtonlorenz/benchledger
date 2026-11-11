@@ -3,6 +3,7 @@ import type { InventoryStockView, InventorySortOrder } from "@benchledger/domain
 import { inventoryKindOptions } from "./domain";
 import type { InventoryItem, InventoryEvidenceState } from "./domain";
 import type { InventoryKindQuery } from "./api";
+import { assumedStockLabel } from "./stock-receiving-policy";
 
 export interface InventoryViewState {
   search: string;
@@ -69,6 +70,10 @@ export function inventoryStockLabel(item: InventoryItem): string {
   const state = webInventoryAssessment(item);
   if (state.unitNeedsCorrection) return "Fix unit";
   if (state.needsRepair) return "Needs repair";
+  // Stock that counts only because of the workspace receiving setting keeps
+  // its real evidence visible ("In stock · delivered, not counted").
+  const assumed = assumedStockLabel(item);
+  if (assumed) return assumed;
   if (state.check) return "Needs checking";
   if (state.available) return "Available";
   if (state.reserved) return "Reserved";

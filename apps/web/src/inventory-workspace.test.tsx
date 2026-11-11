@@ -72,7 +72,8 @@ it("keeps project requirements distinct from consumption and opens the exact par
   expect(screen.getByText(/Enclosure screws · Needs 8 pieces/)).toBeTruthy();
   expect(screen.getByText("Required amounts are not a record of stock used.")).toBeTruthy();
   expect(screen.getByText("Last physical count").nextElementSibling?.textContent).toBe("Not recorded");
-  fireEvent.click(screen.getByRole("button", { name: "Count stock" }));
+  // Delivered, uncounted stock offers its physical check as "Receive and count".
+  fireEvent.click(screen.getByRole("button", { name: "Receive and count" }));
   expect(onCountStock).toHaveBeenCalledExactlyOnceWith(item.id);
   fireEvent.click(screen.getByRole("button", { name: `Open Enclosure screws in ${project.name}` }));
   expect(onOpenProjectPart).toHaveBeenCalledExactlyOnceWith(project.id, "part-screws");

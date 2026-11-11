@@ -1,19 +1,36 @@
 import { DatabaseSync } from "node:sqlite";
+import type { StatementSync } from "node:sqlite";
 import { SCHEMA_SQL } from "./schema.js";
 
 export type SqliteParameter = string | number | bigint | Uint8Array | null;
 export type SqliteRow = Readonly<Record<string, unknown>>;
 
+/** Upper bound on cached prepared statements; repositories use a fixed set of SQL strings, plus a few with variable IN-lists. */
+export const STATEMENT_CACHE_LIMIT = 256;
+
 /** Small wrapper around Node 24's built-in synchronous SQLite driver. The
  * database is only used behind repositories, so callers cannot accidentally
  * bypass domain validation with arbitrary writes. */
+
 export class BenchDatabase {
   private readonly connection: DatabaseSync;
+  /** Least-recently-used prepared statements keyed by SQL text. */
+  private readonly statements = new Map<string, StatementSync>();
   private transactionDepth = 0;
   private savepointSequence = 0;
   private closed = false;
 
-  constructor(path = ":memory:") {
+  /**
+   * `readOnly` opens an existing database without applying the schema, so
+   * inspection commands (such as an import dry-run) never create, migrate or
+   * write the file. Writes through a read-only handle fail in SQLite. A
+   * `file:` URL may carry SQLite URI parameters such as `immutable=1`.
+   */
+  constructor(path: string | URL = ":memory:", options: { readonly readOnly?: boolean } = {}) {
+    if (options.readOnly === true) {
+      this.connection = new DatabaseSync(path, { readOnly: true });
+      return;
+    }
     this.connection = new DatabaseSync(path);
     this.connection.exec(SCHEMA_SQL);
   }
@@ -25,14 +42,33 @@ export class BenchDatabase {
 
   run(sql: string, parameters: readonly SqliteParameter[] = []): unknown {
     this.assertOpen();
-    const statement = this.connection.prepare(sql);
-    return statement.run(...(parameters as SqliteParameter[]));
+    return this.statement(sql).run(...(parameters as SqliteParameter[]));
   }
 
   all<T extends SqliteRow = SqliteRow>(sql: string, parameters: readonly SqliteParameter[] = []): readonly T[] {
     this.assertOpen();
-    const statement = this.connection.prepare(sql);
-    return statement.all(...(parameters as SqliteParameter[])) as unknown as readonly T[];
+    return this.statement(sql).all(...(parameters as SqliteParameter[])) as unknown as readonly T[];
+  }
+
+  /** Number of cached prepared statements (diagnostics and tests). */
+  get cachedStatementCount(): number {
+    return this.statements.size;
+  }
+
+  private statement(sql: string): StatementSync {
+    const cached = this.statements.get(sql);
+    if (cached !== undefined) {
+      this.statements.delete(sql);
+      this.statements.set(sql, cached);
+      return cached;
+    }
+    const prepared = this.connection.prepare(sql);
+    this.statements.set(sql, prepared);
+    if (this.statements.size > STATEMENT_CACHE_LIMIT) {
+      const oldest = this.statements.keys().next().value;
+      if (oldest !== undefined) this.statements.delete(oldest);
+    }
+    return prepared;
   }
 
   get<T extends SqliteRow = SqliteRow>(sql: string, parameters: readonly SqliteParameter[] = []): T | undefined {
@@ -112,6 +148,7 @@ export class BenchDatabase {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.statements.clear();
     this.connection.close();
   }
 }

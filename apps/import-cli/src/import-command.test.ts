@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { InventoryRepository } from "@benchledger/database";
 import { createStockEvent } from "@benchledger/domain";
@@ -173,6 +174,58 @@ describe("private legacy inventory import command", () => {
     expect(reopened.database.all("SELECT COUNT(*) AS count FROM stock_events")[0]?.count).toBe(2);
   });
 
+  it("names the failing field path and item index without echoing source values", async () => {
+    const files = await fixture();
+    const invalid = { ...source, items: [source.items[0], { ...source.items[1], purchased_qty: "PRIVATE-QTY" }] };
+    await writeFile(files.inventoryFile, JSON.stringify(invalid), { encoding: "utf8", mode: 0o600 });
+    const output = await runImportCommand(["--inventory-file", files.inventoryFile, "--data-dir", files.dataDir, "--json"]);
+    expect(output.exitCode).toBe(1);
+    expect(outputJson(output)).toEqual({ ok: false, error: { code: "invalid_inventory", path: "items[1].purchased_qty", itemIndex: 1 } });
+    expect(output.stdout).not.toContain("PRIVATE-QTY");
+    expect(output.stdout).not.toContain("wire-uncounted");
+    const human = await runImportCommand(["--inventory-file", files.inventoryFile, "--data-dir", files.dataDir]);
+    expect(human.stderr).toContain("invalid_inventory at items[1].purchased_qty");
+    expect(human.stderr).not.toContain(privateOrder);
+  });
+
+  it("dry-runs without creating or migrating the data directory", async () => {
+    const files = await fixture();
+    const fresh = await runImportCommand(["--inventory-file", files.inventoryFile, "--data-dir", files.dataDir, "--dry-run", "--json"]);
+    expect(fresh.exitCode).toBe(0);
+    expect(outputJson(fresh)).toMatchObject({ mode: "dry-run", createdItems: 2, eventsToInsert: 2 });
+    await expect(stat(files.dataDir)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const applied = await runImportCommand(["--inventory-file", files.inventoryFile, "--data-dir", files.dataDir, "--json"]);
+    expect(applied.exitCode).toBe(0);
+    const databasePath = join(files.dataDir, "benchledger.sqlite");
+    const before = createHash("sha256").update(await readFile(databasePath)).digest("hex");
+    const entriesBefore = (await readdir(files.dataDir)).sort();
+    const replay = await runImportCommand(["--inventory-file", files.inventoryFile, "--data-dir", files.dataDir, "--dry-run", "--json"]);
+    expect(outputJson(replay)).toMatchObject({ mode: "dry-run", createdItems: 0, updatedItems: 2, eventsToInsert: 0, duplicateEvents: 2, auditRecordsToInsert: 0 });
+    expect(createHash("sha256").update(await readFile(databasePath)).digest("hex")).toBe(before);
+    expect((await readdir(files.dataDir)).sort()).toEqual(entriesBefore);
+  });
+
+  it("dry-runs against uncheckpointed writes without touching the data directory", async () => {
+    const files = await fixture();
+    expect((await runImportCommand(["--inventory-file", files.inventoryFile, "--data-dir", files.dataDir, "--json"])).exitCode).toBe(0);
+    const databasePath = join(files.dataDir, "benchledger.sqlite");
+    // A live writer leaves its changes in the write-ahead log.
+    const writer = new DatabaseSync(databasePath);
+    try {
+      writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0; DELETE FROM audit_log;");
+      const entriesBefore = (await readdir(files.dataDir)).sort();
+      expect(entriesBefore).toContain("benchledger.sqlite-wal");
+      const walBefore = createHash("sha256").update(await readFile(`${databasePath}-wal`)).digest("hex");
+      const replay = await runImportCommand(["--inventory-file", files.inventoryFile, "--data-dir", files.dataDir, "--dry-run", "--json"]);
+      expect(outputJson(replay)).toMatchObject({ mode: "dry-run", createdItems: 0, auditRecordsToInsert: 2 });
+      expect((await readdir(files.dataDir)).sort()).toEqual(entriesBefore);
+      expect(createHash("sha256").update(await readFile(`${databasePath}-wal`)).digest("hex")).toBe(walBefore);
+    } finally {
+      writer.close();
+    }
+  });
+
   it("does not leak malformed input bodies or private source details in errors", async () => {
     const files = await fixture();
     await writeFile(files.inventoryFile, `{ "items": ["${privateItemBody}"], "order": "${privateOrder}",`, { encoding: "utf8", mode: 0o600 });
@@ -187,5 +240,19 @@ describe("private legacy inventory import command", () => {
     expect(output.stderr).not.toContain(privateItemBody);
     const bytes = await readFile(files.inventoryFile);
     expect(createHash("sha256").update(bytes).digest("hex")).toHaveLength(64);
+  });
+
+  it("refuses an oversized inventory source before parsing it", async () => {
+    const files = await fixture();
+    const root = dirname(files.inventoryFile);
+    const oversized = join(root, "oversized.json");
+    await writeFile(oversized, `${JSON.stringify(source)}${" ".repeat(8 * 1024 * 1024)}`, { encoding: "utf8", mode: 0o600 });
+    for (const inventoryFile of [oversized]) {
+      const output = await runImportCommand(["--inventory-file", inventoryFile, "--data-dir", files.dataDir, "--dry-run", "--json"]);
+      expect(output.exitCode, inventoryFile).toBe(1);
+      expect(outputJson(output)).toEqual({ ok: false, error: { code: "invalid_inventory" } });
+    }
+    const accepted = await runImportCommand(["--inventory-file", files.inventoryFile, "--data-dir", files.dataDir, "--dry-run", "--json"]);
+    expect(accepted.exitCode).toBe(0);
   });
 });

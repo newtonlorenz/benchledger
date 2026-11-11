@@ -1,10 +1,10 @@
 import { createAuditRecord, createId } from "@benchledger/domain";
-import type { AuditActor } from "@benchledger/domain";
+import type { AuditActor, AuditRecord } from "@benchledger/domain";
 import type { AuditEvent, AuditInput, AuditPort, Page, RequestSource, UnitOfWorkPort } from "@benchledger/application";
 import { AuditRepository } from "@benchledger/database";
 import type { BenchDatabase } from "@benchledger/database";
 import { RuntimeState } from "./persistence.js";
-import { attempt, page } from "./utils.js";
+import { attempt, parseOffsetCursor } from "./utils.js";
 
 function actorType(source: RequestSource): AuditActor["type"] {
   switch (source) {
@@ -14,6 +14,14 @@ function actorType(source: RequestSource): AuditActor["type"] {
     case "ui":
     case "api": return "human";
   }
+}
+
+/** Read back only the scalar change summary shape written by `append`. */
+function auditChange(value: unknown): AuditEvent["change"] {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter((entry): entry is [string, string | number | boolean] => typeof entry[1] === "string" || typeof entry[1] === "boolean" || (typeof entry[1] === "number" && Number.isFinite(entry[1])));
+  return entries.length === 0 ? undefined : Object.fromEntries(entries);
 }
 
 export class ProductionAuditAdapter implements AuditPort {
@@ -30,7 +38,10 @@ export class ProductionAuditAdapter implements AuditPort {
         sourceSurface: input.source,
         correlationId: input.correlationId,
         ...(input.version === undefined ? {} : { afterVersion: input.version }),
-        ...(input.idempotencyKey === undefined ? {} : { metadata: { idempotencyKey: input.idempotencyKey } })
+        ...(input.idempotencyKey === undefined && input.change === undefined ? {} : { metadata: {
+          ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+          ...(input.change === undefined ? {} : { change: { ...input.change } })
+        } })
       });
       const stored = this.repository.append(native);
       if (input.idempotencyKey !== undefined) this.state.setMetadata("audit", stored.id, { idempotencyKey: input.idempotencyKey });
@@ -44,50 +55,46 @@ export class ProductionAuditAdapter implements AuditPort {
         entityType: stored.entityType,
         entityId: stored.entityId,
         ...(stored.afterVersion === undefined ? {} : { version: stored.afterVersion }),
+        ...(input.change === undefined ? {} : { change: { ...input.change } }),
         createdAt: stored.occurredAt
       };
     }));
   }
 
   async list(limit: number, cursor?: string): Promise<Page<AuditEvent>> {
-    return this.unitOfWork.exclusive(() => attempt(() => {
-      const values = this.repository.list().map((record) => {
-        const metadata = this.state.getMetadata("audit", record.id);
-        return {
-          id: record.id,
-          action: record.action,
-          actor: record.actor.id,
-          source: record.sourceSurface,
-          correlationId: record.correlationId,
-          ...(typeof metadata.idempotencyKey === "string" ? { idempotencyKey: metadata.idempotencyKey } : {}),
-          entityType: record.entityType,
-          entityId: record.entityId,
-          ...(record.afterVersion === undefined ? {} : { version: record.afterVersion }),
-          createdAt: record.occurredAt
-        } satisfies AuditEvent;
-      });
-      return page(values, limit, cursor);
-    }));
+    return this.unitOfWork.exclusive(() => attempt(() => this.pageOf(limit, cursor)));
   }
 
   async listEntity(entityType: string, entityId: string, limit: number, cursor?: string): Promise<Page<AuditEvent>> {
-    return this.unitOfWork.exclusive(() => attempt(() => {
-      const values = this.repository.list(entityId).filter((record) => record.entityType === entityType).map((record) => {
-        const metadata = this.state.getMetadata("audit", record.id);
-        return {
-          id: record.id,
-          action: record.action,
-          actor: record.actor.id,
-          source: record.sourceSurface,
-          correlationId: record.correlationId,
-          ...(typeof metadata.idempotencyKey === "string" ? { idempotencyKey: metadata.idempotencyKey } : {}),
-          entityType: record.entityType,
-          entityId: record.entityId,
-          ...(record.afterVersion === undefined ? {} : { version: record.afterVersion }),
-          createdAt: record.occurredAt
-        } satisfies AuditEvent;
-      });
-      return page(values, limit, cursor);
-    }));
+    return this.unitOfWork.exclusive(() => attempt(() => this.pageOf(limit, cursor, { type: entityType, id: entityId })));
+  }
+
+  private pageOf(limit: number, cursor: string | undefined, entity?: { readonly type: string; readonly id: string }): Page<AuditEvent> {
+    const offset = parseOffsetCursor(cursor);
+    const { records, total } = this.repository.page({ limit, offset, ...(entity === undefined ? {} : { entity }) });
+    const data = records.map((record) => this.toEvent(record));
+    const nextOffset = offset + data.length;
+    return { data, limit, ...(nextOffset < total ? { nextCursor: String(nextOffset) } : {}), total };
+  }
+
+  private toEvent(record: AuditRecord): AuditEvent {
+    // The audit row carries the key in its own metadata; older rows stored it
+    // only in runtime metadata, so read that per returned row as a fallback.
+    const own = record.metadata?.idempotencyKey;
+    const idempotencyKey = typeof own === "string" ? own : this.state.getMetadata("audit", record.id).idempotencyKey;
+    const change = auditChange(record.metadata?.change);
+    return {
+      id: record.id,
+      action: record.action,
+      actor: record.actor.id,
+      source: record.sourceSurface,
+      correlationId: record.correlationId,
+      ...(typeof idempotencyKey === "string" ? { idempotencyKey } : {}),
+      entityType: record.entityType,
+      entityId: record.entityId,
+      ...(record.afterVersion === undefined ? {} : { version: record.afterVersion }),
+      ...(change === undefined ? {} : { change }),
+      createdAt: record.occurredAt
+    } satisfies AuditEvent;
   }
 }

@@ -1,3 +1,4 @@
+import { DomainError } from "@benchledger/domain";
 import { projectSetupPreviewSchema, type ProjectSetupPreview } from "@benchledger/api-contract";
 import type { BenchDatabase, SqliteRow } from "./sqlite.js";
 
@@ -27,7 +28,7 @@ export class ProjectSetupRepository {
 
   markCommitted(id: string, actor: string, updatedAt: string): ProjectSetupPreview {
     const current = this.get(id, actor);
-    if (current === null) throw new Error("project setup preview not found");
+    if (current === null) throw new DomainError("integrity_error", "project setup preview not found");
     const committed = projectSetupPreviewSchema.parse({ ...current, status: "committed", version: current.version + 1, updatedAt });
     this.database.run("UPDATE project_setup_previews SET status = ?, version = ?, updated_at = ?, payload_json = ? WHERE id = ? AND actor = ?", [committed.status, committed.version, committed.updatedAt, JSON.stringify(committed), id, actor]);
     return committed;

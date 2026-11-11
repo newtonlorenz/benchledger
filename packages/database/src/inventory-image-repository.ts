@@ -12,6 +12,17 @@ export class InventoryImageRepository {
     const images = this.db.all("SELECT metadata_json FROM inventory_images WHERE item_id = ? ORDER BY rowid", [itemId]).map(row => JSON.parse(String(row.metadata_json)) as InventoryImage);
     return { itemId, version: images.length, images };
   }
+  /** The first image of each listed item (its gallery cover), in one query. */
+  primaryImages(itemIds: readonly string[]): Map<string, InventoryImage> {
+    const wanted = new Set(itemIds);
+    const result = new Map<string, InventoryImage>();
+    if (wanted.size === 0) return result;
+    for (const row of this.db.all("SELECT item_id, metadata_json FROM inventory_images WHERE rowid IN (SELECT MIN(rowid) FROM inventory_images GROUP BY item_id)")) {
+      const itemId = String(row.item_id);
+      if (wanted.has(itemId)) result.set(itemId, JSON.parse(String(row.metadata_json)) as InventoryImage);
+    }
+    return result;
+  }
   content(itemId: string, imageId: string) {
     const row = this.db.get("SELECT metadata_json, content FROM inventory_images WHERE item_id = ? AND id = ?", [itemId, imageId]);
     return row ? { image: JSON.parse(String(row.metadata_json)) as InventoryImage, bytes: new Uint8Array(row.content as Uint8Array) } : undefined;

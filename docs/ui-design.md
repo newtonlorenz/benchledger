@@ -32,6 +32,17 @@ into nested cards, decorative counters or unsupported completion claims.
 | `apps/web/src/assembly.css`, `pcb.css` | Specialist geometry views and guides. |
 | `apps/web/src/workspace-layout.css` | Retained workflow and form rules not owned above. |
 
+Both 3D viewers (STL file preview and assembly explorer) share the
+`--viewer-*` stage and grid tokens, show a millimetre bounds readout and a
+build-plane grid, and use **Z up**, as CAD tools and slicers do. STL files are
+shown in their recorded coordinates, resting on the build plane.
+
+App-level feedback lives in `apps/web/src/app-flows.css`: success and info
+toasts fade and stay beneath dialogs; warnings and errors persist, are
+announced as alerts and stay above dialogs without covering their actions. A
+failed sync shows a non-blocking banner and the real connection state in the
+header; session expiry uses the reauthentication recovery described below.
+
 Use the existing owner rather than adding another global restyling layer. React
 and Radix provide interaction boundaries; application rules retain authority over
 dismissal, concurrency and stock writes.

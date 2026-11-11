@@ -39,6 +39,8 @@ BenchLedger keeps that context together, from the first requirement to the stock
 | **Files & revisions** | Keep CAD, firmware, drawings and slicer files with exact project or workstream revisions. Preview supported files and download originals with integrity checks. |
 | **Build** | Follow parts, files, assembly, verification notes and actual-use review. Open detailed plate plans, reservations and task groups when needed. |
 | **Sourcing & close-out** | Compare dated supplier quotes with pack sizes, currencies and missing costs visible. Review actual usage, returns and leftovers before updating stock. |
+| **Stock receiving policy** | Choose when stock counts as in stock — when bought, when delivered or after a physical check (the default). Stored evidence stays visible and is never rewritten. |
+| **Phone client** | The initial [iPhone and Android app](docs/mobile-app.md) connects to your server for inventory lookup, quick counts, scanning, item photos and project planning, with an on-device cache for poor Wi-Fi. Local builds are available; store distribution is not set up. |
 | **HTTP API & MCP** | Read gaps, inspect geometry and prepare plans through shared application rules, scoped access, version checks and audit history. |
 
 [Full capability map](docs/capability-map.md) · [Maker workflows](docs/maker-workflows.md)
@@ -131,8 +133,19 @@ Requirements: **Node.js 24** and **npm 11+**.
 git clone https://github.com/newtonlorenz/benchledger.git
 cd benchledger
 npm ci
-npm run build
+npm run build:server
 npm run dev
+```
+
+`npm run dev` starts the server in demo mode with file watching
+(`build:server` builds the packages, web UI, MCP adapter and server; `npm run
+build` additionally runs the slower Expo mobile export). To run the built server
+instead: `node apps/server/dist/main.js --demo`. To try the container image in
+demo mode:
+
+```bash
+docker build -f deploy/Dockerfile -t benchledger:local .
+docker run --rm -p 127.0.0.1:8792:8792 -e BENCHLEDGER_HOST=0.0.0.0 -e BENCHLEDGER_DEMO=true benchledger:local
 ```
 
 Open **[http://127.0.0.1:8792](http://127.0.0.1:8792)** and sign in with the demo password:
@@ -150,7 +163,9 @@ Try the two examples in a demo project:
 
 These are illustrative viewing examples, not validated designs. Stock close-out is available in persistent installations; the lightweight demo does not advertise it.
 
-For persistent storage, authentication and backups, follow the [self-hosting and deployment guide](docs/deployment.md). MCP connections use scoped bearer tokens even when the browser is configured for trusted-LAN access.
+For persistent storage, authentication and backups (`npm run backup -- backup|verify|restore`), follow the [self-hosting and deployment guide](docs/deployment.md). MCP connections use scoped bearer tokens even when the browser is configured for trusted-LAN access.
+
+Upgrading an existing install? The server now answers only the host in `BENCHLEDGER_PUBLIC_BASE_URL` and loopback names, so add any LAN IP address or `.local` name you use to `BENCHLEDGER_ALLOWED_HOSTS`. It also refuses placeholder session secrets, narrows `BENCHLEDGER_TRUST_PROXY` to explicit hops or addresses, and derives `Secure` cookies from an `https://` public URL. See the [changelog upgrade notes](CHANGELOG.md#upgrade-notes-read-before-deploying-this-release).
 
 ## How it works
 
@@ -179,7 +194,7 @@ Try it on a maker workflow and tell us where it breaks down. Useful contribution
 
 Building something with BenchLedger? **Share a screenshot and a link to your project** in [Discussions](https://github.com/newtonlorenz/benchledger/discussions). Public examples help other makers discover what is possible. Star the repository to keep it handy, or send it to someone with a parts drawer that needs organising.
 
-Before contributing, read the [Code of Conduct](CODE_OF_CONDUCT.md), [development workflow](docs/development-workflow.md) and [support guide](SUPPORT.md). Run focused checks while iterating and `npm run check` before review.
+Before contributing, read the [Code of Conduct](CODE_OF_CONDUCT.md), [development workflow](docs/development-workflow.md) and [support guide](SUPPORT.md). Run focused checks while iterating and `npm run check` before review (it builds the server apps, typechecks, runs unit and browser tests; `npm run check:mobile` adds the Expo export). CI runs the same gates as parallel jobs plus a container smoke test and CodeQL.
 
 ## Privacy and licence
 

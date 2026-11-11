@@ -27,8 +27,8 @@ describe("inspection queue derivation", () => {
       itemId: "item-1", relationship: "exact", compatibility: "conditional", availableQuantity: 1,
       suppliedQuantity: 0, inspectQuantity: 1, reason: "Needs inspection"
     }] })];
-    const first = deriveInspectionActions("revision-1", gaps, lines, [item()]);
-    const second = deriveInspectionActions("revision-1", gaps.toReversed(), lines.toReversed(), [item()]);
+    const first = deriveInspectionActions("revision-1", gaps, lines, [item()], "on_receipt");
+    const second = deriveInspectionActions("revision-1", gaps.toReversed(), lines.toReversed(), [item()], "on_receipt");
     expect(first).toEqual(second);
     const physical = first.find((action) => action.kind === "physical_quantity");
     expect(physical).toMatchObject({
@@ -43,7 +43,7 @@ describe("inspection queue derivation", () => {
 
   it("does not create actions for Decide, Source, or Ready lines", () => {
     const noAction = ["decide", "source", "ready"].map((decision) => gap({ decision: decision as BomGap["decision"], status: decision === "ready" ? "supplied" : decision === "decide" ? "specify_first" : "missing" }));
-    expect(deriveInspectionActions("revision-1", noAction, [line()], [item()])).toEqual([]);
+    expect(deriveInspectionActions("revision-1", noAction, [line()], [item()], "on_receipt")).toEqual([]);
   });
 
   it("skips optional Check lines while retaining required checks and set-to-piece conversion", () => {
@@ -54,7 +54,7 @@ describe("inspection queue derivation", () => {
     const actions = deriveInspectionActions("revision-1", [
       gap({ lineId: optionalLine.id, name: optionalLine.name, optional: true, candidates: [candidate] }),
       gap({ lineId: requiredLine.id, name: requiredLine.name, candidates: [candidate] }),
-    ], [optionalLine, requiredLine], [setItem]);
+    ], [optionalLine, requiredLine], [setItem], "on_receipt");
 
     expect(actions.map((action) => action.kind).sort()).toEqual(["compatibility", "unit_conversion"]);
     expect(actions.every((action) => action.lineIds.includes(requiredLine.id))).toBe(true);
@@ -66,7 +66,7 @@ describe("inspection queue derivation", () => {
       itemId: "item-1", relationship: "constraint_match" as const, compatibility: "unknown" as const,
       availableQuantity: 1, suppliedQuantity: 0, inspectQuantity: 1, reason: "Legacy broad constraint match",
     };
-    expect(deriveInspectionActions("revision-1", [gap({ candidates: [legacyConstraintCandidate] })], [line()], [item()])).toEqual([]);
+    expect(deriveInspectionActions("revision-1", [gap({ candidates: [legacyConstraintCandidate] })], [line()], [item()], "on_receipt")).toEqual([]);
   });
 
   it("skips retired or missing line and inventory candidates", () => {
@@ -76,7 +76,7 @@ describe("inspection queue derivation", () => {
     const missingItemGap = gap({ candidates: [{ itemId: "missing-item", relationship: "exact", compatibility: "confirmed", availableQuantity: 1, suppliedQuantity: 0, inspectQuantity: 1, reason: "Needs inspection" }] });
     const retiredItemGap = gap({ candidates: [{ itemId: retiredItem.id, relationship: "exact", compatibility: "confirmed", availableQuantity: 1, suppliedQuantity: 0, inspectQuantity: 1, reason: "Needs inspection" }] });
 
-    expect(deriveInspectionActions("revision-1", [missingLineGap, gap({ lineId: retiredLine.id }), missingItemGap, retiredItemGap], [line(), retiredLine], [item(), retiredItem])).toEqual([]);
+    expect(deriveInspectionActions("revision-1", [missingLineGap, gap({ lineId: retiredLine.id }), missingItemGap, retiredItemGap], [line(), retiredLine], [item(), retiredItem], "on_receipt")).toEqual([]);
   });
 
   it("handles duplicate actions with changed compatibility and malformed or mismatched conversions", () => {
@@ -87,7 +87,7 @@ describe("inspection queue derivation", () => {
     ] });
     const second = line({ id: "set-line-b", unit: "each", constraints: {}, alternatives: [{ itemId: setItem.id, compatible: "unknown" }] });
     const candidate = { itemId: setItem.id, relationship: "uncertain_alternative" as const, compatibility: "conditional" as const, availableQuantity: 1, suppliedQuantity: 0, inspectQuantity: 1, reason: "Needs inspection" };
-    const actions = deriveInspectionActions("revision-1", [gap({ lineId: first.id, candidates: [candidate] }), gap({ lineId: second.id, candidates: [{ ...candidate, compatibility: "unknown" }] })], [first, second], [setItem]);
+    const actions = deriveInspectionActions("revision-1", [gap({ lineId: first.id, candidates: [candidate] }), gap({ lineId: second.id, candidates: [{ ...candidate, compatibility: "unknown" }] })], [first, second], [setItem], "on_receipt");
 
     expect(actions.filter((action) => action.kind === "unit_conversion")).toHaveLength(1);
     expect(actions.filter((action) => action.kind === "compatibility")).toHaveLength(1);
@@ -99,13 +99,13 @@ describe("inspection queue derivation", () => {
       quantityConversion: { inventory: { quantity: 1, unit: "set" }, requirement: { quantity: 10, unit: "each" }, evidence: { basis: "package_label", observedAt: "2026-08-30T00:00:00.000Z" } }
     }] });
     const validGap = gap({ lineId: valid.id, candidates: [{ ...candidate, compatibility: "confirmed" }] });
-    expect(deriveInspectionActions("revision-1", [validGap], [valid], [setItem])).toEqual([]);
+    expect(deriveInspectionActions("revision-1", [validGap], [valid], [setItem], "on_receipt")).toEqual([]);
   });
 
   it("keeps compatibility and conversion predicates separate and excludes line IDs from identity", () => {
     const uncertain = item({ unit: "set", evidence: { state: "physically_counted" }});
     const candidate = { itemId: uncertain.id, relationship: "uncertain_alternative" as const, compatibility: "unknown" as const, availableQuantity: 1, suppliedQuantity: 0, inspectQuantity: 1, reason: "Needs inspection" };
-    const result = deriveInspectionActions("revision-1", [gap({ candidates: [candidate], unit: "each" })], [line({ unit: "each", alternatives: [{ itemId: uncertain.id, compatible: "unknown" }] })], [uncertain]);
+    const result = deriveInspectionActions("revision-1", [gap({ candidates: [candidate], unit: "each" })], [line({ unit: "each", alternatives: [{ itemId: uncertain.id, compatible: "unknown" }] })], [uncertain], "on_receipt");
     expect(result.map((action) => action.kind).sort()).toEqual(["compatibility", "unit_conversion"]);
     expect(result.every((action) => !action.normalizedPredicate.includes("line-1"))).toBe(true);
     expect(result.every((action) => action.id === inspectionActionId("revision-1", action.itemId, action.kind, action.normalizedPredicate))).toBe(true);
@@ -128,7 +128,7 @@ describe("inspection queue derivation", () => {
       candidates: [{ itemId: board.id, relationship: "uncertain_alternative", compatibility: "unknown", availableQuantity: 1, suppliedQuantity: 0, inspectQuantity: 1, reason: "Needs compatibility confirmation" }],
       matchedItemIds: [board.id],
     }));
-    const actions = deriveInspectionActions("revision-1", gaps, lines, [board]);
+    const actions = deriveInspectionActions("revision-1", gaps, lines, [board], "on_receipt");
     const compatibility = actions.filter((action) => action.kind === "compatibility");
     expect(compatibility).toHaveLength(1);
     expect(compatibility[0]).toMatchObject({
@@ -142,14 +142,14 @@ describe("inspection queue derivation", () => {
     const distinct = deriveInspectionActions("revision-1", [
       ...gaps,
       gap({ lineId: "esp-line-distinct", name: "Other board", candidates: [{ itemId: board.id, relationship: "uncertain_alternative", compatibility: "unknown", availableQuantity: 1, suppliedQuantity: 0, inspectQuantity: 1, reason: "Needs compatibility confirmation" }] }),
-    ], [...lines, line({ id: "esp-line-distinct", constraints: { kind: "electronic", model: "ESP32-S3-R2" }, alternatives: [{ itemId: board.id, compatible: "unknown" }] })], [board]);
+    ], [...lines, line({ id: "esp-line-distinct", constraints: { kind: "electronic", model: "ESP32-S3-R2" }, alternatives: [{ itemId: board.id, compatible: "unknown" }] })], [board], "on_receipt");
     expect(distinct.filter((action) => action.kind === "compatibility")).toHaveLength(2);
   });
 
   it("provides stable cursor pagination over the complete sorted candidate scan", () => {
     const actions = deriveInspectionActions("revision-1", [
       gap({ lineId: "line-z" }), gap({ lineId: "line-a" })
-    ], [line({ id: "line-z" }), line({ id: "line-a" })], [item()]);
+    ], [line({ id: "line-z" }), line({ id: "line-a" })], [item()], "on_receipt");
     expect(actions).toHaveLength(1);
     const first = pageInspectionActions(actions, 1);
     expect(first.nextCursor).toBeUndefined();
@@ -161,7 +161,7 @@ describe("inspection queue derivation", () => {
     const boardB = item({ id: "board-b", evidence: { state: "delivered_uncounted" } });
     const lines = [line({ id: "page-a" }), line({ id: "page-b" })];
     const gaps = lines.map((candidateLine, index) => gap({ lineId: candidateLine.id, candidates: [{ itemId: index === 0 ? boardA.id : boardB.id, relationship: "exact", compatibility: "confirmed", availableQuantity: 0, suppliedQuantity: 0, inspectQuantity: 1, reason: "Needs inspection" }] }));
-    const actions = deriveInspectionActions("revision-1", gaps, lines, [boardA, boardB]);
+    const actions = deriveInspectionActions("revision-1", gaps, lines, [boardA, boardB], "on_receipt");
     const first = pageInspectionActions(actions, 1);
     expect(first.nextCursor).toBeDefined();
     expect(pageInspectionActions(actions, 1, first.nextCursor).data).toHaveLength(1);
