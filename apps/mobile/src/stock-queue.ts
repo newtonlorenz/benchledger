@@ -7,12 +7,17 @@ import { adjustmentPreview, type StockKind } from "./stock-adjust";
  * whole life, so a retry after an ambiguous failure is replayed by the server
  * instead of applied twice. Entries replay strictly in the order recorded;
  * a conflict or refusal holds later changes to the same item for the user.
+ *
+ * Every send carries the item version the change was based on. Current
+ * servers check it atomically (409 `version_conflict`, nothing recorded) and
+ * replay an already-applied key before checking it. For older servers, which
+ * ignore it, a never-sent change first re-reads the item instead.
  */
 export type QueueStatus = "pending" | "sending" | "sent" | "conflict" | "failed";
 export type QueueEntry = {
   id: string; seq: number; itemId: string; itemName: string; unit: string;
   kind: StockKind; quantity: number; before: number; after: number;
-  /** Item version the change was based on; checked before the first send. */
+  /** Item version the change was based on; sent with every attempt. */
   baseVersion: number;
   /** An earlier unsent change to the same item this one builds on. */
   chainedTo?: string;
@@ -27,8 +32,10 @@ export interface QueueStorage {
 export type StockItem = { id: string; version: number; quantity: number; unit: string };
 export interface StockApi {
   item(id: string): Promise<StockItem>;
-  recordCount(itemId: string, quantity: number, key: string): Promise<StockItem>;
-  recordReceipt(itemId: string, quantity: number, unit: string, key: string): Promise<StockItem>;
+  recordCount(itemId: string, quantity: number, key: string, expectedVersion?: number): Promise<StockItem>;
+  recordReceipt(itemId: string, quantity: number, unit: string, key: string, expectedVersion?: number): Promise<StockItem>;
+  /** The server checks `expectedVersion` atomically; no client-side re-read is needed. */
+  readonly atomicStockVersionCheck?: boolean;
 }
 export type ReplayResult = { sent: StockItem[]; offline: boolean; stopped?: "unauthorised" };
 export type EnqueueInput = {
@@ -39,6 +46,7 @@ export type EnqueueInput = {
 const SENT_RETENTION_MS = 24 * 60 * 60 * 1000;
 const unsentStatuses = new Set<QueueStatus>(["pending", "sending", "conflict", "failed"]);
 const ambiguous = "Not confirmed yet. It will be resent with the same request, so it cannot be applied twice.";
+const changedOnServer = "This item changed on the server since you recorded this.";
 
 type Outcome = "offline" | "unauthorised" | "conflict" | "failed";
 function classify(error: unknown): { outcome: Outcome; message: string } {
@@ -118,8 +126,9 @@ export class StockQueue {
         held.add(entry.itemId);
         continue;
       }
-      // A never-sent change must still match the record it was based on.
-      if (entry.attempts === 0) {
+      // Fallback for servers that ignore the version: a never-sent change must
+      // still match the record it was based on.
+      if (entry.attempts === 0 && !api.atomicStockVersionCheck) {
         let current: StockItem;
         try { current = await api.item(entry.itemId); }
         catch (error) {
@@ -130,7 +139,7 @@ export class StockQueue {
         }
         if (current.version !== entry.baseVersion) {
           await this.put({ ...entry, status: "conflict", serverQuantity: current.quantity, serverVersion: current.version,
-            message: "This item changed on the server since you recorded this." });
+            message: changedOnServer });
           held.add(entry.itemId); continue;
         }
       }
@@ -138,8 +147,8 @@ export class StockQueue {
       await this.put(sending);
       try {
         const result = entry.kind === "count"
-          ? await api.recordCount(entry.itemId, entry.quantity, entry.key)
-          : await api.recordReceipt(entry.itemId, entry.quantity, entry.unit, entry.key);
+          ? await api.recordCount(entry.itemId, entry.quantity, entry.key, entry.baseVersion)
+          : await api.recordReceipt(entry.itemId, entry.quantity, entry.unit, entry.key, entry.baseVersion);
         const { message: _message, ...rest } = sending;
         await this.put({ ...rest, status: "sent", after: result.quantity, sentAt: this.now().toISOString() });
         sent.push(result);
@@ -152,10 +161,38 @@ export class StockQueue {
         const { outcome, message } = classify(error);
         if (outcome === "offline") { await this.put({ ...sending, status: "pending", message: ambiguous }); return { sent, offline: true }; }
         if (outcome === "unauthorised") { await this.put({ ...sending, status: "pending", message }); return { sent, offline: false, stopped: "unauthorised" }; }
-        await this.put({ ...sending, status: outcome, message }); held.add(entry.itemId);
+        if (outcome === "conflict") {
+          // Nothing was recorded. Show the latest record so the user can decide.
+          const stop = await this.resolveConflict(api, sending, error);
+          if (stop) return { sent, ...stop };
+        } else await this.put({ ...sending, status: outcome, message });
+        held.add(entry.itemId);
       }
     }
     return { sent, offline: false };
+  }
+
+  /**
+   * A refused (409) send: a version conflict, or the item moved meanwhile on
+   * an older server, needs the user's decision with the latest figures; any
+   * other refusal is shown as not accepted.
+   */
+  private async resolveConflict(api: StockApi, sending: QueueEntry, error: unknown): Promise<Omit<ReplayResult, "sent"> | undefined> {
+    const message = error instanceof Error ? error.message : changedOnServer;
+    let current: StockItem;
+    try { current = await api.item(sending.itemId); }
+    catch (readError) {
+      const read = classify(readError);
+      if (read.outcome === "offline") { await this.put({ ...sending, status: "pending", message: `${changedOnServer} Waiting to read the latest record.` }); return { offline: true }; }
+      if (read.outcome === "unauthorised") { await this.put({ ...sending, status: "pending", message: read.message }); return { offline: false, stopped: "unauthorised" }; }
+      await this.put({ ...sending, status: "failed", message: read.message });
+      return undefined;
+    }
+    const versionConflict = error instanceof ClientError && error.code === "version_conflict";
+    if (versionConflict || current.version !== sending.baseVersion) {
+      await this.put({ ...sending, status: "conflict", serverQuantity: current.quantity, serverVersion: current.version, message: changedOnServer });
+    } else await this.put({ ...sending, status: "failed", message });
+    return undefined;
   }
 
   /** Apply a conflicted change on top of the latest server record. */

@@ -38,6 +38,7 @@ export default defineConfig({
         "apps/mobile/src/stock-adjust.ts",
         "apps/mobile/src/scan.ts",
         "apps/mobile/src/image-plan.ts",
+        "apps/mobile/src/thumbnail.ts",
         "packages/api-contract/src/**/*.ts",
         "packages/application/src/**/*.ts",
         "packages/artifacts/src/**/*.ts",

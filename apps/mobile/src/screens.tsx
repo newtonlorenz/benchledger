@@ -12,7 +12,7 @@ import { useItemEditor } from "./item-editor";
 import type { InventoryRoutes, ProjectRoutes } from "./navigation";
 import { ItemPhotos, RowThumbnail } from "./photos";
 import { useSession } from "./session";
-import { inventoryAccessibilityLabel, stockSummary, syncedLabel } from "./presentation";
+import { inventoryAccessibilityLabel, stockActions, stockReceivingPolicyText, stockSummary, syncedLabel } from "./presentation";
 import { routeScan } from "./scan";
 import { ScannerModal } from "./scanner";
 import { useQueueEntries, useStockQueue } from "./stock-context";
@@ -129,7 +129,7 @@ export function InventoryScreen({ navigation }: NativeStackScreenProps<Inventory
   const open = useCallback((id: string) => navigation.navigate("Item", { id }), [navigation]);
   const count = page?.data.length ?? 0;
   const renderItem = useCallback<ListRenderItem<InventoryItem>>(({ item, index }) =>
-    <InventoryRow item={item} first={index === 0} last={index === count - 1} onOpen={open} thumbnail={<RowThumbnail client={client} cache={cache} itemId={item.id} fallback={<SymbolTile name={itemIcon(item.kind)} />} />} />, [count, open, client, cache]);
+    <InventoryRow item={item} first={index === 0} last={index === count - 1} onOpen={open} thumbnail={<RowThumbnail client={client} cache={cache} item={item} fallback={<SymbolTile name={itemIcon(item.kind)} />} />} />, [count, open, client, cache]);
   return <><ScannerModal visible={scanning} title="Scan a label" hint="Point at a BenchLedger item label, or a product barcode to search." onClose={() => setScanning(false)} onScan={scanned} />
   <FlatList<InventoryItem> key={fontScale} style={{ backgroundColor: c.background }} contentInsetAdjustmentBehavior="automatic"
     data={page?.data ?? []} keyExtractor={keyById} keyboardDismissMode="on-drag" renderItem={renderItem}
@@ -155,6 +155,7 @@ export function ItemScreen({ route, navigation }: NativeStackScreenProps<Invento
   const scope = useMemo(() => ({ cache, key: `item/${route.params.id}` }), [cache, route.params.id]);
   const { data: item, busy, updating, error, refresh } = useRemote(useCallback(() => client.item(route.params.id), [client, route.params.id]), scope);
   const pull = usePullRefresh(refresh);
+  const actions = item ? stockActions(item) : undefined;
   return <ScrollView style={{ backgroundColor: c.background }} contentContainerStyle={styles.content} contentInsetAdjustmentBehavior="automatic"
     refreshControl={<RefreshControl {...pull} tintColor={c.accent} />}>
     <WorkspaceStatus /><Updating visible={updating} />
@@ -164,11 +165,13 @@ export function ItemScreen({ route, navigation }: NativeStackScreenProps<Invento
       <Section title="Stock"><View style={[styles.stockRow, fontScale > 1.3 && { flexDirection: "column" }]}>
         <View style={styles.stockColumn}><Text style={[styles.small, { color: c.muted }]}>Recorded quantity</Text><Text style={[styles.stockNumber, { color: c.text }]}>{quantity(item.quantity, item.unit)}</Text></View>
         <View style={styles.stockColumn}><Text style={[styles.small, { color: c.muted }]}>Available quantity</Text><Text style={[styles.stockNumber, { color: c.text }]}>{quantity(item.availableQuantity, item.unit)}</Text></View>
-      </View><Text style={[styles.small, { color: c.muted }]}>Availability follows the server record. Check evidence and compatibility for your build.</Text>
+      </View><Text style={[styles.small, { color: c.muted }]}>{actions?.assumed
+        ? "This counts as in stock because of your workspace's stock setting. Count it to record that you received it."
+        : "Availability follows the server record. Check evidence and compatibility for your build."}</Text>
         {unsent > 0 && <Text style={[styles.small, { color: c.status }]}>{unsent} stock {unsent === 1 ? "change" : "changes"} recorded on this phone, not yet confirmed by the server.</Text>}</Section>
-      {canRecordStock && <View style={{ gap: 12 }}>
-        <Action label="Count stock" icon="calculator-outline" onPress={() => navigation.navigate("AdjustStock", { id: item.id, kind: "count" })} />
-        <Action quiet label="Record received stock" icon="add-circle-outline" onPress={() => navigation.navigate("AdjustStock", { id: item.id, kind: "receipt" })} />
+      {canRecordStock && actions && <View style={{ gap: 12 }}>
+        <Action label={actions.primary} icon="calculator-outline" onPress={() => navigation.navigate("AdjustStock", { id: item.id, kind: "count" })} />
+        {actions.allowReceipt && <Action quiet label="Record received stock" icon="add-circle-outline" onPress={() => navigation.navigate("AdjustStock", { id: item.id, kind: "receipt" })} />}
       </View>}
       <ItemPhotos client={client} cache={cache} itemId={item.id} canWrite={!demo && canWriteWorkspace(session)} />
       <Section title="Item details"><Fact label="Location" value={item.location || "Not recorded"} /><Fact label="Kind" value={humanise(item.kind)} />
@@ -337,6 +340,9 @@ export function ServerScreen({ navigation }: { navigation: { navigate(route: "Pe
   const queue = useStockQueue(); const entries = useQueueEntries(queue);
   const unsent = entries.filter((e) => e.status !== "sent").length;
   const synced = useLastSynced(cache);
+  const preferencesScope = useMemo(() => ({ cache, key: "workspace/preferences" }), [cache]);
+  const { data: preferences } = useRemote(useCallback(() => client.workspacePreferences(), [client]), preferencesScope);
+  const policy = preferences ? stockReceivingPolicyText(preferences.stockReceivingPolicy) : undefined;
   async function signOut() {
     setBusy(true); setError("");
     try { await disconnect(); } catch { setError("Could not remove the saved credential. Try disconnecting again."); setBusy(false); }
@@ -358,6 +364,8 @@ export function ServerScreen({ navigation }: { navigation: { navigate(route: "Pe
     <WorkspaceStatus />
     <Group><Fact label="Server" value={client.connection.server} /><Fact label="Version" value={version || "Not confirmed yet"} />
       <Fact label="Access" value={provisional ? "Not confirmed yet · read only" : session.projectIds !== undefined ? "Selected projects" : canWriteWorkspace(session) ? "Read and write" : "Read only"} /></Group>
+    {policy && <Section title="Stock setting"><Fact label="Stock counts as in stock" value={policy.label.replace(/^When/u, "when")} />
+      <Copy secondary>{`${policy.explanation} Change this in the web app's settings.`}</Copy></Section>}
     {client.connection.server.startsWith("http:") && <Notice message="Local HTTP is unencrypted. Use it only on a network you trust, or configure HTTPS on your server." />}
     <Section title="On this device"><Copy secondary>The connection is kept in secure device storage. {cache.persistent ? "The last inventory and project responses are saved on this phone for offline use." : "Inventory and project responses stay in memory for this session."} Disconnect removes the saved connection, saved responses, photos and unsent changes from this device.</Copy>
       <Fact label="Last synced" value={syncedLabel(synced).replace(/^Last synced /u, "")} />

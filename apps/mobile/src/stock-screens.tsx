@@ -4,7 +4,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Haptics from "expo-haptics";
 import type { InventoryItem } from "@benchledger/api-contract";
 import type { InventoryRoutes } from "./navigation";
-import { formatNumber } from "./presentation";
+import { formatNumber, stockActions } from "./presentation";
 import { useSession } from "./session";
 import { adjustmentPreview, parseQuantity, stepQuantity, stepsFor, validateAdjustment, type StockKind } from "./stock-adjust";
 import { useQueueEntries, useStockQueue } from "./stock-context";
@@ -25,7 +25,11 @@ export function QuickStockScreen({ route, navigation }: NativeStackScreenProps<I
   const entries = useQueueEntries(queue);
   const scope = useMemo(() => ({ cache, key: `item/${route.params.id}` }), [cache, route.params.id]);
   const { data: item, error, busy } = useRemote(useCallback(() => client.item(route.params.id), [client, route.params.id]), scope);
-  const [kind, setKind] = useState<StockKind>(route.params.kind ?? "count");
+  const actions = item ? stockActions(item) : undefined;
+  const [chosen, setKind] = useState<StockKind>(route.params.kind ?? "count");
+  // Delivered or ordered stock is received by counting it; current servers refuse a receipt event first.
+  const kind: StockKind = actions && !actions.allowReceipt ? "count" : chosen;
+  const receiving = actions?.primary === "Receive and count";
   const [text, setText] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -62,12 +66,12 @@ export function QuickStockScreen({ route, navigation }: NativeStackScreenProps<I
   return <ScrollView style={{ backgroundColor: c.background }} contentContainerStyle={styles.content} contentInsetAdjustmentBehavior="automatic" keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
     <View style={styles.hero}><Copy title>{item.name}</Copy><Copy secondary>{item.location ? `${item.location} · ` : ""}Recorded {quantity(item.quantity, item.unit)}</Copy></View>
     <View accessibilityRole="tablist" style={[stock.segments, { backgroundColor: c.surface }]}>
-      {(["count", "receipt"] as const).map((option) => <Pressable key={option} accessibilityRole="tab" accessibilityState={{ selected: kind === option }} onPress={() => switchKind(option)}
+      {(actions?.allowReceipt === false ? ["count"] as const : ["count", "receipt"] as const).map((option) => <Pressable key={option} accessibilityRole="tab" accessibilityState={{ selected: kind === option }} onPress={() => switchKind(option)}
         style={[stock.segment, kind === option && { backgroundColor: c.accent }]}>
-        <Text style={[styles.buttonText, { color: kind === option ? c.onAccent : c.text }]}>{option === "count" ? "Count" : "Received"}</Text>
+        <Text style={[styles.buttonText, { color: kind === option ? c.onAccent : c.text }]}>{option === "count" ? receiving ? "Receive and count" : "Count" : "Received"}</Text>
       </Pressable>)}
     </View>
-    <Copy secondary>{kind === "count" ? "Enter how many you can physically see now. This replaces the recorded quantity." : "Add stock that has just arrived. This adds to the recorded quantity."}</Copy>
+    <Copy secondary>{kind === "count" ? receiving ? "Count what has arrived. This records it as received and replaces the recorded quantity." : "Enter how many you can physically see now. This replaces the recorded quantity." : "Add stock that has just arrived. This adds to the recorded quantity."}</Copy>
     <View style={[stock.counter, { backgroundColor: c.surface }]}>
       <TextInput accessibilityLabel={kind === "count" ? `Counted quantity in ${unit}` : `Received quantity in ${unit}`} value={text} keyboardType="decimal-pad" selectTextOnFocus
         onChangeText={(next) => { setConfirming(false); setText(next.slice(0, 14)); }} style={[stock.value, { color: c.text }]} />

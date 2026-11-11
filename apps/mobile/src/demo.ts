@@ -12,6 +12,7 @@ export const demoFetcher: Fetcher = async (input, init) => {
   const records: Record<string, unknown> = {
     "/health": { status: "ok", service: "benchledger", version: "Sample workspace", demo: true, now: "2026-09-14T00:00:00.000Z" },
     "/auth/session": { authenticated: true, actor: "sample-workspace", scopes: ["read"] },
+    "/workspace/preferences": { stockReceivingPolicy: "on_receipt", version: 1, updatedAt: "2026-09-14T00:00:00.000Z" },
     ...Object.fromEntries(Object.entries(data.items).map(([id, value]) => [`/inventory/${id}`, value])),
     ...Object.fromEntries(Object.entries(data.details).map(([id, value]) => [`/projects/${id}`, value])),
     ...Object.fromEntries(Object.entries(data.revisions).map(([id, value]) => [`/project-revisions/${id}`, value])),

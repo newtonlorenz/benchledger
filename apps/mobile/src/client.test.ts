@@ -201,6 +201,22 @@ describe("quick stock changes and photos", () => {
     expect(new Headers(init.headers).get("Idempotency-Key")).toBe(key);
     expect(JSON.parse(init.body as string)).toEqual({ quantity: 7 });
   });
+  it("sends the version the user saw, and the server refuses a stale one atomically", async () => {
+    const { client, fetcher } = await server();
+    await client.connect();
+    expect(client.atomicStockVersionCheck).toBe(true);
+    const item = await countable(client);
+    const counted = await client.recordCount(item.id, 5, randomUUID(), item.version);
+    expect(new Headers(fetcher.mock.calls.at(-1)![1].headers).get("If-Match")).toBe(String(item.version));
+    expect(JSON.parse(fetcher.mock.calls.at(-1)![1].body as string)).toEqual({ quantity: 5 });
+    await expect(client.recordCount(item.id, 9, randomUUID(), item.version)).rejects.toMatchObject({ status: 409, code: "version_conflict" });
+    await expect(client.recordReceipt(item.id, 1, item.unit, randomUUID(), item.version)).rejects.toMatchObject({ status: 409, code: "version_conflict" });
+    expect(await client.item(item.id)).toMatchObject({ quantity: 5, version: counted.version });
+  });
+  it("reads the workspace stock receiving policy", async () => {
+    const { client } = await server(["read"]);
+    expect(await client.workspacePreferences()).toMatchObject({ stockReceivingPolicy: "on_receipt" });
+  });
   it("records a receipt as an append-only stock event", async () => {
     const { client, fetcher } = await server();
     const item = await countable(client);

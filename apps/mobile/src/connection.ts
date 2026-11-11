@@ -7,7 +7,8 @@ import { z } from "zod/v3";
  */
 export type ClientErrorReason = "unreachable" | "http" | "configuration" | "incompatible" | "invalid" | "other";
 export class ClientError extends Error {
-  constructor(message: string, readonly status = 0, readonly reason: ClientErrorReason = "other") { super(message); }
+  /** `code`: the server's machine-readable reason (`error.details.reason`), when it gave one. */
+  constructor(message: string, readonly status = 0, readonly reason: ClientErrorReason = "other", readonly code?: string) { super(message); }
 }
 
 const localSuffixes = [".local", ".lan", ".home.arpa"];

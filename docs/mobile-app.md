@@ -45,8 +45,11 @@ See the [mobile design system](../apps/mobile/DESIGN.md) and
   change is saved on the phone first and sent in order when the workspace is
   reachable (see [Quick count and receipts](#quick-count-and-receipts)).
 - Add a photo to an item's image gallery from the camera or photo library.
-  Thumbnails appear in item details and, once a gallery has been opened on
-  this phone, in inventory rows.
+  Thumbnails appear in item details and in inventory rows (see
+  [Photos](#photos)).
+- Show stock the workspace counts as in stock without a count, as the web app
+  does: **In stock · delivered, not counted** or **In stock · ordered, not yet
+  delivered** (see [Stock receiving policy](#stock-receiving-policy)).
 - Scan an item label (`benchledger://item/<id>`), or a product barcode to search
   inventory; scan the web workspace's pairing QR code to fill in the connect
   form (see [Scanning and labels](#scanning-and-labels)).
@@ -89,7 +92,8 @@ included in encrypted device backups.
 
 ### Quick count and receipts
 
-From an item, **Count stock** records what you can physically see; it replaces
+From an item, **Count stock** (**Receive and count** for delivered or ordered
+stock) records what you can physically see; it replaces
 the recorded quantity and marks the evidence as physically counted (`POST
 /inventory/{id}/count`, the same call the web app makes). **Record received
 stock** appends a `receipt` stock event (`POST /inventory/{id}/stock-events`),
@@ -100,18 +104,46 @@ Each change is written to the phone before any request and keeps one
 `Idempotency-Key` for its whole life, so a retry after a timeout is replayed by
 the server rather than applied twice (the server scopes the key to the request
 fingerprint, which includes the item). Changes replay strictly in the order
-recorded when the server is confirmed reachable. Before a change is sent the
-first time, the app re-reads the item and compares its `version` with the one
-the change was based on; if it moved, the change is held as **needs your
+recorded when the server is confirmed reachable. If the item's `version` moved
+since the change was based on it, the change is held as **needs your
 decision** with the latest server quantity, and later changes to that item wait.
 You can apply it on top of the latest quantity or discard it. A refusal (for
 example a read-only token) is shown as **not accepted** with **Try again** and
-**Discard**. Nothing is dropped silently. A change already attempted is resent
-with the same key without a version check, because the version may have moved
-because of that very change.
+**Discard**. Nothing is dropped silently.
 
-The count and stock-event routes do not honour `If-Match`; the version check
-is client-side. See [server follow-ups](#known-gaps-and-follow-ups).
+Every send carries the item version the change was based on as `If-Match`.
+Current servers check it atomically with the change and answer HTTP 409
+`version_conflict` without recording anything; the app then re-reads the item
+and holds the change as **needs your decision** with the latest quantity. A
+retry with the same `Idempotency-Key` is replayed by the server before the
+version is checked, so a change that already landed is confirmed, not
+reported as a conflict. Other 409 refusals (for example a receipt on stock
+that has not been counted yet) are shown as **not accepted** when the item
+itself has not changed. The version is sent only as a header, which older
+servers ignore and which is not part of the idempotency fingerprint. For
+servers that do not advertise the stock receiving policy in
+`/api/v1/capabilities` (the release that added the atomic check), the app keeps
+a client-side re-read before the first send instead, and resends an attempted
+change with the same key without that re-read, because the version may have
+moved because of that very change.
+
+### Stock receiving policy
+
+The workspace decides when recorded stock counts as in stock: when it's bought,
+when it's delivered, or when it has been received and checked (the default).
+The Server tab shows the current setting read only, as **Stock counts as in
+stock** with a one-line explanation, from `GET /api/v1/workspace/preferences`.
+Change it in the web app's settings; bearer tokens cannot change it.
+
+Inventory rows, item details and their VoiceOver labels read **In stock ·
+delivered, not counted** or **In stock · ordered, not yet delivered** when the
+server reports `availability: "assumed"`; the stored evidence is unchanged and
+the badge keeps its uncounted (amber) colour. For delivered or ordered stock,
+the item's primary action is **Receive and count**, which records a physical
+count (the receiving step). Servers that report `availability` refuse a
+separate receipt event on such stock until it has been counted, so **Record
+received stock** is not offered there. Older servers without these fields
+show the stored evidence as before.
 
 ### Photos
 
@@ -124,6 +156,12 @@ stable `Idempotency-Key`; if the gallery changed meanwhile, the app reloads it
 and asks you to try again. Temporary copies are deleted after reading. Images
 are fetched with the bearer token and disk-cached by content digest; the cache
 is cleared on disconnect. Photo uploads are not queued offline.
+
+Inventory rows show the item's cover image when the server sends
+`primaryImage`, fetched from the item's own authenticated content route with
+the bearer header (any other address is ignored). Without it, as on older
+servers, a row uses the first photo of a gallery already opened on this phone,
+and otherwise the item icon; a failed image load also falls back to the icon.
 
 ### Scanning and labels
 
@@ -146,8 +184,9 @@ never logged; the consumed-link hash dedupe applies.
 (at most 160 characters). Use error correction level M or higher and a quiet
 zone of four modules; print the item name under the code for people. The label
 carries no server address or token, so it is safe to leave on a drawer, and it
-works with whichever workspace the phone is connected to. The web app does not
-yet print labels; see the follow-ups.
+works with whichever workspace the phone is connected to. The web app prints
+this label from an item (**Print label**), with the item name and location
+under the code.
 
 Camera scanning needs a real device: the iOS Simulator has no camera. The scan
 routing is covered by unit tests.
@@ -324,7 +363,9 @@ offline/401 session controller with persistent scopes, the SQLite cache (via
 Node's built-in SQLite) and its scoping and wipe, the stock queue's ordering,
 idempotency, conflicts and restart recovery, scan routing, photo downscale
 decisions, pairing and record links, stale-while-revalidate loading and paging,
-the edit-conflict flow, foreground throttling and the error boundary. Screen components themselves (`screens.tsx`, `App.tsx`) are not
+the edit-conflict flow, foreground throttling and the error boundary, assumed-stock
+labels across availability values, the read-only receiving policy, row
+thumbnail selection and server-side stock version conflicts. Screen components themselves (`screens.tsx`, `App.tsx`) are not
 rendered in tests; their logic is extracted into the tested modules. Native
 builds and screenshots are distinct from these tests and from physical-device
 or store verification.
@@ -337,13 +378,9 @@ for the tested platforms, screenshots and remaining release checks.
 
 ## Known gaps and follow-ups
 
-- Server: `POST /inventory/{id}/count` and `/stock-events` ignore `If-Match`, so
-  the stale-version check for queued stock changes is client-side and cannot be
-  atomic. Honouring an optional `If-Match` there would close that window.
-- Server: inventory list rows carry no primary image reference, so row
-  thumbnails appear only for items whose gallery was opened on this phone.
-- Web: printing item labels (QR `benchledger://item/<id>`) is not implemented.
-- Barcode scanning has not been exercised on a physical device.
+- Against servers older than the stock receiving policy, the stale-version
+  check for queued stock changes stays client-side and is not atomic.
+- Barcode and printed-label scanning have not been exercised on a physical device.
 - Photo uploads are not queued offline; stock changes are.
 - The space above iOS large titles is UIKit's navigation bar row: on the iOS 27
   simulator the title sits at the same position as the system Settings app, so

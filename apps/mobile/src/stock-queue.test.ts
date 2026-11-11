@@ -11,22 +11,29 @@ function memoryStorage(initial: QueueEntry[] = []): QueueStorage & { rows: Map<s
     remove: vi.fn(async (id: string) => { rows.delete(id); })
   };
 }
-/** A fake server that applies counts and receipts and bumps the version, like the real one. */
-function fakeServer(items: Record<string, StockItem>) {
+/**
+ * A fake server that applies counts and receipts and bumps the version, like
+ * the real one. `atomic` servers check If-Match after idempotent replay.
+ */
+function fakeServer(items: Record<string, StockItem>, atomic = false) {
   const applied: { key: string; itemId: string; kind: string; quantity: number }[] = [];
   const byKey = new Map<string, StockItem>();
-  const apply = (itemId: string, key: string, kind: string, quantity: number) => {
+  const apply = (itemId: string, key: string, kind: string, quantity: number, expectedVersion?: number) => {
     const replay = byKey.get(key);
     if (replay) return { ...replay };
     const current = items[itemId]!;
+    if (atomic && expectedVersion !== undefined && expectedVersion !== current.version) {
+      throw new ClientError("This item changed on the server since you recorded this.", 409, "http", "version_conflict");
+    }
     const next = { ...current, version: current.version + 1, quantity: kind === "count" ? quantity : current.quantity + quantity };
     items[itemId] = next; byKey.set(key, next); applied.push({ key, itemId, kind, quantity });
     return { ...next };
   };
   const api = {
     item: vi.fn(async (id: string) => ({ ...items[id]! })),
-    recordCount: vi.fn(async (itemId: string, quantity: number, key: string) => apply(itemId, key, "count", quantity)),
-    recordReceipt: vi.fn(async (itemId: string, quantity: number, _unit: string, key: string) => apply(itemId, key, "receipt", quantity))
+    recordCount: vi.fn(async (itemId: string, quantity: number, key: string, expectedVersion?: number) => apply(itemId, key, "count", quantity, expectedVersion)),
+    recordReceipt: vi.fn(async (itemId: string, quantity: number, _unit: string, key: string, expectedVersion?: number) => apply(itemId, key, "receipt", quantity, expectedVersion)),
+    atomicStockVersionCheck: atomic
   } satisfies StockApi;
   return { api, applied, items };
 }
@@ -126,7 +133,7 @@ describe("offline stock queue", () => {
   it("marks server refusals and conflicts for the user instead of dropping them", async () => {
     const server = fakeServer({ [screws.id]: { ...screws }, [pla.id]: { ...pla } });
     server.api.recordCount.mockRejectedValueOnce(new ClientError("This token does not have permission for this action.", 403, "http"));
-    server.api.recordReceipt.mockRejectedValueOnce(new ClientError("The record changed.", 409, "http"));
+    server.api.recordReceipt.mockRejectedValueOnce(new ClientError("The record changed.", 409, "http", "version_conflict"));
     const queue = newQueue();
     const failed = await queue.enqueue(count(screws, 36)); await queue.enqueue(receipt(pla, 1));
     await queue.replay(server.api);
@@ -153,7 +160,7 @@ describe("offline stock queue", () => {
     expect(queue.entries[0]).toMatchObject({ status: "pending" });
     await queue.replay(server.api);
     expect(server.api.item).not.toHaveBeenCalled();
-    expect(server.api.recordCount).toHaveBeenCalledWith(screws.id, 36, "stable-key");
+    expect(server.api.recordCount).toHaveBeenCalledWith(screws.id, 36, "stable-key", 3);
   });
   it("runs one replay at a time", async () => {
     const { api, applied } = fakeServer({ [screws.id]: { ...screws } });
@@ -179,5 +186,73 @@ describe("offline stock queue", () => {
     const storage = memoryStorage([old]); const queue = newQueue(storage);
     await queue.load();
     expect(queue.entries).toEqual([]); expect(storage.remove).toHaveBeenCalledWith("old");
+  });
+});
+
+describe("server-side version check", () => {
+  it("sends the version the change was based on and skips the client re-read on current servers", async () => {
+    const server = fakeServer({ [screws.id]: { ...screws }, [pla.id]: { ...pla } }, true);
+    const queue = newQueue();
+    await queue.enqueue(count(screws, 36)); await queue.enqueue(receipt(screws, 4)); await queue.enqueue(receipt(pla, 250));
+    await queue.replay(server.api);
+    expect(server.api.item).not.toHaveBeenCalled();
+    expect(server.api.recordCount).toHaveBeenCalledWith(screws.id, 36, expect.any(String), 3);
+    // The chained receipt builds on the version the count produced.
+    expect(server.api.recordReceipt.mock.calls.map((call) => call[4])).toEqual([4, 7]);
+    expect(queue.entries.map((e) => e.status)).toEqual(["sent", "sent", "sent"]);
+    expect(server.items[screws.id]).toMatchObject({ quantity: 40, version: 5 });
+  });
+  it("maps a 409 version_conflict into the needs-your-decision flow with the latest server figures", async () => {
+    const server = fakeServer({ [screws.id]: { ...screws }, [pla.id]: { ...pla } }, true);
+    const queue = newQueue();
+    const first = await queue.enqueue(count(screws, 36)); await queue.enqueue(receipt(screws, 10)); await queue.enqueue(count(pla, 900));
+    server.items[screws.id] = { ...screws, version: 4, quantity: 38 };
+    await queue.replay(server.api);
+    expect(queue.entries.map((e) => e.status)).toEqual(["conflict", "pending", "sent"]);
+    expect(queue.entries[0]).toMatchObject({ serverQuantity: 38, serverVersion: 4, attempts: 1, message: expect.stringMatching(/changed on the server/u) });
+    expect(server.applied.map((a) => a.itemId)).toEqual([pla.id]);
+    // Accepting resends the same request ID against the version the user has now seen.
+    await queue.accept(first.id);
+    await queue.replay(server.api);
+    expect(server.api.recordCount.mock.calls.filter((call) => call[0] === screws.id).map((call) => [call[2], call[3]])).toEqual([[first.key, 3], [first.key, 4]]);
+    expect(queue.entries.map((e) => e.status)).toEqual(["sent", "sent", "sent"]);
+    expect(server.items[screws.id]!.quantity).toBe(46);
+  });
+  it("replays an ambiguous retry from the server even though the version moved", async () => {
+    const server = fakeServer({ [pla.id]: { ...pla } }, true);
+    const queue = newQueue();
+    await queue.enqueue(receipt(pla, 250));
+    const reachServer = server.api.recordReceipt.getMockImplementation()!;
+    server.api.recordReceipt.mockImplementationOnce(async (...args) => { await reachServer(...args); throw offline(); });
+    await queue.replay(server.api);
+    await queue.replay(server.api);
+    expect(server.applied).toHaveLength(1);
+    expect(queue.entries[0]!.status).toBe("sent");
+  });
+  it("keeps a conflict pending when the latest record cannot be read yet", async () => {
+    const server = fakeServer({ [screws.id]: { ...screws, version: 9 } }, true);
+    server.api.item.mockRejectedValueOnce(offline());
+    const queue = newQueue();
+    await queue.enqueue(count(screws, 36));
+    expect(await queue.replay(server.api)).toMatchObject({ offline: true });
+    expect(queue.entries[0]).toMatchObject({ status: "pending" });
+    await queue.replay(server.api);
+    expect(queue.entries[0]).toMatchObject({ status: "conflict", serverVersion: 9 });
+  });
+  it("shows any other 409 as not accepted when the item itself has not changed", async () => {
+    const server = fakeServer({ [screws.id]: { ...screws } }, true);
+    server.api.recordReceipt.mockRejectedValueOnce(new ClientError("The server adds received stock only after this item has been counted.", 409, "http", "evidence_not_received"));
+    const queue = newQueue();
+    await queue.enqueue(receipt(screws, 5));
+    await queue.replay(server.api);
+    expect(queue.entries[0]).toMatchObject({ status: "failed", message: expect.stringMatching(/counted/u) });
+  });
+  it("treats an unexplained 409 from an older server as a conflict when the item moved", async () => {
+    const server = fakeServer({ [screws.id]: { ...screws } });
+    server.api.recordCount.mockImplementationOnce(async () => { server.items[screws.id] = { ...screws, version: 5, quantity: 12 }; throw new ClientError("conflict", 409, "http"); });
+    const queue = newQueue();
+    await queue.enqueue(count(screws, 36));
+    await queue.replay(server.api);
+    expect(queue.entries[0]).toMatchObject({ status: "conflict", serverQuantity: 12, serverVersion: 5 });
   });
 });

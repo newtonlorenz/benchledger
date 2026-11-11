@@ -20,6 +20,7 @@ describe("offline sample workspace", () => {
           await client.bom(detail.project.currentRevisionId);
         }
       }
+      expect(await client.workspacePreferences()).toMatchObject({ stockReceivingPolicy: "on_receipt" });
       expect(network).not.toHaveBeenCalled();
     } finally { client.dispose(); network.mockRestore(); }
   });

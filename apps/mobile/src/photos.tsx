@@ -9,6 +9,7 @@ import { File } from "expo-file-system";
 import type { BenchLedgerClient, Gallery } from "./client";
 import { ClientError, errorMessage } from "./connection";
 import { UPLOAD_ATTEMPTS, fitsUpload, photoFilename, resizeFor } from "./image-plan";
+import { rowThumbnail, type RowImage } from "./thumbnail";
 import type { QueryCache } from "./query-cache";
 import { useRemote } from "./use-remote";
 import { Action, Notice, styles, useColours } from "./ui";
@@ -114,11 +115,17 @@ export function ItemPhotos({ client, cache, itemId, canWrite }: { client: BenchL
   </View>;
 }
 
-/** A list-row thumbnail, shown only when this item's gallery is already on the device. */
-export function RowThumbnail({ client, cache, itemId, fallback }: { client: BenchLedgerClient; cache: QueryCache; itemId: string; fallback: ReactNode }) {
-  const image = cache.get<Gallery>(galleryKey(itemId))?.value.images[0];
-  if (!image) return <>{fallback}</>;
-  return <Image accessible={false} style={photos.row} source={client.imageSource(itemId, image.id, image.sha256)} cachePolicy="disk" recyclingKey={image.id} contentFit="cover" transition={0} />;
+/**
+ * A list-row thumbnail: the server's primary image when it sends one, else a
+ * gallery already opened on this phone, else the item icon. Requests carry
+ * the bearer header and are disk-cached; a failed load falls back to the icon.
+ */
+export function RowThumbnail({ client, cache, item, fallback }: { client: BenchLedgerClient; cache: QueryCache; item: { id: string; primaryImage?: { id: string; url: string } | undefined }; fallback: ReactNode }) {
+  const image = rowThumbnail(item, cache.get<Gallery>(galleryKey(item.id))?.value);
+  const [failed, setFailed] = useState<RowImage | undefined>(undefined);
+  if (!image || (failed?.imageId === image.imageId && failed.sha256 === image.sha256)) return <>{fallback}</>;
+  return <Image accessible={false} style={photos.row} source={client.imageSource(item.id, image.imageId, image.sha256)} cachePolicy="disk"
+    recyclingKey={image.imageId} contentFit="cover" transition={0} onError={() => setFailed(image)} />;
 }
 
 const photos = StyleSheet.create({
