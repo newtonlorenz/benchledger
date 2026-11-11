@@ -29,7 +29,6 @@ export type InventorySourceStatus =
 
 export type StockConfidence = "confirmed" | "inspect_first" | "ordered" | "unknown";
 
-export type AvailabilityClass = "available" | "inspect-first" | "specify-first" | "partial" | "missing" | "optional";
 
 /** Decisions that must be resolved before a BOM line can move through the
  * reuse/source workflow. These values are deliberately shared with the API
@@ -53,7 +52,6 @@ export interface BomSpecification {
   missingDecisions?: readonly BomSpecificationDecision[];
 }
 
-export type BomDecision = "ready" | "check" | "decide" | "source";
 export type BomCompatibility = "confirmed" | "conditional" | "unknown";
 /** Explicit stock treatment for a project requirement. Legacy BOM rows may
  * carry `null` until a human records whether the item is consumed or reused. */
@@ -179,23 +177,6 @@ export interface StockBalance {
   reported?: number;
   confidence: StockConfidence;
   lastCountAt?: string;
-}
-
-export interface AvailabilityInput {
-  required: number;
-  available: number;
-  confidence: StockConfidence;
-  reported?: number;
-  candidate?: boolean;
-}
-
-export interface AvailabilityResult {
-  status: AvailabilityClass;
-  required: number;
-  supplied: number;
-  shortfall: number;
-  explanation: string;
-  needsInspection: boolean;
 }
 
 export type RevisionStatus =
@@ -336,56 +317,6 @@ export interface BomAlternative {
   compatible?: BomCompatibility;
   readonly quantityConversion?: BomAlternativeQuantityConversion;
   constraints?: BomConstraints;
-}
-
-export interface BomCandidate {
-  item: InventoryItem;
-  balance: StockBalance;
-  reason: string;
-  compatibility?: BomCompatibility;
-}
-
-export interface BomLineEvaluation {
-  line: BomLine;
-  status: AvailabilityClass;
-  decision: BomDecision;
-  missingDecisions?: readonly BomSpecificationDecision[];
-  supplied: number;
-  shortfall: number;
-  candidates: readonly BomCandidate[];
-  selected?: BomCandidate;
-  explanation: string;
-}
-
-export interface BomSummary {
-  totalLines: number;
-  availableLines: number;
-  inspectFirstLines: number;
-  partialLines: number;
-  missingLines: number;
-  optionalMissingLines: number;
-  optionalLines: number;
-  readyLines: number;
-  checkLines: number;
-  decideLines: number;
-  sourceLines: number;
-  estimatedMissingCostMinor?: number;
-}
-
-export interface BomEvaluation {
-  revisionId: string;
-  lines: readonly BomLineEvaluation[];
-  summary: BomSummary;
-  shoppingList: readonly ShoppingListLine[];
-}
-
-export interface ShoppingListLine {
-  bomLineId: string;
-  name: string;
-  quantity: number;
-  unit: QuantityUnit;
-  reason: "required" | "optional" | "inspect-first" | "partial";
-  candidateItemIds: readonly string[];
 }
 
 /** `settled` is the terminal state used by the post-project reconciliation

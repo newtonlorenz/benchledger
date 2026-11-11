@@ -1,4 +1,5 @@
 import { matchesInventorySearch } from "@benchledger/domain/inventory-search";
+import { isConfirmedEvidence } from "@benchledger/domain";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod/v3";
 import { idSchema, workflowPageSchema, sourcingPageSchema, createRequirementOfferSchema, requirementOfferSchema, chooseRequirementOfferSchema, offerChoiceSchema, buildPlanInputSchema, createWorkstreamSchema, workAssignmentInputSchema, bomImportInputSchema, bomImportCommitSchema, createBomLineSchema } from "@benchledger/api-contract";
@@ -96,10 +97,10 @@ export class MakerWorkflowService {
       }
       const materials = new Map<string, number>(); let minutes = 0, timeComplete = true;
       for (const plate of body.plates) {
-        if (plate.printerItemId) { const item = await this.app.getInventoryItem(plate.printerItemId); if (item.kind !== "printer") throw new ApplicationError("validation", "A plate printer must be an owned printer record."); if (!["physically_counted", "commissioned"].includes(item.evidence.state)) warnings.push(`${plate.name}: printer needs commissioning or a physical check.`); }
+        if (plate.printerItemId) { const item = await this.app.getInventoryItem(plate.printerItemId); if (item.kind !== "printer") throw new ApplicationError("validation", "A plate printer must be an owned printer record."); if (!isConfirmedEvidence(item.evidence.state)) warnings.push(`${plate.name}: printer needs commissioning or a physical check.`); }
         else warnings.push(`${plate.name}: choose a printer before slicing.`);
         if (plate.buildConfigurationId) { const configuration = await this.app.getBuildConfiguration(plate.buildConfigurationId); if (configuration.projectRevisionId !== revisionId || plate.printerItemId !== configuration.printerItemSnapshot.itemId) throw new ApplicationError("validation", "A plate configuration must match this revision and its selected printer."); }
-        for (const material of plate.materials) { const item = await this.app.getInventoryItem(material.itemId); if (item.kind !== "filament" || item.unit !== "gram") throw new ApplicationError("validation", "Plate materials must be filament stock recorded in grams."); const grams = (materials.get(item.id) ?? 0) + material.grams * plate.copies; if (!Number.isFinite(grams) || grams > 1e12) throw new ApplicationError("validation", "The planned material quantity is too large."); materials.set(item.id, grams); if (!["physically_counted", "commissioned"].includes(item.evidence.state)) warnings.push(`${plate.name}: ${item.name} needs a physical stock check.`); }
+        for (const material of plate.materials) { const item = await this.app.getInventoryItem(material.itemId); if (item.kind !== "filament" || item.unit !== "gram") throw new ApplicationError("validation", "Plate materials must be filament stock recorded in grams."); const grams = (materials.get(item.id) ?? 0) + material.grams * plate.copies; if (!Number.isFinite(grams) || grams > 1e12) throw new ApplicationError("validation", "The planned material quantity is too large."); materials.set(item.id, grams); if (!isConfirmedEvidence(item.evidence.state)) warnings.push(`${plate.name}: ${item.name} needs a physical stock check.`); }
         if (!plate.materials.length) warnings.push(`${plate.name}: material estimates are not recorded.`);
         if (plate.minutes === undefined) timeComplete = false; else minutes += plate.minutes * plate.copies;
       }

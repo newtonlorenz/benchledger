@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isConfirmedEvidence } from "@benchledger/domain";
 import {
   inspectionActionSchema,
   quantityConversionSchema,
@@ -8,7 +9,6 @@ import {
   type InventoryItem,
 } from "@benchledger/api-contract";
 
-const CONFIRMED_EVIDENCE = new Set(["physically_counted", "commissioned"]);
 const PHYSICAL_COMPATIBILITY_CONSTRAINT_KEYS = new Set([
   "kind", "manufacturer", "model", "sku", "tag", "nameIncludes", "specification",
 ]);
@@ -148,7 +148,7 @@ export function deriveInspectionActions(
       const item = itemById.get(candidate.itemId);
       if (item === undefined || item.retiredAt !== undefined) continue;
       const crossUnit = item.unit !== line.unit;
-      const uncertainQuantity = !CONFIRMED_EVIDENCE.has(item.evidence.state);
+      const uncertainQuantity = !isConfirmedEvidence(item.evidence.state);
 
       if (uncertainQuantity && candidate.inspectQuantity > 0) {
         addDraft(

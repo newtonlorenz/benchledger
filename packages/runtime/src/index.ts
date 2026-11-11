@@ -1,4 +1,3 @@
-export { MemoryInventoryImages } from "./memory-inventory-images.js";
 import { InventoryImageRepository, migrateInventoryImageSchema } from "@benchledger/database";
 import { ProductionInventoryImageAdapter } from "./inventory-image-adapter.js";
 import { TeamRepository, migrateTeamSchema } from "@benchledger/database";
@@ -46,6 +45,8 @@ export interface ProductionRuntimeOptions {
   readonly workspacePasswordVerifier?: WorkspacePasswordVerifier;
   /** Optional host-managed password hasher; defaults to bounded scrypt. */
   readonly workspacePasswordHasher?: WorkspacePasswordHasher;
+  /** Insert the reviewed starter catalog on open. Defaults to true. */
+  readonly seedStarterCatalog?: boolean;
 }
 
 export interface ProductionRuntime {
@@ -115,7 +116,7 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
     migrateProjectSetupSchema(database);
     migrateInspectionSchema(database);
     migrateWorkspaceSecuritySchema(database);
-    seedStarterCatalog(database);
+    if (options.seedStarterCatalog !== false) seedStarterCatalog(database);
     const artifacts = new ArtifactStore({ root: artifactDir, maxUploadBytes, maxStorageBytes });
     const initialized = await artifacts.init();
     if (!initialized.ok) throw new Error(`artifact store initialization failed: ${initialized.error.message}`);
@@ -191,6 +192,8 @@ export async function createProductionRuntime(options: ProductionRuntimeOptions)
 }
 
 export * from "./backup.js";
+export * from "./demo-runtime.js";
+export * from "./demo-seed.js";
 export * from "./barrier.js";
 export * from "./catalog-adapter.js";
 export * from "./mappers.js";

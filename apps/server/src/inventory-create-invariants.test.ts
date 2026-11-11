@@ -3,9 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ApplicationService, type RequestContext } from "@benchledger/application";
-import { createProductionRuntime } from "@benchledger/runtime";
+import { createDemoRuntime, createProductionRuntime } from "@benchledger/runtime";
 import { createApp } from "./app.js";
-import { createMemoryRuntime } from "./memory-store.js";
 
 const context: RequestContext = {
   actor: "inventory-invariant-test",
@@ -31,7 +30,7 @@ const demoCredential = ["demo", "password", "please", "change"].join("-");
 
 describe("inventory creation invariants", () => {
   it("returns a validation 400 before mutating demo inventory or audit history", async () => {
-    const runtime = createMemoryRuntime();
+    const runtime = await createDemoRuntime({ seed: "empty" });
     const app = await createApp({
       demo: true,
       runtime,
@@ -52,13 +51,13 @@ describe("inventory creation invariants", () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ error: { code: "validation" } });
-    await expect(runtime.inventory.getItem(invalidConfirmedInput.id)).resolves.toBeNull();
+    await expect(runtime.ports.inventory.getItem(invalidConfirmedInput.id)).resolves.toBeNull();
     await expect(runtime.ports.audit.list(50)).resolves.toMatchObject({ data: [] });
     await app.close();
   });
 
   it("keeps partial confirmed quantity and available stock aligned in demo and production runtimes", async () => {
-    const demo = createMemoryRuntime();
+    const demo = await createDemoRuntime({ seed: "empty" });
     const dataDir = await mkdtemp(join(tmpdir(), "benchledger-inventory-invariant-"));
     const production = await createProductionRuntime({ dataDir, maxUploadBytes: 1024 * 1024, maxStorageBytes: 4 * 1024 * 1024 });
     try {
@@ -149,7 +148,7 @@ describe("inventory creation invariants", () => {
       unit: "each" as const,
       evidence: { state: "commissioned" as const, source: "bench-commissioning", sourceId: "check-1", observedAt: "2026-08-31T10:00:00.000Z", note: "Located and tested" }
     };
-    const memory = createMemoryRuntime();
+    const memory = await createDemoRuntime({ seed: "empty" });
     const dataDir = await mkdtemp(join(tmpdir(), "benchledger-commission-invariant-"));
     const production = await createProductionRuntime({ dataDir, maxUploadBytes: 1024 * 1024, maxStorageBytes: 4 * 1024 * 1024 });
     const runtimes = [memory.ports, production.ports];

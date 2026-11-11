@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDemoRuntime } from "@benchledger/runtime";
 import { createApp, bearerRecord } from "./app.js";
 import { AuthManager, assertStrongSessionSecret, secureCookiesFromEnvironment } from "./auth.js";
 import { allowedHostsFromEnvironment, trustProxyFromEnvironment } from "./config.js";
-import { createMemoryRuntime } from "./memory-store.js";
 import { healthSchema } from "@benchledger/api-contract";
 import { ApplicationService } from "@benchledger/application";
 
 const secret = "s".repeat(48);
 
 async function lanOpenApp(extra: Record<string, unknown> = {}) {
-  return createApp({ runtime: createMemoryRuntime(), publicBaseUrl: "http://bench.example:8792", auth: { sessionSecret: secret, secureCookies: false }, logger: false, ...extra });
+  return createApp({ runtime: await createDemoRuntime({ seed: "empty" }), publicBaseUrl: "http://bench.example:8792", auth: { sessionSecret: secret, secureCookies: false }, logger: false, ...extra });
 }
 
 describe("DNS rebinding and cross-origin protection", () => {
@@ -140,7 +140,7 @@ describe("session secret strength", () => {
     const previous = process.env.BENCHLEDGER_SESSION_SECRET;
     process.env.BENCHLEDGER_SESSION_SECRET = "replace-with-at-least-32-random-bytes";
     try {
-      await expect(createApp({ runtime: createMemoryRuntime(), publicBaseUrl: "http://127.0.0.1:8792", logger: false })).rejects.toThrow(/BENCHLEDGER_SESSION_SECRET/u);
+      await expect(createApp({ runtime: await createDemoRuntime({ seed: "empty" }), publicBaseUrl: "http://127.0.0.1:8792", logger: false })).rejects.toThrow(/BENCHLEDGER_SESSION_SECRET/u);
     } finally {
       if (previous === undefined) delete process.env.BENCHLEDGER_SESSION_SECRET; else process.env.BENCHLEDGER_SESSION_SECRET = previous;
     }
@@ -196,7 +196,7 @@ describe("error mapping", () => {
 
 describe("server-side schema failures", () => {
   it("reports a malformed server-built response as a logged 500, not a client validation error", async () => {
-    const runtime = createMemoryRuntime();
+    const runtime = await createDemoRuntime({ seed: "empty" });
     const service = new ApplicationService(runtime.ports);
     vi.spyOn(service, "health").mockResolvedValue({ status: "ok", service: "benchledger", version: 42 } as never);
     const app = await createApp({ runtime, service, publicBaseUrl: "http://127.0.0.1:8792", auth: { sessionSecret: secret, secureCookies: false }, logger: false });
@@ -224,7 +224,7 @@ describe("server-side schema failures", () => {
 
 describe("optimistic concurrency", () => {
   it("requires If-Match on BOM line edits with 428", async () => {
-    const app = await createApp({ demo: true, runtime: createMemoryRuntime([]), auth: { sessionSecret: secret, bearerTokens: [bearerRecord("owner", ["read", "write"])] }, logger: false });
+    const app = await createApp({ demo: true, runtime: await createDemoRuntime({ seed: "empty" }), auth: { sessionSecret: secret, bearerTokens: [bearerRecord("owner", ["read", "write"])] }, logger: false });
     const headers = { authorization: "Bearer owner" };
     try {
       const created = await app.inject({ method: "POST", url: "/api/v1/projects/with-initial-revision", headers, payload: { project: { id: "precondition-project", name: "Precondition project", status: "idea" }, revision: { id: "precondition-rev", name: "First", status: "concept", fabricationRoute: "none" } } });
@@ -326,7 +326,7 @@ describe("login rate limiting", () => {
 describe("session cookies", () => {
   it("defaults to Secure cookies for an HTTPS public origin and leaves the env unset otherwise", async () => {
     expect(secureCookiesFromEnvironment({})).toBeUndefined();
-    const app = await createApp({ runtime: createMemoryRuntime(), publicBaseUrl: "https://bench.example", auth: { sessionSecret: secret }, logger: false });
+    const app = await createApp({ runtime: await createDemoRuntime({ seed: "empty" }), publicBaseUrl: "https://bench.example", auth: { sessionSecret: secret }, logger: false });
     try {
       const lan = await app.inject({ method: "POST", url: "/api/v1/auth/lan-session", headers: { host: "bench.example" } });
       expect(lan.statusCode).toBe(200);

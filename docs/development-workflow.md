@@ -70,6 +70,14 @@ global excludes file. Keep private notes in an ignored or locally excluded
 path. Without Git (for example in an exported archive) it falls back to scanning
 the whole directory tree.
 
+Demo mode and most server integration tests run the real SQLite runtime
+(`createDemoRuntime` in `@benchledger/runtime`): an in-memory SQLite database
+and a temporary artifact directory that is removed on close, seeded with the
+synthetic workspace in `packages/runtime/src/demo-seed.ts`. There is no
+separate in-memory rule implementation; add demo content to that seed. The
+only demo-specific behaviour is presentation order: demo projects are listed
+in creation order so the reference project opens first.
+
 Playwright runs two projects. `desktop-chromium` is the full suite on one worker
 against a shared in-memory demo server; specs depend on file-name ordering
 (the `zz-` prefixes), so do not rename them casually. `mobile-chromium-smoke`

@@ -3,7 +3,6 @@ import {
   DomainError,
   assertNonNegativeQuantity,
   assertPositiveQuantity,
-  classifyAvailability,
   confidenceFromSourceStatus,
   consumeReservation,
   createAuditRecord,
@@ -19,8 +18,6 @@ import {
   createWorkItemRevision,
   deriveStockBalance,
   estimatePurchase,
-  evaluateBom,
-  matchesConstraints,
   releaseReservation,
   slugify,
   StockLedger
@@ -142,58 +139,17 @@ describe("stock edge cases", () => {
     expect(deriveStockBalance(baseItem, [createStockEvent({ id: "receipt-edge", itemId: baseItem.id, kind: "receipt", quantity: 10, unit: "piece", reason: "received", occurredAt: "2026-01-01T00:00:00.000Z" }), counted]).lastCountAt).toBe(counted.occurredAt);
   });
 
-  it("maps source evidence conservatively and classifies all availability states", () => {
+  it("maps source evidence conservatively", () => {
     expect(confidenceFromSourceStatus("commissioned_available")).toBe("confirmed");
     expect(confidenceFromSourceStatus("physically_confirmed")).toBe("confirmed");
     expect(confidenceFromSourceStatus("delivered_uncounted")).toBe("inspect_first");
     expect(confidenceFromSourceStatus("shipped_available_baseline")).toBe("inspect_first");
     expect(confidenceFromSourceStatus("ordered_unverified")).toBe("ordered");
     expect(confidenceFromSourceStatus("unknown-status")).toBe("unknown");
-    expect(classifyAvailability({ required: 0, available: 0, confidence: "unknown" }).status).toBe("available");
-    expect(classifyAvailability({ required: 1, available: 0, confidence: "unknown", candidate: false }).status).toBe("missing");
-    expect(classifyAvailability({ required: 2, available: 2, confidence: "confirmed" }).status).toBe("available");
-    expect(classifyAvailability({ required: 2, available: 1, confidence: "confirmed" }).status).toBe("partial");
-    expect(classifyAvailability({ required: 2, available: 0, confidence: "confirmed" }).status).toBe("missing");
-    expect(classifyAvailability({ required: 2, available: 1, confidence: "inspect_first" }).status).toBe("inspect-first");
-    expect(classifyAvailability({ required: 2, available: 0, confidence: "ordered", reported: 2 }).needsInspection).toBe(true);
-    expect(classifyAvailability({ required: 2, available: 0, confidence: "unknown" }).status).toBe("missing");
-    expect(() => classifyAvailability({ required: -1, available: 0, confidence: "unknown" })).toThrow(/required/i);
-    expect(() => classifyAvailability({ required: 1, available: -1, confidence: "unknown" })).toThrow(/available/i);
-    expect(() => classifyAvailability({ required: 1, available: 0, confidence: "unknown", reported: -1 })).toThrow(/reported/i);
   });
 });
 
 describe("BOM matching, reservation and procurement edges", () => {
-  it("evaluates unconstrained descriptive and optional lines, including a cost map", () => {
-    const descriptive = createBomLine({ id: "bom-descriptive", revisionId: "rev-edge", name: "Edge board", quantity: 2, unit: "piece" });
-    const optional = createBomLine({ id: "bom-optional", revisionId: "rev-edge", name: "Optional clamp", quantity: 1, unit: "piece", optional: true, required: false });
-    const result = evaluateBom([descriptive, optional], [{ item: baseItem, balance: balance(baseItem.id, 1) }], new Map([[descriptive.id, 1234], [optional.id, 999]]));
-    expect(result.revisionId).toBe("rev-edge");
-    expect(result.lines[0]?.status).toBe("partial");
-    expect(result.lines[1]?.status).toBe("optional");
-    expect(result.summary.optionalMissingLines).toBe(1);
-    expect(result.summary.estimatedMissingCostMinor).toBe(1234);
-    expect(result.shoppingList.map((line) => line.reason)).toEqual(["partial"]);
-    expect(evaluateBom([], []).revisionId).toBe("");
-  });
-
-  it("checks every declared compatibility constraint and refuses unknown dimensions", () => {
-    expect(matchesConstraints(baseItem, undefined)).toBe(true);
-    expect(matchesConstraints(baseItem, { category: "electronics", manufacturer: "Maker", model: "M-32", variantIncludes: "Rev", machineId: "H2D", tags: ["ESP32"], dimensions: { width: 20, height: 30, depth: 5, diameter: 2 } })).toBe(true);
-    expect(matchesConstraints(baseItem, { category: "filament" })).toBe(false);
-    expect(matchesConstraints(baseItem, { manufacturer: "Other" })).toBe(false);
-    expect(matchesConstraints(baseItem, { model: "Other" })).toBe(false);
-    expect(matchesConstraints(baseItem, { variantIncludes: "Other" })).toBe(false);
-    expect(matchesConstraints(baseItem, { machineId: "Ender" })).toBe(false);
-    expect(matchesConstraints(baseItem, { tags: ["missing"] })).toBe(false);
-    expect(matchesConstraints(baseItem, { dimensions: { width: 21 } })).toBe(false);
-    const { dimensions, ...itemWithoutDimensions } = baseItem;
-    expect(dimensions).toBeDefined();
-    expect(matchesConstraints(itemWithoutDimensions, { dimensions: { width: 20 } })).toBe(false);
-    expect(matchesConstraints(baseItem, { unsupported: "must not match" } as never)).toBe(false);
-    expect(matchesConstraints(baseItem, { dimensions: { unsupported: 20 } } as never)).toBe(false);
-  });
-
   it("requires active reservations and can consume or release them immutably", () => {
     const active = createReservation({ projectRevisionId: "rev-edge", bomLineId: "bom-edge", itemId: baseItem.id, quantity: 1 }, balance(baseItem.id, 2), [reservation("released")]);
     expect(active.status).toBe("active");

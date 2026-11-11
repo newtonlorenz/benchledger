@@ -1,5 +1,5 @@
 import { bomSpecificationSchema, unitCorrectionReason } from "@benchledger/api-contract";
-import { canonicalProjectStatus } from "@benchledger/domain";
+import { canonicalProjectStatus, isConfirmedEvidence } from "@benchledger/domain";
 import type {
   CreateInventoryItem, InventoryItem as ApiInventoryItem, StockEvent as ApiStockEvent,
   StockEventInput, Project as ApiProject, WorkItem as ApiWorkItem, ProjectRevision as ApiProjectRevision,
@@ -250,9 +250,8 @@ function fallbackEvidence(item: InventoryItem): ApiInventoryItem["evidence"]["st
   }
 }
 
-export function isConfirmedEvidence(state: ApiInventoryItem["evidence"]["state"]): boolean {
-  return state === "physically_counted" || state === "commissioned";
-}
+/** Re-exported for adapters; the rule itself lives in `@benchledger/domain`. */
+export { isConfirmedEvidence };
 
 export function nativeItemFromApi(input: CreateInventoryItem, id: string, now: string, existing?: InventoryItem): InventoryItem {
   const evidence = nativeEvidence(input.evidence.state);

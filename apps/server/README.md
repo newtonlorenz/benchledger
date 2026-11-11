@@ -2,7 +2,9 @@
 
 `@benchledger/server` exposes the versioned REST API at `/api/v1` and is
 constructed with an `ApplicationPorts` implementation. `createApp({ demo: true
-})` supplies a small synthetic inventory for local UI/MCP development; a
+})` runs the production SQLite runtime on a disposable in-memory database
+(`createDemoRuntime` from `@benchledger/runtime`) seeded with a small synthetic
+workspace for local UI/MCP development; a
 non-demo deployment must provide a 32-character session secret and an
 environment-backed scrypt password hash. `hashAdminPassword` in `src/auth.ts`
 generates the built-in scrypt format; an Argon2id hash requires an explicitly
@@ -54,6 +56,10 @@ are verified by the artifact port. MCP receives separate, short-lived,
 header-bound capabilities for byte upload, finalize, and download; tokens are
 never put in query strings. Configure the exact HTTP(S) origin in
 `BENCHLEDGER_PUBLIC_BASE_URL`; production startup rejects a missing or
-non-origin value and never derives links from a request Host header. The
-in-memory implementation exists only for synthetic mode and tests; production
-should replace it with the SQLite and content-addressed artifact adapters.
+non-origin value and never derives links from a request Host header.
+
+The hand-written OpenAPI description lives in `src/openapi.ts`; keep it in step
+with the routes in `src/app.ts`. Tests that need a server use
+`createDemoRuntime()` (synthetic seed) or `createDemoRuntime({ seed: "empty" })`
+and inject faults at the port level (for example `vi.spyOn(runtime.ports.audit,
+"append")`) rather than through a parallel store.

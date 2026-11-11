@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyAvailability, createStockEvent, deriveStockBalance, StockLedger } from "./stock.js";
+import { createStockEvent, deriveStockBalance, StockLedger } from "./stock.js";
 import { createId } from "./ids.js";
 import type { InventoryItem } from "./types.js";
 
@@ -38,13 +38,6 @@ describe("stock ledger", () => {
   it("rejects duplicate idempotency keys", () => {
     const event = createStockEvent({ id: "receipt-3", itemId: item.id, kind: "receipt", quantity: 1, unit: "piece", reason: "received", idempotencyKey: "import:one" });
     expect(() => new StockLedger([event, { ...event, id: "receipt-4" }])).toThrow(/idempotency/i);
-  });
-
-  it("classifies uncertainty separately from a confirmed shortfall", () => {
-    expect(classifyAvailability({ required: 2, available: 2, confidence: "confirmed" }).status).toBe("available");
-    expect(classifyAvailability({ required: 2, available: 1, confidence: "confirmed" }).status).toBe("partial");
-    expect(classifyAvailability({ required: 2, available: 0, reported: 2, confidence: "inspect_first" }).status).toBe("inspect-first");
-    expect(classifyAvailability({ required: 2, available: 0, confidence: "unknown", candidate: false }).status).toBe("missing");
   });
 
   it("does not mutate input event arrays", () => {

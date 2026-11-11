@@ -20,7 +20,9 @@ describe("maker release HTTP and MCP acceptance", () => {
       expect((await call("POST", `${revision}/requirement-offers`, { ...offer, priceMinor: 200 }, "scoped", "release-quote-once")).statusCode).toBe(409);
       ok(await call("PUT", `${revision}/offer-choice`, { bomLineId: offer.bomLineId, offerId: quote.id, expectedVersion: 0, expectedBomLineVersion: 1, confirmedFit: true }));
       const pricing = ok(await call("GET", `${revision}/sourcing?limit=2`)); expect(pricing.totals.EUR.knownMinor).toBe(550); expect(pricing.nextCursor).toBe("2");
-      expect(ok(await call("GET", `${revision}/sourcing?limit=2&cursor=2`)).data.some((row: { estimate: { packages?: number } }) => row.estimate.packages === 2)).toBe(true);
+      // SQLite lists BOM lines by id, so the quoted line may be on either page.
+      const secondPage = ok(await call("GET", `${revision}/sourcing?limit=2&cursor=2`));
+      expect([...pricing.data, ...secondPage.data].some((row: { estimate: { packages?: number } }) => row.estimate.packages === 2)).toBe(true);
       const work = ok(await call("POST", `${root}/workstreams`, { name: "Release electronics", kind: "electronics" })).data;
       ok(await call("PUT", `${root}/workstreams/${work.item.id}/assignment`, { expectedVersion: 0, status: "in_progress", dueDate: "2027-01-02", notes: "Review connectors" }));
       expect(ok(await call("GET", `${root}/workstreams`)).data.some((entry: { assignment?: { status: string } }) => entry.assignment?.status === "in_progress")).toBe(true);

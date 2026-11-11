@@ -2,9 +2,6 @@ import { createId, nowIso } from "./ids.js";
 import { DomainError, assertNonNegativeQuantity, assertPositiveQuantity } from "./errors.js";
 import { quantitiesEqual, quantityExceeds, roundQuantity } from "./quantity-compare.js";
 import type {
-  AvailabilityClass,
-  AvailabilityInput,
-  AvailabilityResult,
   AuditActor,
   InventoryItem,
   StockBalance,
@@ -218,38 +215,3 @@ export function confidenceFromSourceStatus(status: string): StockConfidence {
   return "unknown";
 }
 
-export function classifyAvailability(input: AvailabilityInput): AvailabilityResult {
-  assertNonNegativeQuantity(input.required, "required quantity");
-  assertNonNegativeQuantity(input.available, "available quantity");
-  if (input.reported !== undefined) assertNonNegativeQuantity(input.reported, "reported quantity");
-  const candidate = input.candidate ?? true;
-  const reported = input.reported ?? input.available;
-  const supplied = Math.min(input.required, input.available);
-  const shortfall = Math.max(0, input.required - supplied);
-  if (input.required === 0) {
-    return { status: "available", required: 0, supplied: 0, shortfall: 0, explanation: "No stock is required.", needsInspection: false };
-  }
-  if (!candidate && input.available === 0) {
-    return { status: "missing", required: input.required, supplied: 0, shortfall: input.required, explanation: "No matching inventory item was found.", needsInspection: false };
-  }
-  if (input.confidence === "confirmed") {
-    if (input.available >= input.required) {
-      return { status: "available", required: input.required, supplied: supplied, shortfall: 0, explanation: "A physically confirmed balance covers the requirement.", needsInspection: false };
-    }
-    if (input.available > 0) {
-      return { status: "partial", required: input.required, supplied, shortfall, explanation: `Only ${input.available} confirmed unit(s) remain; ${shortfall} more are needed.`, needsInspection: false };
-    }
-    return { status: "missing", required: input.required, supplied: 0, shortfall, explanation: "No confirmed stock remains.", needsInspection: false };
-  }
-  if (reported > 0 || input.available > 0 || input.confidence === "inspect_first" || input.confidence === "ordered") {
-    return {
-      status: "inspect-first",
-      required: input.required,
-      supplied,
-      shortfall,
-      explanation: "Order or delivery evidence exists, but current quantity or condition needs a physical check.",
-      needsInspection: true
-    };
-  }
-  return { status: "missing", required: input.required, supplied: 0, shortfall, explanation: "No current stock evidence is recorded.", needsInspection: false };
-}

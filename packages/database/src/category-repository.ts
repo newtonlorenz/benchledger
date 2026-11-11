@@ -192,7 +192,7 @@ export class InventoryCategoryRepository {
     const expectedValue = expectedVersion(expected);
     if (current.version !== expectedValue) conflict(id, expectedValue, current.version);
     const children = this.database.all<SqliteRow>("SELECT id FROM inventory_categories WHERE parent_id = ? AND archived = 0 LIMIT 1", [id]);
-    if (children.length > 0) throw new DomainError("category_has_children", `inventory category ${id} has active subcategories`);
+    if (children.length > 0) throw new DomainError("category_has_children", `Inventory category '${id}' has active subcategories`);
     const ids = [id];
     const marks = ids.map(() => "?").join(",");
     const references = this.database.get<SqliteRow>(`SELECT a.item_id FROM inventory_item_category_assignments a JOIN inventory_items i ON i.id = a.item_id WHERE i.retired_at IS NULL AND a.category_node_id IN (${marks}) LIMIT 1`, ids);

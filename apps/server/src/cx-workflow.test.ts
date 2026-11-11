@@ -1,6 +1,5 @@
-import { createProductionRuntime } from "@benchledger/runtime";
+import { createDemoRuntime, createProductionRuntime } from "@benchledger/runtime";
 import { ApplicationService } from "@benchledger/application";
-import { createSyntheticRuntime } from "./memory-store.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -76,7 +75,7 @@ for (const durable of [false, true]) describe(`customer correction workflows (${
 
 for (const durable of [false, true]) it(`direct ${durable ? "SQLite" : "memory"} adapter preserves reservation assumptions`, async () => {
   const dir = await mkdtemp(join(tmpdir(), "benchledger-cx-direct-"));
-  const runtime = durable ? await createProductionRuntime({ dataDir: dir }) : createSyntheticRuntime();
+  const runtime = durable ? await createProductionRuntime({ dataDir: dir }) : await createDemoRuntime();
   const context = { actor: "synthetic-review", source: "api" as const, correlationId: "cx-direct", scopes: new Set(["read", "write"]) };
   const service = new ApplicationService(runtime.ports);
   try {

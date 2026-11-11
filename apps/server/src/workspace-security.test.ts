@@ -5,8 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createApp, bearerRecord } from "./app.js";
 import { hashBearerToken } from "./auth.js";
-import { createProductionRuntime, MemoryWorkspaceSecurity, hashWorkspacePassword } from "@benchledger/runtime";
-import { createMemoryRuntime } from "./memory-store.js";
+import { createDemoRuntime, createProductionRuntime, MemoryWorkspaceSecurity, hashWorkspacePassword } from "@benchledger/runtime";
 
 function cookieHeader(setCookie: string | string[] | undefined): string {
   const values = Array.isArray(setCookie) ? setCookie : setCookie === undefined ? [] : [setCookie];
@@ -215,15 +214,17 @@ describe("workspace password access", () => {
   it("applies cumulative and concurrent throttles across verification and password hashing", async () => {
     const oldPassword = "old-workspace-password";
     const encoded = await hashWorkspacePassword(oldPassword);
-    const makePorts = () => {
-      const memory = createMemoryRuntime();
+    const runtimes: Array<{ close(): Promise<void> }> = [];
+    const makePorts = async () => {
+      const memory = await createDemoRuntime({ seed: "empty" });
+      runtimes.push(memory);
       const security = new MemoryWorkspaceSecurity({ bootstrapHash: encoded, verifier: async (password, hash) => {
         await new Promise((resolve) => setTimeout(resolve, 20));
         return password === oldPassword && hash === encoded;
       } });
       return { ...memory.ports, workspaceSecurity: security };
     };
-    const first = makePorts();
+    const first = await makePorts();
     const app = await createApp({ ports: first, publicBaseUrl: "http://127.0.0.1:8792", auth: { sessionSecret: "s".repeat(48), secureCookies: false }, logger: false });
     try {
       const login = await app.inject({ method: "POST", url: "/api/v1/auth/login", payload: { password: oldPassword } });
@@ -238,7 +239,7 @@ describe("workspace password access", () => {
       await app.close();
     }
 
-    const concurrent = makePorts();
+    const concurrent = await makePorts();
     const concurrentApp = await createApp({ ports: concurrent, publicBaseUrl: "http://127.0.0.1:8792", auth: { sessionSecret: "s".repeat(48), secureCookies: false }, logger: false });
     try {
       const results = await Promise.all([0, 1, 2].map((index) => concurrentApp.inject({ method: "POST", url: "/api/v1/auth/login", payload: { password: `wrong-workspace-password-${index}` } })));
@@ -247,7 +248,8 @@ describe("workspace password access", () => {
       await concurrentApp.close();
     }
 
-    const openMemory = createMemoryRuntime();
+    const openMemory = await createDemoRuntime({ seed: "empty" });
+    runtimes.push(openMemory);
     const openPorts = { ...openMemory.ports, workspaceSecurity: new MemoryWorkspaceSecurity() };
     const hashingApp = await createApp({ ports: openPorts, publicBaseUrl: "http://127.0.0.1:8792", auth: { sessionSecret: "s".repeat(48), secureCookies: false }, logger: false });
     try {
@@ -258,6 +260,7 @@ describe("workspace password access", () => {
       expect(results.filter((result) => result.statusCode === 429)).toHaveLength(1);
     } finally {
       await hashingApp.close();
+      for (const runtime of runtimes) await runtime.close();
     }
   });
 });

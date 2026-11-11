@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDemoRuntime } from "@benchledger/runtime";
 import { createHash } from "node:crypto";
-import { createSyntheticRuntime } from "./memory-store.js";
 import { ApplicationService } from "@benchledger/application";
 import { createApp, bearerRecord } from "./app.js";
 const projectId = "synthetic-project-lamp", revisionId = "synthetic-revision-lamp-r01", root = `/api/v1/projects/${projectId}/revisions/${revisionId}/assembly`;
 const ctx = { actor: "synthetic-assembly-author", source: "api" as const, correlationId: "synthetic-assembly", scopes: new Set(["read", "write"]), idempotencyKey: "assembly-setup-key" };
 const bytes = new TextEncoder().encode("solid plate\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 30 0 0\nvertex 0 20 0\nendloop\nendfacet\nendsolid plate");
 async function setup() {
-  const runtime = createSyntheticRuntime();
+  const runtime = await createDemoRuntime();
   const session = await runtime.ports.artifacts.beginUpload({ projectId, revisionId, filename: "synthetic-plate.stl", role: "stl", mediaType: "model/stl", byteSize: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") }, ctx);
   await runtime.ports.artifacts.writeUpload(session.id, bytes); const file = await runtime.ports.artifacts.finalizeUpload(session.id, ctx);
   const source = { artifactId: file.id, sha256: file.sha256, unit: "millimetre" as const };
