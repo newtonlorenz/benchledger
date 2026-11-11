@@ -646,12 +646,17 @@ export class ArtifactStore {
     return this.withSessionLock(sessionId, () => resultFrom(async () => {
       assertValidId(sessionId, "sessionId");
       await this.ensureLayout();
-      return this.publicSession(await this.readSession(sessionId));
+      const session = await this.readSession(sessionId);
+      if (session.status !== "open") return this.publicSession(session);
+      // Read the durable byte count, including a write whose metadata acknowledgement was lost.
+      const part = await this.safeStat(this.uploadPartPath(sessionId), "upload data", true);
+      if (!part?.isFile()) throw new StoreFailure("NOT_FOUND", "upload data was not found", { sessionId });
+      return this.publicSession({ ...session, bytesWritten: part.size });
     }));
   }
 
   /** Append one byte stream to an open upload session. */
-  public writeUpload(sessionId: string, source: ArtifactByteSource | Readable): Promise<Result<UploadProgress>> {
+  public writeUpload(sessionId: string, source: ArtifactByteSource | Readable, expectedOffset?: number): Promise<Result<UploadProgress>> {
     return this.withSessionLock(sessionId, async () => resultFrom(async () => {
       assertValidId(sessionId, "sessionId");
       await this.ensureLayout();
@@ -660,6 +665,13 @@ export class ArtifactStore {
       const partPath = this.uploadPartPath(sessionId);
       await this.assertPathNoSymlink(partPath, this.root);
       let bytesWritten = session.bytesWritten;
+      if (expectedOffset !== undefined) {
+        if (!Number.isSafeInteger(expectedOffset) || expectedOffset < 0) throw new StoreFailure("INVALID_INPUT", "upload offset must be a non-negative integer");
+        const part = await this.safeStat(partPath, "upload data", true);
+        if (!part?.isFile()) throw new StoreFailure("NOT_FOUND", "upload data was not found", { sessionId });
+        if (part.size !== expectedOffset) throw new StoreFailure("CONFLICT", "Upload offset changed; read the upload session before resuming", { receivedBytes: part.size });
+        bytesWritten = part.size;
+      }
       let expiredAt: number | undefined;
       const expiresAtMs = Date.parse(session.expiresAt);
       const handle = await open(partPath, "a");

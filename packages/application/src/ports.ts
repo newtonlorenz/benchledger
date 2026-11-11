@@ -209,6 +209,9 @@ export interface Page<T> {
 }
 
 export interface InventoryListOptions {
+  readonly stockView?: InventoryListQuery["stockView"];
+  readonly sort?: InventoryListQuery["sort"];
+  readonly location?: string;
   readonly q?: string;
   readonly kind?: InventoryListQuery["kind"];
   readonly evidence?: InventoryListQuery["evidence"];
@@ -394,7 +397,7 @@ export interface ArtifactPort {
   /** Resolve an upload session's durable ancestry across requests. */
   getUploadSessionDetails(id: string): Promise<UploadSessionDetails | null>;
   beginUpload(input: BeginUploadInput, ctx: RequestContext): Promise<UploadSession>;
-  writeUpload(sessionId: string, body: Uint8Array): Promise<{ readonly receivedBytes: number }>;
+  writeUpload(sessionId: string, body: Uint8Array, expectedOffset?: number): Promise<{ readonly receivedBytes: number }>;
   /** Remove an uncommitted upload session during audited begin compensation. */
   abortUpload?(sessionId: string): Promise<void>;
   finalizeUpload(sessionId: string, ctx: RequestContext): Promise<Artifact>;

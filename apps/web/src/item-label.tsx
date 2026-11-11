@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { encodeQr, qrSvgPath } from "./qr-code";
 import { Icon } from "./icons";
+import { Button } from "./components/ui/button";
 
 /** Mobile-scannable payload; documented in docs/mobile-app.md (Scanning and labels). */
 export const ITEM_LABEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
@@ -64,10 +65,10 @@ export function PrintItemLabel({ item }: { item: ItemLabelDetails }) {
 
   if (!printable) return null;
   return <section className="drawer-label" aria-label="Item label">
-    {!open ? <button type="button" className="button button-secondary" onClick={() => setOpen(true)}><Icon name="tag" size={16} />Print label</button> : <>
+    {!open ? <Button variant="outline" type="button" className="button button-secondary" onClick={() => setOpen(true)}><Icon name="tag" size={16} />Print label</Button> : <>
       <div className="drawer-label-preview"><ItemLabelCard item={item} /></div>
       <p className="drawer-section-copy">Scan with the BenchLedger app to open this item. The label holds only the item ID, not a server address or password.</p>
-      <div className="drawer-form-actions"><button type="button" className="button button-quiet" onClick={() => setOpen(false)}>Close preview</button><button type="button" className="button button-primary" onClick={() => setPrinting(true)} disabled={printing}>Print</button></div>
+      <div className="drawer-form-actions"><Button variant="ghost" type="button" className="button button-quiet" onClick={() => setOpen(false)}>Close preview</Button><Button variant="default" type="button" className="button button-primary" onClick={() => setPrinting(true)} disabled={printing}>Print</Button></div>
     </>}
     {printing && createPortal(<div className="print-label-root"><ItemLabelCard item={item} /></div>, document.body)}
   </section>;

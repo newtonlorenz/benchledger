@@ -4,11 +4,12 @@ import App from "./App";
 import "@fontsource-variable/ibm-plex-sans/wght.css";
 import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-500.css";
-import "./styles.css";
-import "./workspace-design.css";
-import "./workflow-polish.css";
-// App-level flows load last so they can refine shared layout without editing it.
-import "./app-flows.css";
+import "./shadcn.css";
+import "./workspace-layout.css";
+import "./workspace-shell.css";
+import "./project-workspace.css";
+import "./specialist-journey.css";
+import "./approved-interface.css";
 import { applyAppearance, readAppearance } from "./appearance";
 
 applyAppearance(readAppearance());

@@ -3,7 +3,7 @@ import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ApiError } from "./api";
-import { formatUpdatedAgo, isAmbiguousMutation, SessionExpiredOverlay, SyncBanner, SyncStatusNote, ToastRegion, useRevalidateOnFocus, useToast, writeFailureMessage } from "./app-feedback";
+import { formatUpdatedAgo, isAmbiguousMutation, SyncBanner, SyncStatusNote, ToastRegion, useRevalidateOnFocus, useToast, writeFailureMessage } from "./app-feedback";
 import type { ToastTone } from "./app-feedback";
 
 afterEach(() => { cleanup(); vi.useRealTimers(); });
@@ -150,17 +150,5 @@ describe("focus revalidation", () => {
     render(<FocusHarness onRevalidate={onRevalidate} enabled={false} />);
     act(() => { vi.advanceTimersByTime(5000); window.dispatchEvent(new Event("focus")); });
     expect(onRevalidate).not.toHaveBeenCalled();
-  });
-});
-
-describe("session expiry overlay", () => {
-  it("keeps the overlay open with an error when sign-in fails", async () => {
-    const onLogin = vi.fn().mockRejectedValueOnce(new ApiError("no", { kind: "unauthenticated", status: 401 })).mockResolvedValueOnce(undefined);
-    render(<SessionExpiredOverlay onLogin={onLogin} />);
-    fireEvent.change(screen.getByLabelText("Workspace password"), { target: { value: "pw" } });
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Sign in" })); });
-    expect(screen.getByRole("alert").textContent).toContain("not accepted");
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Sign in" })); });
-    expect(onLogin).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,7 +1,9 @@
+// @vitest-environment jsdom
+import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { calculateProjectSummary } from "./domain";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
-import { ProjectEditingContext, ProjectExportOptions, ProjectManagementBar, RequirementEditAction, RequirementEditForm, ProjectEditForm, matchesRequirementFilter, projectMenuItems } from "./project-editing";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ProjectEditingContext, ProjectManagementBar, RequirementEditAction, RequirementEditForm, ProjectEditForm, RemovedRequirements, matchesRequirementFilter } from "./project-editing";
 import { inventory, projects } from "./mock-data";
 
 describe("maker correction surfaces", () => {
@@ -10,17 +12,18 @@ describe("maker correction surfaces", () => {
   it("keeps unauthorised or archived contexts read-only", () => {
     expect(renderToStaticMarkup(<RequirementEditAction line={line} />)).toBe("");
     const html = renderToStaticMarkup(<ProjectEditingContext.Provider value={{ ...actions, project: { ...project, status: "archived" } }}><RequirementEditAction line={line} /><ProjectManagementBar /></ProjectEditingContext.Provider>);
-    expect(html).not.toContain("Edit requirement"); expect(html).not.toContain("Edit project");
-    expect(projectMenuItems({ project: { ...project, status: "archived" }, onEdit: () => undefined, onExport: () => undefined, onNewRevision: () => undefined, onArchive: () => undefined, onRestore: () => undefined }).map((item) => item.label)).toEqual(["Export summary", "Restore project"]);
+    expect(html).not.toContain("Edit requirement"); expect(html).not.toContain("Edit project"); expect(html).toContain("Export project");
   });
   it("offers explicit active project actions and bounded exports", () => {
-    expect(projectMenuItems({ project, onEdit: () => undefined, onExport: () => undefined, onNewRevision: () => undefined, onArchive: () => undefined, onRestore: () => undefined }).map((item) => item.label)).toEqual(["Edit project", "Export summary", "New revision", "Archive project"]);
-    const html = renderToStaticMarkup(<ProjectExportOptions project={project} />);
-    expect(html).toContain("Download requirements CSV"); expect(html).toContain("Download project brief JSON"); expect(html).toContain("snapshots, not backups");
+    render(<ProjectEditingContext.Provider value={actions}><RequirementEditAction line={line} /><ProjectManagementBar /></ProjectEditingContext.Provider>);
+    expect(screen.getByRole("button", { name: "Edit project" })).toBeTruthy();
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Export project" }), { button: 0, ctrlKey: false, pointerType: "mouse" });
+    expect(screen.getByRole("menuitem", { name: "Download requirements CSV" })).toBeTruthy();
+    expect(screen.getByText(/snapshots, not backups/)).toBeTruthy(); cleanup();
   });
   it("keeps editing distinct from stock evidence and permanent deletion", () => {
     const html = renderToStaticMarkup(<RequirementEditForm line={line} items={inventory} onSave={async () => undefined} onRetire={async () => undefined} onClose={() => undefined} onBusy={() => undefined} />);
-    expect(html).toContain("Required quantity"); expect(html).toContain("No selected item"); expect(html).toContain("not proof of compatibility"); expect(html).toContain("Remove from plan"); expect(html).toContain("Restore it from Removed requirements");
+    expect(html).toContain("Required quantity"); expect(html).toContain("Already in your workshop?"); expect(html).toContain("not proof of compatibility"); expect(html).toContain("Remove from plan"); expect(html).toContain("Restore it from Removed requirements");
     const projectHtml = renderToStaticMarkup(<ProjectEditForm project={project} onSave={async () => undefined} onClose={() => undefined} onBusy={() => undefined} />);
     expect(projectHtml).toContain("Project stage"); expect(projectHtml).toContain("does not certify readiness");
   });
@@ -42,4 +45,41 @@ it("requirement discovery matches words across its name and note", () => {
   const entry = { ...row, line: { ...row.line, label: "Café spacer", note: "Anodised aluminium", optional: false }, decision: "source" as const };
   expect(matchesRequirementFilter(entry, "aluminium cafe", "source")).toBe(true);
   expect(matchesRequirementFilter(entry, "steel", "all")).toBe(false);
+});
+
+
+afterEach(cleanup);
+it("hides an empty removal history but makes a removed last requirement recoverable", async () => {
+  const listRemoved = vi.fn().mockResolvedValue([]);
+  const actions = { project: { ...projects[0]!, bom: [] }, editRequirement: vi.fn(), editProject: vi.fn(), listRemoved, restore: vi.fn().mockResolvedValue(undefined) };
+  const view = render(<ProjectEditingContext.Provider value={actions}><RemovedRequirements hideWhenEmpty /></ProjectEditingContext.Provider>);
+  await waitFor(() => expect(listRemoved).toHaveBeenCalledTimes(1));
+  expect(screen.queryByRole("button", { name: "Removed requirements" })).toBeNull();
+  listRemoved.mockResolvedValue([projects[0]!.bom[0]!]);
+  view.rerender(<ProjectEditingContext.Provider value={{ ...actions, project: { ...actions.project, serverRevisionId: "synthetic-new-revision" } }}><RemovedRequirements hideWhenEmpty /></ProjectEditingContext.Provider>);
+  fireEvent.click(await screen.findByRole("button", { name: "Removed requirements" }));
+  fireEvent.click(await screen.findByRole("button", { name: `Restore requirement ${projects[0]!.bom[0]!.label}` }));
+  await waitFor(() => expect(actions.restore).toHaveBeenCalledWith(projects[0]!.bom[0]!));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Removed requirements" })).toBeNull());
+});
+
+it("retains edited part fields while checking stock and selecting a newly added owned item", () => {
+  const line = projects[0]!.bom[0]!;
+  const check = vi.fn(), add = vi.fn();
+  const props = { line, items: inventory, onSave: vi.fn(), onRetire: vi.fn(), onClose: vi.fn(), onBusy: vi.fn(), onCheckStock: check, onAddOwnedItem: add };
+  const view = render(<RequirementEditForm {...props}/>);
+  fireEvent.change(screen.getByLabelText("Requirement name"), { target: { value: "Edited part" } });
+  fireEvent.change(screen.getByLabelText("Required quantity"), { target: { value: "12" } });
+  fireEvent.change(screen.getByLabelText("Specification and notes"), { target: { value: "Confirm exact fit before use." } });
+  fireEvent.click(screen.getByRole("button", { name: "Check this stock" }));
+  expect(check).toHaveBeenCalledWith(line.itemId);
+  fireEvent.click(screen.getByRole("button", { name: "Add an owned item" }));
+  expect(add).toHaveBeenCalledWith("Edited part");
+  const newId = inventory.find(item => item.id !== line.itemId)!.id;
+  view.rerender(<RequirementEditForm {...props} initialItemId={newId}/>);
+  expect(screen.getByLabelText("Requirement name")).toHaveProperty("value", "Edited part");
+  expect(screen.getByLabelText("Required quantity")).toHaveProperty("value", "12");
+  expect(screen.getByLabelText("Specification and notes")).toHaveProperty("value", "Confirm exact fit before use.");
+  fireEvent.click(screen.getByRole("button", { name: "Check this stock" }));
+  expect(check).toHaveBeenLastCalledWith(newId);
 });

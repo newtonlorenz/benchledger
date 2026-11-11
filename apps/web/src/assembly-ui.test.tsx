@@ -6,7 +6,7 @@ import { ApiError, workflowRequest } from "./api";
 import { projects } from "./mock-data";
 import type { AssemblyInput, ProjectAssembly } from "@benchledger/api-contract";
 vi.mock("./api", async original => ({ ...await original<typeof import("./api")>(), workflowRequest: vi.fn() }));
-vi.mock("./assembly-canvas", () => ({ default: () => <div aria-label="Synthetic model canvas" /> }));
+vi.mock("./assembly-canvas", () => ({ default: ({ view, explosion }: { view: string; explosion: number }) => <div aria-label="Synthetic model canvas" data-view={view} data-explosion={explosion} /> }));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.mocked(workflowRequest).mockReset(); });
 const project = { ...structuredClone(projects[0]!), id: "synthetic-project", serverRevisionId: "synthetic-revision", artifacts: [{ id: "file-1", name: "enclosure.glb", role: "File" as const, revision: "r01", size: "1 KB", hash: "a".repeat(64), updated: "2026-09-12", status: "candidate" as const, projectRevisionId: "synthetic-revision" }] };
 project.allArtifacts = project.artifacts;
@@ -15,6 +15,24 @@ const part = { id: "part-1", artifactId: "file-1", nodeId: "mesh-0", name: "Cove
 const inspection = { sources: [source], parts: [part], geometry: [{ ...part, positions: [0, 0, 0, 10, 0, 0, 0, 10, 0], indices: [0, 1, 2] }], warnings: ["Synthetic viewing warning"] };
 const saved: ProjectAssembly = { id: "synthetic-revision", projectId: project.id, projectRevisionId: project.serverRevisionId, version: 1, contentSha256: "b".repeat(64), name: "Saved assembly", sources: [source], parts: [part], steps: [], notes: "", updatedAt: "2026-09-12T00:00:00Z", updatedBy: "synthetic" };
 const click = (name: string) => fireEvent.click(screen.getByRole("button", { name }));
+it("changes inspection angles without resetting separation, selection or the current camera", async () => {
+  vi.mocked(workflowRequest).mockImplementation(async path => path.endsWith("/inspect") ? inspection : { assembly: saved, warnings: [] });
+  render(<AssemblyWorkspace project={project} onFiles={() => {}} />);
+  await screen.findByLabelText("Synthetic model canvas");
+  click("Cover"); click("Exploded"); click("Front");
+  const canvas = screen.getByLabelText("Synthetic model canvas");
+  expect(canvas.dataset).toMatchObject({ view: "front", explosion: "100" });
+  expect(screen.getByRole("button", { name: "Cover" }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByRole("button", { name: "Front" }).getAttribute("aria-pressed")).toBe("true");
+  click("Assembled");
+  expect(canvas.dataset).toMatchObject({ view: "front", explosion: "0" });
+  click("Rear"); click("Exploded");
+  expect(canvas.dataset).toMatchObject({ view: "rear", explosion: "100" });
+  click("Isometric");
+  expect(canvas.dataset).toMatchObject({ view: "iso", explosion: "100" });
+  expect(screen.getByRole("button", { name: "Rear" }).getAttribute("aria-pressed")).toBe("false");
+  expect(screen.queryByText("Unsaved changes")).toBeNull();
+});
 it("imports with explicit units, edits shared parts/steps and replays an uncertain save unchanged", async () => {
   let persisted: ProjectAssembly | null = null, saves = 0;
   vi.mocked(workflowRequest).mockImplementation(async (path, method, body) => {
@@ -27,6 +45,7 @@ it("imports with explicit units, edits shared parts/steps and replays an uncerta
   expect((screen.getByLabelText("Coordinate units for enclosure.glb") as HTMLSelectElement).value).toBe("metre"); expect((screen.getByLabelText("Up axis for enclosure.glb") as HTMLSelectElement).value).toBe("y");
   click("Open assembly"); await screen.findByRole("button", { name: "Cover" }); click("Cover"); click("Edit assembly");
   fireEvent.change(screen.getByLabelText("Fixing notes"), { target: { value: "Fit after wiring." } });
+  click("Placement and separation");
   fireEvent.change(screen.getByLabelText("Separation (mm) Z"), { target: { value: "35" } });
   vi.stubGlobal("crypto", undefined);
   click("Use this separation for group"); click("Add another placement"); click("Build order"); click("Add build step");
@@ -69,7 +88,7 @@ it("opens large imports in viewing mode and searches without hiding the selected
   vi.mocked(workflowRequest).mockImplementation(async path => path.endsWith("/inspect") ? { ...inspection, parts } : { assembly: null, warnings: [] });
   render(<AssemblyWorkspace project={project} onFiles={() => {}} />);
   await screen.findByRole("button", { name: "Select all files" }); click("Select all files");
-  expect(screen.getByLabelText("enclosure.glb")).toHaveProperty("checked", true);
+  expect(screen.getByLabelText("enclosure.glb")).toHaveProperty("ariaChecked", "true");
   click("Clear selection"); expect(screen.getByRole("button", { name: "Open assembly" }).matches(":disabled")).toBe(true);
   click("Select all files"); click("Open assembly"); await screen.findByRole("button", { name: "Panel 26" });
   expect(screen.queryByLabelText("Assembly name")).toBeNull(); expect(screen.getByRole("button", { name: "Save assembly" })).toBeTruthy();
@@ -78,14 +97,4 @@ it("opens large imports in viewing mode and searches without hiding the selected
   fireEvent.change(screen.getByLabelText("Find a part"), { target: { value: "no match" } });
   expect(screen.getByText("No matching parts.")).toBeTruthy(); expect(screen.getByRole("button", { name: "Isolate part" })).toBeTruthy();
   click("Edit assembly"); expect(screen.getByLabelText("Fixing notes")).toBeTruthy(); click("Done editing"); expect(screen.queryByLabelText("Fixing notes")).toBeNull();
-});
-it("does not report unsaved work just for opening a new model, only after an edit", async () => {
-  vi.mocked(workflowRequest).mockImplementation(async path => path.endsWith("/inspect") ? inspection : { assembly: null, warnings: [] });
-  render(<AssemblyWorkspace project={project} onFiles={() => {}} />);
-  await screen.findByRole("button", { name: "Open assembly" }); fireEvent.click(screen.getByLabelText("enclosure.glb")); click("Open assembly");
-  await screen.findByRole("button", { name: "Cover" });
-  expect(screen.getByText(/1 part · Not saved yet/u)).toBeTruthy(); expect(screen.queryByText(/Unsaved changes/u)).toBeNull();
-  expect(screen.getByRole("button", { name: "Save assembly" })).toBeTruthy();
-  click("Edit assembly"); fireEvent.change(screen.getByLabelText("Assembly name"), { target: { value: "Edited" } });
-  expect(screen.getByText(/Unsaved changes/u)).toBeTruthy();
 });

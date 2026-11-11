@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
-import { openProjectByName } from "./project-nav";
+import { navigateWorkspace, openProject } from "./workspace-controls";
 
 const demoPassword = "demo-password-please-change";
 const projectName = "Synthetic receiving policy check";
@@ -20,7 +20,11 @@ async function signIn(page: Page): Promise<void> {
   await page.goto("/");
   await page.getByLabel("Workspace password").fill(demoPassword);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("heading", { name: "Workspace overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
+}
+
+async function openPolicyProject(page: Page): Promise<void> {
+  await openProject(page, projectName, "Parts");
 }
 
 async function csrf(page: Page): Promise<string> {
@@ -43,7 +47,7 @@ async function seed(page: Page): Promise<void> {
 }
 
 async function choosePolicy(page: Page, label: RegExp, expectedImpact: RegExp): Promise<void> {
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await navigateWorkspace(page, "Settings");
   const section = page.locator(".stock-receiving-section");
   await expect(section.getByRole("heading", { name: "When does stock count as in stock?" })).toBeVisible();
   await section.getByRole("radio", { name: label }).check();
@@ -61,45 +65,45 @@ test("the receiving policy flips delivered stock from Check to ready without rew
   await seed(page);
   // The records were created through the API; reload so the browser reads them.
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Workspace overview" })).toBeVisible();
-  await openProjectByName(page, projectName);
-  await expect(row(page, "Heat-set inserts")).toContainText("Check stock");
-  await expect(row(page, "Mounting screws")).toContainText("Check stock");
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
+  await openPolicyProject(page);
+  await expect(row(page, "Heat-set inserts")).toContainText("Check");
+  await expect(row(page, "Mounting screws")).toContainText("Check");
   await shot(page, "bom-on-receipt");
 
   await choosePolicy(page, /When it's delivered/u, /\d+ items? will now count as in stock/u);
   await shot(page, "settings-saved-on-delivery");
-  await openProjectByName(page, projectName);
+  await openPolicyProject(page);
   const inserts = row(page, "Heat-set inserts");
-  await expect(inserts).toContainText("Ready to use");
-  await expect(inserts).toContainText("Need 4 pieces · Have 4 pieces");
+  await expect(inserts).toContainText("Ready");
   await expect(inserts).toContainText("In stock · delivered, not counted");
-  await expect(row(page, "Mounting screws")).toContainText("Check stock");
+  await expect(row(page, "Mounting screws")).toContainText("Check");
   await shot(page, "bom-on-delivery");
 
   // The inventory list and item drawer keep the recorded evidence visible.
-  await page.getByRole("button", { name: "Inventory", exact: true }).click();
-  await page.getByRole("textbox", { name: "Search inventory" }).fill("Synthetic delivered M3");
+  await navigateWorkspace(page, "Inventory");
+  await page.getByRole("textbox", { name: "Search inventory", exact: true }).fill("Synthetic delivered M3");
   const inventoryRow = page.locator("tr").filter({ hasText: deliveredName });
   await expect(inventoryRow).toContainText("In stock · delivered, not counted");
   await shot(page, "inventory-on-delivery");
-  await page.getByRole("button", { name: `Open ${deliveredName}` }).click();
-  const drawer = page.getByRole("dialog", { name: new RegExp(deliveredName, "u") });
-  await expect(drawer).toContainText("In stock · delivered, not counted");
-  await expect(drawer.getByText("Receive and count", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: new RegExp(`^Open ${deliveredName}`, "u") }).first().click();
+  const close = page.getByRole("button", { name: "Close item details" });
+  await expect(close).toBeVisible();
+  await expect(page.getByText("In stock · delivered, not counted").first()).toBeVisible();
+  await expect(page.getByText("Receive and count", { exact: true }).first()).toBeVisible();
   await shot(page, "drawer-on-delivery");
-  await drawer.getByRole("button", { name: "Close item details" }).click();
+  await close.click();
 
   // "When it's bought" also trusts the ordered screws.
   await choosePolicy(page, /When it's bought/u, /\d+ items? will now count as in stock/u);
-  await openProjectByName(page, projectName);
-  await expect(row(page, "Mounting screws")).toContainText("Ready to use");
+  await openPolicyProject(page);
+  await expect(row(page, "Mounting screws")).toContainText("Ready");
   await expect(row(page, "Mounting screws")).toContainText("In stock · ordered, not yet delivered");
 
   // Restore the default so later runs and specs see the conservative policy.
   await choosePolicy(page, /When I've received and checked it/u, /\d+ items will no longer count as in stock/u);
-  await openProjectByName(page, projectName);
-  await expect(row(page, "Heat-set inserts")).toContainText("Check stock");
+  await openPolicyProject(page);
+  await expect(row(page, "Heat-set inserts")).toContainText("Check");
   const evidence = await (await page.request.get("/api/v1/inventory/e2e-policy-inserts")).json() as { evidence: { state: string }; availability: string };
   expect(evidence).toMatchObject({ evidence: { state: "delivered_uncounted" }, availability: "inspect_first" });
 });

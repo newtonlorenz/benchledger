@@ -1,4 +1,4 @@
-import { assemblyInputSchema, inspectAssemblySchema, commandJsonSchema, createRequirementOfferSchema, chooseRequirementOfferSchema, buildPlanInputSchema, workAssignmentInputSchema, createWorkstreamSchema, bomImportInputSchema, bomImportCommitSchema } from "@benchledger/api-contract";
+import { assemblyInputSchema, inspectAssemblySchema, commandJsonSchema, projectPresentationInputSchema, createRequirementOfferSchema, chooseRequirementOfferSchema, buildPlanInputSchema, workAssignmentInputSchema, createWorkstreamSchema, bomImportInputSchema, bomImportCommitSchema } from "@benchledger/api-contract";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { ApplicationService, RequestContext } from "@benchledger/application";
 import { ApplicationError } from "@benchledger/application";
@@ -26,6 +26,9 @@ export function registerMakerWorkflowRoutes(app: FastifyInstance, service: Appli
   app.get(`${revision}/assembly`, guarded(false, (_request, p) => service.assemblies.read(p.projectId, p.revisionId)));
   app.put(`${revision}/assembly`, guarded(true, (request, p) => service.assemblies.save(p.projectId, p.revisionId, request.body, access.context(request))));
   app.get(`${revision}/assembly/history`, guarded(false, (request, p) => service.assemblies.history(p.projectId, p.revisionId, query(request))));
+  app.get(`${revision}/presentation`, guarded(false, (_request, p) => service.makerWorkflows.projectPresentation(p.projectId, p.revisionId)));
+  app.put(`${revision}/presentation`, guarded(true, (request, p) => service.makerWorkflows.saveProjectPresentation(p.projectId, p.revisionId, request.body, access.context(request))));
+  app.get(`${revision}/presentation/history`, guarded(false, (request, p) => service.makerWorkflows.projectPresentationHistory(p.projectId, p.revisionId, query(request))));
   app.get(`${revision}/build-plan`, guarded(false, (_request, p) => service.makerWorkflows.buildPlan(p.projectId, p.revisionId)));
   app.put(`${revision}/build-plan`, guarded(true, (request, p) => service.makerWorkflows.saveBuildPlan(p.projectId, p.revisionId, request.body, access.context(request))));
   app.get(`${revision}/build-plan/history`, guarded(false, (request, p) => service.makerWorkflows.buildPlanHistory(p.projectId, p.revisionId, query(request))));
@@ -47,6 +50,8 @@ export function makerWorkflowOpenApi(): Record<string, unknown> {
     [`${revision}/assembly`]: { get: method("Read the revision assembly and source warnings", false), put: { ...method("Save an assembly viewing and guidance snapshot", true), ...body(assemblyInputSchema) } },
     [`${revision}/assembly/inspect`]: { post: { ...method("Inspect hash-bound static CAD sources; no persistent mutation", false), ...body(inspectAssemblySchema) } },
     [`${revision}/assembly/history`]: { get: method("Read retained assembly version summaries", false) },
+    [`${revision}/presentation`]: { get: method("Read the revision cover selection with stale-image warnings", false), put: { ...method("Select or clear a hash-bound project display image", true), ...body(projectPresentationInputSchema) } },
+    [`${revision}/presentation/history`]: { get: method("Read retained project cover selections", false) },
     [`${revision}/build-plan`]: { get: method("Read the current versioned multi-plate plan", false), put: { ...method("Save a reviewed multi-plate planning snapshot", true), ...body(buildPlanInputSchema) } },
     [`${revision}/build-plan/history`]: { get: method("Read retained build-plan versions", false) },
     [`${scope}/workstreams`]: { get: method("Read workstreams and assignments", false, false), post: { ...method("Create a workstream and its initial revision atomically", true, false), ...body(createWorkstreamSchema) } },

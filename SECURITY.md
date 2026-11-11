@@ -35,15 +35,25 @@ reasonable opportunity to investigate before disclosure.
   structured token configuration can also enforce expiry.
 - Tokens are stored hashed server-side; plaintext belongs in a client secret
   store such as macOS Keychain.
-- Uploaded files are size- and quota-limited and hash-checked. BenchLedger
-  never executes or slices them. It does parse some uploads server-side:
-  inventory images are decoded and re-encoded (metadata stripped) with
-  `sharp`, and GLB, STL and STEP assembly sources are read and parsed to
-  inspect their geometry. Those
-  parsers are part of the attack surface; keep dependencies current.
-- Artifact downloads are always `Content-Disposition: attachment`, carry
-  `X-Content-Type-Options: nosniff`, and use the recorded media type only for
-  an allow-list of safe types (others become `application/octet-stream`).
+- Uploaded files are size- and quota-limited, hash-checked, and bound to an
+  authorised project or work-item revision. Browser Files and the supported host
+  helper share the 100 MiB limit and format policy, including JSON, ZIP and SVG.
+  BenchLedger never executes or slices them. It does parse some uploads
+  server-side: inventory images are decoded and re-encoded (metadata stripped)
+  with `sharp`, and GLB, STL, STEP and KiCad PCB assembly sources are read and
+  parsed to inspect their geometry. Those parsers are part of the attack
+  surface; keep dependencies current.
+- ZIP archives are stored opaquely for download and are never extracted or
+  executed. SVG previews display verified, escaped source through the 1 MiB text
+  preview, never SVG image Blob URLs, inline markup, objects or iframes.
+- Both authenticated artifact download routes serve attachments
+  (`Content-Disposition: attachment`) with `Cache-Control: no-store`,
+  `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, and
+  `Content-Security-Policy: sandbox allow-downloads; default-src 'none'`. The
+  download permission preserves ordinary attachment navigation without enabling
+  scripts or same-origin access. The recorded media type is used only for an
+  allow-list of safe types; others, including SVG, become
+  `application/octet-stream`. Other excluded file types remain excluded.
 - Request bodies are size-limited before authentication (16 KiB on login
   routes, 2 MiB by default, `BENCHLEDGER_MAX_UPLOAD_BYTES` on upload routes).
 - Responses carry `nosniff`, `Referrer-Policy: no-referrer`, frame denial and

@@ -14,6 +14,14 @@ updates:
         update-types: [version-update:semver-major]
       - dependency-name: "jsdom"
         update-types: [version-update:semver-major]
+      # Expo/React Native in apps/mobile pins react exactly; bump react,
+      # react-dom and @types/react-dom together with an Expo SDK upgrade.
+      - dependency-name: "react"
+        versions: [">=19.3.0"]
+      - dependency-name: "react-dom"
+        versions: [">=19.3.0"]
+      - dependency-name: "@types/react-dom"
+        versions: [">=19.3.0"]
     groups:
       vite-toolchain:
         patterns: [vite, "@vitejs/plugin-react"]

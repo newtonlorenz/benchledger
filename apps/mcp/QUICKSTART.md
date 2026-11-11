@@ -71,6 +71,28 @@ matters:
  Use the exact item resource when a candidate
 needs dimensions, compatibility, provenance, or stock history.
 
+For stock planning, `list_inventory` accepts `stockView: "available" | "check" |
+"reserved" | "depleted"` and `sort: "name" | "name_desc" | "location"`. These are
+shared with the UI and applied before pagination. For example:
+
+```json
+{"stockView":"available","category":"electronic","sort":"name","limit":25}
+```
+
+`available` requires counted/commissioned stock, a positive unallocated balance,
+valid units and no known repair need. It does not establish project compatibility.
+`check` covers unverified evidence, missing available balances, unit corrections
+and repair needs. `reserved` includes partial allocations and may overlap
+`available`; `depleted` requires confirmed/consumed zero stock. Retired records are
+excluded from all four queues. Combine these with existing query/category/location
+filters and follow the returned cursor with the same filters and sort.
+
+Each row includes `stockViews` and `stockCondition`, which retains the canonical
+condition such as `needs_repair` instead of only the legacy `opened` alias. A UI
+AI brief is a dated snapshot of explicitly selected records, not the whole ledger.
+Re-read current quantities/versions before a write and evaluate project BOM
+compatibility before treating stock as a suitable substitute.
+
 Inventory rows expose on-hand, available, and allocated quantities separately.
 A fully reserved counted item is `allocated`, not `depleted`; a partial
 reservation remains visible with both available and allocated quantities.
@@ -395,6 +417,17 @@ CAD, STL, STEP, 3MF, build, firmware, or other large files as base64, and never
 accepts an absolute host path, shell command, SQL statement, or executable
 upload. Artifact paths are logical IDs, not host filesystem paths.
 
+Browser Files and the supported host helper accept JSON (`application/json`),
+ZIP (`application/zip` or `application/x-zip-compressed`), and SVG
+(`image/svg+xml`), with the same 100 MiB limit, revision authorisation and
+length/hash checks. ZIP files are stored opaquely for download without extraction
+or execution. SVG previews show escaped source through the verified 1 MiB text
+preview; they never embed SVG markup or create SVG image Blob URLs. Both
+authenticated download routes return the original as an attachment with
+`no-store`, `no-referrer`, `nosniff`, and `sandbox allow-downloads; default-src 'none'`
+CSP. Direct authenticated attachment navigation remains supported.
+Other excluded file types remain excluded.
+
 Typical roles include `source`, `cad`, `step`, `stl`, `three_mf`,
 `slicer_project`, `gcode`, `drawing`, `validation`, and `document`. Manifest
 freezing is deferred in the current application service; treat hashes and
@@ -494,7 +527,15 @@ but may not record offer snapshots. Human approval remains required for
 purchasing, external publication, deployment, credential changes, destructive
 purge, printer control, heating, firmware flashing, and physical tests.
 
-Indirect ancestry is resolved from durable host state rather than a
+Project-scoped writes can retain purchase context in requirement notes or
+revision artifacts and supplier observations through `record_requirement_offer`.
+Creating stock requires an authorised workspace inventory write, followed by
+explicit requirement matching. A quoted package quantity does not establish
+received or physically counted stock.
+
+For HTTP bearer configuration, a token listed in the write hash environment
+variable receives both read and write scopes, while a read token remains
+read-only. Indirect ancestry is resolved from durable host state rather than a
 request-local cache. The application service's repository-backed defaults cover
 historical BOM/reservation records and upload sessions; hosts may provide an
 explicit resolver for a different durable store.
@@ -569,3 +610,26 @@ contract. Invalid filters are rejected; no new permissions or writes are implied
 ## Assembly explorer
 
 The tools `inspect_assembly_sources`, `read_project_assembly`, `save_project_assembly` and `read_assembly_history` work on any project fabrication route. Inspect existing hash-bound source files, read all part pages, and save the complete assembly with expectedVersion and a stable host command key. Inspection omits triangle buffers. No implicit file upload, physical validation or printer control occurs. See [the assembly contract](../../docs/assembly-explorer.md).
+
+Native `.kicad_pcb` sources use `inspect_assembly_sources` with `unit: "millimetre"` and `upAxis: "z"`. Returned part notes retain available reference/value/footprint metadata; warnings identify omitted geometry and missing component bodies. Inspection is read-only and never resolves external models. See [PCB viewer](../../docs/pcb-viewer.md).
+
+
+## Project preview images
+
+Use `list_project_library({ status: "all", limit: 100 })` and follow each
+`nextCursor` to read all permitted projects with current files and selected
+preview metadata. Read `read_project_presentation({ projectId,
+projectRevisionId })`; its result is `{ presentation: record | null }`. Select
+an authorised, already attached PNG/JPEG/WebP via `save_project_presentation`
+with `presentation: { expectedVersion, coverArtifactId, imageKind, caption }`
+and one stable command key. `imageKind` is `render`, `reference` or
+`built_photo`; `coverArtifactId: null` clears the selection.
+
+The image must belong to the current project revision or a current work-item
+revision in that project, be non-retired and at most 20 MiB. Saving checks
+project ancestry and retains the image hash; reading invalidates a cover whose
+revision, hash or availability changed. Use `read_project_presentation_history`
+for retained selections. The library read requires projects-read scope;
+selection requires projects-write scope. Project-scoped tokens see only their
+allowed projects. Preview images do not certify manufacturing or physical
+readiness, and these commands do not change stock or operate equipment.

@@ -1,5 +1,27 @@
 # Changelog
 
+## Maker experience
+
+- Open the project register directly from Projects, with clearer Requirements and Build steps.
+- Start empty workspaces with two useful actions and hide unused filters and task counts.
+- Add an unlisted owned part from a requirement, retain the draft, and return with the item selected.
+- Capture component specifications immediately; review an explicitly requested count without entering the quantity twice.
+- Finish counts with a receipt and continuation; improve guided stock search, specialist focus and build draft protection.
+
+- Start projects with a name, review owned stock beside each requirement, and defer optional planning details.
+- Retain project/import drafts and guide captured inventory directly into physical-count review.
+- Set aside and release confirmed stock from Build planning before recording actual use.
+- Keep build warnings visible, reuse the intended printer, and upload missing files without leaving a build draft.
+- Connect selected quotes to received-stock capture and explicit requirement matching.
+
+- Protect project, requirement and item-edit drafts; focus item editing on its active task.
+- Keep printer setup tasks consistent and quote review status faithful to estimates.
+- Improve quote-entry focus, shopping evidence copying and build-part validation.
+- Prioritise next project actions, simplify Workbench and disclose specialist viewers.
+- Simplify inventory controls and show stock balances together on phones.
+- Put physical counting first and explain empty build-plan recovery in plain language.
+
+
 Notable user-facing changes will be recorded here. BenchLedger has not made its
 first public release; all current work is under **Unreleased**.
 
@@ -91,6 +113,22 @@ first public release; all current work is under **Unreleased**.
   inventory/project search, evidence and requirement views, versioned item
   metadata edits and atomic project creation. See [mobile setup](docs/mobile-app.md).
 
+- Visual project Gallery and a remembered compact List with thumbnails, retaining
+  search, pins, readiness and next actions.
+- Revision-scoped project image selection in Files, authenticated SHA-256-checked
+  previews, and paged HTTP/MCP project-library and presentation history operations.
+- JSON, ZIP and SVG project artifacts through browser Files and the supported
+  host helper, retaining the 100 MiB limit, exact revision scope and hash checks.
+  ZIP stays opaque and download-only; SVG uses a verified, escaped source preview.
+
+- Shadcn web foundation across forms, navigation, tables, tabs, dialogs, drawers,
+  search pickers, menus, resizable inventory panels and notifications. One semantic
+  light/dark theme replaces the competing visual layers; protected drafts and
+  stock confirmation rules are retained.
+
+- Desktop workspace with persistent project navigation, compact document tools,
+  independently scrolling content and a collapsible project inspector.
+
 - Inline draft protection, explicit unavailable-project recovery and rendered accessibility smoke checks
 
 - Task-oriented home with project search, local pins, recent-project resume and direct attention actions
@@ -126,6 +164,22 @@ first public release; all current work is under **Unreleased**.
   longer rewrite an item's recorded quantity.
 - Demo mode lists projects in the same order as production (most recently
   updated first); the demo-only creation-order wrapper was removed.
+
+- Update Sharp to 0.35.5 and the transitive source-map-js dependency to 1.2.2
+  to resolve the production dependency security audit findings.
+
+- Inspect assemblies from isometric, front and rear views without resetting
+  separation; keep the selected camera while assembling or separating parts.
+- Keep assembly dimensions clear of wrapped phone controls and explain unavailable
+  graphics with an in-place retry. Add synthetic visual review packs and browser
+  checks for intermediate separation states and draft-preserving graphics recovery.
+
+- Serve both authenticated artifact downloads as attachments with no-store,
+  no-referrer, nosniff and a sandbox/default-src-none Content Security Policy.
+
+- Load Assembly, PCB and Markdown views only when opened. Viewer failures stay
+  inside their panel, with safe recovery guidance and local graphics retries
+  that preserve assembly edits.
 
 - Freeze stock-review and inspection inputs while requests are pending or unconfirmed; recover with the exact reviewed payload
 - Render saved stock outcomes as immutable receipts and use one keyboard/inert boundary for inline approval dialogs

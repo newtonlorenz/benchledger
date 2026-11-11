@@ -28,7 +28,8 @@ export class AssemblyService {
     } else if (file.revisionId !== revisionId) throw new ApplicationError("forbidden", "The file must belong to this exact project revision.");
     if (file.sha256 !== source.sha256) throw new ApplicationError("conflict", "The source hash differs. Inspect the exact file before saving.");
     if (write && file.retired) throw new ApplicationError("conflict", "A source was retired. Choose an active file before saving.");
-    if (!/\.(glb|stl|step|stp)$/iu.test(file.filename)) throw new ApplicationError("validation", "Use a STEP, GLB or STL source file.");
+    if (!/\.(glb|stl|step|stp|kicad_pcb)$/iu.test(file.filename)) throw new ApplicationError("validation", "Use a KiCad PCB, STEP, GLB or STL source file.");
+    if (/\.kicad_pcb$/iu.test(file.filename) && (source.unit !== "millimetre" || source.upAxis !== "z")) throw new ApplicationError("validation", "KiCad PCB sources use fixed millimetre units and Z up.");
     if (file.byteSize > 20 * 1024 * 1024) throw new ApplicationError("quota_exceeded", "Assembly files are limited to 20 MB each.");
     return file;
   }
@@ -59,7 +60,7 @@ export class AssemblyService {
       return { id: `part-${i + 1}`, min, max };
     });
     const explosion = suggestAssemblyExplosion(bounds);
-    return { sources, geometry, warnings: [...warnings], parts: geometry.map((mesh, i) => ({ id: bounds[i]!.id, artifactId: mesh.artifactId, nodeId: mesh.nodeId, name: mesh.name, group: mesh.group, color: mesh.color, position: [0, 0, 0], rotation: [0, 0, 0], explode: explosion[bounds[i]!.id]!, material: "", notes: "" })) };
+    return { sources, geometry, warnings: [...warnings], parts: geometry.map((mesh, i) => ({ id: bounds[i]!.id, artifactId: mesh.artifactId, nodeId: mesh.nodeId, name: mesh.name, group: mesh.group, color: mesh.color, position: [0, 0, 0], rotation: [0, 0, 0], explode: explosion[bounds[i]!.id]!, material: mesh.pcb?.kind === "board" ? "Board substrate" : "", notes: mesh.pcb ? [mesh.pcb.reference, mesh.pcb.value, mesh.pcb.footprint, mesh.pcb.modelStatus ? "Footprint geometry only; no component body loaded." : `${mesh.pcb.kind}, ${mesh.pcb.side}`].filter(Boolean).join(" · ") : "" })) };
   }
   async save(projectId: string, revisionId: string, input: unknown, ctx: RequestContext) {
     const body = parse(assemblyInputSchema, input), action = "project.assembly.save";

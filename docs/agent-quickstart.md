@@ -38,6 +38,20 @@ repository. Store those details in private operator notes or runtime
 configuration, not in public docs or examples. For the full operator sequence,
 see [`development-workflow.md`](development-workflow.md).
 
+## Browser orientation
+
+Projects and Inventory are the two workspace destinations. Open a project to
+Overview, then use Parts, Files and Build. Parts includes stock matching, checks
+and To source; Build retains Assembly, PCB and actual-stock-use tools when the
+service advertises them. Settings contains Appearance and **For agents**.
+
+A requirement's **Check stock** action opens the selected inventory item while
+keeping the part draft in memory. Review the physical count and confirm it, then
+use **Return to [part name]** to resume that same draft. Adding an owned item from
+the requirement follows the same draft-preserving return. Counted quantity does
+not establish compatibility, and returning does not save the requirement match.
+Unsaved private form values are not stored in browser preferences.
+
 ## Minute 0–1: discover
 
 Connect to the authenticated MCP endpoint configured by the host application:
@@ -90,15 +104,46 @@ to use `kind`. If the add form has no active categories, choose **Open Settings*
 from that form, create one, and return to Inventory. Existing legacy items may
 be unassigned until edited.
 
+Inventory category filters select exact assigned categories; selecting a parent
+does not include its subcategories. Click a record to inspect it, then use
+**Open item** or the supported keyboard editing controls. **View options** holds
+sorting and optional columns. Inspector visibility and width are remembered
+locally; on phones the item details use a sheet. These display preferences do
+not change agent queries or stock evidence.
+
 For paged inventory reads, pass `categoryNodeId` to filter by an exact managed
 node or `unassigned: true` to select legacy items without an assignment. These
 filters are applied before pagination and cannot be combined.
+
+Use `stockView: "available"` for counted/commissioned stock with a usable unit,
+positive available balance and no known repair need; check compatibility against
+the project's requirements separately. The other shared queues are `check`,
+`reserved` (including partial allocations) and `depleted` (confirmed zero stock).
+`sort` accepts `name`, `name_desc` and `location` before pagination. MCP rows retain
+canonical repair information in `stockCondition` and membership in `stockViews`.
+See [the inventory workstation contract](capability-map.md#inventory-workstation).
+
+The UI inspector provides **Copy for AI** for explicitly selected records only.
+Its dated snapshot includes evidence and versions, sends nothing automatically,
+and must not be treated as a full stocktake or authority to mutate stock.
 
 All list responses are bounded pages. Follow `nextCursor`; never request an
 unbounded database dump. Inventory cursors are opaque read-committed continuation
 tokens: concurrent writes can affect later pages, and keyset snapshot semantics
 are not yet provided. Read the project resources for context, BOM, and artifact
 metadata when working in a project.
+
+For a visual project overview, use `list_project_library` when advertised and
+follow every `nextCursor`. Its default `active` status includes completed
+projects and excludes archived ones; `archived` and `all` are explicit options.
+The library returns project-scoped metadata and image selections, not image bytes
+or global inventory. Read the selected revision with `read_project_presentation`
+before saving a change through `save_project_presentation`, using the observed
+version and a stable command key. Select an already attached PNG, JPEG or WebP
+of up to 20 MiB from the current project or workstream revision, with an honest
+`render`, `reference` or `built_photo` label. Browser users choose the same file
+in **Files → Project image**. See [project images](project-images.md) for the
+contract and history; a picture does not establish physical readiness.
 
 ## Minute 2–4: beginner path
 
@@ -121,7 +166,7 @@ When a connected revision exposes a Check candidate, use the revision-scoped
 inspection queue: list and read the action, submit its observation to the
 `completion-preview` endpoint, show the server preview, and ask for explicit
 human confirmation before calling `completion-commit`. The Project Plan Checks
-panel sits above the BOM, shows three concrete beginner questions plus **View
+panel sits below the requirements, shows three concrete beginner questions plus **View
 all**, and reveals action/line/item versions, evidence, predicate, unit, and
 effects in expert mode. Confirmed compatibility and unit conversion require
 explicit values and evidence (source, basis, and observed time); never infer
@@ -276,22 +321,38 @@ browser-computed byte length and SHA-256. Keep source, STEP, STL, 3MF, slicer,
 drawing, and validation revisions separate; do not overwrite an accepted
 artifact.
 
+Files groups scoped records into **3D print**, **Electronics**, **CAD & firmware**
+and **Instructions**. File details remain tied to the selected artifact. The
+history/all-files view is read-only. An empty file group offers file addition
+without implying that it is required for every project.
+
 In a project's Files tab, Preview opens supported images (PNG, JPEG, GIF,
-WebP, AVIF, BMP, SVG), Markdown, text (TXT, CSV, TSV, JSON, YAML, LOG, GCODE,
-SCAD), and STL meshes. Markdown is formatted; code and data stay plain text.
+WebP, AVIF, BMP), Markdown, text/source (TXT, CSV, TSV, JSON, YAML, LOG, GCODE,
+SCAD, SVG), and STL meshes. Markdown is formatted; code and data stay plain text.
 The STL viewer supports rotate, zoom, and reset. It does not certify dimensions,
 printability, or physical fit. Text/Markdown previews are limited to 1 MiB;
 images/STL to 20 MiB, with STL limited to 250,000 triangles. Larger files and
-unsupported formats, including STEP, 3MF, native CAD, PDF, and HTML, remain
-available to download when already stored. Existing upload format restrictions
-still apply; preview support does not broaden the upload allowlist. Sample records have no downloadable preview bytes.
+unsupported preview formats, including ZIP, STEP, 3MF, native CAD, PDF, and HTML,
+remain available to download when already stored. Download a 3MF and open it
+in the chosen slicer to review its machine/material settings and toolpaths;
+BenchLedger does not launch a slicer or start a print. ZIP archives are opaque and
+download-only; BenchLedger does not extract or execute them. Existing upload
+format restrictions still apply; preview support does not broaden the upload
+allowlist. Sample records have no downloadable preview bytes.
 
 Previews use the existing authenticated `GET /api/v1/artifacts/{id}/download`
-route and verify SHA-256 before rendering. SVG is displayed only as an image;
-Markdown does not run HTML or load embedded images. No files are sent to a
-third-party viewer. Closing a preview cancels its fetch and releases browser
+route and verify SHA-256 before rendering. SVG displays escaped source through
+the 1 MiB text-preview path, without SVG image Blob URLs, inline markup, objects
+or iframes. Markdown does not run HTML or load embedded images. No files are sent
+to a third-party viewer. Closing a preview cancels its fetch and releases browser
 resources. This is a browser-only presentation feature; API and MCP contracts
 are unchanged.
+
+Optional viewing code loads when opened. If a graphics connection is lost,
+**Retry STL preview** or **Retry 3D viewer** restores the renderer locally and
+preserves assembly edits. If the viewing code itself cannot download, the
+dialog and other project tabs remain usable; save open work before refreshing
+the browser. No automatic page reload or record write is part of this recovery.
 
 Generic MCP does not advertise transfer actions or expose upload sessions or
 transfer capabilities. Cached clients calling its former raw
@@ -314,7 +375,8 @@ Call `list_offers` and optionally `record_offer_snapshot` for supplied supplier
 observations. A shopping proposal contains only required BOM lines whose
 decision is **Source**. Keep Ready, Check, Decide, and optional lines visible
 as separate readiness context; never turn them into shopping rows, counts, or
-copied draft text. If no Source line exists while Decide or Check work remains,
+purchase totals. Browser proposal exports may include them in separately labelled
+readiness context. If no Source line exists while Decide or Check work remains,
 say “Nothing is ready to source” and explain those blockers. A useful readiness
 summary separates:
 
@@ -375,13 +437,36 @@ physical execution authority. Named-account activation remains gated off.
 
 ## Removing records from the workspace
 
-Use **Delete project** in the project header, or open an inventory item or printer
-and choose **Delete item** or **Delete printer**. Confirm once. History remains
+Use **Project actions → Delete project** from the selected project,
+or open an inventory item or printer and choose **Delete item** or **Delete printer**. Confirm once. History remains
 retained, but these actions cannot be undone. Archive a project from Project
-settings if you may need to restore it. Release allocated stock before deleting
+actions if you may need to restore it. Release allocated stock before deleting
 an inventory item; do not change its physical count to bypass this safeguard.
 Inventory deletion is a browser/HTTP action, not an advertised MCP tool.
 
 ## Assembly explorer
 
-Use `inspect_assembly_sources` on exact, already uploaded STEP/GLB/STL files, paging through all parts. Read the current version with `read_project_assembly`, then use `save_project_assembly` with the full snapshot, observed expectedVersion and a stable host command key. Units/up axis, positions, separation, names, BOM links and steps are shared with the browser. See [Assembly explorer](assembly-explorer.md) for the full contract and import limits.
+Use `inspect_assembly_sources` on exact, already uploaded KiCad PCB/STEP/GLB/STL files, paging through all parts. Read the current version with `read_project_assembly`, then use `save_project_assembly` with the full snapshot, observed expectedVersion and a stable host command key. Units/up axis, positions, separation, names, BOM links and steps are shared with the browser. See [Assembly explorer](assembly-explorer.md) for the full contract and import limits.
+
+Native PCB inspection uses fixed millimetres and Z up. References, values and footprint notes describe source pads/outlines, not verified component bodies. External model paths are never loaded. Read returned omissions before using a view as evidence. See [PCB viewer](pcb-viewer.md).
+
+Reservation creation is rejected after a project revision's reconciliation has
+been committed. Start a new revision for another build cycle. Reserving stock
+still requires confirmed usable evidence and compatibility; release uses the
+observed reservation version. Browser set-aside and actual-use actions follow
+the same application rules as agent calls.
+
+HTTP upload recovery: after a lost byte-write response, read
+`GET /api/v1/artifacts/uploads/:id` with read access to the upload's project.
+Use `receivedBytes` to send only the remaining suffix, with `Upload-Offset` set
+to that count. A stale offset returns 409 without appending; read progress again.
+Finalize verifies the declared size and SHA-256. Retry an uncertain finalization
+with its original command key. Only a confirmed expired session permits starting
+a fresh upload; session reads do not renew the fifteen-minute expiry.
+
+
+The browser **Parts → To source** route can copy or download a dated full-revision proposal.
+The export keeps selected quote sources, observation dates, package quantities,
+unresolved gaps and currency totals even when the visible list is filtered.
+It is not a live supplier check or purchase instruction. Received stock uses an
+explicit receipt quantity, then count review and separate requirement matching.

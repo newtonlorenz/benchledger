@@ -41,6 +41,13 @@ Read it from `refresh_context`; never try to change it. Policy-trusted rows
 uncounted, so name that assumption when you rely on them.
 A counted item can still require compatibility inspection.
 
+For a visual project overview, use advertised `list_project_library` pages and
+follow every returned cursor. To select a project image, read the current
+revision's presentation and save an eligible attached PNG/JPEG/WebP of up to
+20 MiB with its observed version. Label renders, references and build photos
+honestly; never select historical or unrelated files or treat a picture as
+physical validation. See [project images](../../docs/project-images.md).
+
 Explain required BOM lines as Ready, Check, Decide or Source. Resolve exact
 missing decisions before sourcing; keep plausible unconfirmed candidates Check,
 not reserved or consumed. Only required Source lines enter a shopping proposal.
@@ -106,3 +113,5 @@ Expose exact IDs, versions, quantities/units, source age, compatibility evidence
 hashes and audit results when requested or decision-relevant. State the actual
 changed records, verified result and unresolved constraint; do not claim an
 entire project completed from a single successful tool call.
+
+PCB inspection uses the existing `inspect_assembly_sources` workflow on exact uploaded files. Native KiCad `.kicad_pcb` sources require millimetres and Z up; source pads/outlines are not exact component bodies. Read all returned warnings. External models, paths and scripts are never resolved. The project PCB view is read-only; see [PCB viewer](../../docs/pcb-viewer.md).

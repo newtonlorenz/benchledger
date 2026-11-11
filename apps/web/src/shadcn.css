@@ -1,0 +1,75 @@
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+@theme inline {
+  --color-background: var(--background); --color-foreground: var(--foreground);
+  --color-card: var(--card); --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover); --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary); --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary); --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted); --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--ui-accent); --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive); --color-destructive-foreground: var(--destructive-foreground); --color-border: var(--border);
+  --color-input: var(--input); --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px); --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius); --radius-xl: calc(var(--radius) + 4px); --color-sidebar-ring: var(--sidebar-ring); --color-sidebar-border: var(--sidebar-border); --color-sidebar-accent-foreground: var(--sidebar-accent-foreground); --color-sidebar-accent: var(--sidebar-accent); --color-sidebar-primary-foreground: var(--sidebar-primary-foreground); --color-sidebar-primary: var(--sidebar-primary); --color-sidebar-foreground: var(--sidebar-foreground); --color-sidebar: var(--sidebar);
+}
+
+@layer base {
+*, ::before, ::after { border-color: var(--border); }
+:where([data-slot="button"]) { border: 1px solid transparent; background: transparent; font: inherit; cursor: pointer; }
+:where([data-slot="input"], [data-slot="textarea"]) { border: 1px solid var(--input); border-radius: .5rem; background: var(--card); color: var(--foreground); }
+:where([data-slot="button"]):disabled { opacity: .5; cursor: not-allowed; }
+}
+
+/* Shared shadcn tokens are also the source for the existing domain components.
+   Keep layout and evidence semantics in their respective component stylesheets. */
+:root {
+  --background: #fcfcfa; --foreground: #152033;
+  --card: #fff; --card-foreground: #152033;
+  --popover: #fff; --popover-foreground: #152033;
+  --primary: #1558e8; --primary-foreground: #fff;
+  --secondary: #f1f3f6; --secondary-foreground: #243146;
+  --muted: #f1f3f6; --muted-foreground: #536276;
+  --ui-accent: #eaf0fa; --accent-foreground: #152033;
+  --destructive: #b42332; --destructive-foreground: #fff; --border: #dce1e8; --input: #bcc7d5; --ring: #1558e8;
+  --radius: .5rem;
+  --surface: var(--background); --surface-strong: var(--card); --surface-soft: var(--muted);
+  --surface-muted: var(--ui-accent); --surface-hover: #f2f5fa;
+  --ink: var(--foreground); --ink-soft: #42516a; --ink-muted: var(--muted-foreground);
+  --line: var(--border); --line-strong: var(--input);
+  --accent: var(--primary); --accent-hover: #1044b8; --accent-soft: #edf3ff; --accent-line: #becff4; --on-accent: var(--primary-foreground);
+  --focus: var(--ring); --nav-bg: #edf2fa; --nav-ink: var(--foreground); --nav-muted: var(--muted-foreground);
+  --nav-line: var(--border); --nav-hover: #edf2fc; --nav-selected: #e6efff;
+  --shadow: 0 12px 32px rgb(24 24 27 / 12%);
+  --moss: #246c50; --moss-dark: #20563f; --moss-soft: #edf6ef;
+  --slate: #375d99; --slate-soft: #edf2fa;
+  --amber: #91620d; --amber-ink: #805409; --amber-soft: #fff7e5;
+  --red: #b42332; --red-soft: #fceff0;
+}
+:root[data-theme="dark"] {
+  --background: #141a24; --foreground: #edf2fa;
+  --card: #152033; --card-foreground: #edf2fa;
+  --popover: #252e3c; --popover-foreground: #edf2fa;
+  --primary: #9fbeff; --primary-foreground: #102245;
+  --secondary: #273346; --secondary-foreground: #edf2fa;
+  --muted: #202a39; --muted-foreground: #b3c0d2;
+  --ui-accent: #2d3c53; --accent-foreground: #fcfcfa;
+  --destructive: #ffadb4; --destructive-foreground: #38121a; --border: #3a4b62; --input: #596d88; --ring: #9fbeff;
+  --surface-hover: #29364b; --ink-soft: #c9d3e3;
+  --accent-hover: #b7ceff; --accent-soft: #233853; --accent-line: #4b6994;
+  --nav-bg: #101722; --nav-selected: #2d3c53; --nav-hover: #26354b;
+  --shadow: 0 12px 32px rgb(0 0 0 / 32%);
+  --moss: #94d8b3; --moss-dark: #afe1bf; --moss-soft: #21382c;
+  --slate: #a9c7f3; --slate-soft: #243249;
+  --amber: #e9c275; --amber-ink: #f0cd8b; --amber-soft: #392f20;
+  --red: #ffadb4; --red-soft: #3c252b;
+}
+
+:root { color-scheme: light; --font-ui: "IBM Plex Sans Variable", system-ui, sans-serif; --font-data: "IBM Plex Mono", monospace; font-family: var(--font-ui); --overlay: rgb(0 0 0 / .5); --success-line: #8bbca9; --info-line: #a4bcd9; --warning-line: #d7b477; --danger-line: #dc9ca2; --sidebar: var(--nav-bg); --sidebar-foreground: var(--foreground); --sidebar-primary: var(--primary); --sidebar-primary-foreground: var(--primary-foreground); --sidebar-accent: var(--ui-accent); --sidebar-accent-foreground: var(--foreground); --sidebar-border: var(--border); --sidebar-ring: var(--ring); }
+:root[data-theme="dark"] { color-scheme: dark; --success-line: #396d59; --info-line: #4b6c94; --warning-line: #816c40; --danger-line: #8b4c56; }
+@layer base {
+  button { background: transparent; border: 0; color: inherit; font: inherit; cursor: pointer; }
+  input, textarea, select { font: inherit; }
+}

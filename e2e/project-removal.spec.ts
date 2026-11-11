@@ -1,3 +1,4 @@
+import { clickProjectAction, showProjectAction, navigateWorkspace } from "./workspace-controls";
 import { expect, test, type Page } from "@playwright/test";
 
 const project = {
@@ -45,6 +46,7 @@ async function mockRemovalWorkspace(page: Page): Promise<{ readonly deleteReques
   await page.route("**/api/v1/inventory/categories*", async (route) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [], limit: 200, total: 0 }) });
   });
+  await page.route("**/api/v1/project-library?**", route => route.fulfill({ json: { data: new URL(route.request().url()).searchParams.get("status") === "archived" && !deleted ? [project] : [] } }));
   return { deleteRequest: () => deleted };
 }
 
@@ -80,6 +82,7 @@ async function mockRestoreWorkspace(page: Page): Promise<{ readonly restoreReque
   await page.route("**/api/v1/inventory/categories*", async (route) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [], limit: 200, total: 0 }) });
   });
+  await page.route("**/api/v1/project-library?**", route => route.fulfill({ json: { data: new URL(route.request().url()).searchParams.get("status") === "archived" ? (restoreRequests ? [] : [project]) : (restoreRequests ? [{ ...project, status: "idea", version: 5 }] : []) } }));
   return { restoreRequests: () => restoreRequests };
 }
 
@@ -89,14 +92,12 @@ test.describe("restore confirmation", () => {
   test("restores an archived project only after confirmation", async ({ page }) => {
     const harness = await mockRestoreWorkspace(page);
     await page.goto("/");
-    await page.getByRole("button", { name: "Open navigation" }).click();
-    await page.getByRole("button", { name: /^Projects(?: \d+)?$/u }).click();
-    // With no active projects the index opens on the Archived view.
-    await expect(page.getByRole("button", { name: "Archived (1)", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await navigateWorkspace(page, "Projects");
+    await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Archived", exact: true }).click();
     await page.getByRole("button", { name: "Open project Retained Archive E2E", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Retained Archive E2E", exact: true })).toBeVisible();
 
-    await page.getByText("Project settings", { exact: true }).click();
     await expect(page.locator("#main-content")).not.toContainText(/reservation|tombstone|audit/iu);
     const restoreButton = page.getByRole("button", { name: "Restore project", exact: true });
     await restoreButton.click();
@@ -116,63 +117,49 @@ test.describe("restore confirmation", () => {
     await page.getByRole("alertdialog", { name: "Restore Retained Archive E2E?" }).getByRole("button", { name: "Restore project", exact: true }).click();
     expect(harness.restoreRequests()).toBe(1);
     await expect(page.getByText("Retained Archive E2E was restored to Idea. Previously released stock was not set aside again.", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Archive project", exact: true })).toBeVisible();
-  });
-
-  test("offers Restore from the project's overflow menu with the same confirmation", async ({ page }) => {
-    const harness = await mockRestoreWorkspace(page);
-    await page.goto("/#/projects/project-removal-e2e/plan");
-    await expect(page.getByRole("heading", { name: "Retained Archive E2E", exact: true })).toBeVisible();
-    const more = page.getByRole("button", { name: "More project actions", exact: true });
-    await more.click();
-    await page.getByRole("menuitem", { name: "Restore project", exact: true }).click();
-    const dialog = page.getByRole("alertdialog", { name: "Restore Retained Archive E2E?" });
-    await expect(dialog).toBeVisible();
-    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
-    expect(harness.restoreRequests()).toBe(0);
+    await expect(await showProjectAction(page, "Archive project")).toBeVisible();
   });
 });
 
 test("deletes an archived project after a single confirmation and hides it from Archived", async ({ page }) => {
   const harness = await mockRemovalWorkspace(page);
   await page.goto("/");
-  await page.getByRole("button", { name: /^Projects(?: \d+)?$/u }).click();
-  await page.getByRole("button", { name: "Open project Retained Archive E2E", exact: true }).click();
+  await navigateWorkspace(page, "Projects");
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Archived", exact: true }).click();
+    await page.getByRole("button", { name: "Open project Retained Archive E2E", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Retained Archive E2E", exact: true })).toBeVisible();
 
-  // Delete lives in Project settings (not the page header) behind a typed-name confirmation.
-  await expect(page.locator(".page-header").getByRole("button", { name: "Delete project", exact: true })).toHaveCount(0);
-  await page.getByText("Project settings", { exact: true }).click();
-  const settings = page.locator(".project-actions");
-  await settings.getByRole("button", { name: "Delete project", exact: true }).click();
+  await clickProjectAction(page, "Delete project");
+  await page.getByRole("button", { name: "Delete project permanently", exact: true }).click();
   let dialog = page.getByRole("alertdialog", { name: "Delete Retained Archive E2E?" });
   await expect(dialog).toContainText("This action is irreversible.");
   await expect(dialog).not.toContainText(/reservation|tombstone|audit/iu);
-  await expect(dialog.getByRole("button", { name: "Delete project", exact: true })).toBeDisabled();
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
-  // Cancelling keeps the project and sends nothing.
   expect(harness.deleteRequest()).toBeUndefined();
-  await expect(page.getByRole("heading", { name: "Retained Archive E2E", exact: true })).toBeVisible();
-  await settings.getByRole("button", { name: "Delete project", exact: true }).click();
+  await clickProjectAction(page, "Delete project");
+  await page.getByRole("button", { name: "Delete project permanently", exact: true }).click();
   dialog = page.getByRole("alertdialog", { name: "Delete Retained Archive E2E?" });
   const removeButton = dialog.getByRole("button", { name: "Delete project", exact: true });
-  await dialog.getByLabel(/Type the project name/u).fill("Retained Archive");
-  await expect(removeButton).toBeDisabled();
-  await dialog.getByLabel(/Type the project name/u).fill("Retained Archive E2E");
   await expect(removeButton).toBeEnabled();
   await removeButton.click();
 
   expect(harness.deleteRequest()).toMatchObject({ body: { name: "Retained Archive E2E" }, ifMatch: "4" });
   expect(harness.deleteRequest()?.idempotencyKey).toBeTruthy();
-  await expect(page.getByRole("heading", { name: "No projects yet", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Archived (0)", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "No archived projects", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
+  await expect.poll(() => new URL(page.url()).hash).toBe("#/");
+  await expect(page.getByRole("region", { name: "Getting started", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Project navigator", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "View archived projects", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Open project Retained Archive E2E", exact: true })).toHaveCount(0);
+  await navigateWorkspace(page, "Settings");
   await page.goBack();
-  await expect(page.getByRole("heading", { name: "No projects yet", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Active projects", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Getting started", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open project Retained Archive E2E", exact: true })).toHaveCount(0);
   await page.goForward();
-  await expect(page.getByRole("heading", { name: "No archived projects", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Archived (0)", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(() => new URL(page.url()).hash).toBe("#/settings");
+  await expect(page.getByRole("region", { name: "Project navigator", exact: true })).toHaveCount(0);
 });
 
 test("restores the active or archived project named by browser history", async ({ page }) => {
@@ -214,30 +201,26 @@ test("restores the active or archived project named by browser history", async (
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [], limit: 200, total: 0 }) });
   });
 
+  await page.route("**/api/v1/project-library?**", route => route.fulfill({ json: { data: new URL(route.request().url()).searchParams.get("status") === "archived" ? [project] : [activeProject] } }));
   await page.goto(`/#/projects/${project.id}/files`);
   await expect(page.getByRole("heading", { name: project.name, exact: true })).toBeVisible();
-  // Switching projects goes through the index; each step is a history entry.
-  await page.getByRole("button", { name: /^Projects(?: \d+)?$/u }).click();
-  await page.getByRole("button", { name: "Active projects", exact: true }).click();
+  await navigateWorkspace(page, "Projects");
+  await page.getByRole("button", { name: "Active", exact: true }).click();
   await page.getByRole("button", { name: `Open project ${activeProject.name}`, exact: true }).click();
   await expect(page.getByRole("heading", { name: activeProject.name, exact: true })).toBeVisible();
-  await page.getByRole("button", { name: /^Projects(?: \d+)?$/u }).click();
-  await page.getByRole("button", { name: "Archived (1)", exact: true }).click();
+  await navigateWorkspace(page, "Projects");
+  await page.getByRole("button", { name: "Archived", exact: true }).click();
   await page.getByRole("button", { name: `Open project ${project.name}`, exact: true }).click();
   await expect(page.getByRole("heading", { name: project.name, exact: true })).toBeVisible();
-
   await page.goBack();
-  await expect(page.getByRole("list", { name: "Archived projects" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Archived (1)", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await page.goBack();
-  await expect(page.getByRole("button", { name: "Active projects", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
   await page.goBack();
   await expect(page.getByRole("heading", { name: activeProject.name, exact: true })).toBeVisible();
+  await expect(page.locator(".archive-notice")).toHaveCount(0);
   await page.goBack();
-  await expect(page.getByRole("list", { name: "Active projects" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Active projects", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await page.goBack();
-  await expect(page.getByRole("button", { name: "Archived (1)", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
   await page.goBack();
   await expect(page.getByRole("heading", { name: project.name, exact: true })).toBeVisible();
+  await expect(page.locator(".archive-notice")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Files", exact: true })).toHaveAttribute("aria-selected", "true");
 });

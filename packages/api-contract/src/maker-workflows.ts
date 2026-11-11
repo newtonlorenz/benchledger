@@ -6,6 +6,12 @@ const positive = z.number().finite().positive().max(1_000_000_000);
 const expectedVersion = z.number().int().nonnegative();
 const safeUrl = z.string().max(2000).url().refine((value) => { try { const url = new URL(value); return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password; } catch { return false; } }, "Use an HTTP(S) source URL without embedded credentials");
 export const workflowPageSchema = z.object({ limit: z.number().int().min(1).max(100).default(25), cursor: z.string().regex(/^(0|[1-9][0-9]*)$/u).max(12).optional() }).strict();
+export const projectLibraryQuerySchema = z.object({ limit: z.number().int().min(1).max(100).default(25), cursor: z.string().min(1).max(2048).regex(/^[A-Za-z0-9_-]+$/u).optional(), status: z.enum(["active", "archived", "all"]).default("active") }).strict();
+export const projectPresentationInputSchema = z.object({ expectedVersion, coverArtifactId: idSchema.nullable(), imageKind: z.enum(["render", "reference", "built_photo"]), caption: z.string().trim().max(1000).optional() }).strict();
+export const projectPresentationSchema = projectPresentationInputSchema.omit({ expectedVersion: true }).extend({ projectId: idSchema, projectRevisionId: idSchema, version: z.number().int().positive(), coverSha256: z.string().regex(/^[a-f0-9]{64}$/u).optional(), updatedAt: isoDateSchema, updatedBy: z.string().max(200), warnings: z.array(z.string().max(2000)).max(20) }).strict();
+export type ProjectLibraryQuery = z.infer<typeof projectLibraryQuerySchema>;
+export type ProjectPresentationInput = z.infer<typeof projectPresentationInputSchema>;
+export type ProjectPresentation = z.infer<typeof projectPresentationSchema>;
 /** Search and filter the complete revision before paging; monetary totals retain full-revision scope. */
 export const sourcingPageSchema = workflowPageSchema.extend({
   query: z.string().trim().max(200).optional(),
@@ -56,5 +62,5 @@ export const bomImportInputSchema = z.object({ rows: z.array(createBomLineSchema
 export type BomImportInput = z.infer<typeof bomImportInputSchema>;
 export interface BomImportPreview { id: string; projectId: string; projectRevisionId: string; version: number; actor: string; expiresAt: string; contentSha256: string; basis: string; rows: (BomImportInput["rows"][number] & { id: string })[]; warnings: string[]; status: "active" | "committed" }
 export const bomImportCommitSchema = z.object({ previewId: idSchema, expectedPreviewVersion: z.number().int().positive(), contentSha256: z.string().regex(/^[a-f0-9]{64}$/u), confirmed: z.literal(true) }).strict();
-export type WorkflowKind = "assembly" | "requirement_offer" | "offer_choice" | "build_plan" | "work_assignment" | "bom_import_preview";
+export type WorkflowKind = "assembly" | "project_presentation" | "requirement_offer" | "offer_choice" | "build_plan" | "work_assignment" | "bom_import_preview";
 export interface WorkflowRecord { kind: WorkflowKind; id: string; projectId: string; revisionId?: string; version: number; payload: Record<string, unknown>; createdAt: string; updatedAt: string }

@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
 import { ApiError, conflictReason } from "./api";
 import { Icon } from "./icons";
+import { Button } from "./components/ui/button";
+// App-level feedback styles (sync status, toasts, policy and label) ship with this module.
+import "./app-flows.css";
 
 /**
  * Shared app-level feedback: toasts, write-failure wording, sync status,
- * focus revalidation and the session-expiry sign-in overlay. Kept out of
+ * and focus revalidation. Kept out of
  * App.tsx so the behaviour is unit-testable without booting the workspace.
  */
 
@@ -54,15 +56,19 @@ export function useToast(routeKey: string) {
 }
 
 export function ToastRegion({ toast, onDismiss }: { toast: ToastState | undefined; onDismiss: () => void }) {
-  if (!toast) return null;
-  const urgent = toast.tone === "error" || toast.tone === "warning";
-  const icon = toast.tone === "success" ? "check-circle" : toast.tone === "info" ? "info" : "warning";
+  // The container is always mounted with an aria-live attribute so modal
+  // dialogs (which hide everything else from assistive technology) keep
+  // notifications reachable. Each toast carries its own status/alert role.
+  const urgent = toast?.tone === "error" || toast?.tone === "warning";
+  const icon = toast?.tone === "success" ? "check-circle" : toast?.tone === "info" ? "info" : "warning";
   return (
-    <div className={`toast toast-${toast.tone} app-toast`} role={urgent ? "alert" : "status"} key={toast.nonce}>
-      <Icon name={icon} size={18} />
-      <span>{toast.message}</span>
-      {toast.action && <button type="button" className="button button-quiet toast-action" onClick={() => { toast.action?.run(); onDismiss(); }}>{toast.action.label}</button>}
-      <button type="button" className="toast-close" aria-label="Dismiss notification" onClick={onDismiss}><Icon name="close" size={15} /></button>
+    <div className="toast-region" aria-live="off">
+      {toast && <div className={`toast toast-${toast.tone} app-toast`} role={urgent ? "alert" : "status"} key={toast.nonce}>
+        <Icon name={icon} size={18} />
+        <span>{toast.message}</span>
+        {toast.action && <Button variant="ghost" type="button" className="button button-quiet toast-action" onClick={() => { toast.action?.run(); onDismiss(); }}>{toast.action.label}</Button>}
+        <Button variant="ghost" size="icon" type="button" className="toast-close" aria-label="Dismiss notification" onClick={onDismiss}><Icon name="close" size={15} /></Button>
+      </div>}
     </div>
   );
 }
@@ -136,7 +142,7 @@ export function SyncBanner({ error, lastSyncedAt, now, retrying, onRetry }: { er
     <div className="sync-banner" role="status">
       <Icon name="warning" size={17} />
       <span><strong>{error.kind === "offline" ? "BenchLedger can't reach the service." : "The service reported a problem."}</strong> Showing what was loaded {formatUpdatedAgo(lastSyncedAt, now).replace(/^updated /u, "")}. Changes may not save.</span>
-      <button type="button" className="button button-quiet" disabled={retrying} aria-busy={retrying || undefined} onClick={onRetry}>{retrying ? "Retrying…" : "Retry"}</button>
+      <Button variant="ghost" type="button" className="button button-quiet" disabled={retrying} aria-busy={retrying || undefined} onClick={onRetry}>{retrying ? "Retrying…" : "Retry"}</Button>
     </div>
   );
 }
@@ -163,41 +169,4 @@ export function useRevalidateOnFocus(revalidate: () => void, { enabled, minInter
     document.addEventListener("visibilitychange", maybeRun);
     return () => { window.removeEventListener("focus", maybeRun); document.removeEventListener("visibilitychange", maybeRun); };
   }, [enabled, minIntervalMs]);
-}
-
-/**
- * Sign-in form shown above a still-mounted workspace when the session
- * expires, so open drafts survive re-authentication.
- */
-export function SessionExpiredOverlay({ onLogin }: { onLogin: (password: string) => Promise<void> }) {
-  const [password, setPassword] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string>();
-  const input = useRef<HTMLInputElement>(null);
-  useEffect(() => { input.current?.focus(); }, []);
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!password || submitting) return;
-    setSubmitting(true);
-    setError(undefined);
-    try {
-      await onLogin(password);
-    } catch (failure: unknown) {
-      setError(failure instanceof ApiError && failure.kind === "unauthenticated" ? "That password was not accepted." : failure instanceof Error ? failure.message : "Sign-in failed.");
-      setSubmitting(false);
-    }
-  };
-  return (
-    <div className="session-overlay" role="presentation">
-      <section className="session-overlay-panel" role="alertdialog" aria-modal="true" aria-labelledby="session-overlay-title" aria-describedby="session-overlay-copy">
-        <h2 id="session-overlay-title">Sign in to continue</h2>
-        <p id="session-overlay-copy">Your session ended. Anything you were typing is still here; sign in and carry on where you left off.</p>
-        <form onSubmit={submit}>
-          <label className="field"><span>Workspace password</span><input ref={input} type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
-          {error && <p className="form-error" role="alert">{error}</p>}
-          <button type="submit" className="button button-primary" disabled={!password || submitting} aria-busy={submitting || undefined}>{submitting ? "Signing in…" : "Sign in"}</button>
-        </form>
-      </section>
-    </div>
-  );
 }

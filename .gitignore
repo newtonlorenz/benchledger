@@ -18,3 +18,6 @@ test-results/
 
 # Local design-tool cache; never source or container input.
 .impeccable/hook.cache.json
+
+# Local visual comparison evidence can contain private project content.
+.impeccable/build/

@@ -1,4 +1,5 @@
-import { renderToStaticMarkup } from "react-dom/server";
+// @vitest-environment jsdom
+import { renderToStaticMarkup } from "./test-render-markup";
 import { describe, expect, it } from "vitest";
 import { AddBomDialog, BomLineRow, inventoryCandidateLabel, inventoryDiscriminator } from "./App";
 import { mapBomLine } from "./api";
@@ -10,15 +11,15 @@ describe("BOM line version and expert context", () => {
     const project = projects[0]!;
     const markup = renderToStaticMarkup(<AddBomDialog items={inventory} project={project} expert={false} onClose={() => undefined} onCreate={async () => true} />);
 
-    expect(markup).toContain("Add a part, material, or tool");
-    expect(markup).toContain("What do you need?");
+    expect(markup).toContain("Add a part");
+    expect(markup).toContain("Part name");
     expect(markup).toContain("How will you use it?");
     expect(markup).toContain('value="consumed"');
     expect(markup).toContain("Part or material (used up or built in)");
     expect(markup).toContain('value="reusable"');
     expect(markup).toContain("Reusable tool or equipment");
     expect(markup).toContain("Search matching inventory");
-    expect(markup).not.toContain(project.currentRevision);
+    expect(markup).toContain(project.currentRevision);
     expect(markup).not.toContain(project.serverRevisionId!);
   });
 
@@ -26,7 +27,7 @@ describe("BOM line version and expert context", () => {
     const project = projects[0]!;
     const markup = renderToStaticMarkup(<AddBomDialog items={inventory} project={project} expert onClose={() => undefined} onCreate={async () => true} />);
 
-    expect(markup).toContain(`Add a requirement to ${project.currentRevision}`);
+    expect(markup).toContain("Add a part");
     expect(markup).toContain("Search matching inventory");
     expect(markup).toContain(project.currentRevision);
     expect(markup).toContain(project.serverRevisionId!);
@@ -139,6 +140,20 @@ describe("BOM line version and expert context", () => {
     expect(resolvedMarkup).not.toContain("How will you use this?");
   });
 
+  it("distinguishes unavailable referenced stock details from a canonical gap result", () => {
+    const status: BomLineStatus = {
+      line: { id: "unloaded-reference", version: 1, label: "Connector", itemId: "unloaded-stock", required: 1, unit: "each", role: "consumed" },
+      supplied: 1, remaining: 0, state: "ready", decision: "ready",
+      gap: { lineId: "unloaded-reference", status: "supplied", decision: "ready", suppliedQuantity: 1, inspectQuantity: 0, missingQuantity: 0, matchedItemIds: ["unloaded-stock"], reasons: ["Physically confirmed stock covers this requirement."] },
+    };
+    const markup = renderToStaticMarkup(<BomLineRow line={status} expert={false} onOpenItem={() => undefined}/>);
+    expect(markup).toContain("Referenced stock details unavailable");
+    expect(markup).not.toContain("No matching stock");
+    expect(markup).toContain("Physically confirmed stock covers this requirement.");
+    expect(markup).toContain("Ready");
+    expect(markup).toContain("1 piece");
+  });
+
   it("shows an explicit correction blocker only for semantic inventory unit errors", () => {
     const item = {
       id: "legacy-tool",
@@ -249,16 +264,5 @@ describe("BOM line version and expert context", () => {
         variant: "PETG Basic",
       }),
     ).toBe("Physical item");
-  });
-
-  it("offers Record use on each requirement, or explains why it is unavailable", () => {
-    const line: BomLineStatus = { line: { id: "line-insert", version: 1, label: "M3 inserts", required: 4, unit: "each" }, supplied: 4, remaining: 0, state: "ready", decision: "ready" };
-    const available = renderToStaticMarkup(<BomLineRow line={line} expert={false} onOpenItem={() => undefined} recordUse={{ available: true, onOpen: () => undefined }} />);
-    expect(available).toContain('aria-label="Record use for M3 inserts"');
-    expect(available).not.toMatch(/aria-label="Record use for M3 inserts"[^>]*disabled/u);
-    const unavailable = renderToStaticMarkup(<BomLineRow line={line} expert={false} onOpenItem={() => undefined} recordUse={{ available: false, reason: "Create a project revision before recording used stock.", onOpen: () => undefined }} />);
-    expect(unavailable).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Record use for M3 inserts"|<button[^>]*aria-label="Record use for M3 inserts"[^>]*disabled=""/u);
-    expect(unavailable).toContain("Create a project revision before recording used stock.");
-    expect(renderToStaticMarkup(<BomLineRow line={line} expert={false} onOpenItem={() => undefined} />)).not.toContain("Record use");
   });
 });

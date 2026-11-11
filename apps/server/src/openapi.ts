@@ -191,6 +191,9 @@ export function jsonOpenApi(version: string): Record<string, unknown> {
     { name: "kind", in: "query", required: false, schema: { type: "string", enum: ["printer", "tool", "accessory", "consumable", "electronic", "fastener", "filament", "wire", "adhesive", "other"] } },
     { name: "evidence", in: "query", required: false, schema: { type: "string", enum: ["physically_counted", "commissioned", "delivered_uncounted", "ordered_unverified", "allocated", "consumed", "unknown"] } },
     { name: "available", in: "query", required: false, schema: { type: "boolean" } },
+    { name: "stockView", in: "query", required: false, description: "Stock evidence view; stock that the receiving policy counts as in stock is treated as available.", schema: { type: "string", enum: ["available", "check", "reserved", "depleted"] } },
+    { name: "sort", in: "query", required: false, schema: { type: "string", enum: ["name", "name_desc", "location"] } },
+    { name: "location", in: "query", required: false, schema: { type: "string", maxLength: 256 }, description: "Exact location; applied before pagination." },
     { name: "includeRetired", in: "query", required: false, description: "Include retired inventory history; active rows are returned by default.", schema: { type: "boolean", default: false } },
     { name: "categoryNodeId", in: "query", required: false, description: "Exact managed category or subcategory ID. Mutually exclusive with unassigned=true.", schema: { type: "string", minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" } },
     { name: "unassigned", in: "query", required: false, description: "Return inventory without a managed category assignment. Mutually exclusive with categoryNodeId.", schema: { type: "boolean" } },
@@ -532,6 +535,11 @@ export function jsonOpenApi(version: string): Record<string, unknown> {
         }
       },
       "/workspace": { get: { responses: { "200": { description: "Authenticated aggregate workspace snapshot, including `preferences` (stock receiving policy) used to label availability" } } } },
+      "/project-library": { get: { summary: "Read a bounded maker project library page", description: "Current revisions, requirements and readiness, exact project/workstream artifact ancestry, deliberate display covers. Project-scoped accounts see only their allow-listed projects. Default active includes completed projects. Iterate every nextCursor to read the complete library; no aggregate project cap.", parameters: [
+        { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 25 } },
+        { name: "cursor", in: "query", schema: { type: "string", minLength: 1, maxLength: 2048 } },
+        { name: "status", in: "query", schema: { type: "string", enum: ["active", "archived", "all"], default: "active" } }
+      ], responses: { "200": { description: "Project library page {data,limit,nextCursor?}; presentation is top-level on each project" }, "400": { description: "Invalid query or cursor" }, "403": { description: "Missing read authority" } } } },
       "/workspace/preferences": {
         get: {
           summary: "Read workspace preferences",
@@ -724,12 +732,18 @@ export function jsonOpenApi(version: string): Record<string, unknown> {
         }
       },
       "/artifacts/uploads/{id}": {
+        get: {
+          summary: "Read durable upload progress before retrying bytes",
+          description: "Requires read access and upload project scope. Returns session identity, status and receivedBytes. Reading does not extend expiry. Resume only the remaining bytes at the reported offset, then finalize to verify size and SHA-256.",
+          parameters: [{ name: "id", in: "path", required: true, schema: artifactIdSchema }],
+          responses: { "200": { description: "Upload session with receivedBytes" }, "403": { description: "Read access or upload project scope denied" }, "404": { description: "Upload not found" } }
+        },
         put: {
           summary: "Write the bytes for an existing artifact upload",
-          description: "Requires write access. Project-scoped bearer tokens resolve the upload's durable project ancestry before writing. Send the exact declared bytes; maximum 100 MiB, subject to the configured server limit. Browser sessions require CSRF protection.",
-          parameters: [{ name: "id", in: "path", required: true, schema: artifactIdSchema }],
+          description: "Requires write access. Project-scoped bearer tokens resolve the upload's durable project ancestry before writing. Send the exact declared bytes, or the remaining suffix with Upload-Offset after reading session progress. The offset is checked atomically; a stale offset returns 409 without appending. Maximum 100 MiB, subject to the configured server limit. Browser sessions require CSRF protection.",
+          parameters: [{ name: "id", in: "path", required: true, schema: artifactIdSchema }, { name: "Upload-Offset", in: "header", required: false, schema: { type: "integer", minimum: 0 } }],
           requestBody: { required: true, content: { "application/octet-stream": { schema: { type: "string", format: "binary" } } } },
-          responses: { "200": { description: "Bytes received", content: { "application/json": { schema: { type: "object", required: ["receivedBytes"], properties: { receivedBytes: { type: "integer", minimum: 0 } } } } } }, "403": { description: "Write access or upload project scope denied" }, "413": { description: "Configured byte limit exceeded" } }
+          responses: { "200": { description: "Bytes received", content: { "application/json": { schema: { type: "object", required: ["receivedBytes"], properties: { receivedBytes: { type: "integer", minimum: 0 } } } } } }, "403": { description: "Write access or upload project scope denied" }, "409": { description: "Byte offset changed; read progress before resuming" }, "413": { description: "Configured byte limit exceeded" } }
         }
       },
       "/artifacts/uploads/{id}/finalize": {

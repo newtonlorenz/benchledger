@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import { Color, Matrix4, Quaternion, Vector3 } from "three";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
 import type { AssemblyMesh, AssemblySource } from "@benchledger/api-contract";
+import { parsePcbFile } from "./pcb-parser.js";
 const LIMIT = 250_000;
 const scaleFor = { millimetre: 1, centimetre: 10, metre: 1000, inch: 25.4 };
 const name = (value: unknown, fallback: string) => (typeof value === "string" ? value.trim().slice(0, 160) : "") || fallback;
@@ -22,7 +23,7 @@ function validate(meshes: AssemblyMesh[]) {
   return meshes;
 }
 // Read only static triangle geometry. No external URLs, textures, scripts or CAD code are executed.
-function glb(bytes: Uint8Array, factor: number): AssemblyMesh[] {
+function glb(bytes: Uint8Array, factor: number, combineFragments = false): AssemblyMesh[] {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (bytes.length < 20 || view.getUint32(0, true) !== 0x46546c67 || view.getUint32(4, true) !== 2 || view.getUint32(8, true) !== bytes.length) fail("Use a valid binary glTF 2.0 (.glb) export.");
   let json: any, bin: Uint8Array | undefined;
@@ -52,7 +53,7 @@ function glb(bytes: Uint8Array, factor: number): AssemblyMesh[] {
     return result;
   }
   const meshes: AssemblyMesh[] = [], visited = new Set<number>();
-  let triangleCount = 0;
+  let triangleCount = 0, primitiveCount = 0;
   function visit(index: number, parent: Matrix4, path: string[], depth: number) {
     const node = json.nodes?.[index];
     if (!node || visited.has(index) || depth > 64 || visited.size > 5000) fail("Invalid, cyclic or oversized GLB hierarchy.");
@@ -67,16 +68,24 @@ function glb(bytes: Uint8Array, factor: number): AssemblyMesh[] {
     if (node.mesh !== undefined) {
       const model = json.meshes?.[node.mesh];
       if (!Array.isArray(model?.primitives)) fail("Missing GLB mesh.");
+      const materialGroups = new Map<number | undefined, AssemblyMesh>();
       model.primitives.forEach((primitive: any, pi: number) => {
+        if (++primitiveCount > 10_000) fail("Model exceeds 10,000 mesh fragments.");
+        if (primitive.material !== undefined && (!Number.isSafeInteger(primitive.material) || primitive.material < 0)) fail("Invalid GLB material index.");
         if ((primitive.mode ?? 4) !== 4 || primitive.targets?.length || primitive.extensions) fail("Export static, uncompressed triangle meshes for this viewer.");
         const positions = accessor(primitive.attributes?.POSITION, 3), indices = primitive.indices === undefined ? Array.from({ length: positions.length / 3 }, (_, i) => i) : accessor(primitive.indices, 1);
+        if (!positions.length || positions.length % 3 || !indices.length || indices.length % 3 || !indices.every(i => Number.isInteger(i) && i >= 0 && i < positions.length / 3)) fail("GLB primitive has invalid triangle indices.");
         triangleCount += indices.length / 3;
-        if (triangleCount > LIMIT || meshes.length >= 300) fail("Model exceeds 300 parts or 250,000 triangles.");
+        if (triangleCount > LIMIT) fail("Model exceeds 250,000 triangles.");
+        const grouped = combineFragments ? materialGroups.get(primitive.material) : undefined;
+        if (!grouped && meshes.length >= 300) fail("Model exceeds 300 parts.");
         const v = new Vector3();
         for (let i = 0; i < positions.length; i += 3) { v.fromArray(positions, i).applyMatrix4(matrix).multiplyScalar(factor); v.toArray(positions, i); }
         if (matrix.determinant() < 0) for (let i = 0; i < indices.length; i += 3) [indices[i + 1], indices[i + 2]] = [indices[i + 2]!, indices[i + 1]!];
+        if (grouped) { const offset = grouped.positions.length / 3; for (const p of positions) grouped.positions.push(p); for (const i of indices) grouped.indices.push(i + offset); return; }
         const rgb = json.materials?.[primitive.material]?.pbrMetallicRoughness?.baseColorFactor;
-        meshes.push({ nodeId: `node-${index}-${pi}`, name: model.primitives.length > 1 ? `${title.slice(0, 140)} (${pi + 1})` : title, group: path.join(" / ").slice(0, 160), color: Array.isArray(rgb) && rgb.length >= 3 && rgb.slice(0, 3).every((x: unknown) => typeof x === "number" && Number.isFinite(x) && x >= 0 && x <= 1) ? `#${new Color(rgb[0], rgb[1], rgb[2]).getHexString()}` : "#b6aa91", positions, indices });
+        meshes.push({ nodeId: combineFragments ? `node-${index}-group-${pi}` : `node-${index}-${pi}`, name: model.primitives.length > 1 ? `${title.slice(0, 140)} (${pi + 1})` : title, group: path.join(" / ").slice(0, 160), color: Array.isArray(rgb) && rgb.length >= 3 && rgb.slice(0, 3).every((x: unknown) => typeof x === "number" && Number.isFinite(x) && x >= 0 && x <= 1) ? `#${new Color(rgb[0], rgb[1], rgb[2]).getHexString()}` : "#b6aa91", positions, indices });
+        if (combineFragments) materialGroups.set(primitive.material, meshes.at(-1)!);
       });
     }
     for (const child of node.children ?? []) visit(child, matrix, [...path, title], depth + 1);
@@ -91,7 +100,8 @@ export async function parseAssemblyFile(bytes: Uint8Array, filename: string, uni
   const ext = filename.split(".").pop()?.toLowerCase(), factor = scaleFor[unit];
   let meshes: AssemblyMesh[];
   const warnings = ["Exploded positions illustrate relationships, not a verified removal path. Colours are illustrative; textures and physical fit are not validated."];
-  if (ext === "glb") { meshes = glb(bytes, factor); warnings.push(`GLB coordinates interpreted as ${unit}; check the displayed dimensions. Only static triangle geometry is imported.`); }
+  if (ext === "kicad_pcb") { const result = parsePcbFile(bytes); return { meshes: validate(result.meshes), warnings: result.warnings }; }
+  if (ext === "glb") { try { meshes = glb(bytes, factor); } catch (error) { if (!(error instanceof Error) || error.message !== "Model exceeds 300 parts.") throw error; meshes = glb(bytes, factor, true); warnings.push("GLB surface fragments sharing a node and material were combined to stay within the 300-part limit. Source node placements and colours are preserved."); } warnings.push(`GLB coordinates interpreted as ${unit}; check the displayed dimensions. Only static triangle geometry is imported.`); }
   else if (ext === "stl") {
     if (bytes.length >= 84) { const count = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(80, true); if (84 + count * 50 === bytes.length && count > LIMIT) fail("STL exceeds 250,000 triangles."); }
     const geometry = new STLLoader().parse(bytes.slice().buffer);
@@ -110,7 +120,7 @@ export async function parseAssemblyFile(bytes: Uint8Array, filename: string, uni
     const label = fileLabel(filename);
     meshes = result.meshes.map((mesh: any, index: number) => ({ nodeId: `mesh-${index}`, name: meaningfulStepName(mesh.name) ? name(mesh.name, label) : `${label}${result.meshes.length > 1 ? ` (${index + 1})` : ""}`, group: groups.get(index) || (result.meshes.length > 1 ? label : ""), color: Array.isArray(mesh.color) ? `#${new Color(...mesh.color as [number, number, number]).getHexString()}` : "#b6aa91", positions: mesh.attributes.position.array, indices: mesh.index.array }));
     warnings.push("STEP uses its declared units, converted to millimetres. Small CAD features may be simplified for viewing.");
-  } else fail("Use STEP (.step/.stp), GLB or STL. Export other native CAD formats to STEP or GLB first.");
+  } else fail("Use KiCad (.kicad_pcb), STEP (.step/.stp), GLB or STL. Export other native CAD formats to STEP or GLB first.");
   if (upAxis === "y") for (const mesh of meshes) for (let i = 0; i < mesh.positions.length; i += 3) { const y = mesh.positions[i + 1]!; mesh.positions[i + 1] = -mesh.positions[i + 2]!; mesh.positions[i + 2] = y; }
   return { meshes: validate(meshes), warnings };
 }

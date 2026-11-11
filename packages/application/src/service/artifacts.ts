@@ -7,12 +7,15 @@ import { ServiceModule } from "./module.js";
 
 export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 
-export const ALLOWED_BINARY_MEDIA = new Set([
+export const ALLOWED_ARTIFACT_MEDIA = new Set([
   "application/pdf", "image/jpeg", "image/png", "image/webp", "application/octet-stream",
-  "model/step", "model/stl", "model/gltf-binary", "application/vnd.ms-package.3dmanufacturing-3mf"
+  "application/json", "application/zip", "application/x-zip-compressed", "image/svg+xml",
+  "model/step", "model/stl", "model/gltf-binary", "application/x-kicad-pcb", "application/vnd.ms-package.3dmanufacturing-3mf"
 ]);
 
-export const DISALLOWED_EXTENSIONS = new Set([".html", ".htm", ".svg", ".js", ".mjs", ".cjs", ".exe", ".sh", ".zip", ".tar", ".gz"]);
+// ZIP source bundles stay opaque; SVG drawings are never executed or inlined.
+// Downloads are authenticated attachments and SVG previews use escaped text.
+export const DISALLOWED_EXTENSIONS = new Set([".html", ".htm", ".js", ".mjs", ".cjs", ".exe", ".sh", ".tar", ".gz"]);
 
 export function safeFilename(filename: string): string {
   const trimmed = filename.trim();
@@ -104,7 +107,7 @@ export class ArtifactModule extends ServiceModule {
     await this.assertArtifactAncestry(normalizedInput);
     if (normalizedInput.byteSize <= 0 || normalizedInput.byteSize > MAX_UPLOAD_BYTES) throw new ApplicationError("quota_exceeded", "Upload exceeds the per-file limit");
     const filename = safeFilename(normalizedInput.filename);
-    if (!ALLOWED_BINARY_MEDIA.has(normalizedInput.mediaType) && !normalizedInput.mediaType.startsWith("text/")) {
+    if (!ALLOWED_ARTIFACT_MEDIA.has(normalizedInput.mediaType) && !normalizedInput.mediaType.startsWith("text/")) {
       throw new ApplicationError("unsupported_media", "This media type is not accepted");
     }
     const normalized = { ...normalizedInput, filename };
@@ -123,10 +126,11 @@ export class ArtifactModule extends ServiceModule {
     });
   }
 
-  async writeArtifactUpload(sessionId: string, body: Uint8Array) {
+  async writeArtifactUpload(sessionId: string, body: Uint8Array, expectedOffset?: number) {
+    if (expectedOffset !== undefined && (!Number.isSafeInteger(expectedOffset) || expectedOffset < 0)) throw new ApplicationError("validation", "Upload offset must be a non-negative integer");
     requireId(sessionId, "upload session id");
     if (body.byteLength > MAX_UPLOAD_BYTES) throw new ApplicationError("quota_exceeded", "Upload exceeds the per-file limit");
-    return this.ports.unitOfWork.exclusive(() => this.ports.artifacts.writeUpload(sessionId, body));
+    return this.ports.unitOfWork.exclusive(() => this.ports.artifacts.writeUpload(sessionId, body, expectedOffset));
   }
 
   async finalizeArtifactUpload(sessionId: string, ctx: RequestContext): Promise<Mutation<Artifact>> {

@@ -1,3 +1,8 @@
+import { Alert } from "./components/ui/alert";
+import { Card } from "./components/ui/card";
+import { Label } from "./components/ui/label";
+import { Button } from "./components/ui/button";
+import { Input } from "./components/ui/input";
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { ApiError } from "./api";
@@ -36,7 +41,7 @@ function actionLabel(action: AccessAction): string {
 }
 
 function PasswordField({ label, id, value, onChange, autoComplete, required = true }: { label: string; id: string; value: string; onChange: (value: string) => void; autoComplete: string; required?: boolean }) {
-  return <label className="form-field"><span>{label}</span><input id={id} type="password" value={value} required={required} minLength={12} autoComplete={autoComplete} onChange={(event) => onChange(event.target.value)} /></label>;
+  return <Label className="form-field"><span>{label}</span><Input id={id} type="password" value={value} required={required} minLength={12} autoComplete={autoComplete} onChange={(event) => onChange(event.target.value)} /></Label>;
 }
 
 export function WorkspaceAccessSection({ access, onUpdate, onChanged, onRebootstrap, pendingRetry, onClearRetry }: WorkspaceAccessSectionProps) {
@@ -131,15 +136,15 @@ export function WorkspaceAccessSection({ access, onUpdate, onChanged, onRebootst
   };
 
   const passwordMode = access.mode === "password";
-  return <section className="surface settings-section workspace-access-section" aria-labelledby="workspace-access-title">
+  return <Card asChild><section className="surface settings-section workspace-access-section" aria-labelledby="workspace-access-title">
     <div className="section-heading"><div><span className="eyebrow">Security</span><h2 id="workspace-access-title">Workspace access</h2></div><span className={`access-mode-badge ${passwordMode ? "is-password" : "is-lan-open"}`}>{passwordMode ? "Password required" : "LAN open"}</span></div>
     {!passwordMode && !(retryAvailable && pendingAction === "disable") && <>
-      <p className="workspace-access-warning" role="alert">{LAN_OPEN_WARNING}</p>
+      <Alert asChild><p className="workspace-access-warning" role="alert">{LAN_OPEN_WARNING}</p></Alert>
       <p className="workspace-access-intro">Anyone on this trusted LAN can use the workspace. Enable a password when this address could be reached by someone you do not trust.</p>
       <form className="workspace-access-form" aria-label="Enable workspace password" onSubmit={(event) => { void submit(event, "enable"); }}>
         <PasswordField label="New workspace password" id="new-workspace-password" value={newPassword} onChange={setNewPassword} autoComplete="new-password" />
         <PasswordField label="Confirm new workspace password" id="confirm-workspace-password" value={confirmation} onChange={setConfirmation} autoComplete="new-password" />
-        <button className="button button-primary" type="submit" disabled={action !== undefined}>{action === "enable" ? "Enabling…" : "Enable password"}<Icon name="arrow-right" size={16} /></button>
+        <Button variant="default" className="button button-primary" type="submit" disabled={action !== undefined}>{action === "enable" ? "Enabling…" : "Enable password"}<Icon name="arrow-right" size={16} /></Button>
       </form>
     </>}
     {passwordMode && retryAvailable && pendingAction === "enable" && <>
@@ -147,7 +152,7 @@ export function WorkspaceAccessSection({ access, onUpdate, onChanged, onRebootst
       <form className="workspace-access-form" aria-label="Retry enabling workspace password" onSubmit={(event) => { void submit(event, "enable"); }}>
         <PasswordField label="New workspace password" id="retry-new-workspace-password" value={newPassword} onChange={setNewPassword} autoComplete="new-password" />
         <PasswordField label="Confirm new workspace password" id="retry-confirm-workspace-password" value={confirmation} onChange={setConfirmation} autoComplete="new-password" />
-        <button className="button button-primary" type="submit" disabled={action !== undefined}>{action === "enable" ? "Retrying…" : "Retry enable"}<Icon name="arrow-right" size={16} /></button>
+        <Button variant="default" className="button button-primary" type="submit" disabled={action !== undefined}>{action === "enable" ? "Retrying…" : "Retry enable"}<Icon name="arrow-right" size={16} /></Button>
       </form>
     </>}
     {passwordMode && !(retryAvailable && pendingAction === "enable") && <>
@@ -156,15 +161,15 @@ export function WorkspaceAccessSection({ access, onUpdate, onChanged, onRebootst
         <PasswordField label="Current workspace password" id="current-workspace-password" value={currentPassword} onChange={setCurrentPassword} autoComplete="current-password" />
         <PasswordField label="New workspace password" id="new-workspace-password" value={newPassword} onChange={setNewPassword} autoComplete="new-password" />
         <PasswordField label="Confirm new workspace password" id="confirm-workspace-password" value={confirmation} onChange={setConfirmation} autoComplete="new-password" />
-        <button className="button button-primary" type="submit" disabled={action !== undefined}>{action === "change" ? "Changing…" : "Change password"}<Icon name="arrow-right" size={16} /></button>
+        <Button variant="default" className="button button-primary" type="submit" disabled={action !== undefined}>{action === "change" ? "Changing…" : "Change password"}<Icon name="arrow-right" size={16} /></Button>
       </form>
-      <div className="workspace-access-disable"><p>Disable the password only when this address is on a trusted LAN.</p><PasswordField label="Current workspace password to disable protection" id="disable-workspace-password" value={currentPassword} onChange={setCurrentPassword} autoComplete="current-password" /><button className="button button-quiet" type="button" onClick={() => { void disable(); }} disabled={action !== undefined}>{action === "disable" ? "Disabling…" : actionLabel("disable")}</button></div>
+      <div className="workspace-access-disable"><p>Disable the password only when this address is on a trusted LAN.</p><PasswordField label="Current workspace password to disable protection" id="disable-workspace-password" value={currentPassword} onChange={setCurrentPassword} autoComplete="current-password" /><Button variant="ghost" className="button button-quiet" type="button" onClick={() => { void disable(); }} disabled={action !== undefined}>{action === "disable" ? "Disabling…" : actionLabel("disable")}</Button></div>
     </>}
-    {!passwordMode && retryAvailable && pendingAction === "disable" && <div className="workspace-access-disable workspace-access-recovery"><p>A previous disable request may have succeeded before the response was lost. Re-enter the current password to safely replay it.</p><PasswordField label="Current workspace password to retry disabling protection" id="retry-disable-workspace-password" value={currentPassword} onChange={setCurrentPassword} autoComplete="current-password" /><button className="button button-quiet" type="button" onClick={() => { void disable(); }} disabled={action !== undefined}>{action === "disable" ? "Retrying…" : "Retry disable"}</button></div>}
-    {error && <p className="form-error workspace-access-error" role="alert">{error}</p>}
+    {!passwordMode && retryAvailable && pendingAction === "disable" && <div className="workspace-access-disable workspace-access-recovery"><p>A previous disable request may have succeeded before the response was lost. Re-enter the current password to safely replay it.</p><PasswordField label="Current workspace password to retry disabling protection" id="retry-disable-workspace-password" value={currentPassword} onChange={setCurrentPassword} autoComplete="current-password" /><Button variant="ghost" className="button button-quiet" type="button" onClick={() => { void disable(); }} disabled={action !== undefined}>{action === "disable" ? "Retrying…" : "Retry disable"}</Button></div>}
+    {error && <Alert asChild><p className="form-error workspace-access-error" role="alert">{error}</p></Alert>}
     {status && <p className="workspace-access-status" role="status">{status}</p>}
     {retryAvailable && <p className="workspace-access-retry-note" role="status">A previous request was not confirmed. Re-enter the same credentials to retry it with the same safe request key.</p>}
-    {retryAvailable && <button className="text-button workspace-access-new" type="button" onClick={startNewChange}>Start a new security change</button>}
-    {(error?.includes("Reload") || error?.includes("confirm")) && <button className="text-button workspace-access-reload" type="button" onClick={() => { void rebootstrap(); }} disabled={reloading}><Icon name="refresh" size={15} />{reloading ? "Reloading settings…" : "Reload settings"}</button>}
-  </section>;
+    {retryAvailable && <Button variant="ghost" className="text-button workspace-access-new" type="button" onClick={startNewChange}>Start a new security change</Button>}
+    {(error?.includes("Reload") || error?.includes("confirm")) && <Button variant="ghost" className="text-button workspace-access-reload" type="button" onClick={() => { void rebootstrap(); }} disabled={reloading}><Icon name="refresh" size={15} />{reloading ? "Reloading settings…" : "Reload settings"}</Button>}
+  </section></Card>;
 }

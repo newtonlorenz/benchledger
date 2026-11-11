@@ -1,38 +1,28 @@
-import { Component, lazy, Suspense, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { createPortal } from "react-dom";
+import { Alert } from "./components/ui/alert";
+import { Button } from "./components/ui/button";
+import { Component, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { DeferredMarkdownPreview, DeferredStlPreview } from "./deferred-views";
 import { fetchArtifactDownload } from "./api";
 import type { Artifact } from "./domain";
-import { useModalBoundary } from "./modal-boundary";
+import { WorkspaceModal } from "./components/workspace-modal";
+import { DialogTitle } from "./components/ui/dialog";
 import "./artifact-preview.css";
 
-const StlPreview = lazy(() => import("./stl-preview"));
 class PreviewBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   override state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
-  override render() { return this.state.failed ? <p role="alert">This preview could not be displayed. Close it and retry, or download the file to view it locally.</p> : this.props.children; }
+  override render() { return this.state.failed ? <Alert asChild><p role="alert">This preview could not be displayed. Close it and retry, or download the file to view it locally.</p></Alert> : this.props.children; }
 }
-const imageTypes: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", avif: "image/avif", bmp: "image/bmp", svg: "image/svg+xml" };
+const imageTypes: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", avif: "image/avif", bmp: "image/bmp" };
 export function artifactPreviewKind(name: string): "image" | "markdown" | "text" | "stl" | undefined {
   const extension = name.split(".").pop()?.toLowerCase() ?? "";
   if (Object.hasOwn(imageTypes, extension)) return "image";
   if (["md", "markdown"].includes(extension)) return "markdown";
-  if (["txt", "csv", "tsv", "json", "yaml", "yml", "log", "gcode", "scad"].includes(extension)) return "text";
+  // A raw SVG Blob can become an active same-origin document when opened in a
+  // new tab. Keep its source escaped in <pre>; the original remains downloadable.
+  if (["txt", "csv", "tsv", "json", "yaml", "yml", "log", "gcode", "scad", "svg"].includes(extension)) return "text";
   if (extension === "stl") return "stl";
   return undefined;
-}
-
-export function MarkdownPreview({ text }: { text: string }) {
-  // No raw HTML, embedded remote images, or automatically loaded resources.
-  return <Markdown skipHtml remarkPlugins={[remarkGfm]} components={{
-    // Wide build tables scroll inside the preview instead of the page.
-    table: ({ children }) => <div className="markdown-table-scroll" role="region" aria-label="Table" tabIndex={0}><table>{children}</table></div>,
-    img: ({ alt }) => <span>{alt ? `[Image: ${alt}]` : "[Image]"}</span>,
-    a: ({ href, children }) => href && /^https?:\/\//iu.test(href)
-      ? <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
-      : <span>{children}</span>,
-  }}>{text}</Markdown>;
 }
 
 type PreviewData = { text: string } | { url: string } | { bytes: ArrayBuffer };
@@ -43,7 +33,6 @@ export function ArtifactPreview({ file, onClose }: { file: Artifact; onClose: ()
   const [error, setError] = useState<string>();
   const [attempt, setAttempt] = useState(0);
   const kind = artifactPreviewKind(file.name);
-  useModalBoundary(modal, onClose);
   useEffect(() => {
     const controller = new AbortController();
     let url: string | undefined;
@@ -70,18 +59,15 @@ export function ArtifactPreview({ file, onClose }: { file: Artifact; onClose: ()
     })();
     return () => { controller.abort(); if (url) URL.revokeObjectURL(url); };
   }, [file.id, file.hash, file.name, kind, attempt]);
-  // Portal to <body> so the overlay sits above the sticky sidebar instead of inside the file panel's stacking context.
-  return createPortal(<div className="artifact-preview-backdrop">
-    <div ref={modal} className="artifact-preview-dialog" role="dialog" aria-modal="true" aria-labelledby={title} tabIndex={-1}>
-      <header><h2 id={title}>{file.name}</h2><button type="button" className="button button-quiet" onClick={onClose}>Close preview</button></header>
+  return <WorkspaceModal onClose={onClose}><div ref={modal} className="artifact-preview-dialog" role="dialog" aria-modal="true" aria-labelledby={title} tabIndex={-1}>
+      <header><DialogTitle id={title}>{file.name}</DialogTitle><Button variant="ghost" type="button" className="button button-quiet" onClick={onClose}>Close preview</Button></header>
       <div className="artifact-preview-content">
         <PreviewBoundary key={attempt}>
-        {error ? <div><p role="alert">{error}</p><button type="button" className="button button-quiet" onClick={() => setAttempt(attempt + 1)}>Retry preview</button></div> : !data ? <p role="status">Loading preview…</p> :
+        {error ? <div><Alert asChild><p role="alert">{error}</p></Alert><Button variant="ghost" type="button" className="button button-quiet" onClick={() => setAttempt(attempt + 1)}>Retry preview</Button></div> : !data ? <p role="status">Loading preview…</p> :
           "url" in data ? <img className="artifact-preview-image" src={data.url} alt={file.name} onError={() => setError("This image could not be displayed. Download it to view it locally.")} /> :
-          "bytes" in data ? <Suspense fallback={<p role="status">Loading 3D viewer…</p>}><StlPreview bytes={data.bytes} /></Suspense> :
-          kind === "markdown" ? <article className="artifact-preview-markdown"><MarkdownPreview text={data.text} /></article> : <pre className="artifact-preview-text">{data.text}</pre>}
+          "bytes" in data ? <DeferredStlPreview bytes={data.bytes} /> :
+          kind === "markdown" ? <article className="artifact-preview-markdown"><DeferredMarkdownPreview text={data.text} /></article> : <pre className="artifact-preview-text">{data.text}</pre>}
         </PreviewBoundary>
       </div>
-    </div>
-  </div>, document.body);
+    </div></WorkspaceModal>;
 }

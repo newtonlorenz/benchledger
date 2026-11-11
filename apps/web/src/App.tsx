@@ -1,32 +1,65 @@
-import { watchLateAutofocus } from "./dialog-autofocus";
-import { AssemblyWorkspace, ExistingBomImport, GuidedSetup, MakerPlanningTools, ProjectQuoteTools, ReconciliationUI } from "./lazy-panels";
+import { useWorkflowRead, revisionWorkflowPath } from "./workflow-ui";
+import { ProjectInventoryStatus, useReferencedInventory } from "./project-referenced-inventory";
+import { projectFabricationRoute, projectIntendedPrinterId, isUsableOwnedPrinter } from "./project-build-readiness";
+export { isUsableOwnedPrinter } from "./project-build-readiness";
+import "./maker-experience.css";
+import { Popover, PopoverTrigger, PopoverContent } from "./components/ui/popover";
+import { Progress } from "./components/ui/progress";
+import { Switch } from "./components/ui/switch";
+import { Alert } from "./components/ui/alert";
+import { Card } from "./components/ui/card";
+import { WorkspaceNavigation, WorkspaceBottomNavigation } from "./workspace-navigation";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "./components/ui/tabs";
+import { Skeleton } from "./components/ui/skeleton";
+import { RadioGroup, RadioGroupItem } from "./components/ui/radio-group";
+import { WorkspaceModal } from "./components/workspace-modal";
+import { DialogTitle } from "./components/ui/dialog";
+import { AlertDialogTitle } from "./components/ui/alert-dialog";
+import { SheetTitle } from "./components/ui/sheet";
+import { Label } from "./components/ui/label";
+import { Disclosure, DisclosureTrigger, DisclosureContent } from "./components/ui/disclosure";
+import { NativeSelect, NativeSelectOption } from "./components/ui/native-select";
+import { Checkbox } from "./components/ui/checkbox";
+import { Table, TableCaption, TableHeader, TableRow, TableHead, TableBody, TableCell } from "./components/ui/table";
+import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
+import { Textarea } from "./components/ui/textarea";
+import { Input } from "./components/ui/input";
+import { InventoryPanels, readInventoryLayout, writeInventoryLayout, defaultInventoryLayout, inventoryOptionalColumns } from "./inventory-layout";
+import type { InventoryLayout, InventoryOptionalColumn } from "./inventory-layout";
+import { InventoryInspector, InventoryAiCopy, InventoryThumbnail, InventoryProjectNeeds } from "./inventory-inspector";
+import { parseInventoryView, stockViewOptions, readSavedInventoryViews, saveInventoryViews, inventoryStockLabel, webInventoryAssessment } from "./inventory-workspace-state";
+import type { InventoryViewState, SavedInventoryView } from "./inventory-workspace-state";
+import { DeferredPcbWorkspace as PcbWorkspace, DeferredAssemblyWorkspace as AssemblyWorkspace } from "./deferred-views";
 import { InventoryImages } from "./inventory-images";
-import { ariaSortFor, inventoryEmptyKind, inventoryItemHash, nextSort, readInventoryItemRoute, readInventorySort, refetchLimit, sortInventoryItems, writeInventorySort } from "./inventory-list";
-import type { InventorySort, InventorySortKey } from "./inventory-list";
-import { DialogDraftContext, DiscardDraftPrompt, useDialogDraft, useDraftAwareClose } from "./dialog-draft";
-import { isAmbiguousMutation, isSyncFailure, SessionExpiredOverlay, SyncBanner, SyncStatusNote, ToastRegion, useNow, useRevalidateOnFocus, useToast, writeFailureMessage } from "./app-feedback";
+import { inventoryItemHash, readInventoryItemRoute, refetchLimit } from "./inventory-list";
+import { isAmbiguousMutation, isSyncFailure, SyncBanner, SyncStatusNote, ToastRegion, useNow, useRevalidateOnFocus, useToast, writeFailureMessage } from "./app-feedback";
 import type { ToastTone } from "./app-feedback";
-import { canPreviewArtifact, LazyArtifactPreview } from "./artifact-preview-loader";
+import { ArtifactPreview, artifactPreviewKind } from "./artifact-preview";
 import { UnsavedWorkContext, useNavigationGuard, useUnsavedWork } from "./unsaved-work";
-import { WorkbenchHome, projectLifecycleLabel } from "./workbench-home";
-import { ProjectsIndex } from "./projects-index";
+import { WorkbenchHome } from "./workbench-home";
+import { ProductImage, ProjectProductImageEditor } from "./project-product-image";
+import { currentBuildFiles } from "./project-library";
 import { recordOpenedProject } from "./workbench-state";
 import type { HomeTask } from "./workbench-state";
-import { useAppearance, AppearanceControl } from "./workspace-controls";
+import { useAppearance, AppearanceSettings } from "./workspace-controls";
 import { WorkspaceCommands } from "./workspace-commands";
 import type { WorkspaceCommand } from "./workspace-commands";
-import { createInventoryWithCount } from "./inventory-create";
-import { DeleteProjectConfirmation, OverflowMenu, ProjectSwitcher, RecordUseAction } from "./project-header";
-import { ProjectEditingContext, ProjectExportOptions, projectMenuItems, ProjectManagementBar, RequirementEditAction, RemovedRequirements, RequirementEditForm, ProjectEditForm, matchesRequirementFilter } from "./project-editing";
+import { StockReceiptReference, ReceivedStockNextStep, receiptRequirement, type StockReceiptContext } from "./stock-receipt";
+import { MakerPlanningTools, ProjectQuoteTools, ReconciliationUI } from "./lazy-panels";
+// Dialog content stays eager so the dialog can focus its first field on open.
+import { ExistingBomImport } from "./bom-import-ui";
+import { GuidedSetup } from "./guided-setup";
+import { ProjectEditingContext, ProjectManagementBar, RequirementEditAction, RemovedRequirements, RequirementEditForm, ProjectEditForm, matchesRequirementFilter } from "./project-editing";
 import type { RequirementFilter } from "./project-editing";
 import type { BomLine } from "./domain";
-import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import type * as React from "react";
 import { ApiError, createSampleWorkspaceAdapter, createWorkspaceAdapter, fetchArtifactDownload, MAX_INVENTORY_SEARCH_LENGTH } from "./api";
 import type { WorkspaceAdapter } from "./api";
 import type { BomInput, CatalogProductDraft, CatalogProductPage, CatalogSearchOptions, ExactInventoryInput, InventoryBulkUpdateInput, InventoryBulkUpdateResult, InventoryCommissionInput, InventoryCreateInput, InventoryKindQuery, InventoryListQuery, InventoryUpdateInput, ProjectCreateInput, ProjectRevisionUpdateInput, RevisionInput, WorkspaceAccess } from "./api";
-import { CatalogInventoryFlow, BuildSetupSummary, OwnedItemCombobox, buildFilamentSelection, buildItemEligibility, splitSetupValues } from "./catalog-ui";
+import { CatalogInventoryFlow, BuildSetupSummary, OwnedItemCombobox, OwnedInventorySearchContext, buildFilamentSelection, buildItemEligibility, splitSetupValues } from "./catalog-ui";
 import type { BuildConfigInput, CatalogProduct } from "./domain";
 import {
   calculateProjectSummary,
@@ -50,19 +83,22 @@ import { CategoryManager, CategorySelection, inventoryCategoryFilterOptions, man
 import type { CategoryCreateInput, CategoryUpdateInput, ManagedInventoryCategory } from "./category-ui";
 import { WorkspaceAccessSection } from "./workspace-access";
 import type { ArtifactUploadTarget } from "./artifact-scope";
+import { projectFilesView, groupProjectFiles, type ProjectFilesViewState } from "./project-files-view";
+import { projectPlanView, projectPrimaryTab, type ProjectPlanViewState } from "./project-plan-view";
 import { artifactIdentityLabel, artifactRevisionLabel, artifactScopeChoices, artifactScopeIdentity, artifactScopeKey, defaultArtifactScope, filterArtifactsForScope } from "./artifact-scope";
 import { InspectionQueuePanel } from "./inspection-ui";
 import type { InspectionAction, InspectionCompletionInput, InspectionCompletionPreview, InspectionCompletionResult } from "./inspection-ui";
 import { defaultUnitForItemKind, validUnitsForItemKind } from "@benchledger/api-contract";
+import { projectNextAction, requirementStockReason } from "./requirement-journey";
+import { RequirementOwnedItems, type OwnedItemSearch } from "./requirement-owned-items";
 import { inventoryCandidateLabel, inventoryCandidateText, inventoryDiscriminator } from "./inventory-identity";
 import { PrintItemLabel } from "./item-label";
 import { StockReceivingPolicySection, assumedStockLabel, stockReceivingPolicyLabel } from "./stock-receiving-policy";
 import type { WorkspacePreferencesView } from "./stock-receiving-policy";
 export { inventoryCandidateLabel, inventoryDiscriminator } from "./inventory-identity";
 
-/** "projects" is one open project; "projectIndex" (#/projects) lists them all. */
-type Page = "overview" | "inventory" | "projectIndex" | "projects" | "capabilities" | "settings";
-type ProjectTab = "assembly" | "plan" | "files" | "offers" | "build" | "reconciliation";
+type Page = "overview" | "inventory" | "projects" | "capabilities" | "settings";
+type ProjectTab = "overview" | "pcb" | "assembly" | "plan" | "files" | "offers" | "build" | "reconciliation";
 type ProjectView = "active" | "archived";
 type NavigationHistoryState = { readonly projectView?: ProjectView };
 type ConnectionState = "loading" | "ready" | "sample" | "unauthenticated" | "offline" | "error";
@@ -98,18 +134,9 @@ export async function loadAllInventoryCategories(adapter: Pick<WorkspaceAdapter,
   return categories;
 }
 
-function readInventoryUrlState(): { readonly search: string; readonly categoryNodeId: string; readonly kind: InventoryKindQuery | "All"; readonly evidence: InventoryEvidenceState | "All"; readonly availability: "All" | "available" | "unavailable"; } {
-  if (typeof window === "undefined") return { search: "", categoryNodeId: "", kind: "All", evidence: "All", availability: "All" };
-  const params = new URLSearchParams(window.location.search);
-  const categoryNodeId = params.get("unassigned") === "true" ? UNASSIGNED_CATEGORY_FILTER : (params.get("categoryNodeId")?.trim() ?? "");
-  const kindValue = params.get("kind");
-  const evidenceValue = params.get("evidence");
-  const availableValue = params.get("available");
-  const kind = inventoryKindOptions.some((option) => option.value === kindValue) ? (kindValue as InventoryKindQuery) : "All";
-  const evidenceValues: InventoryEvidenceState[] = ["physically_counted", "commissioned", "delivered_uncounted", "ordered_unverified", "allocated", "consumed", "unknown"];
-  const evidence = evidenceValues.includes(evidenceValue as InventoryEvidenceState) ? (evidenceValue as InventoryEvidenceState) : "All";
-  const availability = availableValue === "true" ? "available" : availableValue === "false" ? "unavailable" : "All";
-  return { search: params.get("q")?.trim().slice(0, MAX_INVENTORY_SEARCH_LENGTH) ?? "", categoryNodeId, kind, evidence, availability };
+function readInventoryUrlState(): InventoryViewState {
+  const params = new URLSearchParams(typeof window === "undefined" ? "" : window.location.search);
+  return parseInventoryView({ search: params.get("q"), categoryNodeId: params.get("unassigned") === "true" ? UNASSIGNED_CATEGORY_FILTER : params.get("categoryNodeId"), kind: params.get("kind"), evidence: params.get("evidence"), availability: params.get("available") === "true" ? "available" : params.get("available") === "false" ? "unavailable" : "All", stockView: params.get("stockView"), sort: params.get("sort"), location: params.get("location") });
 } export const navigationEpoch = () => `navigation-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 function navigationEntryEpoch(state: unknown): string | undefined {
   const value = state !== null && typeof state === "object" ? (state as Record<string, unknown>).benchledgerEpoch : undefined;
@@ -125,29 +152,28 @@ function replaceNavigationHistory(state: unknown, title: string, url?: string | 
   window.history.replaceState({ ...record, benchledgerIndex: navigationEntryIndex(record) ?? navigationEntryIndex(window.history.state) ?? 0, benchledgerEpoch: navigationEntryEpoch(record) ?? navigationEntryEpoch(window.history.state) ?? navigationEpoch() }, title, url);
 }
 function readNavigationUrlState(): { page: Page; projectId?: string; tab: ProjectTab; projectView?: ProjectView; itemId?: string; } {
-  if (typeof window === "undefined") return { page: "overview", tab: "plan" };
+  if (typeof window === "undefined") return { page: "overview", tab: "overview" };
   let parts: string[];
   try {
     parts = window.location.hash.replace(/^#\/?/u, "").split("/").filter(Boolean).map((part) => decodeURIComponent(part));
   } catch {
-    return { page: "overview", tab: "plan" };
+    return { page: "overview", tab: "overview" };
   }
   const historyState = window.history.state as NavigationHistoryState | null;
   const projectView: ProjectView | undefined = historyState?.projectView === "active" || historyState?.projectView === "archived" ? historyState.projectView : undefined;
   const page = parts[0];
   if (page === "projects") {
-    const tab = (["plan", "files", "offers", "build", "assembly", "reconciliation"] as ProjectTab[]).includes(parts[2] as ProjectTab) ? (parts[2] as ProjectTab) : "plan";
-    if (!parts[1]) return { page: "projectIndex", tab, ...(projectView ? { projectView } : {}) };
-    return { page, projectId: parts[1], tab, ...(projectView ? { projectView } : {}) };
+    const tab = (["overview", "plan", "files", "offers", "build", "assembly", "pcb", "reconciliation"] as ProjectTab[]).includes(parts[2] as ProjectTab) ? (parts[2] as ProjectTab) : "overview";
+    return { page, ...(parts[1] ? { projectId: parts[1] } : {}), tab, ...(projectView ? { projectView } : {}) };
   }
+  // An item opened from another page keeps its id in history state, so Back closes it.
   const stateItemId = typeof (historyState as { itemId?: unknown } | null)?.itemId === "string" ? (historyState as { itemId: string }).itemId : undefined;
-  if (page === "inventory") { const itemId = readInventoryItemRoute(window.location.hash) ?? stateItemId; return { page, tab: "plan", ...(itemId ? { itemId } : {}) }; }
-  if (page === "capabilities" || page === "settings" || page === "overview") return { page, tab: "plan", ...(stateItemId ? { itemId: stateItemId } : {}) };
-  return { page: "overview", tab: "plan" };
-} function navigationHash( page: Page, projectId?: string, tab: ProjectTab = "plan" ): string { if (page === "overview") return "#/"; if (page === "projectIndex") return "#/projects"; if (page !== "projects") return `#/${page}`; if (!projectId) return "#/projects"; return `#/projects/${encodeURIComponent(projectId)}/${tab}`; } const pageCopy: Record<Page, { label: string; icon: Parameters<typeof Icon>[0]["name"] }> = {
-  overview: { label: "Workbench", icon: "grid" },
+  if (page === "inventory") { const itemId = readInventoryItemRoute(window.location.hash) ?? stateItemId; return { page, tab: "overview", ...(itemId ? { itemId } : {}) }; }
+  if (page === "capabilities" || page === "settings" || page === "overview") return { page, tab: "overview", ...(stateItemId ? { itemId: stateItemId } : {}) };
+  return { page: "overview", tab: "overview" };
+} function navigationHash( page: Page, projectId?: string, tab: ProjectTab = "overview" ): string { if (page === "overview") return "#/"; if (page !== "projects") return `#/${page}`; if (!projectId) return "#/projects"; return `#/projects/${encodeURIComponent(projectId)}/${tab}`; } const pageCopy: Record<Page, { label: string; icon: Parameters<typeof Icon>[0]["name"] }> = {
+  overview: { label: "Projects", icon: "folder" },
   inventory: { label: "Inventory", icon: "box" },
-  projectIndex: { label: "Projects", icon: "folder" },
   projects: { label: "Projects", icon: "folder" },
   capabilities: { label: "For agents", icon: "code" },
   settings: { label: "Settings", icon: "settings" }
@@ -162,18 +188,29 @@ const technicalDetailsPreferenceKey = "benchledger:technical-details"; function 
   Fasteners: "link",
   "Wire & cable": "link"
 };
-const UNASSIGNED_CATEGORY_FILTER = "__unassigned__"; const inventoryStatusOptions = [ { value: "All", label: "Any stock status" }, { value: "physically_counted", label: "Physically counted" }, { value: "commissioned", label: "Commissioned" }, { value: "delivered_uncounted", label: "Delivered, not counted" }, { value: "ordered_unverified", label: "Ordered, not verified" }, { value: "allocated", label: "Reserved for a project" }, { value: "consumed", label: "Used" }, { value: "unknown", label: "Not checked yet" } ] as const; const inventoryEvidenceOptions = [ { value: "All", label: "All evidence" }, { value: "physically_counted", label: "Physically counted" }, { value: "commissioned", label: "Commissioned" }, { value: "delivered_uncounted", label: "Delivered, not counted" }, { value: "ordered_unverified", label: "Ordered, not verified" }, { value: "allocated", label: "Reserved for a project" }, { value: "consumed", label: "Used" }, { value: "unknown", label: "Not checked yet" } ] as const; function displayedInventoryState(item: InventoryItem): StockState {
+const UNASSIGNED_CATEGORY_FILTER = "__unassigned__"; const inventoryStatusOptions = [ { value: "All", label: "All stock records" }, { value: "physically_counted", label: "Physically counted" }, { value: "commissioned", label: "Commissioned" }, { value: "delivered_uncounted", label: "Delivered, not counted" }, { value: "ordered_unverified", label: "Ordered, not verified" }, { value: "allocated", label: "Reserved for a project" }, { value: "consumed", label: "Used" }, { value: "unknown", label: "Not checked yet" } ] as const; const inventoryEvidenceOptions = [ { value: "All", label: "All evidence" }, { value: "physically_counted", label: "Physically counted" }, { value: "commissioned", label: "Commissioned" }, { value: "delivered_uncounted", label: "Delivered, not counted" }, { value: "ordered_unverified", label: "Ordered, not verified" }, { value: "allocated", label: "Reserved for a project" }, { value: "consumed", label: "Used" }, { value: "unknown", label: "Not checked yet" } ] as const; function displayedInventoryState(item: InventoryItem): StockState {
   return item.unitStatus === "needs_correction" ? "inspect-first" : item.state;
 } /** Keep missing storage metadata distinct from a real location label. */ export function inventoryLocationLabel(location: string | undefined): string { const value = location?.trim(); return !value || value === "Unassigned" ? "No location" : value; } /** Keep the canonical project lifecycle readable without exposing storage keys. */
-export { projectLifecycleLabel };
+export function projectLifecycleLabel(status: Project["status"]): string {
+  const labels: Record<Project["status"], string> = {
+    idea: "Idea",
+    planned: "Planned",
+    ready: "Ready",
+    building: "Building",
+    validating: "Validating",
+    complete: "Complete",
+    archived: "Archived"
+  };
+  return labels[status];
+}
 
 /** One beginner decision vocabulary for every requirement state. */
 export function decisionDisplay(decision: BomDecision | "optional"): { label: string; tone: StockLabelTone; } {
   switch (decision) {
-    case "ready": return { label: "Ready to use", tone: "good" };
-    case "check": return { label: "Check stock", tone: "warn" };
+    case "ready": return { label: "Ready", tone: "good" };
+    case "check": return { label: "Check", tone: "warn" };
     case "decide": return { label: "Decide", tone: "info" };
-    case "source": return { label: "Need to buy", tone: "bad" };
+    case "source": return { label: "Source", tone: "bad" };
     case "optional": return { label: "Optional", tone: "muted" };
   }
 }
@@ -207,6 +244,25 @@ export function formatSourceReadyMessage(count: number): string {
   return `${formatRequirementCount(normalized)} ${normalized === 1 ? "still needs" : "still need"} sourcing`;
 } /** Keep machine-stored specification keys readable in maker-facing copy. */ export function humanizeSpecificationDecision(value: string): string { return value .replaceAll("_", " ") .replace(/\s+/gu, " ") .trim() .toLocaleLowerCase(); } function beginnerInspectDescription(line: BomLineStatus): string { const item = line.item; const evidence = item?.serverEvidence ?? (item?.evidence === "delivered" ? "delivered_uncounted" : item?.evidence === "ordered" ? "ordered_unverified" : undefined); if ( item && (evidence === "delivered_uncounted" || evidence === "ordered_unverified") ) { return `Count ${item.name} before you use it.`; } const reasonText = line.gap?.reasons.join(" ").toLocaleLowerCase() ?? ""; if ( item && (reasonText.includes("compatib") || reasonText.includes("match")) ) { return `Check that ${item.name} matches ${line.line.label}.`; } if (item) return `Check ${item.name} before you use it.`; return "Check this requirement before you use it."; } function App() {
   const initialNavigation = useRef(readNavigationUrlState()).current; const [adapter, setAdapter] = useState<WorkspaceAdapter>(() => createWorkspaceAdapter());
+  const searchOwnedItems = useCallback<OwnedItemSearch>(async (query, signal) => {
+    const page = await adapter.listInventory({ q: query, limit: 25 }, { signal });
+    if (!signal.aborted) setItems((current) => {
+      const byId = new Map(current.map((item) => [item.id, item]));
+      page.items.forEach((item) => byId.set(item.id, item));
+      return [...byId.values()];
+    });
+    return page;
+  }, [adapter]);
+  const searchBuildInventory = useCallback(async (category: "Printers" | "Filament", query: string, signal: AbortSignal) => {
+    const result = await adapter.listInventory({ kind: category === "Printers" ? "printer" : "filament", q: query, limit: 25 }, { signal });
+    if (!signal.aborted) setItems(current => { const byId = new Map(current.map(item => [item.id,item])); result.items.forEach(item => byId.set(item.id,item)); return [...byId.values()]; });
+    return result;
+  }, [adapter]);
+  const mergeReferencedItems = useCallback((records: InventoryItem[]) => setItems((current) => {
+    const byId = new Map(current.map((item) => [item.id, item]));
+    records.forEach((item) => byId.set(item.id, item));
+    return [...byId.values()];
+  }), []);
   const [page, setPage] = useState<Page>(initialNavigation.page);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectRefreshNonce, setProjectRefreshNonce] = useState(0);
@@ -216,11 +272,15 @@ export function formatSourceReadyMessage(count: number): string {
   const historyTravel = useRef<{ phase: "restore" | "proceed"; destination: { url: string; state: unknown }; delta: number } | undefined>(undefined);
   useLayoutEffect(() => { replaceNavigationHistory(window.history.state, "", window.location.href); lastNavigation.current = { url: window.location.href, state: window.history.state }; }, []);
   const [commandsOpen, setCommandsOpen] = useState(false);
-  const [editingRequirement, setEditingRequirement] = useState<{ projectId: string; line: BomLine }>();
+  const [editingRequirement, setEditingRequirement] = useState<{ projectId: string; line: BomLine; initialFocus?: "stock" | undefined; initialItemId?: string | undefined }>();
+  const [partInspectorHost, setPartInspectorHost] = useState<HTMLDivElement | null>(null);
   const [editingProject, setEditingProject] = useState<Project>();
   const [showGuidedSetup, setShowGuidedSetup] = useState(false);
   const [guidedBusy, setGuidedBusy] = useState(false);
+  const [guidedDraft, setGuidedDraft] = useState<ProjectCreateInput>();
+  const [guidedMode, setGuidedMode] = useState<"template" | "import">("template");
   const [correctionBusy, setCorrectionBusy] = useState(false);
+  const [projectEditDraft, setProjectEditDraft] = useState({ dirty: false, unresolved: false });
   const applyProjectCorrection = (project: Project, message: string) => {
     setProjects((current) => current.map((entry) => entry.id === project.id ? project : entry));
     setToast(project.readinessUnavailable ? `${message} Stock status could not refresh; reload before sourcing.` : message, project.readinessUnavailable ? "warning" : "success");
@@ -241,17 +301,29 @@ export function formatSourceReadyMessage(count: number): string {
   const [selectedProjectId, setSelectedProjectId] = useState( initialNavigation.projectId ?? "project-lamp");
   const [selectedItemId, setSelectedItemId] = useState<string | undefined>(initialNavigation.itemId);
   const closingItemRef = useRef(false);
+  const [countStockItemId, setCountStockItemId] = useState<string>();
+  // In-memory recovery only: authenticated rendering resumes the original review.
+  const [pendingStockObservation, setPendingStockObservation] = useState<PendingStockObservation>();
+  const [missingPendingStockItem, setMissingPendingStockItem] = useState(false);
+  const pendingStockObservationRef = useRef<PendingStockObservation | undefined>(undefined);
+  const rememberStockObservation = useCallback((value: PendingStockObservation | undefined) => {
+    pendingStockObservationRef.current = value; setPendingStockObservation(value);
+    navigationGuard.registry.set("pending-stock-observation", value ? { label: "stock observation", unresolved: true } : undefined);
+  }, [navigationGuard.registry]);
   const [projectTab, setProjectTab] = useState<ProjectTab>( initialNavigation.tab );
+  useEffect(() => { if (editingRequirement && (page !== "projects" || selectedProjectId !== editingRequirement.projectId || projectTab !== "plan")) setEditingRequirement(undefined); }, [page, selectedProjectId, projectTab]);
   const [homeTask, setHomeTask] = useState<(HomeTask & { request: number })>();
+  const [projectImageIntent, setProjectImageIntent] = useState<{ projectId: string; request: number }>();
+  const projectImageRequest = useRef(0);
+  const consumeProjectImageIntent = useCallback((request: number) => setProjectImageIntent(current => current?.request === request ? undefined : current), []);
   const [search, setSearch] = useState(() => readInventoryUrlState().search);
+  const [inventoryCategoryNodeId, setInventoryCategoryNodeId] = useState(() => readInventoryUrlState().categoryNodeId);
   const [expert, setExpert] = useState(readTechnicalDetailsPreference);
-  const [mobileNav, setMobileNav] = useState(false);
-  const toastApi = useToast(`${page}:${selectedProjectId}:${projectTab}`); const setToast = toastApi.show; const [loading, setLoading] = useState(true);
+  const toastApi = useToast(page === "projects" ? `projects:${selectedProjectId}` : page); const setToast = toastApi.show; const [loading, setLoading] = useState(true);
   const [connection, setConnection] = useState<ConnectionState>("loading");
   const [connectionError, setConnectionError] = useState<ApiError>();
   const [lastSyncedAt, setLastSyncedAt] = useState<number>();
   const [syncRetrying, setSyncRetrying] = useState(false);
-  const [sessionExpired, setSessionExpired] = useState(false);
   const now = useNow();
   const [demoAvailable, setDemoAvailable] = useState(false);
   const [sampleMode, setSampleMode] = useState(false);
@@ -264,9 +336,18 @@ export function formatSourceReadyMessage(count: number): string {
   const [showNewRevision, setShowNewRevision] = useState(false);
   const [showEditBuildApproach, setShowEditBuildApproach] = useState(false);
   const [showBomImport, setShowBomImport] = useState(false);
-  const [importBusy, setImportBusy] = useState(false);
-  const [showAddBom, setShowAddBom] = useState(false); const [showNewItem, setShowNewItem] = useState(false);
+  const [showAddBom, setShowAddBom] = useState(false);
+  const [addedPart, setAddedPart] = useState<{ projectId: string; lineId: string; name: string }>(); const [showNewItem, setShowNewItem] = useState(false);
+  const [requirementDraft, setRequirementDraft] = useState(emptyRequirementDraft);
+  const [newItemRequirementName, setNewItemRequirementName] = useState<string>();
+  const [newInventoryDraft, setNewInventoryDraft] = useState<NewInventoryDraft>();
+  const [createdInventory, setCreatedInventory] = useState<{ item: InventoryItem; returnToRequirement: boolean; initialCountQuantity?: number; countReceipt?: string }>();
+  const createdInventoryRef = useRef(createdInventory);
+  createdInventoryRef.current = createdInventory;
   const [replacementFor, setReplacementFor] = useState<InventoryItem>();
+  const [receivingStock, setReceivingStock] = useState<StockReceiptContext>();
+  const [receivedStock, setReceivedStock] = useState<{ context: StockReceiptContext; itemId: string }>();
+  useEffect(() => { setReceivingStock(undefined); setReceivedStock(undefined); }, [adapter]);
   const [bulkInventorySelection, setBulkInventorySelection] = useState<BulkInventorySelection>();
   const [bulkSelectionResetNonce, setBulkSelectionResetNonce] = useState(0);
   const [pendingRevisionSetup, setPendingRevisionSetup] = useState<PendingRevisionSetup>();
@@ -299,10 +380,29 @@ export function formatSourceReadyMessage(count: number): string {
     let active = true;
     setLoading(true);
     setConnection("loading");
+    setMissingPendingStockItem(false);
     bootstrapWorkspace().then(async (snapshot) => {
       if (!active) return;
       const archived = await adapter.listArchivedProjects().catch((error: unknown) => error instanceof ApiError && error.status === 404 ? [] : Promise.reject(error));
-      setItems(snapshot.inventory);
+      // The workspace snapshot is bounded. Restore the exact item independently
+      // of the reviewed command so returning to editing cannot remove the drawer.
+      const retained = pendingStockObservationRef.current;
+      const retainedItemId = retained?.item.id ?? createdInventoryRef.current?.item.id;
+      const restoredItem = retainedItemId ? await adapter.readInventoryItem(retainedItemId).catch((error: unknown) => {
+        if (!retained && error instanceof ApiError && error.status === 404) {
+          if (active) {
+            setCreatedInventory(undefined);
+            setSelectedItemId(undefined);
+            setRequirementDraft((draft) => draft.itemId === retainedItemId ? { ...draft, itemId: "" } : draft);
+          }
+          return undefined;
+        }
+        if (active && retained && !retained.uncertain && error instanceof ApiError && error.status === 404) setMissingPendingStockItem(true);
+        throw error;
+      }) : undefined;
+      if (!active) return;
+      setItems(restoredItem ? [...snapshot.inventory.filter((item) => item.id !== restoredItem.id), restoredItem] : snapshot.inventory);
+      if (restoredItem) setSelectedItemId(restoredItem.id);
       setProjects(snapshot.projects);
       setArchivedProjects(archived);
       const requestedNavigation = readNavigationUrlState();
@@ -313,7 +413,6 @@ export function formatSourceReadyMessage(count: number): string {
       setDemoAvailable(Boolean(snapshot.health?.demo));
       setConnection(snapshot.source === "synthetic" ? "sample" : "ready");
       setConnectionError(undefined);
-      setSessionExpired(false);
       setLastSyncedAt(Date.now());
       setLoading(false);
     }).catch((error: unknown) => {
@@ -346,7 +445,7 @@ export function formatSourceReadyMessage(count: number): string {
     return () => { active = false; };
   }, [adapter, connection, categoryReloadNonce]);
 
-   useEffect(() => { try { window.localStorage.setItem( technicalDetailsPreferenceKey, expert ? "shown" : "hidden" ); } catch { // A restricted browser storage policy should not prevent changing the view.
+  useEffect(() => { try { window.localStorage.setItem( technicalDetailsPreferenceKey, expert ? "shown" : "hidden" ); } catch { // A restricted browser storage policy should not prevent changing the view.
 } }, [expert]);
 
   useEffect(() => {
@@ -383,45 +482,47 @@ export function formatSourceReadyMessage(count: number): string {
   const visibleProjects = projectView === "archived" ? archivedProjects : projects;
   const selectedProject = selectedProjectId ? visibleProjects.find((project) => project.id === selectedProjectId) : visibleProjects[0];
   useEffect(() => { if (page === "projects" && selectedProject?.id === selectedProjectId) recordOpenedProject(selectedProjectId, sampleMode); }, [page, selectedProject?.id, selectedProjectId, sampleMode]);
-  const selectedItem = items.find((item) => item.id === selectedItemId);
+  const referencedInventory = useReferencedInventory(page === "projects" ? selectedProject : undefined, items, adapter.readInventoryItem, mergeReferencedItems);
+  const selectedItem = items.find((item) => item.id === selectedItemId) ?? (pendingStockObservation && pendingStockObservation.item.id === selectedItemId ? pendingStockObservation.item : undefined);
   const overlayOpenRef = useRef(false);
-  const overlayOpen = Boolean(sessionExpired || navigationGuard.pending || showBomImport || commandsOpen || showGuidedSetup || editingProject || editingRequirement || selectedItem || showNewProject || showNewRevision || showEditBuildApproach || showAddBom || showNewItem || bulkInventorySelection);
-  overlayOpenRef.current = overlayOpen || mobileNav;
+  const overlayOpen = Boolean(navigationGuard.pending || showBomImport || commandsOpen || showGuidedSetup || editingProject || editingRequirement || selectedItem || showNewProject || showNewRevision || showEditBuildApproach || showAddBom || showNewItem || bulkInventorySelection);
   useEffect(() => {
     const commands = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "k" && !event.isComposing) {
-        event.preventDefault(); if (!overlayOpen && !mobileNav) setCommandsOpen(true);
+        event.preventDefault(); if (!overlayOpen) setCommandsOpen(true);
       }
     };
     window.addEventListener("keydown", commands); return () => window.removeEventListener("keydown", commands);
-  }, [overlayOpen, mobileNav]);
+  }, [overlayOpen]);
+  overlayOpenRef.current = overlayOpen;
 
   // Deep link to an item that is not in the loaded pages: fetch it by id.
   useEffect(() => {
     if (!selectedItemId || items.some((item) => item.id === selectedItemId) || (connection !== "ready" && connection !== "sample")) return;
-    let active = true;
-    adapter.getInventoryItem(selectedItemId).then((item) => {
-      if (active) setItems((current) => current.some((entry) => entry.id === item.id) ? current : [...current, item]);
+    const controller = new AbortController();
+    adapter.readInventoryItem(selectedItemId, { signal: controller.signal }).then((item) => {
+      if (!controller.signal.aborted) setItems((current) => current.some((entry) => entry.id === item.id) ? current : [...current, item]);
     }).catch((error: unknown) => {
-      if (!active) return;
+      if (controller.signal.aborted) return;
       const normalized = normalizeApiError(error);
       if (normalized.kind === "unauthenticated" || normalized.kind === "csrf") { handleSessionExpiry(normalized); return; }
       setToast(normalized.status === 404 ? "That inventory item is not available. It may have been deleted." : `That inventory item could not be loaded. ${normalized.message}`, normalized.status === 404 ? "warning" : "error");
       dismissItem();
     });
-    return () => { active = false; };
+    return () => controller.abort();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedItemId, connection, adapter]);
-  const resetMainScrollAndFocus = () => { if (typeof window !== "undefined") window.scrollTo({ top: 0, left: 0, behavior: "auto" }); const main = mainRef.current; if (!main) return; main.scrollTop = 0; main.scrollLeft = 0; if (mainFocusFrameRef.current !== undefined) { window.cancelAnimationFrame(mainFocusFrameRef.current); mainFocusFrameRef.current = undefined; } main.focus({ preventScroll: true });
+
+  const resetMainScrollAndFocus = () => { if (typeof window !== "undefined") window.scrollTo({ top: 0, left: 0, behavior: "auto" }); const main = mainRef.current; if (!main) return; main.scrollTop = 0; main.scrollLeft = 0; if (mainFocusFrameRef.current !== undefined) { window.cancelAnimationFrame(mainFocusFrameRef.current); mainFocusFrameRef.current = undefined; } main.focus({ preventScroll: true }); window.setTimeout(() => { if (!document.querySelector('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]')) main.focus({ preventScroll: true }); }, 0);
   }; useLayoutEffect(() => {
     if (!pendingMainFocusRef.current) return; pendingMainFocusRef.current = false; resetMainScrollAndFocus();
   }, [page, selectedProjectId, projectTab, projectView]); useEffect(() => {
     const restoreNavigation = () => {
       const restored = readNavigationUrlState(), destination = { url: window.location.href, state: window.history.state as unknown };
       const withoutItem = (url: string) => url.replace(/#\/inventory\/[^/?#]+$/u, "#/inventory");
-      // Opening or closing an item drawer must not reset the list scroll or focus.
+      // Opening or closing an item must not reset the list scroll or focus.
       const itemOnly = withoutItem(destination.url) === withoutItem(lastNavigation.current.url);
-      const apply = () => { replaceNavigationHistory(destination.state, "", destination.url); lastNavigation.current = { ...destination, state: window.history.state }; pendingMainFocusRef.current = !itemOnly; const restoredView: ProjectView = restored.projectView ?? (restored.projectId && archivedProjects.some((project) => project.id === restored.projectId) ? "archived" : (restored.page === "projects" || restored.page === "projectIndex") && projects.length === 0 && archivedProjects.length > 0 ? "archived" : "active"); setProjectView(restoredView); setPage(restored.page); setProjectTab(restored.tab); setSelectedProjectId((current) => restored.page === "projectIndex" ? current : restored.projectId ?? (restoredView === "archived" ? archivedProjects : projects)[0]?.id ?? ""); setMobileNav(false); setSelectedItemId(restored.itemId); };
+      const apply = () => { replaceNavigationHistory(destination.state, "", destination.url); lastNavigation.current = { ...destination, state: window.history.state }; pendingMainFocusRef.current = !itemOnly; const restoredView: ProjectView = restored.projectView ?? (restored.projectId && archivedProjects.some((project) => project.id === restored.projectId) ? "archived" : restored.page === "projects" && projects.length === 0 && archivedProjects.length > 0 ? "archived" : "active"); setProjectView(restoredView); setPage(restored.page); setProjectTab(restored.tab); setSelectedProjectId(restored.projectId ?? (restoredView === "archived" ? archivedProjects : projects)[0]?.id ?? ""); setSelectedItemId(restored.itemId); };
       if (closingItemRef.current) { closingItemRef.current = false; apply(); return; }
       const travel = historyTravel.current;
       if (travel) {
@@ -453,11 +554,11 @@ export function formatSourceReadyMessage(count: number): string {
     };
     window.addEventListener("popstate", restoreNavigation); window.addEventListener("hashchange", restoreNavigation);
     return () => { window.removeEventListener("popstate", restoreNavigation); window.removeEventListener("hashchange", restoreNavigation); };
-  }, [archivedProjects, projects, navigationGuard.registry]); const recordNavigation = ( nextPage: Page, projectId = selectedProjectId, tab = projectTab, view: ProjectView = projectViewRef.current ) => { const intraProjectTabNavigation = nextPage === "projects" && projectId === selectedProjectId && tab !== projectTab; if (intraProjectTabNavigation) pendingMainFocusRef.current = false; const nextView = nextPage === "projects" ? archivedProjects.some((project) => project.id === projectId) ? "archived" : projects.some((project) => project.id === projectId) ? "active" : view : view; const nextHash = navigationHash(nextPage, projectId, tab); const currentState = window.history.state as NavigationHistoryState | null; const projectRoute = nextPage === "projects" || nextPage === "projectIndex"; const nextState: NavigationHistoryState = projectRoute ? { projectView: nextView } : {}; const sameView = !projectRoute || currentState?.projectView === nextView; if (window.location.hash !== nextHash || !sameView) window.history.pushState({ ...nextState, benchledgerIndex: (navigationEntryIndex(window.history.state) ?? 0) + 1, benchledgerEpoch: navigationEntryEpoch(window.history.state) ?? navigationEpoch() }, "", nextHash); lastNavigation.current = { url: window.location.href, state: window.history.state };
+  }, [archivedProjects, projects, navigationGuard.registry]); const recordNavigation = ( nextPage: Page, projectId = selectedProjectId, tab = projectTab, view: ProjectView = projectViewRef.current ) => { const intraProjectTabNavigation = nextPage === "projects" && projectId === selectedProjectId && tab !== projectTab; if (intraProjectTabNavigation) pendingMainFocusRef.current = false; const nextView = nextPage === "projects" ? archivedProjects.some((project) => project.id === projectId) ? "archived" : projects.some((project) => project.id === projectId) ? "active" : view : view; const nextHash = navigationHash(nextPage, projectId, tab); const currentState = window.history.state as NavigationHistoryState | null; const projectRoute = nextPage === "projects"; const nextState: NavigationHistoryState = projectRoute ? { projectView: nextView } : {}; const sameView = !projectRoute || currentState?.projectView === nextView; if (window.location.hash !== nextHash || !sameView) window.history.pushState({ ...nextState, benchledgerIndex: (navigationEntryIndex(window.history.state) ?? 0) + 1, benchledgerEpoch: navigationEntryEpoch(window.history.state) ?? navigationEpoch() }, "", nextHash); lastNavigation.current = { url: window.location.href, state: window.history.state };
   };
 
-  const navigate = (nextPage: Page) => navigationGuard.registry.request(() => { pendingMainFocusRef.current = !searchHandoffRef.current; recordNavigation(nextPage); setPage(nextPage); setMobileNav(false); setSelectedItemId(undefined); if (nextPage === page) resetMainScrollAndFocus(); });
-  /** Open an item drawer as its own history entry so Back closes it. On the
+  const navigate = (nextPage: Page) => navigationGuard.registry.request(() => { pendingMainFocusRef.current = !searchHandoffRef.current; recordNavigation(nextPage); setPage(nextPage); setSelectedItemId(undefined); if (nextPage === page) resetMainScrollAndFocus(); });
+  /** Open an item as its own history entry so Back closes it. On the
    * inventory page the entry is a shareable #/inventory/<id> deep link. */
   const openItem = (itemId: string) => navigationGuard.registry.request(() => {
     if (itemId === selectedItemId) return;
@@ -468,7 +569,7 @@ export function formatSourceReadyMessage(count: number): string {
     lastNavigation.current = { url: window.location.href, state: window.history.state };
     setSelectedItemId(itemId);
   });
-  /** Remove the drawer without leaving a dead #/inventory/<id> entry behind. */
+  /** Remove the item without leaving a dead #/inventory/<id> entry behind. */
   const dismissItem = () => {
     setSelectedItemId(undefined);
     const current = window.history.state as Record<string, unknown> | null;
@@ -478,18 +579,41 @@ export function formatSourceReadyMessage(count: number): string {
       lastNavigation.current = { url: window.location.href, state: window.history.state };
     }
   };
-  const closeItem = () => navigationGuard.registry.request(() => {
+  /** Close via Back when the item pushed its own entry, so history stays linear. */
+  const closeItemHistory = () => {
     const current = window.history.state as Record<string, unknown> | null;
     if (current?.itemPushed === true && current.itemId === selectedItemId) { closingItemRef.current = true; setSelectedItemId(undefined); window.history.back(); }
     else dismissItem();
+  };
+  const openProject = (projectId: string, tab: ProjectTab = "overview", options?: { showImages?: boolean }) => navigationGuard.registry.request(() => { setProjectImageIntent(options?.showImages ? { projectId, request: ++projectImageRequest.current } : undefined); recordOpenedProject(projectId, sampleMode); setProjectView(archivedProjects.some(project => project.id === projectId) ? "archived" : "active"); setHomeTask(undefined); setAddedPart(undefined); pendingMainFocusRef.current = !options?.showImages; recordNavigation("projects", projectId, tab); setSelectedProjectId(projectId); setProjectTab(tab); setPage("projects"); });
+  const openProjectPart = (projectId: string, lineId: string) => navigationGuard.registry.request(() => {
+    const project = projects.find(candidate => candidate.id === projectId);
+    const line = project?.bom.find(candidate => candidate.id === lineId);
+    if (!project || !line) return;
+    setSelectedItemId(undefined); setCountStockItemId(undefined);
+    setProjectView("active"); setSelectedProjectId(project.id); setProjectTab("plan"); setPage("projects");
+    recordNavigation("projects", project.id, "plan", "active");
+    setEditingRequirement({ projectId: project.id, line, initialFocus: "stock" });
   });
-  const openProject = (projectId: string, tab: ProjectTab = "plan") => navigationGuard.registry.request(() => { if (archivedProjects.some((project) => project.id === projectId)) setProjectView("archived"); else if (projects.some((project) => project.id === projectId)) setProjectView("active"); recordOpenedProject(projectId, sampleMode); setHomeTask(undefined); pendingMainFocusRef.current = true; recordNavigation("projects", projectId, tab); setSelectedProjectId(projectId); setProjectTab(tab); setPage("projects"); setMobileNav(false); });
+  const checkRequirementStock = (itemId: string) => {
+    // Candidate searches merge their results into items; keep the part editor
+    // mounted while this supporting stock task owns focus.
+    if (!items.some(item => item.id === itemId)) { setToast("This stock record is unavailable. Choose the item again before counting.", "error"); return; }
+    setCountStockItemId(itemId); setSelectedItemId(itemId);
+  };
   const selectProject = (projectId: string) => openProject(projectId, projectTab);
   const selectProjectTab = (tab: ProjectTab, replace = false) => { if (tab === projectTab) return; navigationGuard.registry.request(() => { const nextHash = navigationHash("projects", selectedProjectId, tab); if (replace) replaceNavigationHistory({}, "", nextHash); else recordNavigation("projects", selectedProjectId, tab); lastNavigation.current = { url: window.location.href, state: window.history.state }; setProjectTab(tab); }); };
-  /** The index's Active/Archived toggle is a history entry, so Back restores the previous view. */
-  const changeIndexView = (view: ProjectView) => { if (view === projectViewRef.current && page === "projectIndex") return; navigationGuard.registry.request(() => { setProjectView(view); recordNavigation("projectIndex", selectedProjectId, projectTab, view); setPage("projectIndex"); }); };
-  const changeProjectView = (view: "active" | "archived") => navigationGuard.registry.request(() => { const nextProjectId = (view === "archived" ? archivedProjects : projects)[0]?.id ?? ""; setProjectView(view); if (nextProjectId) openProject(nextProjectId, projectTab); else { recordNavigation("projects", "", projectTab); setSelectedProjectId(""); } });
- const launchInventorySearch = () => { if (page === "inventory") { if (mainFocusFrameRef.current !== undefined) { window.cancelAnimationFrame(mainFocusFrameRef.current); mainFocusFrameRef.current = undefined; } searchInputRef.current?.focus(); return; } searchHandoffRef.current = true; navigate("inventory"); }; const openNewProject = (event: React.MouseEvent<HTMLButtonElement>) => { newProjectTriggerRef.current = event.currentTarget; setShowNewProject(true); }; const closeNewProject = () => { setShowNewProject(false); const trigger = newProjectTriggerRef.current; if (trigger) window.setTimeout(() => trigger.focus(), 32); }; const openNewPrinter = () => { setReplacementFor(undefined); setShowNewItem(true); }; const openNewPrinterDetails = (item: InventoryItem) => { setReplacementFor(item); setShowNewItem(true); }; const closeNewItem = () => { catalogSearchSequence.current += 1; setCatalogQuery(""); setCatalogProducts([]); setShowNewItem(false); setReplacementFor(undefined); }; const retryConnection = () => { setConnectionError(undefined); setReloadNonce((current) => current + 1); }; const refreshWorkspace = async (): Promise<boolean> => { try { const snapshot = await adapter.loadWorkspace();
+  const changeProjectView = (view: "active" | "archived") => navigationGuard.registry.request(() => { pendingMainFocusRef.current = true; setPage("projects"); const nextProjectId = (view === "archived" ? archivedProjects : projects)[0]?.id ?? ""; setProjectView(view); if (nextProjectId) openProject(nextProjectId, projectTab); else { recordNavigation("projects", "", projectTab); setSelectedProjectId(""); } });
+ const launchInventorySearch = () => { if (page === "inventory") { if (mainFocusFrameRef.current !== undefined) { window.cancelAnimationFrame(mainFocusFrameRef.current); mainFocusFrameRef.current = undefined; } searchInputRef.current?.focus(); return; } searchHandoffRef.current = true; navigate("inventory"); }; const openNewProject = (event: React.MouseEvent<HTMLButtonElement>) => {
+   const origin = event.currentTarget;
+   const popover = origin.closest<HTMLElement>('[data-slot="popover-content"]');
+   // Secondary actions leave their popover when a dialog takes focus. Return
+   // to its persistent launcher rather than a removed popup button.
+   newProjectTriggerRef.current = popover?.id
+     ? [...document.querySelectorAll<HTMLButtonElement>('button[aria-controls]')].find(button => button.getAttribute("aria-controls") === popover.id) ?? origin
+     : origin;
+   setShowNewProject(true);
+ }; const closeNewProject = () => { setShowNewProject(false); const trigger = newProjectTriggerRef.current; if (trigger) window.setTimeout(() => trigger.focus(), 32); }; const openNewPrinter = () => { setReplacementFor(undefined); setShowNewItem(true); }; const openNewPrinterDetails = (item: InventoryItem) => { setReplacementFor(item); setShowNewItem(true); }; const closeNewItem = () => { catalogSearchSequence.current += 1; setCatalogQuery(""); setCatalogProducts([]); setShowNewItem(false); setReplacementFor(undefined); setReceivingStock(undefined); setNewItemRequirementName(undefined); setNewInventoryDraft(undefined); }; const retryConnection = () => { setConnectionError(undefined); setReloadNonce((current) => current + 1); }; const refreshWorkspace = async (): Promise<boolean> => { try { const snapshot = await adapter.loadWorkspace();
       const archived = await adapter.listArchivedProjects().catch((error: unknown) => error instanceof ApiError && error.status === 404 ? [] : Promise.reject(error));
       setItems(snapshot.inventory);
       setProjects(snapshot.projects);
@@ -520,9 +644,8 @@ export function formatSourceReadyMessage(count: number): string {
       const archived = await adapter.archiveProject(project.id, project.version);
       const remaining = projects.filter((candidate) => candidate.id !== project.id);
       setProjects(remaining);
-      setArchivedProjects((current) => [archived, ...current.filter((candidate) => candidate.id !== archived.id)]);
-      // Stay on the archived project so its notice and Restore stay in view.
-      setProjectView("archived"); setSelectedProjectId(archived.id); replaceNavigationHistory( { projectView: "archived" }, "", navigationHash("projects", archived.id, projectTab) ); lastNavigation.current = { url: window.location.href, state: window.history.state };
+      setArchivedProjects((current) => [archived, ...current.filter((candidate) => candidate.id !== archived.id)]); const nextId = remaining[0]?.id ?? archived.id; const nextView: ProjectView = remaining.length > 0 ? "active" : "archived"; setProjectView(nextView);
+      setSelectedProjectId(nextId); replaceNavigationHistory( { projectView: nextView }, "", navigationHash("projects", nextId, projectTab) );
       setToast(expert ? "Project archived. It is hidden from active lists; reservations were released, audit history was retained, and the archive is reversible." : "Project archived. It is hidden from active lists; stock set aside for it was released, its project history was kept, and it can be restored.");
     } catch (error: unknown) {
       handleMutationError(error, "archiving that project");
@@ -550,7 +673,9 @@ export function formatSourceReadyMessage(count: number): string {
       const remainingArchived = archivedProjects.filter((candidate) => candidate.id !== project.id);
       setProjects(remainingProjects);
       setArchivedProjects(remainingArchived);
-      const nextView: ProjectView = remainingProjects.length > 0 ? "active" : remainingArchived.length > 0 ? "archived" : "active"; setProjectView(nextView); setSelectedProjectId(""); setPage("projectIndex"); replaceNavigationHistory( { projectView: nextView }, "", navigationHash("projectIndex") ); lastNavigation.current = { url: window.location.href, state: window.history.state };
+      const nextView: ProjectView = remainingProjects.length > 0 ? "active" : remainingArchived.length > 0 ? "archived" : "active"; setProjectView(nextView); const nextId = (remainingProjects[0] ?? remainingArchived[0])?.id ?? ""; setSelectedProjectId(nextId);
+      if (nextId) replaceNavigationHistory({ projectView: nextView }, "", navigationHash("projects", nextId, projectTab));
+      else { pendingMainFocusRef.current = true; setPage("overview"); replaceNavigationHistory({}, "", navigationHash("overview")); }
       setToast(expert ? "Project permanently removed from the workspace. Its reservation releases and audit history remain retained; it cannot be restored." : "Project permanently removed from the workspace. Its project history was kept, but it cannot be restored.");
     } catch (error: unknown) {
       handleMutationError(error, "removing that project");
@@ -559,6 +684,7 @@ export function formatSourceReadyMessage(count: number): string {
   };
 
   const useSampleWorkspace = () => {
+    if (pendingStockObservationRef.current) return;
     setConnectionError(undefined);
     setAdapter(createSampleWorkspaceAdapter());
   };
@@ -587,23 +713,17 @@ export function formatSourceReadyMessage(count: number): string {
     }
   };
 
-  const resumeSession = async (password: string) => {
-    await adapter.login(password);
-    setSessionExpired(false);
-    setConnectionError(undefined);
-    await refreshWorkspace();
-  };
-
   const retrySync = async () => {
     setSyncRetrying(true);
     try { await refreshWorkspace(); } finally { setSyncRetrying(false); }
   };
 
-  useRevalidateOnFocus(() => { if (!navigationGuard.registry.hasDraft()) void refreshWorkspace(); }, { enabled: connection === "ready" && !sessionExpired && !sampleMode });
+  useRevalidateOnFocus(() => { if (!navigationGuard.registry.hasDraft()) void refreshWorkspace(); }, { enabled: connection === "ready" && !sampleMode });
 
   const signOut = async () => {
     try {
       await adapter.logout();
+      rememberStockObservation(undefined);
       setItems([]);
       setProjects([]);
       setArchivedProjects([]);
@@ -629,11 +749,7 @@ export function formatSourceReadyMessage(count: number): string {
 
   const handleSessionExpiry = (error: unknown): ApiError => {
     const normalized = normalizeApiError(error);
-    if (!sampleMode && connection === "ready") {
-      // Keep the workspace (and any open drafts) mounted under a sign-in
-      // overlay; the background is inert until the session is renewed.
-      setSessionExpired(true);
-    } else if (!sampleMode) {
+    if (!sampleMode) {
       clearAuthenticatedWorkspace();
       setConnectionError(normalized);
       setConnection("unauthenticated");
@@ -748,7 +864,7 @@ export function formatSourceReadyMessage(count: number): string {
   const createProject = async (input: ProjectCreateInput ): Promise<ProjectCreateOutcome> => {
     try {
       const project = await adapter.createProject(input);
-      setProjects((current) => [project, ...current]); pendingMainFocusRef.current = true; recordNavigation("projects", project.id, "plan"); setSelectedProjectId(project.id); setProjectTab("plan"); setShowNewProject(false);
+      setProjects((current) => [project, ...current]); pendingMainFocusRef.current = true; recordNavigation("projects", project.id, "overview"); setSelectedProjectId(project.id); setProjectTab("overview"); setShowNewProject(false);
       setPage("projects");
       setToast(`${project.name} is ready for its first requirements.`);
       return "created";
@@ -798,11 +914,11 @@ export function formatSourceReadyMessage(count: number): string {
       return true;
     } catch (error: unknown) {
       handleMutationError(error, "creating that revision");
-      return false;
+      throw error;
     }
   };
 
-  const updateBuildApproach = async ( input: ProjectRevisionUpdateInput ): Promise<boolean> => { if (!selectedProject?.serverRevisionId) return false; try { const updated = await adapter.updateProjectRevision( selectedProject.serverRevisionId, input, selectedProject.serverRevisionVersion ); setProjects((current) => current.map((candidate) => candidate.id === updated.id ? updated : candidate ) ); setArchivedProjects((current) => current.map((candidate) => candidate.id === updated.id ? updated : candidate ) ); setShowEditBuildApproach(false); const refreshed = await refreshWorkspace(); setToast( refreshed ? "Build approach saved." : "Build approach saved, but the workspace refresh failed. Reload before continuing.", refreshed ? "success" : "error" ); return true; } catch (error: unknown) { handleMutationError(error, "updating that build approach"); return false; } }; const retryRevisionSetup = async () => {
+  const updateBuildApproach = async ( input: ProjectRevisionUpdateInput ): Promise<boolean> => { if (!selectedProject?.serverRevisionId) return false; try { const updated = await adapter.updateProjectRevision( selectedProject.serverRevisionId, input, selectedProject.serverRevisionVersion ); setProjects((current) => current.map((candidate) => candidate.id === updated.id ? updated : candidate ) ); setArchivedProjects((current) => current.map((candidate) => candidate.id === updated.id ? updated : candidate ) ); setShowEditBuildApproach(false); const refreshed = await refreshWorkspace(); setToast( refreshed ? "Build approach saved." : "Build approach saved, but the workspace refresh failed. Reload before continuing.", refreshed ? "success" : "error" ); return true; } catch (error: unknown) { handleMutationError(error, "updating that build approach"); throw error; } }; const retryRevisionSetup = async () => {
     const pending = pendingRevisionSetup;
     if (!pending) return;
     const project = projects.find((candidate) => candidate.id === pending.projectId);
@@ -831,9 +947,13 @@ export function formatSourceReadyMessage(count: number): string {
     if (!selectedProject) return false;
     try {
       const project = await adapter.createBomLine(selectedProject.id, input);
+      const newLine = project.bom.find(line => !selectedProject.bom.some(previous => previous.id === line.id));
+      if (newLine) setAddedPart({ projectId: project.id, lineId: newLine.id, name: newLine.label });
       setProjects((current) => current.map((candidate) => candidate.id === project.id ? project : candidate));
       setShowAddBom(false);
-      setToast(project.readinessUnavailable ? `${input.name} was saved. Stock status could not refresh; reload before sourcing.` : `${input.name} was added to ${project.currentRevision}.`, project.readinessUnavailable ? "warning" : "success");
+      recordNavigation("projects", project.id, "plan"); setProjectTab("plan");
+      setRequirementDraft(emptyRequirementDraft());
+      setToast(project.readinessUnavailable ? `${input.name} was saved. Stock status could not refresh; reload before sourcing.` : `${input.name} was added to ${project.currentRevision}.`, project.readinessUnavailable ? "error" : "success");
       return true;
     } catch (error: unknown) {
       handleMutationError(error, "adding that requirement");
@@ -852,18 +972,25 @@ export function formatSourceReadyMessage(count: number): string {
     }
   };
 
-  const addInventoryItem = async (input: InventoryCreateInput, countedNow = false): Promise<boolean> => {
+  const addInventoryItem = async (input: InventoryCreateInput, intent?: InventoryCaptureIntent): Promise<boolean> => {
     try {
-      const { item, counted, countError } = await createInventoryWithCount(adapter, input, countedNow);
+      const item = await adapter.createInventoryItem(input);
       setItems((current) => [item, ...current]);
-      setInventoryRefreshNonce((current) => current + 1); closeNewItem();
-      const ready = await refreshProjectReadiness();
-      if (countError !== undefined) setToast(`${item.name} was added, but its physical count was not confirmed (${normalizeApiError(countError).message}). Open it and record the count again.`, "warning", { label: "Open item", run: () => openItem(item.id) });
-      else if (ready) setToast(counted ? `${item.name} added with a physical count of ${formatQuantity(item.quantity, item.unit)}.` : `${item.name} added as Check. Record a physical count before reserving it.`);
+      setInventoryRefreshNonce((current) => current + 1);
+      if (receivingStock) setReceivedStock({ context: receivingStock, itemId: item.id });
+      const returnToRequirement = newItemRequirementName !== undefined;
+      if (returnToRequirement) {
+        if (editingRequirement) setEditingRequirement(current => current ? { ...current, initialItemId: item.id } : current);
+        else setRequirementDraft((draft) => ({ ...draft, itemId: item.id }));
+      }
+      setCreatedInventory({ item, returnToRequirement, ...(intent?.reviewCount ? { initialCountQuantity: input.quantity } : {}) });
+      closeNewItem();
+      if (!showNewProject && !showNewRevision && !showEditBuildApproach) setSelectedItemId(item.id);
+      if (await refreshProjectReadiness()) setToast(`${item.name} added as Check. Record a physical count before reserving it.`);
       return true;
     } catch (error: unknown) {
       handleMutationError(error, "adding that inventory item");
-      return false;
+      throw error;
     }
   };
 
@@ -938,18 +1065,27 @@ export function formatSourceReadyMessage(count: number): string {
     try {
       const item = await adapter.createExactInventoryItem(input);
       setItems((current) => [item, ...current]);
-      setInventoryRefreshNonce((current) => current + 1); closeNewItem();
+      setInventoryRefreshNonce((current) => current + 1);
+      if (receivingStock) setReceivedStock({ context: receivingStock, itemId: item.id });
+      const returnToRequirement = newItemRequirementName !== undefined;
+      if (returnToRequirement) {
+        if (editingRequirement) setEditingRequirement(current => current ? { ...current, initialItemId: item.id } : current);
+        else setRequirementDraft((draft) => ({ ...draft, itemId: item.id }));
+      }
+      setCreatedInventory({ item, returnToRequirement });
+      closeNewItem();
+      if (!showNewProject && !showNewRevision && !showEditBuildApproach) setSelectedItemId(item.id);
       setCatalogQuery("");
       setCatalogProducts([]);
-      if (await refreshProjectReadiness()) setToast(`${item.name} added. Its exact product link is ${item.productProfile?.linkState === "confirmed" ? "confirmed" : "reported until you check it"}.`);
+      if (await refreshProjectReadiness()) setToast(`${item.name} added as Check. Record a physical count before reserving it.`);
       return true;
     } catch (error: unknown) {
       handleMutationError(error, "adding that exact inventory item");
       return false;
     }
-  }; const linkExactInventoryItem = async ( item: InventoryItem, input: ExactInventoryInput ): Promise<boolean> => { try { const linked = await adapter.linkExactInventoryItem( item.id, input, item.productProfile?.version ); setItems((current) => current.map((candidate) => candidate.id === linked.id ? linked : candidate ) ); closeNewItem(); setSelectedItemId(linked.id); if (await refreshProjectReadiness()) setToast( `${linked.name} now has an exact product link. Its stock evidence is unchanged.` ); return true; } catch (error: unknown) { handleMutationError(error, "linking that exact product"); return false; } }; if (loading || connection === "loading") return <LoadingScreen />;
+  }; const linkExactInventoryItem = async ( item: InventoryItem, input: ExactInventoryInput ): Promise<boolean> => { try { const linked = await adapter.linkExactInventoryItem( item.id, input, item.productProfile?.version ); setItems((current) => current.map((candidate) => candidate.id === linked.id ? linked : candidate ) ); closeNewItem(); if (!showNewProject && !showNewRevision && !showEditBuildApproach) setSelectedItemId(linked.id); if (await refreshProjectReadiness()) setToast( `${linked.name} now has an exact product link. Its stock evidence is unchanged.` ); return true; } catch (error: unknown) { handleMutationError(error, "linking that exact product"); return false; } }; if (loading || connection === "loading") return <LoadingScreen />;
   if (connection !== "ready" && connection !== "sample") {
-    return ( <ConnectionScreen state={connection} error={connectionError} demoAvailable={demoAvailable} onLogin={signIn} onRetry={retryConnection} onSample={useSampleWorkspace} /> );
+    return ( <ConnectionScreen state={connection} error={connectionError} demoAvailable={demoAvailable && !pendingStockObservation} recoveryNotice={missingPendingStockItem ? "This item is no longer available. Discard the unsaved observation to return to your workspace." : pendingStockObservation ? "Reconnect or sign in to resume your reviewed stock observation. Nothing will be sent again until you choose Retry." : undefined} onDiscardRecovery={missingPendingStockItem && pendingStockObservation && !pendingStockObservation.uncertain ? () => { rememberStockObservation(undefined); setSelectedItemId(undefined); setMissingPendingStockItem(false); retryConnection(); } : undefined} onLogin={signIn} onRetry={retryConnection} onSample={useSampleWorkspace} /> );
   }
 
   const openHomeTask = (task: HomeTask) => {
@@ -961,59 +1097,44 @@ export function formatSourceReadyMessage(count: number): string {
     else if (task.kind === "check" || task.kind === "decide") { pendingMainFocusRef.current = false; setHomeTask({ ...task, request: Date.now() }); }
   };
   const commandItems: WorkspaceCommand[] = [
-    ...(["overview", "inventory", "projectIndex", "settings", "capabilities"] as Page[]).map((target) => ({ id: `page:${target === "projectIndex" ? "projects" : target}`, label: pageCopy[target].label, detail: target === "capabilities" ? "Read API and agent instructions" : `Open ${pageCopy[target].label.toLowerCase()}`, group: "Navigation" as const, icon: pageCopy[target].icon, run: () => navigate(target) })),
+    ...(["overview", "inventory", "settings", "capabilities"] as Page[]).map((target) => ({ id: `page:${target}`, label: pageCopy[target].label, detail: target === "capabilities" ? "Read API and agent instructions" : `Open ${pageCopy[target].label.toLowerCase()}`, group: "Navigation" as const, icon: pageCopy[target].icon, run: () => target === "inventory" ? launchInventorySearch() : navigate(target) })),
     { id: "new-project", label: "New project", detail: "Add a project and its first revision", group: "Actions", icon: "plus", run: () => setShowNewProject(true) },
     { id: "add-item", label: "Add inventory item", detail: "Record a part, material or tool", group: "Actions", icon: "box", run: () => { setReplacementFor(undefined); setShowNewItem(true); } },
     ...projects.map((project) => ({ id: `project:${project.id}`, label: project.name, detail: project.currentRevision, group: "Projects" as const, icon: "folder" as const, run: () => { setProjectView("active"); openProject(project.id); } })),
+    ...items.map((item) => ({ id: `item:${item.id}`, label: item.name, detail: [item.variant, item.location].filter(Boolean).join(" · "), group: "Loaded inventory" as const, icon: "box" as const, run: () => openItem(item.id) }))
   ];
-  const searchCommandItems = async (query: string, signal: AbortSignal): Promise<WorkspaceCommand[]> => {
-    const result = await adapter.listInventory({ q: query.slice(0, MAX_INVENTORY_SEARCH_LENGTH), limit: 8 });
-    if (signal.aborted) return [];
-    setItems((current) => { const byId = new Map(current.map((item) => [item.id, item] as const)); result.items.forEach((item) => byId.set(item.id, item)); return [...byId.values()]; });
-    return result.items.map((item) => ({ id: `item:${item.id}`, label: item.name, detail: [item.variant, inventoryLocationLabel(item.location), formatQuantity(item.quantity, item.unit)].filter(Boolean).join(" · "), group: "Inventory" as const, icon: "box" as const, run: () => openItem(item.id) }));
-  };
+
   return (
-    <UnsavedWorkContext.Provider value={navigationGuard.registry}><div className="app-shell"><div className="app-session-scope" inert={sessionExpired || undefined} aria-hidden={sessionExpired || undefined}>
-      <a className="skip-link" inert={overlayOpen || mobileNav || undefined} aria-hidden={overlayOpen || mobileNav || undefined} href="#main-content" onClick={(event) => { event.preventDefault(); mainRef.current?.focus(); }}>Skip to workspace</a>
-      <div className="app-background" aria-hidden={overlayOpen ? true : undefined} inert={overlayOpen || undefined}>
-        <Sidebar page={page} projectCount={projects.length} sampleMode={sampleMode} syncStatus={<SyncStatusNote sampleMode={sampleMode} error={connectionError} lastSyncedAt={lastSyncedAt} now={now} />} expert={expert} onNavigate={navigate} mobileOpen={mobileNav} onClose={() => setMobileNav(false)} />
-        <div className="app-main" aria-hidden={mobileNav ? true : undefined} inert={mobileNav || undefined}>
-          <header className="topbar">
-            <button className="icon-button desktop-menu-button" type="button" aria-label={appearance.value.collapsed ? "Expand navigation" : "Collapse navigation"} aria-expanded={!appearance.value.collapsed} title={appearance.value.collapsed ? "Expand navigation" : "Collapse navigation"} onClick={() => appearance.change({ collapsed: !appearance.value.collapsed })}><Icon name="panel-left" size={18} /></button>
-            <button className="icon-button mobile-menu-button" aria-label="Open navigation" onClick={() => setMobileNav(true)}>
-              <Icon name="menu" size={21} />
-            </button>
-            <div className="breadcrumb"><span>BenchLedger</span><Icon name="chevron-right" size={14} /><strong>{pageCopy[page].label}</strong></div>
-            <div className="topbar-actions">
-              <button type="button" className="command-launcher" aria-label="Open workspace commands" title="Workspace commands (Control or Command + Shift + K)" aria-keyshortcuts="Control+Shift+K Meta+Shift+K" onClick={() => setCommandsOpen(true)}><Icon name="command" size={16} /><span>Commands</span><kbd>⇧⌘ K</kbd></button>
-              <AppearanceControl value={appearance.value} onChange={appearance.change} />
-              {page !== "inventory" && ( <button ref={searchLauncherRef} type="button" className="global-search" onClick={launchInventorySearch} aria-label="Search inventory" aria-keyshortcuts="Control+K Meta+K">
-                <Icon name="search" size={17} />
-                <span className="global-search-text">Search inventory</span>
-              </button> )} <button className="icon-button" aria-label="Open workspace settings" onClick={() => navigate("settings")}> <Icon name="settings" size={19} /> </button>
-            </div>
-          </header>
+    <OwnedInventorySearchContext.Provider value={searchBuildInventory}><UnsavedWorkContext.Provider value={navigationGuard.registry}><div className="app-shell">
+      <a className="skip-link" inert={overlayOpen || undefined} aria-hidden={overlayOpen || undefined} href="#main-content" onClick={(event) => { event.preventDefault(); mainRef.current?.focus(); }}>Skip to workspace</a>
+      <div className="app-background">
+        <div className="app-main">
+          <WorkspaceNavigation page={page} onNavigate={navigate} onCommands={() => setCommandsOpen(true)} searchRef={searchLauncherRef} syncStatus={<SyncStatusNote sampleMode={sampleMode} error={connectionError} lastSyncedAt={lastSyncedAt} now={now} />} />
 
           {sampleMode && <SampleBanner onReturn={returnToPrivateWorkspace} />}
           {!sampleMode && <SyncBanner error={connectionError} lastSyncedAt={lastSyncedAt} now={now} retrying={syncRetrying} onRetry={() => { void retrySync(); }} />}
 
           <main ref={mainRef} className="content" id="main-content" tabIndex={-1} >
-            {page === "overview" && ( <OverviewPage stockReceivingLabel={workspacePreferences ? stockReceivingPolicyLabel(workspacePreferences.stockReceivingPolicy) : undefined} onStockSettings={sampleMode ? undefined : () => navigate("settings")} onTask={openHomeTask} onRefresh={refreshWorkspace} onImport={sampleMode ? undefined : () => setShowGuidedSetup(true)} onAddItem={() => { setReplacementFor(undefined); setShowNewItem(true); }} items={items} projects={projects} expert={expert} sampleMode={sampleMode} onNavigate={navigate} onOpenProject={(id, tab) => { setProjectView("active"); openProject(id, tab); }} onSelectItem={openItem} onNewProject={openNewProject} onAddPrinter={openNewPrinter} /> )}{" "}
-            {page === "inventory" && ( <InventoryPage adapter={adapter} categories={categories} expert={expert} search={search} searchInputRef={searchInputRef} refreshKey={inventoryRefreshNonce} bulkSelectionResetKey={bulkSelectionResetNonce} onSearch={(value) => setSearch(value.slice(0, MAX_INVENTORY_SEARCH_LENGTH))} onSessionExpired={handleSessionExpiry} onPageItems={(pageItems) => setItems((current) => { const byId = new Map(current.map((item) => [item.id, item] as const)); pageItems.forEach((item) => byId.set(item.id, item)); return [...byId.values()]; })} onSelectItem={openItem} onNewItem={() => { setReplacementFor(undefined); setShowNewItem(true); }} onBulkSelectionChange={(selection, onResult) => setBulkInventorySelection(selection.length ? { items: [...selection], onResult } : undefined)} /> )}{" "}
-            {page === "projects" && selectedProject && ( <ProjectEditingContext.Provider value={{ project: selectedProject, refreshProject: async () => { const refreshed = await refreshWorkspace(); if (refreshed) { setProjectRefreshNonce((value) => value + 1); setToast("Project refreshed from the workspace."); } return refreshed; }, editRequirement: (line) => setEditingRequirement({ projectId: selectedProject.id, line }), editProject: () => setEditingProject(selectedProject), listRemoved: () => adapter.listRetiredBomLines(selectedProject.id), restore: async (line) => { applyProjectCorrection(await adapter.restoreBomLine(selectedProject.id, line.id, line.version), "Requirement restored. No stock was reserved."); } }}><ProjectPage assemblySupported={serviceCapabilities.includes("assembly.read")} key={projectRefreshNonce} onImportBom={() => setShowBomImport(true)} homeTask={homeTask?.projectId === selectedProject.id ? homeTask : undefined} makerWorkflowsSupported={!sampleMode && serviceCapabilities.includes("maker_workflows.read")} project={selectedProject} projects={visibleProjects} projectView={projectView} archivedProjectCount={archivedProjects.length} items={items} offers={offers} tab={projectTab} expert={expert} sampleMode={sampleMode} reconciliationSupported={ serviceCapabilities.includes("reconciliation.read") && serviceCapabilities.includes("reconciliation.write") } onTabChange={selectProjectTab} onSelectProject={selectProject} onProjectViewChange={changeProjectView} onOpenItem={setSelectedItemId} onNavigate={navigate} onToast={setToast} onNewProject={openNewProject} onArchive={archiveProject} onRestore={restoreProject} onRemove={removeProject} onNewRevision={() => navigationGuard.registry.request(() => setShowNewRevision(true))} onEditBuildApproach={() => setShowEditBuildApproach(true)} onRetrySetup={pendingRevisionSetup?.projectId === selectedProject.id && pendingRevisionSetup.revisionId === selectedProject.serverRevisionId ? retryRevisionSetup : undefined} onAddBom={() => setShowAddBom(true)} onResolveBomRole={resolveBomLineRole} onUpload={uploadArtifact} onReadReconciliation={adapter.readReconciliation} onSaveReconciliation={adapter.saveReconciliationDraft} onCommitReconciliation={adapter.commitReconciliation} onRefreshWorkspace={refreshWorkspace} onListInspections={adapter.listInspections} onReadInspection={adapter.readInspection} onPreviewInspection={adapter.previewInspectionCompletion} onConfirmInspection={adapter.commitInspectionCompletion} /></ProjectEditingContext.Provider> )}{" "}
-            {page === "projects" && !selectedProject && selectedProjectId && <section className="surface workflow-unavailable"><h1>Project unavailable</h1><p>This project is not in the loaded workspace. It may have been removed or be unavailable to this account. No other project was opened.</p><button type="button" className="button button-primary" onClick={() => navigate("overview")}>Open project register</button><button type="button" className="button button-quiet" onClick={() => { void refreshWorkspace(); }}>Retry project lookup</button></section>}{(page === "projectIndex" || (page === "projects" && !selectedProject && !selectedProjectId)) && <ProjectsIndex projects={projects} archivedProjects={archivedProjects} items={items} view={projectView} currentProjectId={selectedProjectId || undefined} onOpen={(id) => openProject(id)} onViewChange={changeIndexView} onNewProject={openNewProject} />}{" "}
+            {page === "overview" && ( <OverviewPage archivedProjects={archivedProjects} archivedCount={archivedProjects.length} onOpenArchive={() => changeProjectView("archived")} onTask={openHomeTask} onRefresh={refreshWorkspace} onImport={sampleMode ? undefined : () => { setGuidedDraft(undefined); setGuidedMode("import"); setShowGuidedSetup(true); }} onAddItem={() => { setReplacementFor(undefined); setShowNewItem(true); }} items={items} projects={projects} expert={expert} sampleMode={sampleMode} onNavigate={navigate} onOpenProject={openProject} onSelectItem={openItem} onNewProject={openNewProject} onAddPrinter={openNewPrinter} /> )}{" "}
+            {page === "inventory" && ( <InventoryPage projects={projects} onOpenProjectPart={openProjectPart} onCountStock={checkRequirementStock} key={sampleMode ? "sample" : "workspace"} categoryNodeId={inventoryCategoryNodeId} setCategoryNodeId={setInventoryCategoryNodeId} sampleMode={sampleMode} adapter={adapter} categories={categories} expert={expert} search={search} searchInputRef={searchInputRef} refreshKey={inventoryRefreshNonce} bulkSelectionResetKey={bulkSelectionResetNonce} onSearch={(value) => setSearch(value.slice(0, MAX_INVENTORY_SEARCH_LENGTH))} onSessionExpired={handleSessionExpiry} onPageItems={(pageItems) => setItems((current) => { const byId = new Map(current.map((item) => [item.id, item] as const)); pageItems.forEach((item) => byId.set(item.id, item)); return [...byId.values()]; })} onSelectItem={openItem} onNewItem={() => { setReplacementFor(undefined); setShowNewItem(true); }} onBulkSelectionChange={(selection, onResult) => setBulkInventorySelection(selection.length ? { items: [...selection], onResult } : undefined)} /> )}{" "}
+            {page === "projects" && selectedProject && ( <ProjectEditingContext.Provider value={{ project: selectedProject, refreshProject: async () => { const refreshed = await refreshWorkspace(); if (refreshed) { setProjectRefreshNonce((value) => value + 1); setToast("Project refreshed from the workspace."); } return refreshed; }, selectedLineId: editingRequirement?.line.id, editRequirement: (line, initialFocus) => { if (editingRequirement?.line.id === line.id) return; navigationGuard.registry.request(() => { recordNavigation("projects", selectedProject.id, "plan"); setProjectTab("plan"); setEditingRequirement({ projectId: selectedProject.id, line, initialFocus }); }); }, editProject: () => setEditingProject(selectedProject), listRemoved: () => adapter.listRetiredBomLines(selectedProject.id), restore: async (line) => { applyProjectCorrection(await adapter.restoreBomLine(selectedProject.id, line.id, line.version), "Requirement restored. No stock was reserved."); } }}><ProjectInventoryStatus state={referencedInventory} /><ProjectPage hasPartInspector={Boolean(editingRequirement)} onPartInspectorHost={setPartInspectorHost} imageIntent={projectImageIntent} onImageIntentHandled={consumeProjectImageIntent} addedPart={addedPart} pcbSupported={serviceCapabilities.includes("pcb.read")} assemblySupported={serviceCapabilities.includes("assembly.read")} key={projectRefreshNonce} onImportBom={() => setShowBomImport(true)} onNewInventory={(context) => { setReplacementFor(undefined); setReceivingStock(context); setShowNewItem(true); }} homeTask={homeTask?.projectId === selectedProject.id ? homeTask : undefined} makerWorkflowsSupported={!sampleMode && serviceCapabilities.includes("maker_workflows.read")} project={selectedProject} projects={visibleProjects} projectView={projectView} archivedProjectCount={archivedProjects.length} items={items} offers={offers} tab={projectTab} expert={expert} sampleMode={sampleMode} reconciliationSupported={ serviceCapabilities.includes("reconciliation.read") && serviceCapabilities.includes("reconciliation.write") } onTabChange={selectProjectTab} onSelectProject={selectProject} onProjectViewChange={changeProjectView} onOpenItem={openItem} onNavigate={navigate} onToast={setToast} onNewProject={openNewProject} onArchive={archiveProject} onRestore={restoreProject} onRemove={removeProject} onNewRevision={() => navigationGuard.registry.request(() => setShowNewRevision(true))} onEditBuildApproach={() => setShowEditBuildApproach(true)} onRetrySetup={pendingRevisionSetup?.projectId === selectedProject.id && pendingRevisionSetup.revisionId === selectedProject.serverRevisionId ? retryRevisionSetup : undefined} onAddBom={() => setShowAddBom(true)} onResolveBomRole={resolveBomLineRole} onUpload={uploadArtifact} onReadReconciliation={adapter.readReconciliation} onSaveReconciliation={adapter.saveReconciliationDraft} onCommitReconciliation={adapter.commitReconciliation} onRefreshWorkspace={refreshWorkspace} onListInspections={adapter.listInspections} onReadInspection={adapter.readInspection} onPreviewInspection={adapter.previewInspectionCompletion} onConfirmInspection={adapter.commitInspectionCompletion} /></ProjectEditingContext.Provider> )}{" "}
+            {page === "projects" && !selectedProject && selectedProjectId && <Card asChild><section className="surface workflow-unavailable"><h1>Project unavailable</h1><p>This project is not in the loaded workspace. It may have been removed or be unavailable to this account. No other project was opened.</p><Button variant="default" type="button" className="button button-primary" onClick={() => navigate("overview")}>Open project register</Button><Button variant="ghost" type="button" className="button button-quiet" onClick={() => { void refreshWorkspace(); }}>Retry project lookup</Button></section></Card>}{page === "projects" && !selectedProject && !selectedProjectId && ( <section><EmptyState icon="folder" title={projectView === "archived" ? "No archived projects" : "No projects yet"} description={projectView === "archived" ? "Archived projects will appear here with their retained history." : "Enter a project name and goal. Then add requirements and files."} {...(projectView === "active" ? { action: "Create first project", onAction: () => setShowNewProject(true) } : {})} /></section> )}{" "}
             {page === "capabilities" && ( <CapabilitiesPage expert={expert} onCopy={setToast} /> )}{" "}
-            {page === "settings" && ( <><div className={workspaceAccess?.mode === "lan_open" ? "settings-page-lan-open" : undefined}><SettingsPage expert={expert} sampleMode={sampleMode} connection={connection} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} onRetryCategories={() => setCategoryReloadNonce((current) => current + 1)} onCreateCategory={createInventoryCategory} onUpdateCategory={updateInventoryCategory} onArchiveCategory={archiveInventoryCategory} hideLogout={workspaceAccess?.mode === "lan_open"} onExpert={() => setExpert((current) => !current)} onLogout={sampleMode ? returnToPrivateWorkspace : signOut} /></div>{(workspacePreferences || sampleMode) && ( <div className="settings-layout"><StockReceivingPolicySection preferences={workspacePreferences ?? { stockReceivingPolicy: "on_receipt", version: 1 }} canChange={!sampleMode && sessionScopes.admin && !sessionScopes.scoped} readOnlyReason={sampleMode ? "The sample workspace uses the default setting." : undefined} onPreview={adapter.previewStockReceivingPolicy} onSave={adapter.updateStockReceivingPolicy} onSaved={async (saved) => { setWorkspacePreferences(saved); await refreshWorkspace(); setInventoryRefreshNonce((value) => value + 1); setProjectRefreshNonce((value) => value + 1); }} /></div> )}{workspaceAccess && !sampleMode && !workspaceAccess.demo && ( <div className="settings-layout"><WorkspaceAccessSection access={workspaceAccess} pendingRetry={adapter.getWorkspaceAccessRetry()} onUpdate={adapter.updateWorkspaceAccess} onChanged={setWorkspaceAccess} onClearRetry={adapter.clearWorkspaceAccessRetry} onRebootstrap={() => { setReloadNonce((current) => current + 1); }} /></div> )}</> )}
+            {page === "settings" && ( <><div className={workspaceAccess?.mode === "lan_open" ? "settings-page-lan-open" : undefined}><SettingsPage appearanceControls={<AppearanceSettings value={appearance.value} onChange={appearance.change} />} onOpenAgents={() => navigate("capabilities")} expert={expert} sampleMode={sampleMode} connection={connection} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} onRetryCategories={() => setCategoryReloadNonce((current) => current + 1)} onCreateCategory={createInventoryCategory} onUpdateCategory={updateInventoryCategory} onArchiveCategory={archiveInventoryCategory} hideLogout={workspaceAccess?.mode === "lan_open"} onExpert={() => setExpert((current) => !current)} onLogout={sampleMode ? returnToPrivateWorkspace : signOut} /></div>{(workspacePreferences || sampleMode) && ( <div className="settings-layout"><StockReceivingPolicySection preferences={workspacePreferences ?? { stockReceivingPolicy: "on_receipt", version: 1 }} canChange={!sampleMode && sessionScopes.admin && !sessionScopes.scoped} readOnlyReason={sampleMode ? "The sample workspace uses the default setting." : undefined} onPreview={adapter.previewStockReceivingPolicy} onSave={adapter.updateStockReceivingPolicy} onSaved={async (saved) => { setWorkspacePreferences(saved); await refreshWorkspace(); setInventoryRefreshNonce((value) => value + 1); setProjectRefreshNonce((value) => value + 1); }} /></div> )}{workspaceAccess && !sampleMode && !workspaceAccess.demo && ( <div className="settings-layout"><WorkspaceAccessSection access={workspaceAccess} pendingRetry={adapter.getWorkspaceAccessRetry()} onUpdate={adapter.updateWorkspaceAccess} onChanged={setWorkspaceAccess} onClearRetry={adapter.clearWorkspaceAccessRetry} onRebootstrap={() => { setReloadNonce((current) => current + 1); }} /></div> )}</> )}
           </main>
+          <WorkspaceBottomNavigation page={page} onNavigate={navigate} />
         </div>
       </div>
 
-      {navigationGuard.pending && <Dialog title={navigationGuard.pending.unresolved ? "Finish the pending save" : "Leave without saving?"} role="alertdialog" onClose={navigationGuard.cancel}><p className="dialog-intro">{navigationGuard.pending.unresolved ? "A save or upload is still running or has not been confirmed. Stay on this page and resolve it before leaving." : `Your ${navigationGuard.pending.labels.join(", ")} has unsaved changes. Keep editing, or discard this draft.`}</p><div className="dialog-actions"><button data-autofocus type="button" className="button button-primary" onClick={navigationGuard.cancel}>Keep editing</button>{!navigationGuard.pending.unresolved && <button type="button" className="button button-danger" onClick={navigationGuard.discard}>Discard changes and leave</button>}</div></Dialog>}
-      {commandsOpen && <Dialog title="Workspace commands" onClose={() => setCommandsOpen(false)}><WorkspaceCommands commands={commandItems} onSearchItems={searchCommandItems} onRun={(command) => { setCommandsOpen(false); command.run(); }} onSearchInventory={() => { setCommandsOpen(false); launchInventorySearch(); }} /></Dialog>}
-      {selectedItem && ( <InventoryDrawer suspended={Boolean(navigationGuard.pending)} sampleMode={sampleMode} item={selectedItem} items={items} usedIn={projectsUsingItem(projects, selectedItem.id)} onOpenProject={(projectId) => { dismissItem(); setProjectView("active"); openProject(projectId); }} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} expert={expert} onClose={closeItem} onCount={recordCount} onCommission={commissionInventoryItem} onUpdate={updateInventoryItem} onDelete={async (item) => {
+      {navigationGuard.pending && <Dialog title={navigationGuard.pending.unresolved ? "Finish the pending save" : "Leave without saving?"} role="alertdialog" onClose={navigationGuard.cancel}><p className="dialog-intro">{navigationGuard.pending.unresolved ? "A save or upload is still running or has not been confirmed. Stay on this page and resolve it before leaving." : `You have unsaved changes in ${navigationGuard.pending.labels.join(", ")}. Keep editing, or discard this draft.`}</p><div className="dialog-actions"><Button variant="default" data-autofocus type="button" className="button button-primary" onClick={navigationGuard.cancel}>Keep editing</Button>{!navigationGuard.pending.unresolved && <Button variant="destructive" type="button" className="button button-danger" onClick={navigationGuard.discard}>Discard changes and leave</Button>}</div></Dialog>}
+      {commandsOpen && <Dialog title="Workspace commands" onClose={() => setCommandsOpen(false)}><WorkspaceCommands commands={commandItems} onRun={(command) => { setCommandsOpen(false); command.run(); }} onSearchInventory={() => { setCommandsOpen(false); launchInventorySearch(); }} /></Dialog>}
+      {editingRequirement && <RequirementEditForm key={`${editingRequirement.projectId}:${editingRequirement.line.id}`} presentation={{ host: partInspectorHost, suspended: Boolean(navigationGuard.pending || selectedItem || showNewItem), context: `${selectedProject?.name ?? "Project"} · ${selectedProject?.currentRevision ?? ""}` }} onCheckStock={checkRequirementStock} onAddOwnedItem={(name) => { setNewItemRequirementName(name); setReplacementFor(undefined); setNewInventoryDraft(undefined); setShowNewItem(true); }} initialItemId={editingRequirement.initialItemId} onSearchOwnedItems={searchOwnedItems} initialFocus={editingRequirement.initialFocus} line={editingRequirement.line} items={items} onBusy={setCorrectionBusy} onClose={() => navigationGuard.registry.request(() => setEditingRequirement(undefined))} onSave={async (input) => { applyProjectCorrection(await adapter.updateBomLine(editingRequirement.projectId, editingRequirement.line.id, input, editingRequirement.line.version), "Requirement saved."); if (receivedStock?.itemId === editingRequirement.initialItemId) setReceivedStock(undefined); setEditingRequirement(undefined); }} onRetire={async () => { applyProjectCorrection(await adapter.retireBomLine(editingRequirement.projectId, editingRequirement.line.id, editingRequirement.line.version), "Requirement removed from the plan. Its history is retained."); setEditingRequirement(undefined); }} />}
+      {selectedItem && ( <InventoryDrawer returnContext={editingRequirement ? `${projects.find(project => project.id === editingRequirement.projectId)?.name ?? "Project"} · ${projects.find(project => project.id === editingRequirement.projectId)?.currentRevision ?? ""} · ${editingRequirement.line.label}` : createdInventory?.returnToRequirement && selectedProject ? `${selectedProject.name} · ${selectedProject.currentRevision} · ${requirementDraft.name}` : undefined} projects={projects} onOpenProjectPart={editingRequirement ? undefined : openProjectPart} initialCountExpanded={countStockItemId === selectedItem.id} key={selectedItem.id} nested={Boolean(editingRequirement || (createdInventory?.item.id === selectedItem.id && createdInventory.returnToRequirement))} doneLabel={editingRequirement ? `Return to ${editingRequirement.line.label}` : createdInventory?.item.id === selectedItem.id && createdInventory.returnToRequirement ? `Return to ${requirementDraft.name || "part"}` : "Done"} initialCountQuantity={createdInventory?.item.id === selectedItem.id ? createdInventory.initialCountQuantity : undefined} onCountIntentConsumed={() => setCreatedInventory((current) => { if (!current || current.item.id !== selectedItem.id) return current; const { initialCountQuantity: _intent, ...rest } = current; return rest; })} countReceipt={createdInventory?.item.id === selectedItem.id ? createdInventory.countReceipt : undefined} onCountSaved={(countReceipt) => setCreatedInventory((current) => { if (current?.item.id !== selectedItem.id) return current; const { countReceipt: _previous, ...rest } = current; return countReceipt ? { ...rest, countReceipt } : rest; })} onAddAnother={createdInventory?.item.id === selectedItem.id && !createdInventory.returnToRequirement && !receivedStock ? () => navigationGuard.registry.request(() => { dismissItem(); setCreatedInventory(undefined); setShowNewItem(true); }) : undefined} resumeObservation={pendingStockObservation?.item.id === selectedItem.id ? pendingStockObservation : undefined} onPendingObservation={rememberStockObservation} nextStepHasAction={Boolean(!editingRequirement && receivedStock?.itemId === selectedItem.id && receiptRequirement(receivedStock.context, projects.find(project => project.id === receivedStock.context.projectId)))} nextStep={!editingRequirement && receivedStock?.itemId === selectedItem.id ? <ReceivedStockNextStep context={receivedStock.context} item={selectedItem} project={projects.find((project) => project.id === receivedStock.context.projectId)} onReview={() => navigationGuard.registry.request(() => { const project = projects.find((candidate) => candidate.id === receivedStock.context.projectId); const line = receiptRequirement(receivedStock.context, project); if (!line || !project) return; dismissItem(); setCountStockItemId(undefined); setProjectView("active"); setSelectedProjectId(project.id); setProjectTab("plan"); setPage("projects"); recordNavigation("projects", project.id, "plan", "active"); setEditingRequirement({ projectId: project.id, line, initialFocus: "stock", initialItemId: selectedItem.id }); })} /> : undefined} suspended={Boolean(navigationGuard.pending)} sampleMode={sampleMode} item={selectedItem} items={items} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} expert={expert} onClose={() => { const close = () => { closeItemHistory(); setCountStockItemId(undefined); setCreatedInventory(undefined); }; if (editingRequirement || (createdInventory?.item.id === selectedItem.id && createdInventory.returnToRequirement)) close(); else navigationGuard.registry.request(close); }} onCount={recordCount} onCommission={commissionInventoryItem} onUpdate={updateInventoryItem} onDelete={async (item) => {
         if (item.version === undefined) throw new Error("Reload this item before deleting it.");
         await adapter.deleteInventoryItem(item.id, item.version);
         setItems((current) => current.filter((candidate) => candidate.id !== item.id));
+        setCreatedInventory((current) => current?.item.id === item.id ? undefined : current);
+        setRequirementDraft((draft) => draft.itemId === item.id ? { ...draft, itemId: "" } : draft);
         dismissItem();
         setBulkInventorySelection(undefined);
         setBulkSelectionResetNonce((value) => value + 1);
@@ -1021,98 +1142,29 @@ export function formatSourceReadyMessage(count: number): string {
         await refreshWorkspace();
         setToast(`${item.name} deleted. Its history is retained.`);
       }} onLinkProduct={(record) => navigationGuard.registry.request(() => { dismissItem(); setReplacementFor(record); setShowNewItem(true); })} onCreateReplacement={(record) => navigationGuard.registry.request(() => { dismissItem(); setReplacementFor(record); setShowNewItem(true); })} /> )}{" "}
-      {showBomImport && selectedProject && <Dialog title="Import requirements from CSV" onClose={() => { if (!importBusy) setShowBomImport(false); }}><ExistingBomImport project={selectedProject} onRefresh={refreshWorkspace} onBusy={setImportBusy} /></Dialog>}
-      {showGuidedSetup && <Dialog title="Guided project setup" onClose={() => { if (!guidedBusy) setShowGuidedSetup(false); }}><GuidedSetup adapter={adapter} items={items} onBusy={setGuidedBusy} onDone={async (projectId) => { if (!await refreshWorkspace()) throw new Error("The project is saved, but the workspace could not refresh. Open it again when the connection recovers."); setShowGuidedSetup(false); openProject(projectId); }} /></Dialog>}
-      {showNewProject && ( <NewProjectDialog onGuided={sampleMode ? undefined : () => { setShowNewProject(false); setShowGuidedSetup(true); }} items={items} suspended={showNewItem} onClose={closeNewProject} onAddPrinter={openNewPrinter} onCreate={createProject} /> )}{" "}
-      {showNewRevision && selectedProject && ( <NewRevisionDialog project={selectedProject} items={items} expert={expert} suspended={showNewItem} onClose={() => setShowNewRevision(false)} onAddPrinterDetails={openNewPrinterDetails} onAddPrinter={openNewPrinter} onCreate={createRevision} /> )}{" "} {showEditBuildApproach && selectedProject && ( <EditBuildApproachDialog project={selectedProject} items={items} expert={expert} suspended={showNewItem} onClose={() => setShowEditBuildApproach(false)} onAddPrinter={openNewPrinter} onSave={updateBuildApproach} /> )}{" "}
-      {editingProject && <Dialog title="Edit project" onClose={() => { if (!correctionBusy) setEditingProject(undefined); }}><ProjectEditForm project={editingProject} onBusy={setCorrectionBusy} onClose={() => setEditingProject(undefined)} onSave={async (input) => { if (editingProject.version === undefined) throw new ApiError("Reload this project to obtain its current version before editing.", { kind: "conflict", status: 428, code: "precondition_required" }); applyProjectCorrection(await adapter.updateProject(editingProject.id, input, editingProject.version), "Project updated. Stock and validation evidence are unchanged."); setEditingProject(undefined); }} /></Dialog>}
-      {editingRequirement && <Dialog title="Edit requirement" onClose={() => { if (!correctionBusy) setEditingRequirement(undefined); }}><RequirementEditForm line={editingRequirement.line} items={items} onBusy={setCorrectionBusy} onClose={() => setEditingRequirement(undefined)} onSave={async (input) => { applyProjectCorrection(await adapter.updateBomLine(editingRequirement.projectId, editingRequirement.line.id, input, editingRequirement.line.version), "Requirement saved."); setEditingRequirement(undefined); }} onRetire={async () => { applyProjectCorrection(await adapter.retireBomLine(editingRequirement.projectId, editingRequirement.line.id, editingRequirement.line.version), "Requirement removed from the plan. Its history is retained."); setEditingRequirement(undefined); }} /></Dialog>}
-      {showAddBom && selectedProject && ( <AddBomDialog items={items} project={selectedProject} expert={expert} onClose={() => setShowAddBom(false)} onCreate={addBomLine} /> )}{" "}
-      {showNewItem && ( <NewInventoryDialog expert={expert} replacementFor={replacementFor} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} catalogQuery={catalogQuery} catalogProducts={catalogProducts} onCatalogQuery={setCatalogQuery} onResetCatalog={resetCatalogSelection} onSearchCatalog={searchCatalogProducts} onSearchCatalogPage={listCatalogProductPage} onCreateCatalogProduct={addCatalogProduct} onCreateExact={addExactInventoryItem} onLinkExact={linkExactInventoryItem} onClose={closeNewItem} onGoSettings={() => { closeNewItem(); setShowNewRevision(false); navigate("settings"); }} onCreate={addInventoryItem} /> )}{" "}
+      {showBomImport && selectedProject && <Dialog title="Import requirements from CSV" suspended={Boolean(navigationGuard.pending)} onClose={() => navigationGuard.registry.request(() => setShowBomImport(false))}><ExistingBomImport project={selectedProject} onRefresh={refreshWorkspace} /></Dialog>}
+      {showGuidedSetup && <Dialog title="Guided project setup" suspended={Boolean(navigationGuard.pending)} onClose={() => { if (!guidedBusy) navigationGuard.registry.request(() => {
+        setShowGuidedSetup(false);
+        window.setTimeout(() => { if (document.activeElement === document.body && newProjectTriggerRef.current?.isConnected) newProjectTriggerRef.current.focus(); }, 32);
+      }); }}><GuidedSetup initialDraft={guidedDraft} initialMode={guidedMode} adapter={adapter} items={items} onBusy={setGuidedBusy} onDone={async (projectId) => { if (!await refreshWorkspace()) throw new Error("The project is saved, but the workspace could not refresh. Open it again when the connection recovers."); setShowGuidedSetup(false); recordOpenedProject(projectId, sampleMode); pendingMainFocusRef.current = true; recordNavigation("projects", projectId, "plan"); setSelectedProjectId(projectId); setProjectTab("plan"); setPage("projects"); }} /></Dialog>}
+      {showNewProject && ( <NewProjectDialog onGuided={sampleMode ? undefined : (draft, mode) => { setGuidedDraft(draft); setGuidedMode(mode); setShowNewProject(false); setShowGuidedSetup(true); }} items={items} suspended={showNewItem} dismissalPending={Boolean(navigationGuard.pending)} onClose={() => navigationGuard.registry.request(closeNewProject)} onAddPrinter={openNewPrinter} onCreate={createProject} /> )}{" "}
+      {showNewRevision && selectedProject && ( <NewRevisionDialog dismissalPending={Boolean(navigationGuard.pending)} project={selectedProject} items={items} expert={expert} suspended={showNewItem} onClose={() => setShowNewRevision(false)} onAddPrinterDetails={openNewPrinterDetails} onAddPrinter={openNewPrinter} onCreate={createRevision} /> )}{" "} {showEditBuildApproach && selectedProject && ( <EditBuildApproachDialog dismissalPending={Boolean(navigationGuard.pending)} project={selectedProject} items={items} expert={expert} suspended={showNewItem} onClose={() => setShowEditBuildApproach(false)} onAddPrinter={openNewPrinter} onSave={updateBuildApproach} /> )}{" "}
+      {editingProject && <ScopedDraftDialog title="Edit project" dirty={projectEditDraft.dirty} unresolved={projectEditDraft.unresolved || correctionBusy} suspended={Boolean(navigationGuard.pending)} onClose={() => setEditingProject(undefined)}>{(requestClose) => <ProjectEditForm project={editingProject} onDraftChange={setProjectEditDraft} onBusy={setCorrectionBusy} onClose={requestClose} onSave={async (input) => { if (editingProject.version === undefined) throw new ApiError("Reload this project to obtain its current version before editing.", { kind: "conflict", status: 428, code: "precondition_required" }); applyProjectCorrection(await adapter.updateProject(editingProject.id, input, editingProject.version), "Project updated. Stock and validation evidence are unchanged."); setEditingProject(undefined); }} />}</ScopedDraftDialog>}
+
+      {showAddBom && selectedProject && ( <AddBomDialog draft={requirementDraft} onDraftChange={setRequirementDraft} suspended={showNewItem || Boolean(createdInventory?.returnToRequirement && selectedItem)} onAddOwnedItem={(name) => { setNewItemRequirementName(name); setReplacementFor(undefined); setNewInventoryDraft(undefined); setShowNewItem(true); }} onSearchOwnedItems={searchOwnedItems} items={items} project={selectedProject} expert={expert} dismissalPending={Boolean(navigationGuard.pending)} onClose={() => navigationGuard.registry.request(() => { setShowAddBom(false); setRequirementDraft(emptyRequirementDraft()); })} onCreate={addBomLine} /> )}{" "}
+      {showNewItem && ( <NewInventoryDialog initialDraft={newInventoryDraft} onDraftChange={setNewInventoryDraft} requirementName={newItemRequirementName} receiving={receivingStock} dismissalPending={Boolean(navigationGuard.pending)} expert={expert} replacementFor={replacementFor} categories={categories} categoriesLoading={categoriesLoading} categoriesError={categoriesError} catalogQuery={catalogQuery} catalogProducts={catalogProducts} onCatalogQuery={setCatalogQuery} onResetCatalog={resetCatalogSelection} onSearchCatalog={searchCatalogProducts} onSearchCatalogPage={listCatalogProductPage} onCreateCatalogProduct={addCatalogProduct} onCreateExact={addExactInventoryItem} onLinkExact={linkExactInventoryItem} onClose={closeNewItem} onGoSettings={() => navigationGuard.registry.request(() => { closeNewItem(); setShowNewRevision(false); setShowNewProject(false); setShowEditBuildApproach(false); setShowAddBom(false); setRequirementDraft(emptyRequirementDraft()); navigate("settings"); })} onCreate={addInventoryItem} /> )}{" "}
       {bulkInventorySelection && ( <BulkInventoryDialog selectedItems={bulkInventorySelection.items} onClose={closeBulkInventory} onDone={closeBulkInventory} onApply={applyBulkInventory} /> )}{" "}
-      </div>
-      {sessionExpired && <SessionExpiredOverlay onLogin={resumeSession} />}
       <ToastRegion toast={toastApi.toast} onDismiss={toastApi.dismiss} />
-    </div></UnsavedWorkContext.Provider>
+    </div></UnsavedWorkContext.Provider></OwnedInventorySearchContext.Provider>
   );
 }
 
-function BrandMark() { return ( <div className="brand-mark" aria-hidden="true"> <span /> <span /> <span /> </div> ); } function Sidebar({ page, projectCount, sampleMode, syncStatus, expert, onNavigate, mobileOpen, onClose }: { page: Page; projectCount: number; sampleMode: boolean; syncStatus: ReactNode; expert: boolean; onNavigate: (page: Page) => void; mobileOpen: boolean; onClose: () => void; }) {
-  const drawerRef = useRef<HTMLElement>(null);
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const returnFocusRef = useRef<HTMLElement | undefined>(undefined);
-
-  useEffect(() => {
-    if (!mobileOpen) return;
-    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
-    closeButtonRef.current?.focus();
-  }, [mobileOpen]);
-
-  useEffect(() => {
-    if (!mobileOpen) return;
-    const desktop = window.matchMedia("(min-width: 801px)");
-    const closeAtDesktop = (event: MediaQueryListEvent) => {
-      if (event.matches) onClose();
-    };
-    desktop.addEventListener("change", closeAtDesktop);
-    return () => desktop.removeEventListener("change", closeAtDesktop);
-  }, [mobileOpen, onClose]);
-
-  const closeAndRestoreFocus = () => {
-    const returnFocus = returnFocusRef.current;
-    onClose();
-    window.requestAnimationFrame(() => returnFocus?.focus());
-  };
-
-  const keepMobileFocusInside = (event: React.KeyboardEvent<HTMLElement>) => {
-    if (!mobileOpen) return;
-    if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      closeAndRestoreFocus();
-      return;
-    }
-    if (event.key !== "Tab") return;
-    const focusable = [...(drawerRef.current?.querySelectorAll<HTMLElement>(focusableOverlaySelector) ?? [])];
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (!first || !last) {
-      event.preventDefault();
-      drawerRef.current?.focus();
-    } else if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  };
-
-  return ( <>
-    {mobileOpen && ( <div className="nav-scrim" aria-hidden="true" onClick={closeAndRestoreFocus} /> )}
-    <aside ref={drawerRef} className={`sidebar ${mobileOpen ? "is-open" : ""}`} aria-label="Primary navigation" role={mobileOpen ? "dialog" : undefined} aria-modal={mobileOpen ? true : undefined} tabIndex={mobileOpen ? -1 : undefined} onKeyDown={keepMobileFocusInside}>
-      <div className="brand-lockup"><BrandMark /><div><div className="wordmark">BenchLedger</div><div className="brand-caption">Parts, stock and builds</div></div><button ref={closeButtonRef} className="icon-button sidebar-close" aria-label="Close navigation" onClick={closeAndRestoreFocus}><Icon name="close" size={18} /></button></div>
-      <div className="workspace-identity" aria-label="Current workspace"><span className="workspace-avatar">W</span><span><strong>Current workspace</strong><small>{sampleMode ? "Sample records" : "Private workspace"}</small></span></div>
-      <nav className="nav-list">
-        <span className="nav-label">Workspace</span>
-        {(["overview", "inventory", "projectIndex"] as Page[]).map((entry) => { const active = page === entry || (entry === "projectIndex" && page === "projects"); return ( <button key={entry} className={`nav-item ${active ? "is-active" : ""}`} title={pageCopy[entry].label} aria-current={page === entry ? "page" : active ? "true" : undefined} data-label={pageCopy[entry].label} onClick={() => onNavigate(entry)}><Icon name={pageCopy[entry].icon} size={18} /><span>{pageCopy[entry].label}</span>{entry === "projectIndex" && ( <span className="nav-count">{projectCount}</span> )}</button>); })}{" "} {expert && ( <> <span className="nav-label nav-label-agent">Agent access</span>
-        <button className={`nav-item ${page === "capabilities" ? "is-active" : ""}`} title="For agents" aria-current={page === "capabilities" ? "page" : undefined} data-label="For agents" onClick={() => onNavigate("capabilities")}><Icon name="code" size={18} /><span>For agents</span><span className="status-dot" /></button>
-      </> )} </nav>
-      <div className="sidebar-bottom"><button className={`nav-item ${page === "settings" ? "is-active" : ""}`} title="Settings" aria-current={page === "settings" ? "page" : undefined} data-label="Settings" onClick={() => onNavigate("settings")}><Icon name="settings" size={18} /><span>Settings</span></button>{syncStatus}</div>
-    </aside>
-  </> );
-}
+function BrandMark() { return ( <div className="brand-mark" aria-hidden="true"> <span /> <span /> <span /> </div> ); }
 
 function LoadingScreen() {
-  return ( <div className="loading-screen" role="status" aria-live="polite"><div className="loading-brand"><BrandMark /><span>Loading workspace</span></div><div className="skeleton-line wide" /><div className="skeleton-line" /><div className="skeleton-table"><span /><span /><span /><span /></div></div> );
+  return ( <div className="loading-screen" role="status" aria-live="polite"><div className="loading-brand"><BrandMark /><span>Loading workspace</span></div><Skeleton className="skeleton-line wide" /><Skeleton className="skeleton-line" /><div className="skeleton-table"><Skeleton /><Skeleton /><Skeleton /><Skeleton /></div></div> );
 }
 
-/** Active projects whose requirements reference this inventory item. */
-export function projectsUsingItem(projects: readonly Project[], itemId: string): { id: string; name: string }[] {
-  return projects.filter((project) => project.status !== "archived" && project.bom.some((line) => line.itemId === itemId)).map((project) => ({ id: project.id, name: project.name }));
-}
-
-/** Replace refreshed active projects in place; never add projects that were not already listed. */
 export function mergeRefreshedProjects(current: readonly Project[], refreshed: readonly Project[]): Project[] {
   const byId = new Map(refreshed.filter((project) => project.status !== "archived").map((project) => [project.id, project] as const));
   return current.filter((project) => project.status !== "archived").map((project) => byId.get(project.id) ?? project);
@@ -1148,7 +1200,7 @@ export function reconciliationLoadErrorMessage(message: string, expert: boolean)
   return "The used-stock update could not be loaded. Try again or return to the plan.";
 }
 
-export function ConnectionScreen({ state, error, demoAvailable, onLogin, onRetry, onSample }: { state: Exclude<ConnectionState, "loading" | "ready" | "sample">; error: ApiError | undefined; demoAvailable: boolean; onLogin: (password: string) => Promise<void>; onRetry: () => void; onSample: () => void; }) {
+export function ConnectionScreen({ state, error, demoAvailable, recoveryNotice, onDiscardRecovery, onLogin, onRetry, onSample }: { recoveryNotice?: string | undefined; onDiscardRecovery?: (() => void) | undefined; state: Exclude<ConnectionState, "loading" | "ready" | "sample">; error: ApiError | undefined; demoAvailable: boolean; onLogin: (password: string) => Promise<void>; onRetry: () => void; onSample: () => void; }) {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string>();
@@ -1162,41 +1214,37 @@ export function ConnectionScreen({ state, error, demoAvailable, onLogin, onRetry
   const isOffline = state === "offline";
   const isAuth = state === "unauthenticated";
   const title = isAuth ? "Sign in" : isOffline ? "Private service offline" : "Cannot open workspace";
-  const description = isAuth ? "Enter the password for this private workspace." : isOffline ? "BenchLedger cannot reach the private service. It did not replace private data with sample data." : "The service returned an error before it loaded the workspace. Nothing changed.";
+  const description = isAuth ? "Enter the password for this private workspace." : recoveryNotice ? "The workspace could not be reloaded. Your reviewed observation is still kept in this window." : isOffline ? "BenchLedger cannot reach the private service. It did not replace private data with sample data." : "The service returned an error before it loaded the workspace. Nothing changed.";
   const detail = error && !isAuth && !isOffline ? error.correlationId ? `Reference ${error.correlationId}` : error.message : undefined;
-  return ( <main className="connection-screen"><section className="connection-card" aria-labelledby="connection-title"><div className="loading-brand"><BrandMark /><span>BenchLedger · private workspace</span></div><div className="connection-state-icon"><Icon name={isAuth ? "info" : isOffline ? "link" : "warning"} size={22} /></div><h1 id="connection-title">{title}</h1><p className="connection-description">{description}</p>{detail && ( <p className="connection-detail" role="alert">{detail}</p> )}{" "}{isAuth && ( <form className="login-form" onSubmit={submit} noValidate><label className="form-field" htmlFor="workspace-password"><span>Workspace password</span><input id="workspace-password" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} aria-describedby={formError ? "workspace-password-error" : undefined} aria-invalid={Boolean(formError)} autoFocus /></label>{formError && ( <p id="workspace-password-error" className="form-error" role="alert">{formError}</p> )}<button className="button button-primary login-submit" type="submit" disabled={submitting}>{submitting ? "Signing in…" : "Sign in"}<Icon name="arrow-right" size={16} /></button></form> )}{" "}{!isAuth && ( <button className="button button-secondary connection-retry" onClick={onRetry}><Icon name="refresh" size={16} /> Try again{" "} </button> )}{" "}{demoAvailable && ( <div className="sample-choice"><span>Sample workspace</span><button className="text-button" onClick={onSample}> {" "}Open sample workspace <Icon name="arrow-right" size={15} /></button><small> {" "}Sample records are for practice. BenchLedger does not mix them with private records.{" "} </small></div> )}</section></main> );
+  return ( <main className="connection-screen"><section className="connection-card" aria-labelledby="connection-title"><div className="loading-brand"><BrandMark /><span>BenchLedger · private workspace</span></div><div className="connection-state-icon"><Icon name={isAuth ? "info" : isOffline ? "link" : "warning"} size={22} /></div><h1 id="connection-title">{title}</h1><p className="connection-description">{description}</p>{recoveryNotice && <p role="status">{recoveryNotice}</p>}{detail && ( <Alert asChild><p className="connection-detail" role="alert">{detail}</p></Alert> )}{" "}{isAuth && ( <form className="login-form" onSubmit={submit} noValidate><Label className="form-field" htmlFor="workspace-password"><span>Workspace password</span><Input id="workspace-password" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} aria-describedby={formError ? "workspace-password-error" : undefined} aria-invalid={Boolean(formError)} autoFocus /></Label>{formError && ( <Alert asChild><p id="workspace-password-error" className="form-error" role="alert">{formError}</p></Alert> )}<Button variant="default" className="button button-primary login-submit" type="submit" disabled={submitting}>{submitting ? "Signing in…" : "Sign in"}<Icon name="arrow-right" size={16} /></Button></form> )}{" "}{!isAuth && ( <Button variant="outline" className="button button-secondary connection-retry" onClick={onRetry}><Icon name="refresh" size={16} /> Try again{" "} </Button> )}{" "}{onDiscardRecovery && <Button variant="outline" onClick={onDiscardRecovery}>Discard observation and reload</Button>}{demoAvailable && ( <div className="sample-choice"><span>Sample workspace</span><Button variant="ghost" className="text-button" onClick={onSample}> {" "}Open sample workspace <Icon name="arrow-right" size={15} /></Button><small> {" "}Sample records are for practice. BenchLedger does not mix them with private records.{" "} </small></div> )}</section></main> );
 } export function SampleBanner({ onReturn }: { onReturn: () => void }) {
   return ( <div className="offline-banner sample-banner" role="status"><Icon name="info" size={17} /><div><strong>Sample workspace</strong><span> {" "}
           Try the workflow here. Changes do not affect your private
-          workspace.{" "} </span></div><button className="text-button" onClick={onReturn}><Icon name="arrow-left" size={15} /> Return to private workspace{" "} </button></div> );
+          workspace.{" "} </span></div><Button variant="ghost" className="text-button" onClick={onReturn}><Icon name="arrow-left" size={15} /> Return to private workspace{" "} </Button></div> );
 }
 
-function PageHeader({ eyebrow, title, description, action, onAction, actionIcon = "plus", children, collapseDescription = false }: { eyebrow: string; title: string; description: string; collapseDescription?: boolean; action?: string | undefined; onAction?: ((event: React.MouseEvent<HTMLButtonElement>) => void) | undefined; actionIcon?: Parameters<typeof Icon>[0]["name"]; children?: ReactNode; }) {
-  return ( <div className="page-header"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1>{collapseDescription ? <details className="project-description-disclosure"><summary>Project notes</summary><p>{description}</p></details> : <p>{description}</p>}</div><div className="header-actions">{children}{" "} {action && ( <button className="button button-primary" onClick={onAction}><Icon name={actionIcon} size={17} />{action}</button> )}</div></div> );
+function PageHeader({ title, description, action, onAction, actionIcon = "plus", children, collapseDescription = false }: { eyebrow: string; title: string; description: string; collapseDescription?: boolean; action?: string | undefined; onAction?: ((event: React.MouseEvent<HTMLButtonElement>) => void) | undefined; actionIcon?: Parameters<typeof Icon>[0]["name"]; children?: ReactNode; }) {
+  return ( <div className="page-header"><div><h1>{title}</h1>{collapseDescription ? <Disclosure className="project-description-disclosure"><DisclosureTrigger>Project notes</DisclosureTrigger><DisclosureContent><p>{description}</p></DisclosureContent></Disclosure> : description ? <p>{description}</p> : null}</div><div className="header-actions">{children}{" "} {action && ( <Button variant="default" className="button button-primary" onClick={onAction}><Icon name={actionIcon} size={17} />{action}</Button> )}</div></div> );
 }
 
 function BuildRail({ currentStep, projectName, onProject }: { currentStep: number; projectName?: string | undefined; onProject?: (() => void) | undefined; }) {
-  return ( <section className="build-rail" aria-label="Build progress"><div className="rail-heading"><div><span className="eyebrow">Build path</span><strong>{projectName ?? "Your next build"}</strong></div>{onProject && ( <button className="text-button" onClick={onProject}> {" "}Open project <Icon name="arrow-right" size={15} /></button> )}</div><div className="rail-track">{railSteps.map((step, index) => ( <div className={`rail-step ${index < currentStep ? "is-complete" : ""} ${index === currentStep ? "is-current" : ""}`} key={step}><span className="rail-marker">{index < currentStep ? ( <Icon name="check" size={13} /> ) : ( index + 1 )}</span><span>{step}</span>{index < railSteps.length - 1 && ( <span className="rail-line" aria-hidden="true" /> )}</div>))}</div></section> );
+  return ( <section className="build-rail" aria-label="Build progress"><div className="rail-heading"><div><span className="eyebrow">Build path</span><strong>{projectName ?? "Your next build"}</strong></div>{onProject && ( <Button variant="ghost" className="text-button" onClick={onProject}> {" "}Open project <Icon name="arrow-right" size={15} /></Button> )}</div><div className="rail-track">{railSteps.map((step, index) => ( <div className={`rail-step ${index < currentStep ? "is-complete" : ""} ${index === currentStep ? "is-current" : ""}`} key={step}><span className="rail-marker">{index < currentStep ? ( <Icon name="check" size={13} /> ) : ( index + 1 )}</span><span>{step}</span>{index < railSteps.length - 1 && ( <span className="rail-line" aria-hidden="true" /> )}</div>))}</div></section> );
 }
 
-type NullablePrinterProject = Project & { readonly intendedPrinterItemId?: string | null };
-function projectFabricationRoute(project: Project): FabricationRoute { const plannedPrinter = (project as NullablePrinterProject).intendedPrinterItemId; if (project.fabricationRoute) return project.fabricationRoute; if (plannedPrinter !== undefined) return plannedPrinter ? "printed" : "undecided"; return project.buildConfigSnapshot?.printerItemId ? "printed" : "undecided"; } function projectIntendedPrinterId(project: Project): string | undefined { const plannedPrinter = (project as NullablePrinterProject).intendedPrinterItemId; if (plannedPrinter !== undefined) return plannedPrinter ?? undefined; return project.fabricationRoute === undefined ? project.buildConfigSnapshot?.printerItemId : undefined; } export function isUsableOwnedPrinter(item: InventoryItem): boolean { const evidence = item.serverEvidence ?? item.evidence; const retired = (item as InventoryItem & { retired?: boolean }).retired === true || item.tags.some((tag) => tag.toLocaleLowerCase() === "retired");
-  const availableQuantity = item.availableQuantity ?? Math.max(item.quantity - item.reserved, 0);
-  const profileMatchesItem = item.productProfile?.inventoryItemId === item.id && item.productProfile.catalogProductId === item.catalogProduct?.id && item.productProfile.linkState === "confirmed" && (item.productProfile.profileType === "printer_asset" || item.productProfile.printer !== undefined); return ( item.category === "Printers" && !retired && item.unit === "each" && item.unitStatus !== "needs_correction" && item.quantity > 0 && availableQuantity > 0 && (evidence === "physically_counted" || evidence === "commissioned") && item.catalogProduct?.kind === "printer" && isExactProductIdentityComplete(item) && profileMatchesItem ); } export function printerBuildVolumeCopy( item: InventoryItem | undefined ): string | undefined { const volume = item?.catalogProduct?.buildVolumeMm; if ( !volume || ![volume.x, volume.y, volume.z].every((value) => typeof value === "number" && Number.isFinite(value) && value > 0 ) ) return undefined; return `${volume.x} × ${volume.y} × ${volume.z} mm build volume`; } export interface PrintRelatedSignals { requirementCount: number; fileCount: number; hasBuildSetup: boolean; } export function printRelatedSignals( project: Project, items: InventoryItem[] ): PrintRelatedSignals { const printRequirementCount = project.bom.filter((line) => { const item = line.itemId ? items.find((candidate) => candidate.id === line.itemId) : undefined; const itemIsPrintRelated = item?.category === "Filament" || item?.category === "Printers" || item?.kind === "filament" || item?.kind === "printer"; const constrainedKind = line.constraints?.kind; return ( itemIsPrintRelated || constrainedKind === "filament" || constrainedKind === "printer" ); }).length; const printableFileCount = project.artifacts.filter( (artifact) => artifact.role === "STL" || artifact.role === "Build plate" ).length; return { requirementCount: printRequirementCount, fileCount: printableFileCount, hasBuildSetup: project.buildConfigSnapshot !== undefined }; } export function hasCurrentRevisionPrintableArtifact(project: Project): boolean { const currentWorkItemRevisions = new Map( (project.workItems ?? []).flatMap((item) => { const revisionId = item.currentRevisionId ?? item.currentRevision?.id; return revisionId ? [[item.id, revisionId] as const] : []; }) ); return project.artifacts.some((artifact) => { if (artifact.role !== "STL" && artifact.role !== "Build plate") return false; if (artifact.workItemId !== undefined) { return ( artifact.workItemRevisionId !== undefined && currentWorkItemRevisions.get(artifact.workItemId) === artifact.workItemRevisionId ); } return ( project.serverRevisionId !== undefined && artifact.projectRevisionId === project.serverRevisionId ); }); } function printReviewCopy(signals: PrintRelatedSignals): string | undefined { const itemCount = signals.requirementCount + signals.fileCount; if (itemCount > 0) return `Review ${itemCount} print-related item${itemCount === 1 ? "" : "s"} before continuing with this route.`; if (signals.hasBuildSetup) return "A saved print setup remains. Review it before continuing with this route."; return undefined; } export function BuildApproachCard({ project, items, expert, onSelectPrinter, onChoosePrinter, onReviewPrintItems }: { project: Project; items: InventoryItem[]; expert: boolean; onSelectPrinter?: ((id: string) => void) | undefined; onChoosePrinter?: (() => void) | undefined; onReviewPrintItems?: ((target: "plan" | "files") => void) | undefined; }) { const route = projectFabricationRoute(project); const printerId = projectIntendedPrinterId(project); const printer = printerId ? items.find((item) => item.id === printerId) : undefined; const usablePrinter = printer && isUsableOwnedPrinter(printer) ? printer : undefined; const selectedPrinterLabel = usablePrinter ? inventoryCandidateLabel(usablePrinter, items, expert).name : undefined; const routeCopy = route === "ready_made" ? "Use a bought or existing enclosure/part" : route === "none" ? "Electronics / assembly only" : route === "printed" ? (selectedPrinterLabel ?? (printer ? "Printer needs a check" : "No printer selected yet")) : "Choose how this project will be built."; const printSignals = route === "ready_made" || route === "none" ? printRelatedSignals(project, items) : undefined; const reviewCopy = printSignals ? printReviewCopy(printSignals) : undefined; const reviewTarget = printSignals && printSignals.requirementCount === 0 && printSignals.fileCount > 0 ? ("files" as const) : ("plan" as const); const hasPrintableFile = route === "printed" && hasCurrentRevisionPrintableArtifact(project); const detailCopy = route === "printed" ? usablePrinter ? `${printerBuildVolumeCopy(usablePrinter) ?? "Build volume not recorded"}.` : printer ? "This printer is not available as an owned capability until it is physically counted or commissioned." : "Choose or add an owned printer when needed." : route === "ready_made" ? "Next, add the dimensions or requirement for the part you will use." : route === "none" ? "No printer is needed for this approach." : "Select a build approach when the requirements are known."; return ( <section className="surface build-approach-card" aria-label="Build approach" > <div className="build-approach-heading"> <div> <span className="eyebrow">Build approach</span> <h2>{routeCopy}</h2> </div> {route !== "printed" && ( <span className="route-chip">{fabricationRouteLabel(route)}</span> )} </div> <p>{detailCopy}</p> {reviewCopy && ( <div className="build-approach-review" role="note"> <strong>Review print-related items</strong> <span>{reviewCopy}</span> {onReviewPrintItems && ( <button type="button" className="text-button" onClick={() => onReviewPrintItems(reviewTarget)} > {reviewTarget === "files" ? "Open Files" : "Open Plan"} <Icon name="arrow-right" size={14} /> </button> )} </div> )}{" "} {route === "printed" && ( <div className="build-approach-fit"> <strong>Not checked yet.</strong> <span> {hasPrintableFile ? "Build file added. Fit still needs a slicer check." : "Add a printable file to check fit."} </span> </div> )}{" "} {(onChoosePrinter || (route === "printed" && printer && onSelectPrinter)) && ( <div className="build-approach-actions"> {onChoosePrinter && ( <button type="button" className="text-button" onClick={onChoosePrinter} > {" "}
-              Change build approach <Icon name="arrow-right" size={15} /> </button> )}{" "} {route === "printed" && printer && onSelectPrinter && ( <button type="button" className="text-button" onClick={() => onSelectPrinter(printer.id)} > {" "}
-              Open printer details <Icon name="arrow-up-right" size={14} /> </button> )} </div> )}{" "} {expert && ( <details className="expert-detail build-approach-expert"> <summary>Planning details</summary> <div className="detail-grid"> <div> <span>Fabrication route</span> <code>{route}</code> </div> <div> <span>Intended printer</span> <code>{printerId ?? "Not selected"}</code> </div> <div> <span>Printer build volume</span> <code>{printerBuildVolumeCopy(printer) ?? "Not recorded"}</code> </div> </div> </details> )} </section> ); } export function OverviewPage({ items, projects, expert, sampleMode, onNavigate, onOpenProject, onSelectItem, onNewProject, onAddPrinter, onAddItem, onImport, onTask, onRefresh, stockReceivingLabel, onStockSettings }: {
-  stockReceivingLabel?: string | undefined; onStockSettings?: (() => void) | undefined;
-  items: InventoryItem[]; projects: Project[]; expert: boolean; sampleMode: boolean;
-  onNavigate(page: Page): void; onOpenProject(id: string, tab?: ProjectTab): void; onSelectItem(id: string): void;
+export function printerBuildVolumeCopy( item: InventoryItem | undefined ): string | undefined { const volume = item?.catalogProduct?.buildVolumeMm; if ( !volume || ![volume.x, volume.y, volume.z].every((value) => typeof value === "number" && Number.isFinite(value) && value > 0 ) ) return undefined; return `${volume.x} × ${volume.y} × ${volume.z} mm build volume`; } export interface PrintRelatedSignals { requirementCount: number; fileCount: number; hasBuildSetup: boolean; } export function printRelatedSignals( project: Project, items: InventoryItem[] ): PrintRelatedSignals { const printRequirementCount = project.bom.filter((line) => { const item = line.itemId ? items.find((candidate) => candidate.id === line.itemId) : undefined; const itemIsPrintRelated = item?.category === "Filament" || item?.category === "Printers" || item?.kind === "filament" || item?.kind === "printer"; const constrainedKind = line.constraints?.kind; return ( itemIsPrintRelated || constrainedKind === "filament" || constrainedKind === "printer" ); }).length; const printableFileCount = project.artifacts.filter( (artifact) => artifact.role === "STL" || artifact.role === "Build plate" ).length; return { requirementCount: printRequirementCount, fileCount: printableFileCount, hasBuildSetup: project.buildConfigSnapshot !== undefined }; } export function hasCurrentRevisionPrintableArtifact(project: Project): boolean { const currentWorkItemRevisions = new Map( (project.workItems ?? []).flatMap((item) => { const revisionId = item.currentRevisionId ?? item.currentRevision?.id; return revisionId ? [[item.id, revisionId] as const] : []; }) ); return project.artifacts.some((artifact) => { if (artifact.role !== "STL" && artifact.role !== "Build plate") return false; if (artifact.workItemId !== undefined) { return ( artifact.workItemRevisionId !== undefined && currentWorkItemRevisions.get(artifact.workItemId) === artifact.workItemRevisionId ); } return ( project.serverRevisionId !== undefined && artifact.projectRevisionId === project.serverRevisionId ); }); } function printReviewCopy(signals: PrintRelatedSignals): string | undefined { const itemCount = signals.requirementCount + signals.fileCount; if (itemCount > 0) return `Review ${itemCount} print-related item${itemCount === 1 ? "" : "s"} before continuing with this route.`; if (signals.hasBuildSetup) return "A saved print setup remains. Review it before continuing with this route."; return undefined; } export function BuildApproachCard({ project, items, expert, onSelectPrinter, onChoosePrinter, onReviewPrintItems }: { project: Project; items: InventoryItem[]; expert: boolean; onSelectPrinter?: ((id: string) => void) | undefined; onChoosePrinter?: (() => void) | undefined; onReviewPrintItems?: ((target: "plan" | "files") => void) | undefined; }) { const route = projectFabricationRoute(project); const printerId = projectIntendedPrinterId(project); const printer = printerId ? items.find((item) => item.id === printerId) : undefined; const usablePrinter = printer && isUsableOwnedPrinter(printer) ? printer : undefined; const selectedPrinterLabel = usablePrinter ? inventoryCandidateLabel(usablePrinter, items, expert).name : undefined; const routeCopy = route === "ready_made" ? "Use a bought or existing enclosure/part" : route === "none" ? "Electronics / assembly only" : route === "printed" ? (selectedPrinterLabel ?? (printer ? "Printer needs a check" : printerId ? "Recorded printer details unavailable" : "No printer selected yet")) : "Choose how this project will be built."; const printSignals = route === "ready_made" || route === "none" ? printRelatedSignals(project, items) : undefined; const reviewCopy = printSignals ? printReviewCopy(printSignals) : undefined; const reviewTarget = printSignals && printSignals.requirementCount === 0 && printSignals.fileCount > 0 ? ("files" as const) : ("plan" as const); const hasPrintableFile = route === "printed" && hasCurrentRevisionPrintableArtifact(project); const detailCopy = route === "printed" ? usablePrinter ? `${printerBuildVolumeCopy(usablePrinter) ?? "Build volume not recorded"}.` : printer ? "This printer is not available as an owned capability until it is physically counted or commissioned." : "Choose or add an owned printer when needed." : route === "ready_made" ? "Next, add the dimensions or requirement for the part you will use." : route === "none" ? "No printer is needed for this approach." : "Select a build approach when the requirements are known."; return ( <Card asChild><section className="surface build-approach-card" aria-label="Build approach" > <div className="build-approach-heading"> <div> <h3>{routeCopy}</h3> </div> {route !== "printed" && ( <span className="route-chip">{fabricationRouteLabel(route)}</span> )} </div> <p>{detailCopy}</p> {reviewCopy && ( <div className="build-approach-review" role="note"> <strong>Review print-related items</strong> <span>{reviewCopy}</span> {onReviewPrintItems && ( <Button variant="ghost" type="button" className="text-button" onClick={() => onReviewPrintItems(reviewTarget)} > {reviewTarget === "files" ? "Open Files" : "Open Plan"} <Icon name="arrow-right" size={14} /> </Button> )} </div> )}{" "} {route === "printed" && ( <div className="build-approach-fit"> <strong>Not checked yet.</strong> <span> {hasPrintableFile ? "Build file added. Fit still needs a slicer check." : "Add a printable file to check fit."} </span> </div> )}{" "} {(onChoosePrinter || (route === "printed" && printer && onSelectPrinter)) && ( <div className="build-approach-actions"> {onChoosePrinter && ( <Button variant="ghost" type="button" className="text-button" onClick={onChoosePrinter} > {" "}
+              Change build approach <Icon name="arrow-right" size={15} /> </Button> )}{" "} {route === "printed" && printer && onSelectPrinter && ( <Button variant="ghost" type="button" className="text-button" onClick={() => onSelectPrinter(printer.id)} > {" "}
+              Open printer details <Icon name="arrow-up-right" size={14} /> </Button> )} </div> )}{" "} {expert && ( <Disclosure className="expert-detail build-approach-expert"> <DisclosureTrigger>Planning details</DisclosureTrigger><DisclosureContent> <div className="detail-grid"> <div> <span>Fabrication route</span> <code>{route}</code> </div> <div> <span>Intended printer</span> <code>{printerId ?? "Not selected"}</code> </div> <div> <span>Printer build volume</span> <code>{printerBuildVolumeCopy(printer) ?? "Not recorded"}</code> </div> </div> </DisclosureContent></Disclosure> )} </section></Card> ); } export function OverviewPage({ items, projects, archivedProjects, archivedCount, onOpenArchive, expert, sampleMode, onNavigate, onOpenProject, onSelectItem, onNewProject, onAddPrinter, onAddItem, onImport, onTask, onRefresh }: {
+  items: InventoryItem[]; projects: Project[]; archivedProjects?: Project[] | undefined; archivedCount?: number | undefined; onOpenArchive?: (() => void) | undefined; expert: boolean; sampleMode: boolean;
+  onNavigate(page: Page): void; onOpenProject(id: string, tab?: ProjectTab, options?: { showImages?: boolean }): void; onSelectItem(id: string): void;
   onNewProject(event: React.MouseEvent<HTMLButtonElement>): void; onAddPrinter?: (() => void) | undefined;
   onAddItem?: (() => void) | undefined; onImport?: (() => void) | undefined;
   onTask?: ((task: HomeTask) => void) | undefined; onRefresh?: (() => Promise<boolean>) | undefined;
 }) {
-  return <><WorkbenchHome projects={projects} items={items} printers={items.filter((item) => item.category === "Printers" && !item.tags.some((tag) => tag.toLowerCase() === "retired"))} isPrinterUsable={isUsableOwnedPrinter} sampleMode={sampleMode}
+  return <><WorkbenchHome archivedProjects={archivedProjects} archivedCount={archivedCount} onOpenArchive={onOpenArchive} projects={projects} items={items} printers={items.filter((item) => item.category === "Printers" && !item.tags.some((tag) => tag.toLowerCase() === "retired"))} isPrinterUsable={isUsableOwnedPrinter} sampleMode={sampleMode}
     onOpen={onOpenProject} onTask={onTask ?? ((task) => onOpenProject(task.projectId, task.kind === "source" ? "offers" : task.kind === "files" ? "files" : "plan"))}
     onNewProject={onNewProject} onAddItem={onAddItem ?? onAddPrinter ?? (() => onNavigate("inventory"))} onImport={onImport}
-    onInventory={() => onNavigate("inventory")} onItem={onSelectItem} onRefresh={onRefresh} stockReceivingLabel={stockReceivingLabel} onStockSettings={onStockSettings} />
-    {expert && <details className="home-technical-details"><summary>Technical project context</summary><p>Open a project to read its current revision and recorded evidence.</p><button type="button" className="text-button workshop-agent-link" onClick={() => onNavigate("capabilities")}>For agents<Icon name="code" size={15} /></button></details>}
+    onInventory={() => onNavigate("inventory")} onItem={onSelectItem} onRefresh={onRefresh} />
+    {expert && <Disclosure className="home-technical-details"><DisclosureTrigger>Technical project context</DisclosureTrigger><DisclosureContent><p>Open a project to read its current revision and recorded evidence.</p><Button variant="ghost" type="button" className="text-button workshop-agent-link" onClick={() => onNavigate("capabilities")}>For agents<Icon name="code" size={15} /></Button></DisclosureContent></Disclosure>}
   </>;
 }
 
@@ -1204,22 +1252,38 @@ function Metric({ value, label, detail, tone }: { value: string; label: string; 
   return ( <div className="metric"><span className={`metric-value metric-${tone}`}>{value}</span><div><strong>{label}</strong><small>{detail}</small></div></div> );
 }
 
-function SectionHeading({ eyebrow, title, action, onAction }: { eyebrow: string; title: string; action?: string | undefined; onAction?: (() => void) | undefined; }) {
-  return ( <div className="section-heading"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2></div>{action && ( <button className="text-button" onClick={onAction}>{action}<Icon name="arrow-right" size={14} /></button> )}</div> );
+function SectionHeading({ title, action, onAction }: { eyebrow: string; title: string; action?: string | undefined; onAction?: (() => void) | undefined; }) {
+  return ( <div className="section-heading"><div><h2>{title}</h2></div>{action && ( <Button variant="ghost" className="text-button" onClick={onAction}>{action}<Icon name="arrow-right" size={14} /></Button> )}</div> );
 }
 
 function hasObservedInventoryVersion(item: InventoryItem): item is VersionedInventoryItem {
   return ( typeof item.version === "number" && Number.isSafeInteger(item.version) && item.version > 0 );
 }
 
-function InventoryPage({ adapter, categories, expert, search, searchInputRef, refreshKey, bulkSelectionResetKey, onSearch, onSessionExpired, onPageItems, onSelectItem, onNewItem, onBulkSelectionChange }: { adapter: WorkspaceAdapter; categories: readonly ManagedInventoryCategory[]; expert: boolean; search: string; searchInputRef: React.RefObject<HTMLInputElement | null>; refreshKey: number; bulkSelectionResetKey: number; onSearch: (value: string) => void; onSessionExpired: (error: unknown) => void; onPageItems: (items: readonly InventoryItem[]) => void; onSelectItem: (id: string) => void; onNewItem: () => void; onBulkSelectionChange: (items: readonly VersionedInventoryItem[], onResult: (result: InventoryBulkUpdateResult) => void) => void; }) {
+export function InventoryPage({ categoryNodeId, setCategoryNodeId, sampleMode, adapter, categories, expert, search, searchInputRef, refreshKey, bulkSelectionResetKey, onSearch, onSessionExpired, onPageItems, onSelectItem, onNewItem, onBulkSelectionChange, projects, onOpenProjectPart, onCountStock }: { projects?: readonly Project[] | undefined; onOpenProjectPart?: ((projectId: string, lineId: string) => void) | undefined; onCountStock?: ((id: string) => void) | undefined; categoryNodeId: string; setCategoryNodeId: (id: string) => void; sampleMode: boolean; adapter: WorkspaceAdapter; categories: readonly ManagedInventoryCategory[]; expert: boolean; search: string; searchInputRef: React.RefObject<HTMLInputElement | null>; refreshKey: number; bulkSelectionResetKey: number; onSearch: (value: string) => void; onSessionExpired: (error: unknown) => void; onPageItems: (items: readonly InventoryItem[]) => void; onSelectItem: (id: string) => void; onNewItem: () => void; onBulkSelectionChange: (items: readonly VersionedInventoryItem[], onResult: (result: InventoryBulkUpdateResult) => void) => void; }) {
   const initialUrlState = readInventoryUrlState();
+  const [stockView, setStockView] = useState(initialUrlState.stockView);
+  const [sort, setSort] = useState(initialUrlState.sort);
+  const [location, setLocation] = useState(initialUrlState.location);
+  const [inspectedId, setInspectedId] = useState<string>();
+  const [layout, setLayout] = useState(() => readInventoryLayout(sampleMode));
+  const inspectorOpen = layout.inspectorOpen;
+  const updateLayout = (next: InventoryLayout, commit = true) => {
+    setLayout(next);
+    if (commit && !writeInventoryLayout(next, sampleMode)) setViewNotice("Layout changed for this session. Browser storage is unavailable.");
+  };
+  const setInspectorOpen = (open: boolean) => updateLayout({ ...layout, inspectorOpen: open });
+  const [viewOptionsOpen, setViewOptionsOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [savedViews, setSavedViews] = useState<SavedInventoryView[]>(() => readSavedInventoryViews(sampleMode));
+  const [saveViewOpen, setSaveViewOpen] = useState(false);
+  const [viewName, setViewName] = useState("");
+  const [viewNotice, setViewNotice] = useState("");
   const retainSearchFocusRef = useRef(false);
-  const [categoryNodeId, setCategoryNodeId] = useState(initialUrlState.categoryNodeId);
   const [kind, setKind] = useState<InventoryKindQuery | "All">(initialUrlState.kind);
   const [evidence, setEvidence] = useState<InventoryEvidenceState | "All">(initialUrlState.evidence);
   const [availability, setAvailability] = useState<"All" | "available" | "unavailable">(initialUrlState.availability);
-  const [moreFiltersOpen, setMoreFiltersOpen] = useState(expert); const [pageItems, setPageItems] = useState<InventoryItem[]>([]);
+  const [pageItems, setPageItems] = useState<InventoryItem[]>([]);
   const [nextCursor, setNextCursor] = useState<string>();
   const [total, setTotal] = useState<number>();
   const [loading, setLoading] = useState(true);
@@ -1227,24 +1291,26 @@ function InventoryPage({ adapter, categories, expert, search, searchInputRef, re
   const [error, setError] = useState<ApiError>();
   const [loadMoreError, setLoadMoreError] = useState<ApiError>();
   const [retryNonce, setRetryNonce] = useState(0);
-  const [sort, setSort] = useState<InventorySort | undefined>(() => typeof window === "undefined" ? undefined : readInventorySort(window.location.search));
   const loadedCountRef = useRef(0);
   const fetchedFilterKeyRef = useRef<string | undefined>(undefined);
   const [selectedTargets, setSelectedTargets] = useState<Map<string, number>>(() => new Map());
   const [selectionNotice, setSelectionNotice] = useState<string>();
-  const selectAllRef = useRef<HTMLInputElement>(null);
+  const selectAllRef = useRef<HTMLButtonElement>(null);
   const selectedTargetsRef = useRef(selectedTargets);
   const requestSequence = useRef(0);
   const baseQuery: InventoryListQuery = {
     limit: 25,
+    ...(stockView === "all" ? {} : { stockView }),
+    ...(sort === "name" ? {} : { sort }),
+    ...(location.trim() ? { location: location.trim() } : {}),
     ...(search.trim() ? { q: search.trim() } : {}),
     ...(kind === "All" ? {} : { kind }),
     ...(evidence === "All" ? {} : { evidence }),
     ...(categoryNodeId === UNASSIGNED_CATEGORY_FILTER ? { unassigned: true } : categoryNodeId ? { categoryNodeId } : {}),
     ...(availability === "All" ? {} : { available: availability === "available" })
   };
-  const filterKey = `${search}|${categoryNodeId}|${kind}|${evidence}|${availability}`;
-  const previousFilterKey = useRef(filterKey); const selectedKindLabel = inventoryKindOptions.find( (option) => option.value === kind )?.label; const advancedFilterSummary = [ kind !== "All" && selectedKindLabel ? `Item type: ${selectedKindLabel}` : undefined ] .filter((value): value is string => Boolean(value)) .join(" · "); // Capture the selection from the current render before a filter change
+  const filterKey = JSON.stringify([search, categoryNodeId, kind, evidence, availability, stockView, sort, location]);
+  const previousFilterKey = useRef(filterKey); const selectedKindLabel = inventoryKindOptions.find( (option) => option.value === kind )?.label; const advancedFilterSummary = [ location.trim() ? `Location: ${location.trim()}` : undefined, kind !== "All" && selectedKindLabel ? `Item type: ${selectedKindLabel}` : undefined ] .filter((value): value is string => Boolean(value)) .join(" · "); // Capture the selection from the current render before a filter change
   // resets it. Empty selections do not need a disruptive status message.
   selectedTargetsRef.current = selectedTargets;
 
@@ -1273,10 +1339,6 @@ function InventoryPage({ adapter, categories, expert, search, searchInputRef, re
     setSelectionNotice(undefined);
   }, [bulkSelectionResetKey]);
 
-  useEffect(() => {
-    if (!selectAllRef.current) return;
-    selectAllRef.current.indeterminate = loadedSelectedCount > 0 && !allLoadedSelected;
-  }, [loadedSelectedCount, allLoadedSelected]);
 
   const toggleSelected = (itemId: string) => {
     const item = pageItems.find((candidate) => candidate.id === itemId);
@@ -1348,17 +1410,19 @@ function InventoryPage({ adapter, categories, expert, search, searchInputRef, re
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    ["q", "categoryNodeId", "unassigned", "kind", "evidence", "available"].forEach((key) => params.delete(key));
+    ["q", "categoryNodeId", "unassigned", "kind", "evidence", "available", "stockView", "sort", "location"].forEach((key) => params.delete(key));
+    if (stockView !== "all") params.set("stockView", stockView);
+    if (sort !== "name") params.set("sort", sort);
+    if (location.trim()) params.set("location", location.trim());
     if (search.trim()) params.set("q", search.trim());
     if (categoryNodeId === UNASSIGNED_CATEGORY_FILTER) params.set("unassigned", "true");
     else if (categoryNodeId) params.set("categoryNodeId", categoryNodeId);
     if (kind !== "All") params.set("kind", kind);
     if (evidence !== "All") params.set("evidence", evidence);
     if (availability !== "All") params.set("available", String(availability === "available"));
-    writeInventorySort(params, sort);
     const query = params.toString();
     replaceNavigationHistory(null, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
-  }, [search, categoryNodeId, kind, evidence, availability, sort]);
+  }, [search, categoryNodeId, kind, evidence, availability, stockView, sort, location]);
 
   useLayoutEffect(() => {
     if (!retainSearchFocusRef.current) return;
@@ -1435,53 +1499,143 @@ function InventoryPage({ adapter, categories, expert, search, searchInputRef, re
     }
   };
 
-  const filtered = Boolean(search.trim() || categoryNodeId || kind !== "All" || evidence !== "All" || availability !== "All");
-  const emptyKind = inventoryEmptyKind({ filtered, total: loading ? undefined : total ?? pageItems.length });
-  const sortedItems = sortInventoryItems(pageItems, sort, (item) => managedInventoryLabel(categories, item));
-  const clearFilters = () => {
-    onSearch("");
-    setCategoryNodeId("");
-    setKind("All");
-    setEvidence("All");
-    setAvailability("All");
+  const currentView: InventoryViewState = { search, categoryNodeId, kind, evidence, availability, stockView, sort, location };
+  const applyView = (view: InventoryViewState) => {
+    onSearch(view.search); setCategoryNodeId(view.categoryNodeId); setKind(view.kind); setEvidence(view.evidence);
+    setAvailability(view.availability); setStockView(view.stockView); setSort(view.sort); setLocation(view.location);
   };
+  const clearFilters = () => applyView(parseInventoryView({}));
+  const savedViewName = savedViews.find((view) => JSON.stringify(view.filters) === JSON.stringify(parseInventoryView(currentView)))?.name ?? "";
+  const saveView = (event: FormEvent) => {
+    event.preventDefault();
+    const name = viewName.trim();
+    if (!name) return;
+    if (savedViews.some((view) => view.name === name)) { setViewNotice("That view name already exists. Choose another name."); return; }
+    if (savedViews.length >= 12) { setViewNotice("You can save up to 12 views. Remove a saved view first."); return; }
+    const next = [...savedViews, { name, filters: parseInventoryView(currentView) }];
+    const persisted = saveInventoryViews(next, sampleMode);
+    setSavedViews(next); setSaveViewOpen(false); setViewName("");
+    setViewNotice(persisted ? `Saved “${name}” in this browser.` : "View available for this session. Browser storage is unavailable.");
+  };
+  const removeView = () => {
+    const next = savedViews.filter((view) => view.name !== savedViewName);
+    const persisted = saveInventoryViews(next, sampleMode); setSavedViews(next);
+    setViewNotice(persisted ? "Saved view removed. Inventory records are unchanged." : "View removed for this session. Browser storage is unavailable.");
+  };
+  const inspectedItem = pageItems.find((item) => item.id === inspectedId) ?? pageItems[0];
+  const inspectItem = (id: string) => { setInspectedId(id); if (!inspectorOpen) setInspectorOpen(true); };
+  const inspectedCategory = inspectedItem ? managedInventoryLabel(categories, inspectedItem) : undefined;
+  const activeView = stockViewOptions.find((view) => view.value === stockView)!;
+  const activeFilters = [
+    search.trim() ? `Search: ${search.trim()}` : "",
+    categoryNodeId === UNASSIGNED_CATEGORY_FILTER ? "Unassigned items" : categoryNodeId ? `Category: ${inventoryCategoryFilterOptions(categories).find((option) => option.value === categoryNodeId)?.label ?? "Selected category"}` : "",
+    stockView !== "all" ? activeView.label : "",
+    evidence !== "All" ? (inventoryStatusOptions.find((option) => option.value === evidence)?.label ?? evidence.replaceAll("_", " ")) : "",
+    availability !== "All" ? availability === "available" ? "Available for reuse" : "Not available" : "",
+    advancedFilterSummary
+  ].filter(Boolean);
+
+  // A successful unfiltered result is the only evidence of a new inventory.
+  // Filtered zero results and service errors retain their recovery controls.
+  if (!loading && !error && total === 0 && activeFilters.length === 0) return <>
+    <PageHeader eyebrow="Inventory" title="Inventory" description="Parts, materials and tools you own." />
+    <section className="inventory-first-use" aria-labelledby="inventory-first-title">
+      <Icon name="box" size={28} />
+      <h2 id="inventory-first-title">Start with what you have</h2>
+      <p>Add a component, a spool of filament or a tool. Give it a name and a location so you can find it when your next project needs it.</p>
+      <Button onClick={onNewItem}><Icon name="plus" size={17} />Add first item</Button>
+      <p className="field-hint">You can record details now and confirm the quantity when you count it.</p>
+      <Button variant="ghost" className="text-button" onClick={() => setRetryNonce(value => value + 1)}><Icon name="refresh" size={15} />Refresh inventory</Button>
+    </section>
+  </>;
+
   return ( <>
-    <PageHeader eyebrow="Inventory" title="Inventory" description="Parts, materials, tools and recorded stock evidence." action="Add item" onAction={onNewItem} />
-    <section className="surface inventory-section">
-      <div className="inventory-toolbar" aria-label="Inventory filters">
-        <label className="field-search"><Icon name="search" size={17} /><span className="sr-only">Search inventory</span><input ref={searchInputRef} aria-label="Search inventory" value={search} maxLength={MAX_INVENTORY_SEARCH_LENGTH} onChange={(event) => { retainSearchFocusRef.current = document.activeElement === event.currentTarget; onSearch(event.currentTarget.value); }} placeholder="Search name, model, tag, or location" /></label>
+    <PageHeader eyebrow="Inventory" title="Inventory" description="Know what is on your bench." action="Add item" onAction={onNewItem} />
+    <section className={`inventory-workspace inventory-workstation ${inspectorOpen ? "has-inspector" : ""}`} style={{ "--inventory-inspector-width": `${layout.inspectorWidth}px` } as React.CSSProperties} aria-label="Inventory workspace">
+      <div className={`inventory-toolbar ${filtersOpen ? "filters-open" : ""}`} aria-label="Inventory filters">
+        <Label className="field-search"><Icon name="search" size={17} /><span className="sr-only">Search inventory</span><Input ref={searchInputRef} aria-label="Search inventory" value={search} maxLength={MAX_INVENTORY_SEARCH_LENGTH} onChange={(event) => { retainSearchFocusRef.current = document.activeElement === event.currentTarget; onSearch(event.currentTarget.value); }} placeholder="Search items, models or locations" /></Label>
+        <nav className="inventory-stock-views" aria-label="Inventory stock views">{stockViewOptions.filter(view => view.value !== "depleted").map(view => <Button variant="ghost" key={view.value} aria-current={stockView === view.value ? "page" : undefined} title={view.description} onClick={() => { setStockView(view.value); setAvailability("All"); setEvidence("All"); }}>{view.value === "all" ? "All" : view.value === "available" ? "Available" : view.label}</Button>)}</nav>
+        <Button variant="outline" type="button" className="button button-secondary inventory-filters-toggle" aria-controls="inventory-filter-options" aria-expanded={filtersOpen} onClick={() => setFiltersOpen(!filtersOpen)}><Icon name="filter" size={15} />Filters</Button>
+        <Popover open={viewOptionsOpen} onOpenChange={setViewOptionsOpen}>
+          <PopoverTrigger asChild><Button variant="outline" type="button" className="button button-secondary"><Icon name="sliders" size={15} />View options</Button></PopoverTrigger>
+          <PopoverContent align="end" className="inventory-view-options" aria-label="Inventory view options">
+            <div className="inventory-view-options-section">
+              <h2>View options</h2>
+              <Label className="inventory-sort-control">Sort<NativeSelect aria-label="Sort inventory" value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}><NativeSelectOption value="name">Name A–Z</NativeSelectOption><NativeSelectOption value="name_desc">Name Z–A</NativeSelectOption><NativeSelectOption value="location">Location</NativeSelectOption></NativeSelect></Label>
+              <Label>Saved view<NativeSelect aria-label="Saved inventory view" value={savedViewName} onChange={(event) => { const view = savedViews.find((view) => view.name === event.target.value); if (view) applyView(view.filters); }}><NativeSelectOption value="">Custom view</NativeSelectOption>{savedViews.map((view) => <NativeSelectOption key={view.name} value={view.name}>{view.name}</NativeSelectOption>)}</NativeSelect></Label>
+              <div className="inventory-options-actions"><Button variant="ghost" type="button" className="text-button" aria-expanded={saveViewOpen} onClick={() => { setSaveViewOpen(!saveViewOpen); setViewNotice(""); }}>Save view…</Button>{savedViewName && <Button variant="ghost" type="button" className="text-button" onClick={removeView}>Remove saved view</Button>}</div>
+              {saveViewOpen && <form className="inventory-save-form" onSubmit={saveView}><Label>View name<Input aria-label="Inventory view name" value={viewName} onChange={(event) => setViewName(event.target.value)} maxLength={60} placeholder="e.g. Electronics in drawer A" autoFocus /></Label><div className="inventory-options-actions"><Button variant="default" className="button button-primary" disabled={!viewName.trim()}>Save view</Button><Button variant="ghost" type="button" className="text-button" onClick={() => setSaveViewOpen(false)}>Cancel</Button></div><small>Filters and sorting are saved in this browser.</small></form>}
+            </div>
+            <fieldset className="inventory-view-options-section inventory-column-controls"><legend>Additional columns</legend>{inventoryOptionalColumns.map((column) => <Label key={column}><Checkbox checked={layout.columns.includes(column)} onCheckedChange={() => updateLayout({ ...layout, columns: layout.columns.includes(column) ? layout.columns.filter((value) => value !== column) : [...layout.columns, column] })} />{column === "sku" ? "SKU / part number" : column[0]!.toUpperCase() + column.slice(1)}</Label>)}<small>Item and available stock stay visible. Recorded amounts remain in item details.</small></fieldset>
+            <Button variant="ghost" type="button" className="button button-quiet inventory-inspector-toggle" aria-expanded={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)}><Icon name="panel-left" size={15} />Inspector</Button>
+            <div className="inventory-options-actions"><Button variant="ghost" type="button" className="text-button" onClick={clearFilters}>Reset filters</Button><Button variant="ghost" type="button" className="text-button" onClick={() => updateLayout({ ...defaultInventoryLayout, columns: [...defaultInventoryLayout.columns] })}>Reset layout</Button></div>
+          </PopoverContent>
+        </Popover>
+
+      </div>
+      <div id="inventory-filter-options" className="inventory-filter-options" hidden={!filtersOpen}>
         <div className="inventory-filter-grid">
+          <InventoryFilter label="Stock view" value={stockView} onChange={value => setStockView(value as typeof stockView)} options={stockViewOptions} />
           <InventoryFilter label="Category" value={categoryNodeId} onChange={setCategoryNodeId} options={[{ value: "", label: "All categories" }, ...inventoryCategoryFilterOptions(categories), { value: UNASSIGNED_CATEGORY_FILTER, label: "Unassigned items" }]} />
-          <InventoryFilter label={expert ? "Evidence" : "Stock status"} value={evidence} onChange={(value) => setEvidence(value as InventoryEvidenceState | "All")} options={ expert ? inventoryEvidenceOptions : inventoryStatusOptions } />
-          <InventoryFilter label="Availability" value={availability} onChange={(value) => setAvailability(value as typeof availability)} options={[{ value: "All", label: "All availability" }, { value: "available", label: "Available for reuse" }, { value: "unavailable", label: "Not available" } ]} /> <details className="inventory-more-filters" open={moreFiltersOpen} onToggle={(event) => setMoreFiltersOpen(event.currentTarget.open)} > <summary> <span>More filters</span> {advancedFilterSummary && ( <small>{advancedFilterSummary}</small> )} <Icon name="chevron-down" size={14} />
-          </summary> <div className="inventory-more-filter-grid"> <InventoryFilter label="Item type" value={kind} onChange={(value) => setKind(value as InventoryKindQuery | "All")} options={[{ value: "All", label: "All item types" }, ...inventoryKindOptions ]} /> {advancedFilterSummary && ( <button type="button" className="text-button inventory-clear-more" onClick={() => setKind("All")} > {" "}
-                    Clear more filters{" "} </button> )} </div> </details>
+          <InventoryFilter label={expert ? "Evidence" : "Stock record"} value={evidence} onChange={(value) => setEvidence(value as InventoryEvidenceState | "All")} options={expert ? inventoryEvidenceOptions : inventoryStatusOptions} />
+          <InventoryFilter label="Availability" value={availability} onChange={(value) => setAvailability(value as typeof availability)} options={[{ value: "All", label: "All availability" }, { value: "available", label: "Available for reuse" }, { value: "unavailable", label: "Not available" }]} />
+          <InventoryFilter label="Item type" value={kind} onChange={(value) => setKind(value as InventoryKindQuery | "All")} options={[{ value: "All", label: "All item types" }, ...inventoryKindOptions]} />
+          <Label className="inventory-location-filter">Exact location<Input aria-label="Filter inventory by exact location" value={location} maxLength={256} onChange={(event) => setLocation(event.target.value)} placeholder="Any location" /></Label>
         </div>
       </div>
-      <div className="inventory-page-status" role="status" aria-live="polite">{loading ? (pageItems.length ? "Updating inventory…" : "Loading inventory…") : error ? "Inventory could not be loaded." : loadMoreError ? "Showing the loaded items. More items could not be loaded." : total === undefined ? `Showing ${pageItems.length} items` : `Showing ${pageItems.length} of ${total} items`}{sort && nextCursor && !loading ? " · sorted within the loaded items" : ""}</div>
-      {selectedTargets.size > 0 && ( <div className="inventory-selection-bar" aria-label="Bulk inventory selection"><div><strong>{selectedTargets.size} selected of {pageItems.length}{" "} loaded{" "} </strong><span> {" "}Select all applies only to the items currently loaded. You can select up to 100.{" "} </span></div><button className="button button-secondary" onClick={openBulkEditor}> {" "}Bulk edit<Icon name="sliders" size={16} /></button></div> )}{" "}
+      <div className="inventory-results-bar">
+        {activeFilters.length > 0 && <div className="inventory-active-filters" aria-label="Active inventory filters"><span>{activeFilters.join(" · ")}</span><Button variant="ghost" className="text-button" onClick={clearFilters}>Clear filters</Button></div>}
+        <div className="inventory-result-controls"><div className="inventory-page-status" role="status" aria-live="polite">{loading ? "Loading inventory…" : error ? "Inventory could not be loaded." : loadMoreError ? "Showing the loaded items. More items could not be loaded." : total === undefined ? `Showing ${pageItems.length} items` : `Showing ${pageItems.length} of ${total} items`}</div>
+          <Button variant="ghost" className="icon-button" aria-label="Refresh inventory" onClick={() => setRetryNonce((value) => value + 1)}><Icon name="refresh" size={15} /></Button></div>
+      </div>
+      {viewNotice && <p className="inventory-selection-notice" role="status">{viewNotice}</p>}
+
+      {selectedTargets.size > 0 && ( <div className="inventory-selection-bar" aria-label="Bulk inventory selection"><div><strong>{selectedTargets.size} selected of {pageItems.length}{" "} loaded{" "} </strong><span> {" "}Select all applies only to the items currently loaded. You can select up to 100.{" "} </span></div><InventoryAiCopy key={[...selectedTargets.keys()].join("|")} items={pageItems.filter((item) => selectedTargets.has(item.id))} /><Button variant="outline" className="button button-secondary" onClick={openBulkEditor}> {" "}Bulk edit<Icon name="sliders" size={16} /></Button></div> )}{" "}
       {unversionedNotice && ( <p id="inventory-version-notice" className="inventory-selection-notice" role="status" aria-live="polite">{unversionedNotice}</p> )}{" "}
       {selectionNotice && ( <p className="inventory-selection-notice" role="status" aria-live="polite">{selectionNotice}</p> )}{" "}
-      {error ? ( <div className="inventory-load-error" role="alert"><span>{error.message}</span><button className="button button-secondary" onClick={() => setRetryNonce((value) => value + 1)}> {" "}Try again{" "} </button></div> ) : loading && pageItems.length === 0 ? ( <div className="inventory-loading" aria-label="Loading inventory"> {" "}Loading inventory…{" "} </div> ) : pageItems.length ? ( <><InventoryTable items={sortedItems} busy={loading} sort={sort} onSort={(key) => setSort((current) => nextSort(current, key))} categories={categories} selectedIds={new Set(selectedTargets.keys())} selectAllRef={selectAllRef} allLoadedSelected={allLoadedSelected} hasUnversionedLoaded={Boolean(unversionedItem)} onToggleAll={toggleAllLoaded} onToggleSelected={toggleSelected} onSelectItem={onSelectItem} />{loadMoreError && ( <div className="inventory-load-error" role="alert"><span>{loadMoreError.message}</span><button className="button button-secondary" onClick={() => { void loadMore(); }}> {" "}Try again{" "} </button></div> )}{" "}{nextCursor && ( <div className="inventory-load-more"><button className="button button-secondary" onClick={() => { void loadMore(); }} disabled={loadingMore} aria-busy={loadingMore}>{loadingMore ? "Loading…" : "Load more"}<Icon name="chevron-right" size={16} /></button></div> )}</> ) : ( emptyKind === "first-item" ? <EmptyState icon="box" title="Your inventory is empty" description="Add the first part, material, tool or printer you own. Search the catalog or type the details yourself, and tick that you counted it if it's in front of you." action="Add your first item" onAction={onNewItem} /> : <EmptyState icon="search" title="No matching items" description="Change the search text or filters." action="Clear filters" onAction={clearFilters} /> )}
+
+      <InventoryPanels width={layout.inspectorWidth} onChange={width => updateLayout({ ...layout, inspectorWidth: width }, true)} register={<div className="inventory-register">{error ? ( <Alert asChild><div className="inventory-load-error" role="alert"><span>{error.message}</span><Button variant="outline" className="button button-secondary" onClick={() => setRetryNonce((value) => value + 1)}> {" "}Try again{" "} </Button></div></Alert> ) : loading && pageItems.length === 0 ? ( <div className="inventory-loading" aria-label="Loading inventory"> {" "}Loading inventory…{" "} </div> ) : pageItems.length ? ( <><InventoryTable sampleMode={sampleMode} sort={sort} onSortChange={setSort} visibleColumns={layout.columns} inspectedId={inspectorOpen ? inspectedItem?.id : undefined} onInspectItem={inspectItem} items={pageItems} categories={categories} selectedIds={new Set(selectedTargets.keys())} selectAllRef={selectAllRef} allLoadedSelected={allLoadedSelected} hasUnversionedLoaded={Boolean(unversionedItem)} onToggleAll={toggleAllLoaded} onToggleSelected={toggleSelected} onSelectItem={onSelectItem} />{loadMoreError && ( <Alert asChild><div className="inventory-load-error" role="alert"><span>{loadMoreError.message}</span><Button variant="outline" className="button button-secondary" onClick={() => { void loadMore(); }}> {" "}Try again{" "} </Button></div></Alert> )}{" "}{nextCursor && ( <div className="inventory-load-more"><Button variant="outline" className="button button-secondary" onClick={() => { void loadMore(); }} disabled={loadingMore} aria-busy={loadingMore}>{loadingMore ? "Loading…" : "Load more"}<Icon name="chevron-right" size={16} /></Button></div> )}</> ) : ( activeFilters.length ? <EmptyState icon="search" title="No matching items" description="Change the search text or filters." action="Clear filters" onAction={clearFilters} /> : <EmptyState icon="box" title="Your inventory starts here" description="Add a part, material or tool, then record what you have." action="Add first item" onAction={onNewItem} /> )}</div>} inspector={inspectorOpen ? <InventoryInspector sampleMode={sampleMode} projects={projects} onOpenProjectPart={onOpenProjectPart} onCountStock={onCountStock} item={loading || error ? undefined : inspectedItem} category={inspectedCategory} onOpen={onSelectItem} onClose={() => setInspectorOpen(false)} /> : null}/>
     </section>
   </> );
 }
 
 function InventoryFilter({ label, value, options, onChange }: { label: string; value: string; options: readonly { value: string; label: string }[]; onChange: (value: string) => void; }) {
-  return ( <label className="category-control"><span className="category-control-label">{label}</span><select aria-label={`Filter inventory by ${label.toLowerCase()}`} value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => ( <option key={option.value} value={option.value}>{option.label}</option>))}</select></label> );
+  return ( <Label className="category-control"><span className="category-control-label">{label}</span><NativeSelect aria-label={`Filter inventory by ${label.toLowerCase()}`} value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => ( <NativeSelectOption key={option.value} value={option.value}>{option.label}</NativeSelectOption>))}</NativeSelect></Label> );
 }
 
 export function managedInventoryLabel(categories: readonly ManagedInventoryCategory[], item: InventoryItem, _expert = false): string { // Missing category metadata is a normal beginner-facing state; a referenced
 // node that is absent from the managed list is a service/category error.
 return ( selectedCategoryLabel(categories, item.categoryNodeId) ?? (item.categoryNodeId ? "Managed category unavailable" : "No category") );
-} function SortHeader({ label, sortKey, sort, onSort }: { label: string; sortKey: InventorySortKey; sort: InventorySort | undefined; onSort?: ((key: InventorySortKey) => void) | undefined }) {
-  const state = ariaSortFor(sort, sortKey);
-  if (!onSort) return <th scope="col">{label}</th>;
-  return <th scope="col" aria-sort={state}><button type="button" className="sort-header" data-sort={state} onClick={() => onSort(sortKey)}>{label}</button></th>;
-}
-
-export function InventoryTable({ items, busy = false, sort, onSort, categories, selectedIds, selectAllRef, allLoadedSelected, hasUnversionedLoaded, onToggleAll, onToggleSelected, onSelectItem }: { items: InventoryItem[]; busy?: boolean; sort?: InventorySort | undefined; onSort?: ((key: InventorySortKey) => void) | undefined; categories: readonly ManagedInventoryCategory[]; selectedIds: ReadonlySet<string>; selectAllRef: React.RefObject<HTMLInputElement | null>; allLoadedSelected: boolean; hasUnversionedLoaded: boolean; onToggleAll: () => void; onToggleSelected: (id: string) => void; onSelectItem: (id: string) => void; }) {
-  return ( <div className={`table-scroll${busy ? " is-refreshing" : ""}`} aria-busy={busy || undefined}><table className="data-table inventory-table"><caption className="sr-only">Inventory items{sort ? `, sorted by ${sort.key} ${sort.direction === "asc" ? "ascending" : "descending"}` : ""}</caption><thead><tr><th scope="col" className="select-column"><label className="inventory-checkbox-hit"><input ref={selectAllRef} type="checkbox" className="inventory-checkbox" checked={allLoadedSelected} onChange={onToggleAll} disabled={hasUnversionedLoaded} aria-describedby={hasUnversionedLoaded ? "inventory-version-notice" : undefined} aria-label="Select all loaded inventory items" /></label></th><SortHeader label="Item" sortKey="name" sort={sort} onSort={onSort} /><SortHeader label="Category" sortKey="category" sort={sort} onSort={onSort} /><SortHeader label="Quantity" sortKey="quantity" sort={sort} onSort={onSort} /><th scope="col">Status</th><SortHeader label="Location" sortKey="location" sort={sort} onSort={onSort} /><SortHeader label="Updated" sortKey="updated" sort={sort} onSort={onSort} /><th scope="col"><span className="sr-only">Open</span></th></tr></thead><tbody>{items.map((item) => { const categoryLabel = managedInventoryLabel(categories, item); const versionAvailable = hasObservedInventoryVersion(item); const versionNoticeId = `inventory-version-${item.id}`; const identity = inventoryCandidateLabel(item, items); const identityText = inventoryCandidateText(item, items); return ( <tr key={item.id}><td className="select-column"><label className="inventory-checkbox-hit"><input type="checkbox" className="inventory-checkbox" checked={selectedIds.has(item.id)} onChange={() => onToggleSelected(item.id)} disabled={!versionAvailable} aria-describedby={!versionAvailable ? versionNoticeId : undefined} aria-label={`Select ${identityText}`} /></label>{!versionAvailable && ( <span id={versionNoticeId} className="sr-only"> {" "}Cannot select for bulk edit because this row has no positive observed version. Reload inventory first.{" "} </span> )}</td><td><button className="table-item" onClick={() => onSelectItem(item.id)}>{item.primaryImage ? <span className="item-glyph item-thumb"><img src={item.primaryImage.url} alt="" loading="lazy" decoding="async" width={item.primaryImage.width} height={item.primaryImage.height} /></span> : <span className={`item-glyph accent-${item.accent}`}><Icon name={categoryIcons[item.category]} size={16} /></span>}<span><strong>{identity.name}</strong>{identity.discriminator ? ( <small>{identity.discriminator}</small> ) : item.variant ? ( <small>{item.variant}</small> ) : null}{" "} {(item.category === "Filament" || item.category === "Printers") && ( <small className={`exact-product-state ${isExactProductConfirmed(item) ? "is-confirmed" : ""}`}>{exactProductLabel(item)}</small> )}</span></button></td><td data-label="Category"><span className="category-label"><Icon name={categoryIcons[item.category]} size={14} />{categoryLabel}</span></td><td className="quantity-cell" data-label="Quantity"> {item.unitStatus === "needs_correction" ? ( <> <strong className="quantity-blocked">Fix unit</strong> <small>Quantity not usable</small> </> ) : ( <> <strong>{formatQuantity(Math.max(item.quantity - item.reserved, 0), item.unit)}</strong>{item.reserved > 0 && ( <small>{formatQuantity(item.reserved, item.unit)}{" "} reserved{" "} </small> )} </> )}</td><td><StatusPill state={displayedInventoryState(item)} {...(item.unitStatus === "needs_correction" ? { label: "Fix unit" } : assumedStockLabel(item) ? { label: assumedStockLabel(item)! } : {})} /></td><td data-label="Location"><span className="location-label"> {inventoryLocationLabel(item.location)}</span></td><td className="updated-cell" data-label="Updated">{item.updatedAt ? <time dateTime={item.updatedAt}>{formatShortDate(item.updatedAt)}</time> : <span className="muted-value">—</span>}</td><td><button className="row-open" onClick={() => onSelectItem(item.id)} aria-label={`Open ${identityText}`}><Icon name="chevron-right" size={17} /></button></td></tr> ); })}</tbody></table></div> );
+} export function InventoryTable({ sampleMode = true, items, categories, selectedIds, selectAllRef, allLoadedSelected, hasUnversionedLoaded, onToggleAll, onToggleSelected, onSelectItem, inspectedId, onInspectItem, visibleColumns = ["category", "location"], sort = "name", onSortChange }:  { sampleMode?: boolean; items: InventoryItem[]; categories: readonly ManagedInventoryCategory[]; selectedIds: ReadonlySet<string>; selectAllRef: React.RefObject<HTMLButtonElement | null>; allLoadedSelected: boolean; hasUnversionedLoaded: boolean; onToggleAll: () => void; onToggleSelected: (id: string) => void; onSelectItem: (id: string) => void; inspectedId?: string | undefined; onInspectItem?: (id: string) => void; visibleColumns?: readonly InventoryOptionalColumn[]; sort?: InventoryViewState["sort"]; onSortChange?: (sort: InventoryViewState["sort"]) => void; }) {
+  const activateItem = (id: string) => { if (window.matchMedia?.("(max-width: 800px)").matches || !onInspectItem) onSelectItem(id); else onInspectItem(id); };
+  const moveInspector = (event: React.KeyboardEvent<HTMLTableRowElement>, index: number) => {
+    if (!onInspectItem || (event.target !== event.currentTarget && !(event.target as HTMLElement).closest(".table-item"))) return;
+    if (event.key === "Enter" || event.key === "F2") { event.preventDefault(); onSelectItem(items[index]!.id); return; }
+    const next = event.key === "ArrowDown" ? Math.min(items.length - 1, index + 1) : event.key === "ArrowUp" ? Math.max(0, index - 1) : event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : -1;
+    if (next < 0) return;
+    event.preventDefault(); onInspectItem(items[next]!.id);
+    const rows = event.currentTarget.parentElement?.querySelectorAll("tr"); rows?.[next]?.focus();
+  };
+  return <div className="table-scroll"><Table className="data-table inventory-table"><TableCaption className="sr-only">Inventory items. Click to select, double-click to open. Use arrow keys to move and Enter or F2 to open. Checkboxes select records for bulk actions.</TableCaption><TableHeader><TableRow>
+    <TableHead scope="col" className="select-column"><Label className="inventory-checkbox-hit"><Checkbox ref={selectAllRef}  className="inventory-checkbox" checked={allLoadedSelected ? true : items.some((item) => selectedIds.has(item.id)) ? "indeterminate" : false} onCheckedChange={onToggleAll} disabled={hasUnversionedLoaded} aria-describedby={hasUnversionedLoaded ? "inventory-version-notice" : undefined} aria-label="Select all loaded inventory items" /></Label></TableHead>
+    <TableHead scope="col" aria-sort={sort === "name" ? "ascending" : sort === "name_desc" ? "descending" : "none"}>{onSortChange ? <Button variant="ghost" className="inventory-sort-heading" onClick={() => onSortChange(sort === "name" ? "name_desc" : "name")}>Item<Icon name="chevron-down" size={12} className={sort === "name_desc" ? "is-descending" : undefined} /></Button> : "Item"}</TableHead>{visibleColumns.includes("category") && <TableHead scope="col" className="inventory-category-column">Category</TableHead>}{visibleColumns.includes("recorded") && <TableHead scope="col">Recorded</TableHead>}<TableHead scope="col">Available</TableHead>{visibleColumns.includes("reserved") && <TableHead scope="col">Reserved</TableHead>}{visibleColumns.includes("status") && <TableHead scope="col">Status</TableHead>}{visibleColumns.includes("location") && <TableHead scope="col" className="inventory-location-column" aria-sort={sort === "location" ? "ascending" : "none"}>{onSortChange ? <Button variant="ghost" className="inventory-sort-heading" onClick={() => onSortChange("location")}>Location<Icon name="chevron-down" size={12} /></Button> : "Location"}</TableHead>}{visibleColumns.includes("sku") && <TableHead scope="col">SKU / part number</TableHead>}<TableHead scope="col"><span className="sr-only">Open</span></TableHead>
+  </TableRow></TableHeader><TableBody>{items.map((item, index) => {
+    const categoryLabel = managedInventoryLabel(categories, item);
+    const versionAvailable = hasObservedInventoryVersion(item); const versionNoticeId = `inventory-version-${item.id}`;
+    const identity = inventoryCandidateLabel(item, items); const identityText = inventoryCandidateText(item, items);
+    const assessment = webInventoryAssessment(item);
+    return <TableRow key={item.id} className={inspectedId === item.id ? "is-inspected" : undefined} tabIndex={onInspectItem ? (inspectedId === item.id || !inspectedId && index === 0 ? 0 : -1) : undefined} onFocus={(event) => { if (event.target === event.currentTarget) onInspectItem?.(item.id); }} onClick={(event) => { if (!(event.target as HTMLElement).closest("button, input, label")) activateItem(item.id); }} onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest("input, label, .row-open")) onSelectItem(item.id); }} onKeyDown={(event) => moveInspector(event, index)}>
+      <TableCell className="select-column"><Label className="inventory-checkbox-hit"><Checkbox  className="inventory-checkbox" checked={selectedIds.has(item.id)} onCheckedChange={() => onToggleSelected(item.id)} disabled={!versionAvailable} aria-describedby={!versionAvailable ? versionNoticeId : undefined} aria-label={`Select ${identityText}`} /></Label>{!versionAvailable && <span id={versionNoticeId} className="sr-only">Cannot select for bulk edit because this row has no positive observed version. Reload inventory first.</span>}</TableCell>
+      <TableCell className="inventory-name-cell"><Button variant="ghost" className="table-item" aria-pressed={onInspectItem ? inspectedId === item.id : undefined} onClick={() => activateItem(item.id)}><InventoryThumbnail item={item} sampleMode={sampleMode} /><span><strong>{identity.name}</strong>{identity.discriminator ? <small>{identity.discriminator}</small> : item.variant ? <small>{item.variant}</small> : null}{(item.category === "Filament" || item.category === "Printers") && <small className={`exact-product-state ${isExactProductConfirmed(item) ? "is-confirmed" : ""}`}>{exactProductLabel(item)}</small>}</span></Button></TableCell>
+      {visibleColumns.includes("category") && <TableCell className="inventory-category-column"><span className="inventory-mobile-label" aria-hidden="true">Category</span><span className="category-label">{categoryLabel}</span></TableCell>}
+      {visibleColumns.includes("recorded") && <TableCell className="quantity-cell inventory-recorded-cell"><span className="inventory-mobile-label" aria-hidden="true">Recorded</span><strong>{formatQuantity(item.quantity, item.unit)}</strong>{!assessment.confirmed && <small>Unconfirmed</small>}</TableCell>}
+      <TableCell className="quantity-cell inventory-available-cell"><span className="inventory-mobile-label" aria-hidden="true">Available</span>{item.unitStatus === "needs_correction" ? <><strong className="quantity-blocked">Fix unit</strong><small>Quantity not usable</small></> : <><strong>{assessment.check ? inventoryStockLabel(item) : item.availableQuantity === undefined ? "Not reported" : formatQuantity(item.availableQuantity, item.unit)}</strong>{!assessment.confirmed && <small>{formatQuantity(item.quantity, item.unit)} recorded</small>}{item.reserved > 0 && <small>{formatQuantity(item.reserved, item.unit)} reserved</small>}</>}</TableCell>
+      {visibleColumns.includes("reserved") && <TableCell className="quantity-cell inventory-reserved-cell"><span className="inventory-mobile-label" aria-hidden="true">Reserved</span>{formatQuantity(item.reserved, item.unit)}</TableCell>}
+      {visibleColumns.includes("status") && <TableCell className="inventory-status-cell"><span className={`stock-indicator ${assessment.check ? "is-check" : assessment.available ? "is-available" : ""}`}>{inventoryStockLabel(item)}</span></TableCell>}
+      {visibleColumns.includes("location") && <TableCell className="inventory-location-column"><span className="inventory-mobile-label" aria-hidden="true">Location</span><span className="location-label">{inventoryLocationLabel(item.location)}</span></TableCell>}{visibleColumns.includes("sku") && <TableCell className="inventory-sku-column"><span className="inventory-mobile-label" aria-hidden="true">SKU / part number</span>{item.sku || "—"}</TableCell>}
+      <TableCell className="inventory-row-actions"><div><Button variant="ghost" className="row-open" onClick={() => onSelectItem(item.id)} aria-label={`Open ${identityText}`}><Icon name="chevron-right" size={17} /></Button></div></TableCell>
+    </TableRow>;
+  })}</TableBody></Table></div>;
 }
 
 type BulkInventoryOutcome = {
@@ -1607,18 +1761,18 @@ function splitBulkTags(value: string): string[] {
   return ( <Dialog title="Bulk edit inventory" onClose={dialogClose}>
     {step === "edit" && ( <form className="bulk-inventory-form" onSubmit={reviewChanges} aria-busy={saving}>
       <p className="dialog-intro"> {" "}Apply the same storage, condition, or tag changes to {" "} <strong>{targetCount} selected item{targetCount === 1 ? "" : "s"}</strong>{" "}. Quantity and evidence are not included.{" "} </p>
-      <label className="form-field"><span>Location</span><input autoFocus value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Leave blank to keep each location" disabled={saving} /></label>
-      <label className="form-field"><span>Condition</span><select value={condition} onChange={(event) => setCondition(event.target.value as InventoryCondition | "")} disabled={saving}><option value="">Keep each current condition</option><option value="new">New</option><option value="good">Good</option><option value="worn">Worn</option><option value="needs_repair">Needs repair</option><option value="unknown">Unknown</option></select></label>
-      <label className="form-field"><span>Tags to add</span><input value={tagsAdd} onChange={(event) => setTagsAdd(event.target.value)} placeholder="Comma or newline separated" disabled={saving} /></label>
-      <label className="form-field"><span>Tags to remove</span><input value={tagsRemove} onChange={(event) => setTagsRemove(event.target.value)} placeholder="Comma or newline separated" disabled={saving} /></label>
-      {formError && ( <p className="form-error" role="alert">{formError}</p> )}
+      <Label className="form-field"><span>Location</span><Input autoFocus value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Leave blank to keep each location" disabled={saving} /></Label>
+      <Label className="form-field"><span>Condition</span><NativeSelect value={condition} onChange={(event) => setCondition(event.target.value as InventoryCondition | "")} disabled={saving}><NativeSelectOption value="">Keep each current condition</NativeSelectOption><NativeSelectOption value="new">New</NativeSelectOption><NativeSelectOption value="good">Good</NativeSelectOption><NativeSelectOption value="worn">Worn</NativeSelectOption><NativeSelectOption value="needs_repair">Needs repair</NativeSelectOption><NativeSelectOption value="unknown">Unknown</NativeSelectOption></NativeSelect></Label>
+      <Label className="form-field"><span>Tags to add</span><Input value={tagsAdd} onChange={(event) => setTagsAdd(event.target.value)} placeholder="Comma or newline separated" disabled={saving} /></Label>
+      <Label className="form-field"><span>Tags to remove</span><Input value={tagsRemove} onChange={(event) => setTagsRemove(event.target.value)} placeholder="Comma or newline separated" disabled={saving} /></Label>
+      {formError && ( <Alert asChild><p className="form-error" role="alert">{formError}</p></Alert> )}
       <p className="bulk-inventory-note"> {" "}Nothing changes until you review and confirm.{" "} </p>
-      <div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose} disabled={saving}> {" "}Cancel{" "} </button><button type="submit" className="button button-primary" disabled={saving || !hasActualChange}> {" "}Review changes<Icon name="arrow-right" size={16} /></button></div>
+      <div className="dialog-actions"><Button variant="ghost" type="button" className="button button-quiet" onClick={onClose} disabled={saving}> {" "}Cancel{" "} </Button><Button variant="default" type="submit" className="button button-primary" disabled={saving || !hasActualChange}> {" "}Review changes<Icon name="arrow-right" size={16} /></Button></div>
     </form> )}{" "}
     {step === "confirm" && ( <section className="bulk-inventory-confirmation" aria-busy={saving}>
       <p className="dialog-intro">Nothing changes until you confirm.</p>
       <div className="bulk-inventory-summary"><strong>{targetCount} item{targetCount === 1 ? "" : "s"}</strong>{location.trim() && <span>Location → {location.trim()}</span>}{" "} {condition && ( <span>Condition → {condition.replaceAll("_", " ")}</span> )}{" "}{(tagsAdd.trim() || tagsRemove.trim()) && ( <span> {" "}Tags → {" "} {tagsAdd.trim() ? `add ${splitBulkTags(tagsAdd).join(", ")}` : ""}{" "} {tagsAdd.trim() && tagsRemove.trim() ? "; " : ""}{" "} {tagsRemove.trim() ? `remove ${splitBulkTags(tagsRemove).join(", ")}` : ""}</span> )}</div>
-      <div className="dialog-actions"><button type="button" className="button button-quiet" onClick={() => setStep("edit")} disabled={saving}> {" "}Back to changes{" "} </button><button type="button" className="button button-primary" onClick={() => { void confirmChanges(); }} disabled={saving} aria-busy={saving}>{saving ? "Applying…" : "Confirm bulk edit"}</button></div>
+      <div className="dialog-actions"><Button variant="ghost" type="button" className="button button-quiet" onClick={() => setStep("edit")} disabled={saving}> {" "}Back to changes{" "} </Button><Button variant="default" type="button" className="button button-primary" onClick={() => { void confirmChanges(); }} disabled={saving} aria-busy={saving}>{saving ? "Applying…" : "Confirm bulk edit"}</Button></div>
       {saving && ( <p className="bulk-live-status" role="status" aria-live="polite"> {" "}Applying changes to {targetCount} item{" "} {targetCount === 1 ? "" : "s"}…{" "} </p> )}
     </section> )}{" "}
     {step === "result" && outcome && ( <section className={`bulk-inventory-result bulk-result-${outcome.kind}`}>
@@ -1627,7 +1781,7 @@ function splitBulkTags(value: string): string[] {
       {outcome.kind === "ambiguous" && ( <p className="bulk-inventory-note"> {" "}Retry safely reuses the retained idempotency key for this exact edit. Do not change the values if you want the service to replay the same command.{" "} </p> )}{" "}
       {outcome.kind === "conflict" && ( <p className="bulk-inventory-note"> {" "}Nothing was saved. Reload inventory and select the current rows before trying again.{" "} </p> )}{" "}
       {outcome.kind === "error" && ( <p className="bulk-inventory-note"> {" "}Nothing was saved. Correct the values or check the service connection.{" "} </p> )}
-      <div className="dialog-actions">{outcome.kind === "success" || outcome.kind === "noop" ? ( <button type="button" className="button button-primary" onClick={onDone}> {" "}Done{" "} </button> ) : outcome.kind === "ambiguous" ? ( <><button type="button" className="button button-primary" onClick={() => { void confirmChanges(); }} disabled={saving} aria-busy={saving}> {" "}Retry safely{" "} </button><button type="button" className="button button-secondary" onClick={onClose}> {" "}Close{" "} </button></> ) : ( <><button type="button" className="button button-quiet" onClick={() => { setOutcome(undefined); setStep("edit"); }}> {" "}Back to changes{" "} </button><button type="button" className="button button-secondary" onClick={onClose}> {" "}Close{" "} </button></> )}</div>
+      <div className="dialog-actions">{outcome.kind === "success" || outcome.kind === "noop" ? ( <Button variant="default" type="button" className="button button-primary" onClick={onDone}> {" "}Done{" "} </Button> ) : outcome.kind === "ambiguous" ? ( <><Button variant="default" type="button" className="button button-primary" onClick={() => { void confirmChanges(); }} disabled={saving} aria-busy={saving}> {" "}Retry safely{" "} </Button><Button variant="outline" type="button" className="button button-secondary" onClick={onClose}> {" "}Close{" "} </Button></> ) : ( <><Button variant="ghost" type="button" className="button button-quiet" onClick={() => { setOutcome(undefined); setStep("edit"); }}> {" "}Back to changes{" "} </Button><Button variant="outline" type="button" className="button button-secondary" onClick={onClose}> {" "}Close{" "} </Button></> )}</div>
     </section> )}
   </Dialog> );
 }
@@ -1647,7 +1801,7 @@ function evidenceLabel(evidence: InventoryItem["evidence"], serverEvidence?: Inv
 }
 
 function StatusPill({ state, compact = false, label }: { state: StockState | "optional"; compact?: boolean; label?: string; }) {
-  const status = state === "optional" ? { label: "Optional", tone: "muted" as const } : getStockLabel(state); const displayLabel = label ?? status.label; return ( <span className={`status-pill tone-${status.tone} ${compact ? "status-compact" : ""}`} > <span className="status-symbol" aria-hidden="true"> {status.tone === "good" ? "✓" : status.tone === "bad" ? "!" : status.tone === "warn" ? "?" : "–"} </span> {displayLabel} </span> ); } export async function copyTextWithFallback(value: string): Promise<boolean> { if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) { try { await navigator.clipboard.writeText(value); return true; } catch { // HTTP LAN origins may not expose the async clipboard API. Continue
+  const status = state === "optional" ? { label: "Optional", tone: "muted" as const } : getStockLabel(state); const displayLabel = label ?? status.label; return ( <Badge variant="outline" className={`status-pill tone-${status.tone} ${compact ? "status-compact" : ""}`} > <span className="status-symbol" aria-hidden="true"> {status.tone === "good" ? "✓" : status.tone === "bad" ? "!" : status.tone === "warn" ? "?" : "–"} </span> {displayLabel} </Badge> ); } export async function copyTextWithFallback(value: string): Promise<boolean> { if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) { try { await navigator.clipboard.writeText(value); return true; } catch { // HTTP LAN origins may not expose the async clipboard API. Continue
 // with the user-gesture fallback before asking for a manual copy.
 } } if ( typeof document === "undefined" || typeof document.execCommand !== "function" ) return false; const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined; const textarea = document.createElement("textarea"); textarea.value = value; textarea.readOnly = true; textarea.setAttribute("aria-hidden", "true"); textarea.style.position = "fixed"; textarea.style.opacity = "0"; textarea.style.pointerEvents = "none"; document.body.append(textarea); textarea.select(); textarea.setSelectionRange(0, value.length); try { return document.execCommand("copy"); } catch { return false; } finally { textarea.remove(); previousFocus?.focus();
 } } export function ProjectExpertContext({ project }: { project: Project }) {
@@ -1667,12 +1821,18 @@ function CopyValueButton({ value }: { value: string }) {
   const [feedback, setFeedback] = useState<"success" | "error">();
   const feedbackTimer = useRef<number | undefined>(undefined); const feedbackId = useId(); useEffect( () => () => {
     if (feedbackTimer.current !== undefined) window.clearTimeout(feedbackTimer.current); }, [] ); const announce = (next: "success" | "error") => { if (feedbackTimer.current !== undefined) window.clearTimeout(feedbackTimer.current); setFeedback(next); feedbackTimer.current = window.setTimeout(() => { feedbackTimer.current = undefined; setFeedback(undefined); }, 1800);
-    }; const copy = async () => { announce((await copyTextWithFallback(value)) ? "success" : "error"); }; const feedbackMessage = feedback === "success" ? "Copied." : feedback === "error" ? "Copy did not work. Select the value and copy it manually." : undefined; return ( <span className="copy-value-control"> <button type="button" className="copy-value-button" onClick={() => { void copy(); }} aria-describedby={feedback ? feedbackId : undefined} aria-label={feedback === "success" ? "Copied" : "Copy value"}>{feedback === "success" ? "Copied" : "Copy"}</button> {feedbackMessage && ( <span id={feedbackId} className={`copy-value-feedback copy-feedback-${feedback}`} role={feedback === "error" ? "alert" : "status"} aria-live="polite" > {feedbackMessage} </span> )} </span> );
+    }; const copy = async () => { announce((await copyTextWithFallback(value)) ? "success" : "error"); }; const feedbackMessage = feedback === "success" ? "Copied." : feedback === "error" ? "Copy did not work. Select the value and copy it manually." : undefined; return ( <span className="copy-value-control"> <Button variant="ghost" type="button" className="copy-value-button" onClick={() => { void copy(); }} aria-describedby={feedback ? feedbackId : undefined} aria-label={feedback === "success" ? "Copied" : "Copy value"}>{feedback === "success" ? "Copied" : "Copy"}</Button> {feedbackMessage && ( <span id={feedbackId} className={`copy-value-feedback copy-feedback-${feedback}`} role={feedback === "error" ? "alert" : "status"} aria-live="polite" > {feedbackMessage} </span> )} </span> );
 }
 
-function ProjectPage({ assemblySupported, onImportBom, homeTask, project, projects, projectView, archivedProjectCount, items, offers, tab, expert, sampleMode, reconciliationSupported, makerWorkflowsSupported, onTabChange, onSelectProject, onProjectViewChange, onOpenItem, onNavigate, onToast, onNewProject, onArchive, onRestore, onRemove, onNewRevision, onEditBuildApproach, onRetrySetup, onAddBom, onResolveBomRole, onUpload, onReadReconciliation, onSaveReconciliation, onCommitReconciliation, onRefreshWorkspace, onListInspections, onReadInspection, onPreviewInspection, onConfirmInspection }: {
+export function ProjectPage({ hasPartInspector = false, onPartInspectorHost, imageIntent, onImageIntentHandled, pcbSupported, assemblySupported, onImportBom, onNewInventory, homeTask, addedPart, project, projects, items, offers, tab, expert, sampleMode, reconciliationSupported, makerWorkflowsSupported, onTabChange, onOpenItem, onNavigate, onToast, onArchive, onRestore, onRemove, onNewRevision, onEditBuildApproach, onRetrySetup, onAddBom, onResolveBomRole, onUpload, onReadReconciliation, onSaveReconciliation, onCommitReconciliation, onRefreshWorkspace, onListInspections, onReadInspection, onPreviewInspection, onConfirmInspection }: {
+  hasPartInspector?: boolean;
+  onPartInspectorHost?: ((element: HTMLDivElement | null) => void) | undefined;
+  imageIntent?: { projectId: string; request: number } | undefined;
+  onImageIntentHandled?: ((request: number) => void) | undefined;
   homeTask?: (HomeTask & { request: number }) | undefined;
+  addedPart?: { projectId: string; lineId: string; name: string } | undefined;
   onImportBom(): void;
+  onNewInventory(context: StockReceiptContext): void;
   project: Project;
   projects: Project[];
   projectView: "active" | "archived";
@@ -1682,6 +1842,7 @@ function ProjectPage({ assemblySupported, onImportBom, homeTask, project, projec
   tab: ProjectTab;
   expert: boolean;
   assemblySupported: boolean;
+  pcbSupported: boolean;
   makerWorkflowsSupported: boolean;
   sampleMode: boolean; reconciliationSupported: boolean; onTabChange: (tab: ProjectTab, replace?: boolean) => void;
   onSelectProject: (id: string) => void;
@@ -1704,6 +1865,17 @@ function ProjectPage({ assemblySupported, onImportBom, homeTask, project, projec
   onPreviewInspection: WorkspaceAdapter["previewInspectionCompletion"];
   onConfirmInspection: WorkspaceAdapter["commitInspectionCompletion"];
 }) {
+  const projectEditing = useContext(ProjectEditingContext);
+  const [filesViewState, setFilesViewState] = useState<ProjectFilesViewState>();
+  const handledImageRequest = useRef<number>(undefined);
+  useEffect(() => {
+    if (!imageIntent || imageIntent.projectId !== project.id || tab !== "files" || handledImageRequest.current === imageIntent.request) return;
+    handledImageRequest.current = imageIntent.request;
+    setFilesViewState(current => ({ ...projectFilesView(project, current), scopeKey: artifactScopeKey(defaultArtifactScope(project)), showImages: true }));
+    onImageIntentHandled?.(imageIntent.request);
+  }, [imageIntent, onImageIntentHandled, project, tab]);
+  const openProjectImages = () => { setFilesViewState({ ...projectFilesView(project, filesViewState), scopeKey: artifactScopeKey(defaultArtifactScope(project)), showImages: true }); onTabChange("files"); };
+  const [planViewState, setPlanViewState] = useState<ProjectPlanViewState>();
   const summary = calculateProjectSummary(project, items);
   const [localTask, setLocalTask] = useState<(HomeTask & { request: number })>();
   const taskForPlan = localTask?.projectId === project.id && (!homeTask || localTask.request > homeTask.request) ? localTask : homeTask;
@@ -1711,25 +1883,27 @@ function ProjectPage({ assemblySupported, onImportBom, homeTask, project, projec
 
   const configuredPrinter = project.buildConfigSnapshot?.printerItemId ? items.find((item) => item.id === project.buildConfigSnapshot?.printerItemId) : undefined;
   const configuredFilament = project.buildConfigSnapshot?.filamentItemId ? items.find((item) => item.id === project.buildConfigSnapshot?.filamentItemId) : undefined;
-  const projectRoute = projectFabricationRoute(project); const intendedPrinterId = projectIntendedPrinterId(project); const intendedPrinter = intendedPrinterId ? items.find((item) => item.id === intendedPrinterId) : undefined; const routeNeedsDecision = project.status !== "archived" && projectRoute === "undecided"; const printedRouteNeedsPrinter = project.status !== "archived" && projectRoute === "printed" && (intendedPrinter === undefined || !isUsableOwnedPrinter(intendedPrinter)); const nextActionTitle = project.status === "archived" ? "Restore to continue work" : summary.readinessUnavailable ? "Reload stock results" : routeNeedsDecision ? "Choose build approach" : summary.decideLines ? "Add the missing details" : summary.inspectLines ? "Check the physical stock" : summary.sourceLines ? "Source the remaining requirements" : summary.totalLines === 0 ? "Add requirements" : printedRouteNeedsPrinter ? "Choose a printer" : "Ready to validate"; const nextActionDescription = project.status === "archived" ? "Archived projects reject new work, revisions, requirements, uploads, and used-stock updates until restored." : summary.readinessUnavailable ? "Inventory changed, but stock results are unavailable. Wait for the latest results before preparing a Source proposal." : routeNeedsDecision ? "Select the build approach before validation." : summary.decideLines ? `Add the missing details before you choose what to buy.` : summary.inspectLines ? formatRequirementCheckMessage(summary.inspectLines) + "." : summary.sourceLines ? formatSourceReadyMessage(summary.sourceLines) + "." : summary.totalLines === 0 ? "No requirements are recorded yet." : printedRouteNeedsPrinter ? "Pick an owned printer before checking build volume, material setup, or printable files." : "Every recorded requirement is covered by confirmed stock."; const hasServerRevision = !sampleMode && reconciliationSupported && Boolean(project.serverRevisionId);
+  const projectRoute = projectFabricationRoute(project); const intendedPrinterId = projectIntendedPrinterId(project); const intendedPrinter = intendedPrinterId ? items.find((item) => item.id === intendedPrinterId) : undefined; const routeNeedsDecision = project.status !== "archived" && projectRoute === "undecided"; const printedRouteNeedsPrinter = project.status !== "archived" && projectRoute === "printed" && (intendedPrinter === undefined || !isUsableOwnedPrinter(intendedPrinter)); const nextAction = projectNextAction(summary, project.status === "archived", routeNeedsDecision, printedRouteNeedsPrinter);
+
+  const nextActionDescription = { restore: "Restore this project before adding or changing work.", refresh: "Stock results are unavailable. Refresh before relying on quantities or preparing a shopping proposal.", requirements: "Start with one part, material or tool. You can choose how to build it later.", decide: "Add the missing specifications before choosing stock or suppliers.", check: formatRequirementCheckMessage(summary.inspectLines) + ".", source: formatSourceReadyMessage(summary.sourceLines) + ".", approach: "The requirements are recorded. Choose how you plan to build before validation.", printer: "Pick an owned printer before checking build volume, material setup or printable files.", ready: "All required parts have confirmed stock. Design checks and physical validation are still separate." }[nextAction]; const hasServerRevision = !sampleMode && reconciliationSupported && Boolean(project.serverRevisionId);
   const [reconciliation, setReconciliation] = useState<ReconciliationViewModel>();
   const [reconciliationLoading, setReconciliationLoading] = useState(false);
   const [reconciliationError, setReconciliationError] = useState<string>();
+  const projectActionsTriggerId = useId();
+  const [projectToolsOpen, setProjectToolsOpen] = useState(false);
+  const [combinedShoppingOpen, setCombinedShoppingOpen] = useState(false);
+  const [revisionHistoryOpen, setRevisionHistoryOpen] = useState(false);
+  const activeTab = projectPrimaryTab(tab);
   const [archiveConfirmationOpen, setArchiveConfirmationOpen] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [restoreConfirmationOpen, setRestoreConfirmationOpen] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [removeConfirmationOpen, setRemoveConfirmationOpen] = useState(false);
-  const [exportOpen, setExportOpen] = useState(false);
   const [removing, setRemoving] = useState(false);
-  const [recordUseLineId, setRecordUseLineId] = useState<string>();
-  const recordUseAvailable = hasServerRevision && reconciliationSupported;
-  const recordUseReason = !hasServerRevision ? (sampleMode ? "Recording used stock needs your private workspace." : "Create a project revision before recording used stock.") : "This BenchLedger service cannot record used stock yet.";
-  const openRecordUse = (lineId?: string) => { setRecordUseLineId(lineId); onTabChange("reconciliation"); };
   const [inspectionActions, setInspectionActions] = useState<readonly InspectionAction[]>(() => (project as InspectionProject).inspectionActions ?? []);
   const [inspectionError, setInspectionError] = useState<string>();
-  const tabRefs = useRef<Record<ProjectTab, HTMLButtonElement | null>>({ assembly: null, plan: null, files: null, offers: null, build: null, reconciliation: null }); const pendingTabFocusRef = useRef<ProjectTab | undefined>(undefined); const reconciliationRevisionId = project.serverRevisionId;
-  const inspectionRevisionId = project.serverRevisionId; const availableTabs: ProjectTab[] = ["plan", "files", ...(assemblySupported ? ["assembly" as const] : []), "offers", ...(makerWorkflowsSupported ? ["build" as const] : []), ...(hasServerRevision ? ["reconciliation" as const] : [])]; const moveTabFocus = ( event: React.KeyboardEvent<HTMLButtonElement>, current: ProjectTab ) => { if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return; event.preventDefault(); const currentIndex = availableTabs.indexOf(current); const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? availableTabs.length - 1 : event.key === "ArrowRight" ? (currentIndex + 1) % availableTabs.length : (currentIndex - 1 + availableTabs.length) % availableTabs.length; const next = availableTabs[nextIndex]; if (!next) return; pendingTabFocusRef.current = next; onTabChange(next); }; useLayoutEffect(() => { const pendingTab = pendingTabFocusRef.current; if (!pendingTab || pendingTab !== tab) return; pendingTabFocusRef.current = undefined; tabRefs.current[pendingTab]?.focus(); }, [tab]); useEffect(() => {
+  const reconciliationRevisionId = project.serverRevisionId;
+  const inspectionRevisionId = project.serverRevisionId; useEffect(() => {
     const snapshotActions = (project as InspectionProject).inspectionActions;
     // A normal workspace read may omit the derived queue. Preserve the
     // already-consumed result until the revision-scoped list read replaces it.
@@ -1767,7 +1941,7 @@ function ProjectPage({ assemblySupported, onImportBom, homeTask, project, projec
   }, [tab, hasServerRevision, project.id, reconciliationRevisionId, onReadReconciliation]);
 
   useEffect(() => {
-    if (!hasServerRevision && tab === "reconciliation") onTabChange("plan", true);
+    if (!hasServerRevision && tab === "reconciliation") onTabChange("build", true);
   }, [hasServerRevision, tab, onTabChange]);
 
   const saveReconciliation = async (model: ReconciliationViewModel) => {
@@ -1844,50 +2018,126 @@ function ProjectPage({ assemblySupported, onImportBom, homeTask, project, projec
     onPreviewInspection: (action, input) => onPreviewInspection(action.projectRevisionId, action.id, input),
     onConfirmInspection: confirmInspection
   };
-  const editing = useContext(ProjectEditingContext);
-  const nextActionButton = project.status === "archived" || summary.readinessUnavailable ? undefined : routeNeedsDecision ? { label: "Set build approach", run: onEditBuildApproach } : summary.totalLines === 0 ? { label: "Add first requirement", run: onAddBom } : summary.decideLines ? { label: "Review missing details", run: () => reviewRequirements("decide") } : summary.inspectLines ? { label: "Review stock checks", run: () => reviewRequirements("check") } : summary.sourceLines > 0 ? (tab !== "offers" ? { label: "Open shopping list", run: () => onTabChange("offers") } : undefined) : printedRouteNeedsPrinter ? { label: "Review printer setup", run: onEditBuildApproach } : undefined;
-  // One primary action: the project's next step, beside the title.
-  const nextActionControl = nextActionButton ? <button type="button" className="button button-primary project-next-action" onClick={nextActionButton.run}>{nextActionButton.label}<Icon name="arrow-right" size={16} /></button> : null;
-  const nextActionPanel = <div className="dossier-next" role={routeNeedsDecision ? "region" : undefined} aria-label={routeNeedsDecision ? "Build approach" : undefined}><span className="eyebrow">Next action</span><strong>{nextActionTitle}</strong><span>{nextActionDescription}</span></div>;
   return ( <InspectionContext.Provider value={inspectionContext}><>
-    <header className="page-header project-header"><div className="project-header-title"><div className="eyebrow">Project</div><h1>{project.name}</h1><div className="project-header-meta"><span className={`register-stage register-stage-${project.status}`}>Stage: {projectLifecycleLabel(project.status)}</span><span className="project-header-revision">Revision {project.currentRevision}</span></div>{tab === "assembly" ? <details className="project-description-disclosure"><summary>Project notes</summary><p>{project.description}</p></details> : <p>{project.description}</p>}</div><div className="header-actions"><ProjectSwitcher projects={projects} value={project.id} onSelect={onSelectProject} />{nextActionControl}<OverflowMenu label="More project actions" items={projectMenuItems({ project, onEdit: () => editing?.editProject(), onExport: () => setExportOpen(true), onNewRevision, onArchive: () => setArchiveConfirmationOpen(true), onRestore: () => setRestoreConfirmationOpen(true) })} /></div></header>
-    <div className="project-next-mobile">{nextActionPanel}</div>
-    {exportOpen && <Dialog title="Export project summary" onClose={() => setExportOpen(false)}><ProjectExportOptions project={project} /></Dialog>}
-    {archiveConfirmationOpen && ( <Dialog title={`Archive ${project.name}?`} role="alertdialog" onClose={() => { if (!archiving) setArchiveConfirmationOpen(false); }}><p className="dialog-intro">{expert ? "This hides the project from active lists and releases its active reservations. Revisions, files, requirements, stock evidence, and audit history remain retained. Archive is reversible; restore returns it to Idea without recreating reservations." : "This hides the project from active lists and releases stock set aside for it. Its revisions, files, requirements, stock records, and project history are kept. You can restore it later, but released stock will not be set aside again."}</p><div className="dialog-actions"><button type="button" className="button button-quiet" onClick={() => setArchiveConfirmationOpen(false)} disabled={archiving}> {" "}Cancel{" "} </button><button type="button" className="button button-primary" onClick={() => { void confirmArchive(); }} disabled={archiving} aria-busy={archiving}>{archiving ? "Archiving…" : "Archive project"}</button></div></Dialog> )}{" "}
-    {restoreConfirmationOpen && ( <Dialog title={`Restore ${project.name}?`} role="alertdialog" onClose={() => { if (!restoring) setRestoreConfirmationOpen(false); }}><p className="dialog-intro">{expert ? "This moves the project to Idea. It does not recreate released reservations." : "This moves the project to Idea. Stock released when it was archived will not be set aside again."}</p><div className="dialog-actions"><button type="button" className="button button-quiet" onClick={() => setRestoreConfirmationOpen(false)} disabled={restoring}> {" "}Cancel{" "} </button><button type="button" className="button button-primary" onClick={() => { void confirmRestore(); }} disabled={restoring} aria-busy={restoring}>{restoring ? "Restoring…" : "Restore project"}</button></div></Dialog> )}{" "}
-    {removeConfirmationOpen && ( <Dialog title={`Delete ${project.name}?`} role="alertdialog" onClose={() => { if (!removing) { setRemoveConfirmationOpen(false);  } }}><p className="dialog-intro"><strong>This action is irreversible.</strong> {" "} {expert ? ( <> {" "}It removes this {" "} {project.status === "archived" ? "archived" : "active"}{" "} project from workspace lists. {" "} {project.status === "archived" ? "" : "Active reservations will be released. "}{" "} Its tombstone, revisions, files, reservation release evidence, and audit history remain retained, but the project cannot be restored.{" "} </> ) : ( <> {" "}It removes this {" "} {project.status === "archived" ? "archived" : "active"}{" "} project from workspace lists. {" "} {project.status === "archived" ? "" : "Stock set aside for it will be released. "}{" "} Its project history is kept, but the project cannot be restored.{" "} </> )}</p><DeleteProjectConfirmation projectName={project.name} busy={removing} onCancel={() => setRemoveConfirmationOpen(false)} onConfirm={() => { void confirmRemove(); }} /></Dialog> )}{" "}
+    <Button variant="ghost" className="project-back" onClick={() => onNavigate("overview")}><Icon name="arrow-left" size={16} />Projects</Button>
+    <header className="page-header project-heading">
+      <div><h1>{project.name}</h1><div className="project-heading-meta"><span>{project.currentRevision}</span><span className={`project-stage stage-${project.status}`}>{projectLifecycleLabel(project.status)}</span></div></div>
+      <Button variant="ghost" type="button" className="project-menu-trigger" id={projectActionsTriggerId} aria-label="Project actions" aria-expanded={projectToolsOpen} onClick={() => setProjectToolsOpen(true)}><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></Button>
+    </header>
+    {projectToolsOpen && <WorkspaceModal kind="sheet" onClose={() => setProjectToolsOpen(false)}><section className="project-actions-sheet" aria-label="Project actions"><div className="dialog-header"><SheetTitle>Project actions</SheetTitle><Button variant="ghost" size="icon" aria-label="Close project actions" onClick={() => setProjectToolsOpen(false)}><Icon name="close" size={19}/></Button></div><p>{project.name} · {project.currentRevision}</p><ProjectManagementBar compact focusReturnId={projectActionsTriggerId} onAction={() => setProjectToolsOpen(false)} /><div className="project-tools-actions"><Button variant="ghost" data-focus-return={projectActionsTriggerId} onClick={() => { setProjectToolsOpen(false); setRevisionHistoryOpen(true); }}><Icon name="clock" size={18}/>Revision history</Button>{project.status !== "archived" && <Button variant="ghost" data-focus-return={projectActionsTriggerId} onClick={() => { setProjectToolsOpen(false); onNewRevision(); }}><Icon name="plus" size={18}/>Create revision</Button>}<Button variant="ghost" data-focus-return={projectActionsTriggerId} onClick={() => { setProjectToolsOpen(false); if (project.status === "archived") setRestoreConfirmationOpen(true); else setArchiveConfirmationOpen(true); }}><Icon name="archive" size={18}/>{project.status === "archived" ? "Restore project" : "Archive project"}</Button><Disclosure className="project-delete-disclosure"><DisclosureTrigger>Delete project</DisclosureTrigger><DisclosureContent><p>Removing a project cannot be undone. Its recorded history is retained.</p><Button variant="destructive" data-focus-return={projectActionsTriggerId} onClick={() => { setProjectToolsOpen(false); setRemoveConfirmationOpen(true); }}>Delete project permanently</Button></DisclosureContent></Disclosure></div></section></WorkspaceModal>}
+    {combinedShoppingOpen && <Dialog title="Combined shopping proposal" onClose={() => setCombinedShoppingOpen(false)}><p>This proposal includes {projects.filter(entry => entry.status !== "archived").length} loaded active projects. Check stock across projects before ordering; the same available stock may be needed by more than one project.</p><ShoppingList project={project} summary={combinedProjectSummary(projects, items)} offers={offers} expert={expert} onToast={onToast} onBackToPlan={() => setCombinedShoppingOpen(false)}/></Dialog>}
+    {revisionHistoryOpen && <Dialog title="Revision history" onClose={() => setRevisionHistoryOpen(false)}><ProjectRevisionHistory project={project} remote={!sampleMode && makerWorkflowsSupported}/><Button variant="outline" onClick={() => { setRevisionHistoryOpen(false); setFilesViewState({ ...projectFilesView(project), scopeKey: "all" }); onTabChange("files"); }}>Browse file history</Button></Dialog>}
+    {archiveConfirmationOpen && ( <Dialog title={`Archive ${project.name}?`} role="alertdialog" onClose={() => { if (!archiving) setArchiveConfirmationOpen(false); }}><p className="dialog-intro">{expert ? "This hides the project from active lists and releases its active reservations. Revisions, files, requirements, stock evidence, and audit history remain retained. Archive is reversible; restore returns it to Idea without recreating reservations." : "This hides the project from active lists and releases stock set aside for it. Its revisions, files, requirements, stock records, and project history are kept. You can restore it later, but released stock will not be set aside again."}</p><div className="dialog-actions"><Button variant="ghost" type="button" className="button button-quiet" onClick={() => setArchiveConfirmationOpen(false)} disabled={archiving}> {" "}Cancel{" "} </Button><Button variant="default" type="button" className="button button-primary" onClick={() => { void confirmArchive(); }} disabled={archiving} aria-busy={archiving}>{archiving ? "Archiving…" : "Archive project"}</Button></div></Dialog> )}{" "}
+    {restoreConfirmationOpen && ( <Dialog title={`Restore ${project.name}?`} role="alertdialog" onClose={() => { if (!restoring) setRestoreConfirmationOpen(false); }}><p className="dialog-intro">{expert ? "This moves the project to Idea. It does not recreate released reservations." : "This moves the project to Idea. Stock released when it was archived will not be set aside again."}</p><div className="dialog-actions"><Button variant="ghost" type="button" className="button button-quiet" onClick={() => setRestoreConfirmationOpen(false)} disabled={restoring}> {" "}Cancel{" "} </Button><Button variant="default" type="button" className="button button-primary" onClick={() => { void confirmRestore(); }} disabled={restoring} aria-busy={restoring}>{restoring ? "Restoring…" : "Restore project"}</Button></div></Dialog> )}{" "}
+    {removeConfirmationOpen && ( <Dialog title={`Delete ${project.name}?`} role="alertdialog" onClose={() => { if (!removing) { setRemoveConfirmationOpen(false);  } }}><p className="dialog-intro"><strong>This action is irreversible.</strong> {" "} {expert ? ( <> {" "}It removes this {" "} {project.status === "archived" ? "archived" : "active"}{" "} project from workspace lists. {" "} {project.status === "archived" ? "" : "Active reservations will be released. "}{" "} Its tombstone, revisions, files, reservation release evidence, and audit history remain retained, but the project cannot be restored.{" "} </> ) : ( <> {" "}It removes this {" "} {project.status === "archived" ? "archived" : "active"}{" "} project from workspace lists. {" "} {project.status === "archived" ? "" : "Stock set aside for it will be released. "}{" "} Its project history is kept, but the project cannot be restored.{" "} </> )}</p><div className="dialog-actions"><Button variant="ghost" type="button" className="button button-quiet" onClick={() => { setRemoveConfirmationOpen(false);  }} disabled={removing}> {" "}Cancel{" "} </Button><Button variant="destructive" type="button" className="button button-danger" onClick={() => { void confirmRemove(); }} disabled={removing} aria-busy={removing}>{removing ? "Removing…" : "Delete project"}</Button></div></Dialog> )}{" "}
     {project.status === "archived" && ( <div className="archive-notice" role="status"><Icon name="archive" size={17} /><span><strong>Archived project</strong> {expert ? "Hidden from active lists. Active reservations were released; revisions, files, requirements, stock evidence, and audit history remain retained. Restore is reversible and returns the project to Idea without recreating reservations." : "Hidden from active lists. Stock set aside for it was released; revisions, files, requirements, stock records, and project history were kept. Restoring returns it to Idea without setting that stock aside again."}</span></div> )}{" "}
-    {onRetrySetup && project.status !== "archived" && ( <div className="setup-retry-callout" role="status"><Icon name="warning" size={17} /><span><strong> {" "}Revision created. The setup save was not confirmed.{" "} </strong>{" "} Retry setup; BenchLedger will check the saved result before creating anything twice.{" "} </span><button className="button button-secondary" onClick={onRetrySetup}><Icon name="refresh" size={16} /> Retry setup{" "} </button></div> )}
-    <div className="project-toolbar"><div className="project-task-strip" aria-label="Project task shortcuts">{summary.readinessUnavailable ? <button type="button" onClick={() => { void onRefreshWorkspace(); }}>Refresh stock results</button> : <><span><strong>{summary.readyLines}</strong> Ready</span><button type="button" disabled={!summary.decideLines} onClick={() => reviewRequirements("decide")}><strong>{summary.decideLines}</strong> Decide</button><button type="button" disabled={!summary.inspectLines} onClick={() => reviewRequirements("check")}><strong>{summary.inspectLines}</strong> Check</button><button type="button" disabled={!summary.sourceLines} onClick={() => onTabChange("offers")}><strong>{summary.sourceLines}</strong> Source</button></>}{project.status !== "archived" && routeNeedsDecision && <button type="button" onClick={onEditBuildApproach}>Review build approach</button>}{project.status !== "archived" && <RecordUseAction compact available={recordUseAvailable} reason={recordUseReason} onOpen={() => openRecordUse()} />}</div><ProjectManagementBar /></div> {expert && ( <BuildRail currentStep={project.railStep} projectName={`${project.name} · ${project.currentRevision}`} /> )} <div className="dossier-layout"><section className="dossier-workspace"><div className="tab-list" role="tablist" aria-label="Project workspace">{availableTabs.map((target) => <button key={target} ref={(node) => { tabRefs.current[target] = node; }} id={`project-tab-${target}`} role="tab" aria-controls="project-tabpanel" aria-selected={tab === target} tabIndex={tab === target ? 0 : -1} className={tab === target ? "is-active" : ""} onKeyDown={(event) => moveTabFocus(event, target)} onClick={() => onTabChange(target)}>
-  <Icon name={target === "plan" ? "clipboard" : target === "files" ? "folder" : target === "offers" ? "tag" : target === "build" ? "layers" : "check-circle"} size={16} />
-  {target === "plan" ? "Plan" : target === "files" ? "Files" : target === "offers" ? "Shopping list" : target === "build" ? "Build planning" : target === "assembly" ? "Assembly" : "Update used stock"}
-  {target !== "build" && target !== "assembly" && <span>{target === "plan" ? summary.totalLines : target === "files" ? project.artifacts.length : target === "offers" ? summary.sourceLines : reconciliation?.status === "committed" ? "Done" : "Review"}</span>}
-</button>)}</div>
+    {onRetrySetup && project.status !== "archived" && ( <div className="setup-retry-callout" role="status"><Icon name="warning" size={17} /><span><strong> {" "}Revision created. The setup save was not confirmed.{" "} </strong>{" "} Retry setup; BenchLedger will check the saved result before creating anything twice.{" "} </span><Button variant="outline" className="button button-secondary" onClick={onRetrySetup}><Icon name="refresh" size={16} /> Retry setup{" "} </Button></div> )}
+    <section className="project-workspace"><Tabs value={activeTab} onValueChange={next => onTabChange(next as ProjectTab)}>
+      <div className="project-navigation"><TabsList className="tab-list" aria-label="Project workspace">{([["overview", "Overview"], ["plan", "Parts"], ["files", "Files"], ["build", "Build"]] as const).map(([target, label]) => <TabsTrigger key={target} value={target} id={`project-tab-${target}`} aria-controls="project-tabpanel" onClick={() => { if (target === activeTab && tab !== target) onTabChange(target); }}>{label}</TabsTrigger>)}</TabsList></div>
+      <TabsContent value={activeTab} id="project-tabpanel" aria-labelledby={`project-tab-${activeTab}`}>
+        {activeTab === "overview" && <div className="project-overview">
+          <div className="project-overview-image"><ProductImage project={project} onChoose={openProjectImages} /><div className="project-image-caption"><span>Appearance preview · {project.currentRevision}</span><Button variant="ghost" onClick={openProjectImages}>View project images<Icon name="arrow-right" size={16}/></Button></div></div>
+          <div className="project-overview-copy"><section className={`project-next-step next-${nextAction}`} aria-label="Next project action"><h2>{nextAction === "check" ? `Check ${summary.lineStatuses.find(line => !line.line.optional && line.decision === "check")?.line.label ?? "your stock"}` : nextAction === "requirements" ? "Add what this build needs" : nextAction === "decide" ? "Fill in the missing details" : nextAction === "source" ? "Find the remaining parts" : nextAction === "approach" ? "Choose your build approach" : nextAction === "printer" ? "Choose a printer" : nextAction === "restore" ? "Restore this project to continue" : nextAction === "refresh" ? "Refresh the stock results" : "Prepare your build"}</h2><p>{nextActionDescription}</p><Button onClick={() => {
+            if (nextAction === "refresh") { void onRefreshWorkspace(); }
+            else if (nextAction === "restore") setRestoreConfirmationOpen(true);
+            else if (nextAction === "requirements") onAddBom();
+            else if (nextAction === "approach" || nextAction === "printer") onEditBuildApproach();
+            else if (nextAction === "check") { const line = summary.lineStatuses.find(row => !row.line.optional && row.decision === "check")?.line; if (line && projectEditing) projectEditing.editRequirement(line, "stock"); else reviewRequirements("check"); }
+            else if (nextAction === "decide") reviewRequirements("decide");
+            else onTabChange(nextAction === "source" ? "offers" : "build");
+          }}>{nextAction === "requirements" ? "Add first part" : nextAction === "refresh" ? "Retry stock results" : nextAction === "restore" ? "Restore project" : nextAction === "check" ? "Review this part" : nextAction === "decide" ? "Review missing details" : nextAction === "source" ? "Review sourcing" : nextAction === "approach" || nextAction === "printer" ? "Review build setup" : "Open build plan"}<Icon name="arrow-right" size={16}/></Button></section>
+          {summary.totalLines > 0 && !summary.readinessUnavailable && <div className="project-task-strip" aria-label="Parts summary">{summary.readyLines > 0 && <span><strong>{summary.readyLines}</strong> Stock ready</span>}{summary.inspectLines > 0 && <Button variant="ghost" onClick={() => reviewRequirements("check")}><strong>{summary.inspectLines}</strong> To check</Button>}{summary.decideLines > 0 && <Button variant="ghost" onClick={() => reviewRequirements("decide")}><strong>{summary.decideLines}</strong> To decide</Button>}{summary.sourceLines > 0 && <Button variant="ghost" onClick={() => onTabChange("offers")}><strong>{summary.sourceLines}</strong> To source</Button>}</div>}
+          <section className="project-overview-notes"><h2>Project notes</h2><p>{project.description || "Add a short description of what you want to make."}</p>{project.notes.length > 0 && <Disclosure><DisclosureTrigger>Recorded observations · {project.notes.length}</DisclosureTrigger><DisclosureContent><ul>{project.notes.map((note, index) => <li key={index}>{note}</li>)}</ul></DisclosureContent></Disclosure>}{project.status !== "archived" && projectEditing && <Button variant="ghost" onClick={projectEditing.editProject}>Edit notes</Button>}</section></div>
+          <div className="project-continue"><h2>Continue working</h2><Button variant="ghost" onClick={() => onTabChange("files")}><Icon name="folder" size={22}/><span><strong>Build files</strong><small>Print, electronics, CAD and instructions</small></span><Icon name="arrow-right" size={18}/></Button><Button variant="ghost" onClick={() => onTabChange("build")}><Icon name="clipboard" size={22}/><span><strong>Build plan</strong><small>Prepare, assemble and record your work</small></span><Icon name="arrow-right" size={18}/></Button></div>
+        </div>}
+        {activeTab === "plan" && <>
+          {tab === "plan" && <div className={`project-parts-workspace ${hasPartInspector ? "has-part-inspector" : ""}`}><div className="project-parts-register">{summary.readinessUnavailable && <Alert asChild><div className="project-readiness-error" role="alert"><p>Stock results are unavailable. Refresh before relying on quantities.</p><Button variant="outline" onClick={() => { void onRefreshWorkspace(); }}>Retry stock results</Button></div></Alert>}<ProjectPlan key={`${project.id}:${project.serverRevisionId ?? ""}`} viewState={planViewState} onViewStateChange={setPlanViewState} homeTask={taskForPlan} addedPart={addedPart} onImport={makerWorkflowsSupported && project.status !== "archived" ? onImportBom : undefined} onFiles={() => onTabChange("files")} onShopping={() => onTabChange("offers")} project={project} summary={summary} expert={expert} onOpenItem={onOpenItem} onAddBom={project.status === "archived" ? () => onToast("Restore this project before adding a part.") : onAddBom} onResolveBomRole={onResolveBomRole} /></div><div className="project-part-inspector-host" ref={onPartInspectorHost} /></div>}
+          {tab === "offers" && <><Button variant="ghost" className="back-to-parts" onClick={() => onTabChange("plan")}><Icon name="arrow-left" size={16}/>Back to parts</Button>{makerWorkflowsSupported ? <><ProjectQuoteTools key={`${project.id}:${project.serverRevisionId}`} project={project} onPlan={() => onTabChange("plan")} onInventory={onNewInventory} onMatch={(lineId) => { const line = project.bom.find(entry => entry.id === lineId); if (line) projectEditing?.editRequirement(line, "stock"); }} /><Disclosure className="historical-offers"><DisclosureTrigger>Inventory-linked supplier records</DisclosureTrigger><DisclosureContent><p>These offers belong to inventory records. They are separate from quotes selected for this project.</p><ShoppingList project={project} summary={summary} offers={offers} expert={expert} onToast={onToast} onBackToPlan={() => onTabChange("plan")} /></DisclosureContent></Disclosure></> : <ShoppingList project={project} summary={summary} offers={offers} expert={expert} onToast={onToast} onBackToPlan={() => onTabChange("plan")} />}<Button variant="ghost" className="combined-shopping-link" onClick={() => setCombinedShoppingOpen(true)}>Combined shopping proposal<Icon name="arrow-right" size={16}/></Button></>}
+        </>}
+        {activeTab === "files" && <ProjectFiles key={`${project.id}:${project.serverRevisionId ?? ""}`} project={project} viewState={filesViewState} onViewStateChange={setFilesViewState} expert={expert} sampleMode={sampleMode} onUpload={(file, role, target) => onUpload(project.id, file, role, target)} archived={project.status === "archived"} onProjectRefresh={onRefreshWorkspace} />}
+        {activeTab === "build" && <div className="project-build"><div className="project-secondary-nav" aria-label="Build views"><Button variant="ghost" aria-pressed={tab === "build"} onClick={() => onTabChange("build")}>Build plan</Button>{hasServerRevision && <Button variant="ghost" aria-pressed={tab === "reconciliation"} onClick={() => onTabChange("reconciliation")}>Record used stock</Button>}{assemblySupported && <Button variant="ghost" aria-pressed={tab === "assembly"} onClick={() => onTabChange("assembly")}>Assembly</Button>}{pcbSupported && <Button variant="ghost" aria-pressed={tab === "pcb"} onClick={() => onTabChange("pcb")}>PCB</Button>}</div>
+          {(tab === "build" || tab === "reconciliation") && <>
+          {makerWorkflowsSupported ? <MakerPlanningTools key={`${project.id}:${project.serverRevisionId}`} project={project} items={items} onRefresh={onRefreshWorkspace} onUpload={(file, role, target) => onUpload(project.id, file, role, target)} stockReservationsSupported={reconciliationSupported} onApproach={onEditBuildApproach} onParts={() => onTabChange("plan")} onFiles={() => onTabChange("files")} onAssembly={assemblySupported ? () => onTabChange("assembly") : undefined} onUsedStock={hasServerRevision ? () => onTabChange("reconciliation") : undefined} review={tab === "reconciliation" && hasServerRevision ? <section className="reconciliation-page-surface">{reconciliationLoading && <div className="reconciliation-loading" role="status"><strong>Loading the current stock review…</strong><p>Nothing changes in stock while this review loads.</p></div>}{reconciliationError && !reconciliationLoading && <Alert asChild><div className="reconciliation-loading reconciliation-load-error" role="alert"><strong>{reconciliationLoadErrorMessage(reconciliationError, expert)}</strong><Button variant="outline" onClick={() => onTabChange("build")}>Back to build plan</Button></div></Alert>}{reconciliation && !reconciliationLoading && !reconciliationError && <ReconciliationUI embedded readOnly={project.status === "archived"} model={reconciliation} expert={expert} onChange={setReconciliation} onRequestPreview={saveReconciliation} onConfirmCommit={commitReconciliation}/>}</section> : undefined}/> : <div className="build-unavailable"><h2>Prepare your build</h2><p>Review the parts and current files before starting assembly. Record physical checks and actual stock use after the work.</p><Button variant="outline" onClick={() => onTabChange("plan")}>Review parts</Button><Button variant="outline" onClick={() => onTabChange("files")}>Review files</Button><p className="form-hint">Detailed build planning is unavailable in this workspace.</p></div>}
+          {!makerWorkflowsSupported && tab === "reconciliation" && hasServerRevision && <section className="reconciliation-page-surface">{reconciliationLoading && <div className="reconciliation-loading" role="status"><strong>Loading the current stock review…</strong><p>Nothing changes in stock while this review loads.</p></div>}{reconciliationError && !reconciliationLoading && <Alert asChild><div className="reconciliation-loading reconciliation-load-error" role="alert"><strong>{reconciliationLoadErrorMessage(reconciliationError, expert)}</strong><Button variant="outline" onClick={() => onTabChange("build")}>Back to build plan</Button></div></Alert>}{reconciliation && !reconciliationLoading && !reconciliationError && <ReconciliationUI embedded readOnly={project.status === "archived"} model={reconciliation} expert={expert} onChange={setReconciliation} onRequestPreview={saveReconciliation} onConfirmCommit={commitReconciliation}/>}</section>}
+          {tab === "build" && <Disclosure className="build-plan-details"><DisclosureTrigger>Build approach and setup</DisclosureTrigger><DisclosureContent><BuildApproachCard project={project} items={items} expert={expert} onSelectPrinter={onOpenItem} onChoosePrinter={project.status !== "archived" ? onEditBuildApproach : undefined} onReviewPrintItems={onTabChange}/>{project.buildConfigSnapshot && <BuildSetupSummary input={project.buildConfigSnapshot} printer={configuredPrinter} filament={configuredFilament} expert={expert}/>}</DisclosureContent></Disclosure>}
+          {tab === "build" && expert && <Disclosure className="build-plan-details"><DisclosureTrigger>Technical context</DisclosureTrigger><DisclosureContent><BuildRail currentStep={project.railStep} projectName={`${project.name} · ${project.currentRevision}`}/><ProjectExpertContext project={project}/></DisclosureContent></Disclosure>}</>}
+          {tab === "pcb" && (pcbSupported ? <PcbWorkspace key={`${project.id}:${project.serverRevisionId}`} project={project} onFiles={() => onTabChange("files")} onAssembly={() => onTabChange("assembly")} /> : <p>PCB viewing is unavailable on this host.</p>)}
+          {tab === "assembly" && (assemblySupported ? <AssemblyWorkspace key={`${project.id}:${project.serverRevisionId}`} project={project} onFiles={() => onTabChange("files")} /> : <p>Assembly viewing is unavailable on this host.</p>)}
 
- <div id="project-tabpanel" role="tabpanel" aria-labelledby={"project-tab-" + tab} tabIndex={0} > {tab === "assembly" && (assemblySupported ? <AssemblyWorkspace key={`${project.id}:${project.serverRevisionId}`} project={project} onFiles={() => onTabChange("files")} /> : <p>Assembly viewing is unavailable on this host.</p>)}{tab === "plan" && ( <ProjectPlan homeTask={taskForPlan} onImport={makerWorkflowsSupported && project.status !== "archived" ? onImportBom : undefined} project={project} summary={summary} expert={expert} onOpenItem={onOpenItem} onAddBom={project.status === "archived" ? () => onToast("Restore this project before adding a requirement.") : onAddBom} onResolveBomRole={onResolveBomRole} recordUse={project.status === "archived" ? undefined : (lineId) => ({ available: recordUseAvailable, reason: recordUseReason, onOpen: () => openRecordUse(lineId) })} /> )}{tab === "build" && !makerWorkflowsSupported && <div className="surface workflow-unavailable"><h2>Build planning is unavailable</h2><p>This workspace does not provide build planning.</p><button type="button" className="button button-secondary" onClick={() => onTabChange("plan")}>Back to plan</button></div>}{tab === "build" && makerWorkflowsSupported && <MakerPlanningTools key={`${project.id}:${project.serverRevisionId}`} project={project} items={items} onRefresh={onRefreshWorkspace} />}{" "}{tab === "files" && ( <ProjectFiles project={project} expert={expert} sampleMode={sampleMode} onUpload={(file, role, target) => onUpload(project.id, file, role, target)} archived={project.status === "archived"} /> )}{" "}{tab === "offers" && (makerWorkflowsSupported ? <><ProjectQuoteTools key={`${project.id}:${project.serverRevisionId}`} project={project} onPlan={() => onTabChange("plan")} /><details className="surface historical-offers"><summary>Inventory-linked supplier records</summary><p>These offers belong to inventory records. They are separate from quotes selected for this project.</p><ShoppingList project={project} summary={summary} offers={offers} expert={expert} onToast={onToast} onBackToPlan={() => onTabChange("plan")} /></details></> : <ShoppingList project={project} summary={summary} offers={offers} expert={expert} onToast={onToast} onBackToPlan={() => onTabChange("plan")} />)}{" "}{tab === "reconciliation" && hasServerRevision && ( <section className="reconciliation-page-surface">{reconciliationLoading && ( <div className="reconciliation-loading" role="status"><span className="eyebrow">Update used stock</span><strong>Loading the current review…</strong><p>Nothing changes in stock while this review loads.</p></div> )}{" "}{reconciliationError && !reconciliationLoading && ( <div className="reconciliation-loading reconciliation-load-error" role="alert"><span className="eyebrow">Could not load stock update</span><strong>{reconciliationLoadErrorMessage(reconciliationError, expert)}</strong><button className="button button-secondary" onClick={() => onTabChange("plan")}> {" "}Back to plan{" "} </button></div> )}{" "}{reconciliation && !reconciliationLoading && !reconciliationError && ( <ReconciliationUI embedded focusBomLineId={recordUseLineId} readOnly={project.status === "archived"} model={reconciliation} expert={expert} onChange={setReconciliation} onRequestPreview={saveReconciliation} onConfirmCommit={commitReconciliation} /> )}</section> )}</div> </section><aside className="dossier-column"> {expert && ( <div className="dossier-status"><span className={`status-pill tone-${project.status === "complete" ? "good" : "info"}`}><span className="status-symbol">●</span>{projectLifecycleLabel(project.status)}</span><span className="revision-label">{project.currentRevision}</span></div> )} <h2>{project.workItem}</h2><div className="project-next-desktop">{nextActionPanel}</div> {!routeNeedsDecision && ( <BuildApproachCard project={project} items={items} expert={expert} onSelectPrinter={onOpenItem} onChoosePrinter={onEditBuildApproach} onReviewPrintItems={(target) => onTabChange(target)} /> )} {expert && ( <><dl className="dossier-facts"><div><dt>Current revision</dt><dd>{project.currentRevision}</dd></div><div><dt>Build files</dt><dd>{project.artifacts.length} artifacts</dd></div><div><dt>Last changed</dt><dd>{project.updated}</dd></div></dl>{project.buildConfigSnapshot && ( <BuildSetupSummary input={project.buildConfigSnapshot} printer={configuredPrinter} filament={configuredFilament} expert /> )} </> )}{" "}{expert && ( <details className="expert-detail"><summary>Technical context</summary><ProjectExpertContext project={project} /></details> )}<button className="text-button dossier-inventory-link" onClick={() => onNavigate("inventory")}> {" "}Browse all inventory <Icon name="arrow-right" size={15} />{" "} </button><details className="project-actions"><summary> {" "}Project settings <Icon name="chevron-down" size={14} /></summary><div className="project-settings-content"><span>{expert ? "Archive keeps revisions and audit history available. Removing a project keeps its tombstone but cannot be undone." : "Archive keeps the project and its history available. Removing a project cannot be undone, although its project history is kept."}</span><div className="project-settings-buttons">{project.status === "archived" ? ( <button className="button button-primary" onClick={() => setRestoreConfirmationOpen(true)}><Icon name="refresh" size={16} /> Restore project{" "} </button> ) : ( <button className="button button-secondary" onClick={() => setArchiveConfirmationOpen(true)}><Icon name="archive" size={16} /> Archive project{" "} </button> )}<button type="button" className="button button-danger" onClick={() => setRemoveConfirmationOpen(true)}><Icon name="trash" size={16} /> Delete project</button></div></div></details></aside></div>
+        </div>}
+      </TabsContent>
+    </Tabs></section>
   </></InspectionContext.Provider> );
 }
 
-function ProjectPlan({ homeTask, onImport, project, summary, expert, onOpenItem, onAddBom, onResolveBomRole, recordUse }: { recordUse?: ((lineId: string) => { available: boolean; reason?: string | undefined; onOpen: () => void }) | undefined; homeTask?: (HomeTask & { request: number }) | undefined; onImport?: (() => void) | undefined; project: Project; summary: ReturnType<typeof calculateProjectSummary>; expert: boolean; onOpenItem: (id: string) => void; onAddBom: () => void; onResolveBomRole: ( lineId: string, role: "consumed" | "reusable", expectedVersion: number ) => Promise<void>; }) {
+export function ProjectRevisionHistory({ project, remote }: { project: Project; remote: boolean }) {
+  const [cursor, setCursor] = useState<string>(), [selected, setSelected] = useState<string>();
+  const history = useWorkflowRead<{ data: Array<{ id: string; number: number; name: string; status?: string }>; nextCursor?: string }>(remote ? `/projects/${encodeURIComponent(project.id)}/revision-history?limit=10${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}` : undefined);
+  const snapshot = useWorkflowRead<{ revision: { number: number; name: string }; lines: Array<{ id: string; name: string; requiredQuantity: number; unit: string }>; files: Array<{ id: string; filename: string; role: string }> }>(remote && selected ? `${revisionWorkflowPath(project.id, selected)}/snapshot` : undefined);
+  const revisions = remote ? history.data?.data ?? [] : project.projectRevisions?.length ? project.projectRevisions : [{ id: project.serverRevisionId ?? "current", name: project.currentRevision }];
+  return <><p>Read earlier requirements and file identities. The current revision remains selected.</p>
+    {history.loading && <p role="status">Loading revision history…</p>}{history.error && <Alert asChild><div role="alert"><p>{history.error}</p><Button variant="outline" onClick={history.reload}>Retry revision history</Button></div></Alert>}
+    <ol className="project-revision-list">{revisions.map(revision => <li key={revision.id}><div>{remote ? <Button variant="ghost" onClick={() => setSelected(revision.id)}>Read revision {revision.number}: {revision.name}</Button> : <strong>{revision.name || (revision.number === undefined ? "Recorded revision" : `Revision ${revision.number}`)}</strong>}<span>{revision.id === project.serverRevisionId ? "Current revision" : revision.status ?? "Earlier revision"}</span></div></li>)}</ol>
+    {history.data?.nextCursor && <Button variant="ghost" onClick={() => setCursor(history.data!.nextCursor)}>Older revisions</Button>}{cursor && <Button variant="ghost" onClick={() => setCursor(undefined)}>Latest revisions</Button>}
+    {snapshot.loading && <p role="status">Loading revision snapshot…</p>}{snapshot.error && <Alert asChild><div role="alert"><p>{snapshot.error}</p><Button variant="outline" onClick={snapshot.reload}>Retry revision snapshot</Button></div></Alert>}
+    {snapshot.data && <section className="project-revision-snapshot" aria-label="Read-only revision snapshot"><h3>Revision {snapshot.data.revision.number}: {snapshot.data.revision.name}</h3><p>Read-only · {snapshot.data.lines.length} requirements · {snapshot.data.files.length} files</p>{snapshot.data.lines.map(line => <p key={line.id}>{line.name}: {line.requiredQuantity} {line.unit}</p>)}{snapshot.data.files.map(file => <p key={file.id}>{file.filename} · {file.role}</p>)}</section>}
+  </>;
+}
+
+export function ProjectPlan({ homeTask, addedPart, onImport, onFiles, onShopping, project, summary, expert, onOpenItem, onAddBom, onResolveBomRole, viewState, onViewStateChange }: { addedPart?: { projectId: string; lineId: string; name: string } | undefined; onFiles?: (() => void) | undefined; onShopping?: (() => void) | undefined; viewState?: ProjectPlanViewState | undefined; onViewStateChange?: ((view: ProjectPlanViewState) => void) | undefined; homeTask?: (HomeTask & { request: number }) | undefined; onImport?: (() => void) | undefined; project: Project; summary: ReturnType<typeof calculateProjectSummary>; expert: boolean; onOpenItem: (id: string) => void; onAddBom: () => void; onResolveBomRole: ( lineId: string, role: "consumed" | "reusable", expectedVersion: number ) => Promise<void>; }) {
   const inspection = useContext(InspectionContext);
   const empty = summary.totalLines === 0;
-  const [requirementQuery, setRequirementQuery] = useState("");
-  const [requirementFilter, setRequirementFilter] = useState<RequirementFilter>("all");
-  useEffect(() => { setRequirementQuery(""); setRequirementFilter("all"); }, [project.id, project.serverRevisionId]);
+  const [localViewState, setLocalViewState] = useState<ProjectPlanViewState>();
+  const view = projectPlanView(project, viewState ?? localViewState);
+  const saveView = onViewStateChange ?? setLocalViewState;
+  const requirementQuery = view.query, requirementFilter = view.filter;
+  const setRequirementQuery = (query: string) => saveView({ ...view, query });
+  const setRequirementFilter = (filter: RequirementFilter) => saveView({ ...view, filter });
   const planRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!homeTask || homeTask.projectId !== project.id) return;
-    setRequirementQuery(""); setRequirementFilter(homeTask.kind === "check" ? "check" : homeTask.kind === "decide" ? "decide" : "all");
+    if (!homeTask || homeTask.projectId !== project.id || homeTask.request === view.handledTaskRequest) return;
+    saveView({ ...view, query: "", filter: homeTask.kind === "check" ? "check" : homeTask.kind === "decide" ? "decide" : "all", handledTaskRequest: homeTask.request });
     const timer = window.setTimeout(() => { const target = planRef.current?.querySelector<HTMLElement>(".bom-section"); target?.focus({ preventScroll: true }); target?.scrollIntoView({ block: "start", behavior: "instant" }); }, 0);
     return () => window.clearTimeout(timer);
-  }, [homeTask?.request, project.id]);
+  }, [homeTask?.request, project.id, project.serverRevisionId]);
+  const addedLine = addedPart?.projectId === project.id ? summary.lineStatuses.find(row => row.line.id === addedPart.lineId) : undefined;
+  useEffect(() => {
+    if (!addedLine || view.handledAddedPartId === addedLine.line.id) return;
+    saveView({ ...view, query: "", filter: "all", handledAddedPartId: addedLine.line.id });
+    const timer = window.setTimeout(() => {
+      const row = Array.from(planRef.current?.querySelectorAll<HTMLElement>("[data-requirement-id]") ?? []).find(element => element.dataset.requirementId === addedLine.line.id);
+      if (!row) return;
+      row.focus({ preventScroll: true });
+      const bounds = row.getBoundingClientRect();
+      if (bounds.top < 0 || bounds.bottom > window.innerHeight) row.scrollIntoView?.({ block: "nearest", behavior: "instant" });
+    }, 50);
+    return () => window.clearTimeout(timer);
+  }, [addedLine?.line.id, project.id, project.serverRevisionId]);
   const visibleLines = summary.lineStatuses.filter((line) => matchesRequirementFilter(line, requirementQuery, requirementFilter));
   const filtering = requirementQuery.trim() !== "" || requirementFilter !== "all";
 
-  return ( <div className="project-plan" ref={planRef}> {(expert || (inspection?.actions.length ?? 0) > 0 || inspection?.error) && ( <InspectionQueuePanel actions={inspection?.actions ?? (project as InspectionProject).inspectionActions ?? []} expert={expert} loadError={inspection?.error} onReadInspection={inspection?.onReadInspection} onPreviewInspection={inspection?.onPreviewInspection} onConfirmInspection={inspection?.onConfirmInspection} /> )} <section className="surface bom-section" tabIndex={-1}><div className="requirements-heading"><SectionHeading eyebrow="Requirements" title="Required parts and materials" /><div className="requirements-actions">{onImport && <button type="button" className="button button-quiet" onClick={onImport}><Icon name="upload" size={15} />Import requirements from CSV</button>}<button className="add-line-button" onClick={onAddBom}><Icon name="plus" size={16} />{empty ? "Add first requirement" : "Add a requirement"}</button></div></div>{(summary.totalLines > 6 || filtering) && <div className="requirement-filters"><label className="form-field"><span>Search requirements</span><input aria-label="Search project requirements" value={requirementQuery} onChange={(event) => setRequirementQuery(event.target.value)} placeholder="Part, note or selected item" /></label><label className="form-field"><span>Show</span><select aria-label="Filter project requirements" value={requirementFilter} onChange={(event) => setRequirementFilter(event.target.value as RequirementFilter)}>{[["all", "All requirements"], ["attention", "Needs attention"], ["ready", "Ready"], ["check", "Needs checking"], ["decide", "Needs a decision"], ["source", "Needs sourcing"], ["optional", "Optional"]].map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><p role="status">Showing {visibleLines.length} of {summary.totalLines} requirements. Readiness and exports still use the full plan.</p>{filtering && <button type="button" className="text-button" onClick={() => { setRequirementQuery(""); setRequirementFilter("all"); }}>Clear requirement filters</button>}</div>} {expert && ( <div className="bom-explainer"><Icon name="info" size={16} /><span> {" "}Counted or commissioned stock is Ready. Delivered or ordered stock is Check. Missing details are Decide. Stock that is still missing is Source.{" "} </span></div> )}{" "} {empty ? ( <div className="empty-state"><h3>No requirements are recorded yet.</h3><p>Add the parts, materials, and tools this build needs. Use the Files tab for designs and instructions.</p></div> ) : ( <div className="bom-list"><div className="bom-grid-head" aria-hidden="true"><span>Requirement</span><span>Quantity</span><span>Stock / status</span><span /></div>{visibleLines.length === 0 && <p className="requirements-no-match">No requirements match these filters.</p>}{visibleLines.map((line) => ( <BomLineRow key={line.line.id} line={line} expert={expert} onOpenItem={onOpenItem} onResolveRole={onResolveBomRole} recordUse={recordUse?.(line.line.id)} />))}</div> )}</section><RemovedRequirements /> {expert && ( <section className="surface learning-section"><SectionHeading eyebrow="Project memory" title="Recorded observations" /><div className="learning-list">{project.notes.length ? ( project.notes.map((note, index) => ( <div className="learning-row" key={note}><span className="learning-index">0{index + 1}</span><p>{note}</p><span className="learning-time">Recorded</span></div>)) ) : ( <p className="activity-empty"> {" "}No observations are recorded for this revision yet.{" "} </p> )}</div></section> )} </div> );
+  return <div className="project-plan" ref={planRef}>
+    {addedLine && view.dismissedAddedPartId !== addedLine.line.id && <div className="part-added-receipt" role="status"><Icon name="check-circle" size={18}/><span><strong>{addedPart?.name ?? addedLine.line.label}</strong> added to this revision.</span><Button variant="ghost" onClick={onAddBom}>Add another</Button><Button variant="ghost" size="icon" aria-label="Dismiss added part notice" onClick={() => saveView({ ...view, dismissedAddedPartId: addedLine.line.id })}><Icon name="close" size={16}/></Button></div>}
+    <section className="bom-section" tabIndex={-1}>
+      {empty ? <div className="project-parts-empty"><Icon name="box" size={42}/><h2>Add what this build needs</h2><p>Start with a part, material or tool.<br/>Match it to your stock as you go.</p>{project.status !== "archived" && <><Button id="add-project-requirement" onClick={onAddBom}><Icon name="plus" size={18}/>Add first part</Button>{onImport && <Button variant="ghost" className="requirements-import" onClick={onImport}>Import parts list</Button>}</>}{onFiles && project.artifacts.length > 0 && <div className="empty-parts-files"><Icon name="file" size={26}/><div><strong>{project.artifacts.length} project {project.artifacts.length === 1 ? "file" : "files"}</strong><p>Use drawings and notes to plan your parts.</p><Button variant="ghost" onClick={onFiles}>Browse files<Icon name="arrow-right" size={16}/></Button></div></div>}</div> : <>
+      <div className="requirements-heading"><h2>Parts</h2>{project.status !== "archived" && <Button id="add-project-requirement" variant="outline" className="add-line-button" onClick={onAddBom}><Icon name="plus" size={16}/>Add part</Button>}</div>
+      <div className="parts-toolbar">
+        <Label className="field-search"><Icon name="search" size={16}/><Input aria-label="Search project requirements" value={requirementQuery} onChange={event => setRequirementQuery(event.target.value)} placeholder="Find a part…"/></Label>
+        <div className="parts-filter-chips" role="group" aria-label="Filter parts">{([["all", "All", undefined], ["check", "To check", summary.inspectLines], ["source", "To source", summary.sourceLines]] as const).map(([value, label, count]) => <Button key={value} variant="ghost" aria-pressed={requirementFilter === value} onClick={() => setRequirementFilter(value)}>{label}{count ? <span aria-hidden="true">{count}</span> : null}</Button>)}</div>
+        <div className="parts-toolbar-actions"><Disclosure className="parts-more-filters"><DisclosureTrigger>More filters</DisclosureTrigger><DisclosureContent><Label className="form-field"><span>Show</span><NativeSelect aria-label="Filter project requirements" value={requirementFilter} onChange={event => setRequirementFilter(event.target.value as RequirementFilter)}>{[["all", "All parts"], ["attention", "Needs attention"], ["ready", "Ready"], ["check", "To check"], ["decide", "To decide"], ["source", "To source"], ["optional", "Optional"]].map(([value,label]) => <NativeSelectOption key={value} value={value}>{label}</NativeSelectOption>)}</NativeSelect></Label></DisclosureContent></Disclosure>{onShopping && <Button variant="ghost" onClick={onShopping}>Shopping list</Button>}{onImport && <Button variant="ghost" className="requirements-import" onClick={onImport}>Import parts list</Button>}</div>
+      </div>
+
+      {filtering && <div className="parts-filter-result"><p role="status">Showing {visibleLines.length} of {summary.totalLines} requirements. Readiness and exports still use the full plan.</p><Button variant="ghost" onClick={() => saveView({ ...view, query: "", filter: "all" })}>Clear requirement filters</Button></div>}
+      <div className="bom-list"><div className="bom-grid-head" aria-hidden="true"><span>Part</span><span>Needed</span><span>Available</span><span>Status</span><span/></div>{visibleLines.length === 0 && <p className="requirements-no-match">No parts match these filters.</p>}{visibleLines.map(line => <BomLineRow key={line.line.id} highlighted={addedLine?.line.id === line.line.id && view.dismissedAddedPartId !== line.line.id} line={line} expert={expert} onOpenItem={onOpenItem} onResolveRole={onResolveBomRole}/>)}</div><p className="parts-evidence-note">Only confirmed, compatible stock counts as available for this part. Recorded and reserved amounts remain separate.</p>
+      </>}
+    </section>
+    {(expert || (inspection?.actions.length ?? 0) > 0 || inspection?.error) && <InspectionQueuePanel actions={inspection?.actions ?? (project as InspectionProject).inspectionActions ?? []} expert={expert} loadError={inspection?.error} onReadInspection={inspection?.onReadInspection} onPreviewInspection={inspection?.onPreviewInspection} onConfirmInspection={inspection?.onConfirmInspection}/>}
+    <RemovedRequirements hideWhenEmpty/>
+  </div>;
 }
 
-export function BomLineRow({ line, expert, onOpenItem, onResolveRole, recordUse }: { line: BomLineStatus; expert: boolean; onOpenItem: (id: string) => void; onResolveRole?: ( lineId: string, role: "consumed" | "reusable", expectedVersion: number ) => void; /** Opens used-stock recording on this line, or explains why it cannot. */ recordUse?: { available: boolean; reason?: string | undefined; onOpen: () => void } | undefined; }) {
+export function BomLineRow({ line, highlighted = false, expert, onOpenItem, onResolveRole }: { highlighted?: boolean; line: BomLineStatus; expert: boolean; onOpenItem: (id: string) => void; onResolveRole?: ( lineId: string, role: "consumed" | "reusable", expectedVersion: number ) => void; }) {
+  const editing = useContext(ProjectEditingContext);
   const required = line.gap?.requiredQuantity ?? line.line.required;
   const unit = line.gap?.unit ?? line.line.unit;
   const reasons = line.gap?.reasons ?? [];
@@ -1899,13 +2149,15 @@ export function BomLineRow({ line, expert, onOpenItem, onResolveRole, recordUse 
   const needsUnitCorrection = correctionItem !== undefined;
   const roleLabel = line.line.role === "consumed" ? "Part or material" : line.line.role === "reusable" ? "Reusable tool or equipment" : "Review use"; const roleNeedsReview = line.line.role !== "consumed" && line.line.role !== "reusable"; const rowDisplay = needsUnitCorrection ? { label: "Fix unit", tone: "warn" as const } : decisionDisplay(line.line.optional ? "optional" : line.decision);
   const matchedItemLabel = line.item ? inventoryCandidateLabel(line.item, line.items ?? [line.item], expert) : undefined;
-  return ( <div className={`bom-row bom-${line.state} ${needsUnitCorrection ? "bom-unit-mismatch" : ""}`}>
-    <div className="bom-main"><div><strong>{line.line.label}</strong><span>{line.line.note ?? `${formatQuantity(required, unit)} required`}</span><div className="bom-row-actions"><RequirementEditAction line={line.line} />{recordUse && <RecordUseAction compact label={`Record use for ${line.line.label}`} available={recordUse.available} reason={recordUse.reason} onOpen={recordUse.onOpen} />}</div>{roleNeedsReview && onResolveRole && ( <div className="bom-role-choice" role="group" aria-label={`Choose how ${line.line.label} is used`} > <small>How will you use this?</small> <button type="button" className="text-button" onClick={() => onResolveRole(line.line.id, "consumed", line.line.version) } > {" "}
-                Part or material{" "} </button> <button type="button" className="text-button" onClick={() => onResolveRole(line.line.id, "reusable", line.line.version) } > {" "}
-                Reusable tool{" "} </button> </div> )}{" "} {expert && ( <small className={`bom-role-state ${roleNeedsReview ? "is-review" : ""}`} > <strong>{roleLabel}</strong> {roleNeedsReview ? " · Use is not recorded; review before planning stock consumption." : " · Recorded for planning."} </small> )}{" "} {expert && needsUnitCorrection && ( <small className="bom-unit-warning"><strong>Fix unit</strong> {correctionItem.unitCorrectionReason ?? "Stock is not matched or reserved until its unit is corrected from observed evidence."}</small> )}{" "}{expert && line.missingDecisions?.length ? ( <small className="bom-missing-decisions"> {" "}Decide: {" "} {line.missingDecisions.map(humanizeSpecificationDecision) .join(", ")}</small> ) : null}</div></div>
-    <div className="bom-quantity"><strong>Need {formatQuantity(required, unit)} · Have {formatQuantity(line.supplied, unit)}</strong>{line.remaining > 0 && ( <small>{formatQuantity(line.remaining, unit)} still to buy</small> )}{line.supplied > 0 && line.item && assumedStockLabel(line.item) && ( <small className="bom-assumed-stock">{assumedStockLabel(line.item)}</small> )}</div>
-    <div className="bom-match">{needsUnitCorrection ? ( <span className="match-none">No safe match</span> ) : line.item && matchedItemLabel ? ( <button className="match-link" onClick={() => onOpenItem(line.item!.id)}><span>{matchedItemLabel.name}</span>{matchedItemLabel.discriminator && ( <small>· {matchedItemLabel.discriminator}</small> )}<Icon name="arrow-up-right" size={13} /></button> ) : ( <span className="match-none">No matching stock</span> )}<span className={`status-pill tone-${rowDisplay.tone}`}><span className="status-symbol" aria-hidden="true">{rowDisplay.tone === "good" ? "✓" : rowDisplay.tone === "bad" ? "!" : rowDisplay.tone === "warn" ? "?" : "–"}</span>{rowDisplay.label}</span></div>
-    {expert && ( <details className="bom-expert"><summary aria-label={`Show evidence for ${line.line.label}`}><Icon name="chevron-down" size={16} /></summary><div><span>Line ID</span><p>{line.line.id}</p><span>Line version</span><p>{line.line.version}</p><span>Canonical unit</span><p>{line.line.serverUnit ?? line.line.unit}</p><span>Requirement use</span> <p> {roleNeedsReview ? "Not recorded — review whether this is used up or reusable. It is not treated as consumable." : roleLabel} </p> {line.item?.dimensions && ( <span> {" "}Recorded dimensions: {formatDimensions(line.item.dimensions)}</span> )}{" "}{reasons.length > 0 && ( <><span>Canonical gap reasons</span><ul>{reasons.map((reason) => ( <li key={reason}>{reason}</li>))}</ul></> )}{" "}{diagnostics.length > 0 && ( <><span>Unit diagnostics</span><ul>{diagnostics.map((diagnostic) => ( <li key={diagnostic}>{diagnostic}</li>))}</ul></> )}{" "}{candidates.length > 0 && ( <><span>Candidate evidence</span><ul>{candidates.map((candidate) => ( <li key={`${candidate.itemId}-${candidate.relationship}`}>{itemFor(candidate.itemId)?.name ?? candidate.itemId}: {" "} {candidate.reason}</li>))}</ul></> )}{" "}{alternatives.length > 0 && ( <><span>Structured alternatives</span><ul>{alternatives.map((alternative) => ( <li key={alternative.itemId}>{alternative.itemId}{" "} {alternative.compatible ? ` · ${alternative.compatible}` : ""}{" "} {alternative.reason ? ` · ${alternative.reason}` : ""}{" "} {alternative.quantityConversion ? ` · 1 ${alternative.quantityConversion.inventory.unit} = ${alternative.quantityConversion.requirement.quantity} ${alternative.quantityConversion.evidence.basis}, observed ${alternative.quantityConversion.evidence.observedAt.slice(0, 10)}` : ""}</li>))}</ul></> )}</div></details> )}
+  const availableLabel = needsUnitCorrection ? "No safe match" : line.decision === "decide" ? "Needs detail" : line.decision === "check" && line.supplied === 0 ? "Not confirmed" : formatQuantity(line.supplied, unit);
+  return ( <div data-requirement-id={line.line.id} tabIndex={-1} className={`bom-row ${highlighted ? "is-new-part" : ""} ${editing?.selectedLineId === line.line.id ? "is-selected" : ""} bom-${line.state} ${needsUnitCorrection ? "bom-unit-mismatch" : ""}`}>
+    <div className="bom-main"><div><strong>{editing && editing.project.status !== "archived" ? <Button variant="ghost" className="part-name-button" onClick={() => editing.editRequirement(line.line)}>{line.line.label}</Button> : line.line.label}</strong>{line.line.note && <span className="part-note">{line.line.note}</span>}{line.supplied > 0 && line.item && assumedStockLabel(line.item) && <span className="part-note bom-assumed-stock">{assumedStockLabel(line.item)}</span>}<Disclosure className="bom-stock-details"><DisclosureTrigger>Stock details</DisclosureTrigger><DisclosureContent><p className="requirement-stock-reason">{requirementStockReason(line)}</p>{line.item && matchedItemLabel && !needsUnitCorrection && <Button variant="ghost" className="match-link" onClick={() => onOpenItem(line.item!.id)}><span>{matchedItemLabel.name}</span>{matchedItemLabel.discriminator && <small> · {matchedItemLabel.discriminator}</small>}<Icon name="arrow-up-right" size={13}/></Button>}{!line.item && <p className="match-none">{line.line.itemId || line.gap?.matchedItemIds.length ? "Referenced stock details unavailable" : "No matching stock"}</p>}{line.remaining > 0 && <p>{formatQuantity(line.remaining, unit)} still needed.</p>}</DisclosureContent></Disclosure>{roleNeedsReview && onResolveRole && ( <div className="bom-role-choice" role="group" aria-label={`Choose how ${line.line.label} is used`} > <small>How will you use this?</small> <Button variant="ghost" type="button" className="text-button" onClick={() => onResolveRole(line.line.id, "consumed", line.line.version) } > {" "}
+                Part or material{" "} </Button> <Button variant="ghost" type="button" className="text-button" onClick={() => onResolveRole(line.line.id, "reusable", line.line.version) } > {" "}
+                Reusable tool{" "} </Button> </div> )}{" "} {expert && ( <small className={`bom-role-state ${roleNeedsReview ? "is-review" : ""}`} > <strong>{roleLabel}</strong> {roleNeedsReview ? " · Use is not recorded; review before planning stock consumption." : " · Recorded for planning."} </small> )}{" "} {expert && needsUnitCorrection && ( <small className="bom-unit-warning"><strong>Fix unit</strong> {correctionItem.unitCorrectionReason ?? "Stock is not matched or reserved until its unit is corrected from observed evidence."}</small> )}{" "}{expert && line.missingDecisions?.length ? ( <small className="bom-missing-decisions"> {" "}Decide: {" "} {line.missingDecisions.map(humanizeSpecificationDecision) .join(", ")}</small> ) : null}</div></div>
+    <div className="bom-quantity"><span className="bom-mobile-label">Needed</span><strong>{formatQuantity(required, unit)}</strong></div>
+    <div className="bom-available"><span className="bom-mobile-label">Available</span><strong>{availableLabel}</strong>{line.supplied > 0 && line.decision === "check" && <small>More to check</small>}</div>
+    <div className="bom-status"><Badge variant="outline" className={`status-pill tone-${rowDisplay.tone}`}><span className="status-symbol" aria-hidden="true">{rowDisplay.tone === "good" ? "✓" : rowDisplay.tone === "bad" ? "!" : rowDisplay.tone === "warn" ? "?" : "–"}</span>{rowDisplay.label}</Badge></div>
+    <div className="bom-row-actions"><RequirementEditAction line={line.line} compact />{expert && ( <Disclosure className="bom-expert"><DisclosureTrigger aria-label={`Show evidence for ${line.line.label}`}><span className="sr-only">Evidence</span></DisclosureTrigger><DisclosureContent><div><span>Line ID</span><p>{line.line.id}</p><span>Line version</span><p>{line.line.version}</p><span>Canonical unit</span><p>{line.line.serverUnit ?? line.line.unit}</p><span>Requirement use</span> <p> {roleNeedsReview ? "Not recorded — review whether this is used up or reusable. It is not treated as consumable." : roleLabel} </p> {line.item?.dimensions && ( <span> {" "}Recorded dimensions: {formatDimensions(line.item.dimensions)}</span> )}{" "}{reasons.length > 0 && ( <><span>Canonical gap reasons</span><ul>{reasons.map((reason) => ( <li key={reason}>{reason}</li>))}</ul></> )}{" "}{diagnostics.length > 0 && ( <><span>Unit diagnostics</span><ul>{diagnostics.map((diagnostic) => ( <li key={diagnostic}>{diagnostic}</li>))}</ul></> )}{" "}{candidates.length > 0 && ( <><span>Candidate evidence</span><ul>{candidates.map((candidate) => ( <li key={`${candidate.itemId}-${candidate.relationship}`}>{itemFor(candidate.itemId)?.name ?? candidate.itemId}: {" "} {candidate.reason}</li>))}</ul></> )}{" "}{alternatives.length > 0 && ( <><span>Structured alternatives</span><ul>{alternatives.map((alternative) => ( <li key={alternative.itemId}>{alternative.itemId}{" "} {alternative.compatible ? ` · ${alternative.compatible}` : ""}{" "} {alternative.reason ? ` · ${alternative.reason}` : ""}{" "} {alternative.quantityConversion ? ` · 1 ${alternative.quantityConversion.inventory.unit} = ${alternative.quantityConversion.requirement.quantity} ${alternative.quantityConversion.evidence.basis}, observed ${alternative.quantityConversion.evidence.observedAt.slice(0, 10)}` : ""}</li>))}</ul></> )}</div></DisclosureContent></Disclosure> )}</div>
   </div> );
 }
 
@@ -1928,14 +2180,25 @@ interface UploadRun {
   targetLabel: string;
 }
 
-export function ProjectFiles({ project, expert, sampleMode, onUpload, archived = false }: { project: Project; expert: boolean; sampleMode: boolean; onUpload: (file: File, role: string, target?: ArtifactUploadTarget) => Promise<void>; archived?: boolean; }) {
+export function ProjectFiles({ project, expert, sampleMode, onUpload, archived = false, viewState, onViewStateChange, onProjectRefresh }: { project: Project; expert: boolean; sampleMode: boolean; onUpload: (file: File, role: string, target?: ArtifactUploadTarget) => Promise<void>; onProjectRefresh: () => Promise<boolean>; archived?: boolean; viewState?: ProjectFilesViewState | undefined; onViewStateChange?: ((view: ProjectFilesViewState) => void) | undefined; }) {
   const fileInput = useRef<HTMLInputElement>(null);
-  const [fileQuery, setFileQuery] = useState("");
+  const [localViewState, setLocalViewState] = useState<ProjectFilesViewState>();
+  const view = projectFilesView(project, viewState ?? localViewState);
+  const saveView = onViewStateChange ?? setLocalViewState;
+  const fileQuery = view.query;
+  const setFileQuery = (query: string) => saveView({ ...view, query });
+  const setScopeKey = (scopeKey: string) => saveView({ ...view, scopeKey });
   const [dropActive, setDropActive] = useState(false);
   const choices = artifactScopeChoices(project, expert);
-  const [scopeKey, setScopeKey] = useState(() => artifactScopeKey(defaultArtifactScope(project)));
+  const scopeKey = view.scopeKey;
   const [uploadRun, setUploadRun] = useState<UploadRun>();
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]); const selectedChoice = choices.find((choice) => choice.key === scopeKey) ?? choices[0];
+  const detailsRef = useRef<HTMLElement>(null);
+  const imageSectionRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (view.showImages) { imageSectionRef.current?.scrollIntoView?.({ block: "start" }); imageSectionRef.current?.querySelector<HTMLButtonElement>("[data-disclosure=trigger]")?.focus({ preventScroll: true }); } }, [view.showImages]);
+  const detailsTrigger = useRef<HTMLButtonElement | null>(null);
+  const [detailsFileId, setDetailsFileId] = useState<string>();
+  const [showUpload, setShowUpload] = useState(false);
   const [previewFile, setPreviewFile] = useState<Project["artifacts"][number]>();
   const [downloadingId, setDownloadingId] = useState<string>();
   const [downloadError, setDownloadError] = useState<string>();
@@ -1962,15 +2225,19 @@ export function ProjectFiles({ project, expert, sampleMode, onUpload, archived =
   };
   const scope = selectedChoice?.target ?? { kind: "all" as const };
   const allArtifacts = project.allArtifacts ?? project.artifacts;
-  const scopeArtifacts = filterArtifactsForScope(allArtifacts, scope);
+  const scopeArtifacts = scope.kind === "all" ? allArtifacts : scope.kind === "project" && scope.projectRevisionId === project.serverRevisionId ? currentBuildFiles(project) : filterArtifactsForScope(allArtifacts, scope).filter(file => file.status !== "superseded");
   const visibleArtifacts = scopeArtifacts.filter((file) => `${file.name} ${file.role}`.toLocaleLowerCase().includes(fileQuery.trim().toLocaleLowerCase()));
+  const fileGroups = groupProjectFiles(visibleArtifacts);
+  const detailsFile = visibleArtifacts.find(file => file.id === detailsFileId);
+  useEffect(() => { if (!detailsFile) return; detailsRef.current?.focus({ preventScroll: true }); if (window.matchMedia?.("(max-width: 1100px)").matches) detailsRef.current?.scrollIntoView?.({ block: "start" }); }, [detailsFile?.id]);
   const uploadsDisabled = archived || uploadRun?.active === true || scope.kind === "all";
   const fileNavigation = useContext(UnsavedWorkContext);
   useUnsavedWork(selectedFiles.length > 0, "selected files", uploadRun?.active === true);
+  // An externally removed workstream scope must not retarget staged files.
+  useEffect(() => { setSelectedFiles([]); }, [scopeKey]);
 
   useEffect(() => {
-    setScopeKey(artifactScopeKey(defaultArtifactScope(project)));
-    setFileQuery(""); setDropActive(false); setPreviewFile(undefined);
+    setDropActive(false); setPreviewFile(undefined); setDetailsFileId(undefined); setShowUpload(false);
     setUploadRun(undefined); setSelectedFiles([]); }, [project.id, project.serverRevisionId]);
 
   const processFiles = async (selected: File[]) => {
@@ -2019,46 +2286,53 @@ export function ProjectFiles({ project, expert, sampleMode, onUpload, archived =
       ? "Read-only view. Choose a revision before adding files."
       : scope.kind === "project"
         ? "New files will be saved with this project revision."
-        : "New files will be saved with this work item revision."; const addFilesLabel = selectedFiles.length ? `Add ${selectedFiles.length} file${selectedFiles.length === 1 ? "" : "s"}` : "Add files"; const selectedFilesLabel = selectedFiles.map((file) => file.name).join(", "); return ( <section className="surface files-section">
-    <div className="files-header"><div><span className="eyebrow">Files</span><h2>Build files</h2><p>{archived ? "This archive keeps files and history available, but uploads resume only after you restore the project." : sampleMode ? "Try file uploads here. Changes stay in this sample workspace." : "Keep CAD, exports, build plates, and validation notes with the revision they belong to."}</p></div><div className="file-upload-actions"><input ref={fileInput} type="file" multiple className="sr-only" aria-label="Choose files to upload" onChange={chooseFiles} disabled={uploadsDisabled} /><button type="button" className="button button-secondary" onClick={() => fileInput.current?.click()} disabled={uploadsDisabled} >{archived ? "Restore to add files" : scope.kind === "all" ? "Choose a revision first" : selectedFiles.length ? "Change selection" : "Choose files"} </button> <button type="button" className="button button-primary" onClick={addFiles} disabled={uploadsDisabled || selectedFiles.length === 0} aria-busy={uploadRun?.active} ><Icon name="upload" size={16} />{uploadRun?.active ? "Uploading…" : addFilesLabel}</button> {selectedFiles.length > 0 && ( <span className="selected-file-summary" role="status"> {selectedFilesLabel}</span> )} </div></div>
-    <div className="artifact-scope-control"><label className="form-field" htmlFor="artifact-scope"><span>File scope</span><select id="artifact-scope" aria-label="Choose file scope" value={selectedChoice?.key ?? "all"} onChange={(event) => { const next = event.target.value; const change = () => { setScopeKey(next); setSelectedFiles([]); }; if (selectedFiles.length && fileNavigation) fileNavigation.request(change); else change(); }} disabled={uploadRun?.active || archived}>{choices.map((choice) => ( <option key={choice.key} value={choice.key} disabled={choice.disabled}>{choice.label}</option>))}</select></label><div className="file-scope-identity"><Icon name="folder" size={15} /><span><strong>{artifactScopeIdentity(scope, expert)}</strong><code>{scopeDescription}</code></span><span className="file-scope-context">{sampleMode ? "sample workspace" : "private workspace"}</span></div></div>
-    {!archived && <div className={`files-drop-area ${dropActive ? "is-dragging" : ""} ${uploadsDisabled ? "is-disabled" : ""}`} role="group" aria-label="File drop area"
+        : "New files will be saved with this work item revision."; const addFilesLabel = selectedFiles.length ? `Add ${selectedFiles.length} file${selectedFiles.length === 1 ? "" : "s"}` : "Add files"; const selectedFilesLabel = selectedFiles.map((file) => file.name).join(", "); return ( <Card asChild><section className="surface files-section"><div className={`files-working-layout${detailsFile ? " has-file-details" : ""}`}><div className="files-register">
+    <div className="files-header"><div><h2>Files</h2><p>{scope.kind === "all" ? "File history · all recorded revisions" : scope.kind === "work-item" ? selectedChoice?.label : `Current revision · ${project.currentRevision}`}</p></div><div className="file-upload-actions"><Input ref={fileInput} type="file" multiple className="sr-only" aria-label="Choose files to upload" onChange={chooseFiles} disabled={uploadsDisabled}/>{selectedFiles.length ? <><Button variant="ghost" onClick={() => fileInput.current?.click()} disabled={uploadsDisabled}>Change selection</Button><Button onClick={addFiles} disabled={uploadsDisabled} aria-busy={uploadRun?.active}><Icon name="upload" size={16}/>{uploadRun?.active ? "Uploading…" : addFilesLabel}</Button></> : <Button variant="outline" onClick={() => { setShowUpload(true); fileInput.current?.click(); }} disabled={uploadsDisabled}><Icon name="plus" size={16}/>{archived ? "Restore to add files" : scope.kind === "all" ? "Choose a revision first" : "Add files"}</Button>}</div></div>
+    {archived && <p className="form-hint">Archived files remain available. Restore the project to add files.</p>}
+    {selectedFiles.length > 0 && <p className="selected-file-summary" role="status">{selectedFilesLabel}</p>}
+    <div className="files-list-toolbar"><Label className="field-search"><Icon name="search" size={16}/><Input aria-label="Search project files" placeholder="Find a file…" value={fileQuery} onChange={event => setFileQuery(event.target.value.slice(0, 200))}/></Label><Button variant="ghost" disabled={uploadRun?.active} onClick={() => { const change = () => { setScopeKey(scope.kind === "all" ? artifactScopeKey(defaultArtifactScope(project)) : "all"); setSelectedFiles([]); }; if (selectedFiles.length && fileNavigation) fileNavigation.request(change); else change(); }}>{scope.kind === "all" ? "Current files" : "View history"}</Button></div>
+    {(showUpload || selectedFiles.length > 0 || choices.filter(choice => !choice.disabled && !choice.readOnly).length > 1 || expert) && <div className="artifact-scope-control"><Label className="form-field" htmlFor="artifact-scope"><span>File scope</span><NativeSelect id="artifact-scope" aria-label="Choose file scope" value={selectedChoice?.key ?? "all"} onChange={(event) => { const next = event.target.value; const change = () => { setScopeKey(next); setSelectedFiles([]); }; if (selectedFiles.length && fileNavigation) fileNavigation.request(change); else change(); }} disabled={uploadRun?.active}>{choices.map((choice) => ( <NativeSelectOption key={choice.key} value={choice.key} disabled={choice.disabled}>{choice.label}</NativeSelectOption>))}</NativeSelect></Label>{(showUpload || selectedFiles.length > 0 || expert) && <div className="file-scope-identity"><Icon name="folder" size={15} /><span><strong>{artifactScopeIdentity(scope, expert)}</strong><code>{scopeDescription}</code></span><span className="file-scope-context">{sampleMode ? "sample workspace" : "private workspace"}</span></div>}</div>}
+    {!archived && (showUpload || selectedFiles.length > 0) && <div className={`files-drop-area ${dropActive ? "is-dragging" : ""} ${uploadsDisabled ? "is-disabled" : ""}`} role="group" aria-label="File drop area"
       onDragOver={(event) => { if (Array.from(event.dataTransfer.types).includes("Files")) { event.preventDefault(); if (!uploadsDisabled) setDropActive(true); } }}
       onDragLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDropActive(false); }}
       onDrop={(event) => { event.preventDefault(); setDropActive(false); if (!uploadsDisabled) { const selected = Array.from(event.dataTransfer.files); if (selected.length) setSelectedFiles(selected); } }}>
       <Icon name="upload" size={22} /><div><strong>{scope.kind === "all" ? "Select a revision to add files" : selectedFiles.length ? `${selectedFiles.length} files selected` : "Drop design files here"}</strong><span>{scope.kind === "all" ? "This view is read-only." : "Review the selection, then select Add files. Nothing uploads on drop."}</span></div>
-      {selectedFiles.length > 0 && <button type="button" className="text-button" disabled={uploadsDisabled} onClick={() => setSelectedFiles([])}>Clear file selection</button>}
+      {selectedFiles.length > 0 && <Button variant="ghost" type="button" className="text-button" disabled={uploadsDisabled} onClick={() => setSelectedFiles([])}>Clear file selection</Button>}
     </div>}
-    {scopeArtifacts.length > 0 && <div className="files-list-toolbar"><label className="field-search"><Icon name="search" size={16} /><input aria-label="Search project files" placeholder="Find a file or type" value={fileQuery} onChange={(event) => setFileQuery(event.target.value.slice(0, 200))} /></label><span>{visibleArtifacts.length} of {scopeArtifacts.length} files in this view</span></div>}
-    {uploadRun && ( <div className={`upload-status ${errorCount ? "has-errors" : ""}`} role="status" aria-live="polite"><div className="upload-status-heading"><strong>{uploadRun.active ? `Uploading ${Math.min((uploadRun.currentIndex ?? uploadRun.completed) + 1, uploadRun.total)} of ${uploadRun.total}` : `${successCount} of ${uploadRun.total} file${uploadRun.total === 1 ? "" : "s"} uploaded`}</strong><span>{currentEntry?.name ?? (errorCount ? `${errorCount} failed` : `Target: ${uploadRun.targetLabel}`)}</span></div><progress max={uploadRun.total} value={uploadRun.completed} aria-label="Artifact upload progress" /><ul>{uploadRun.entries.map((entry) => ( <li key={`${entry.name}-${entry.role}`}><span><strong>{entry.name}</strong><small>{entry.role}</small></span><span className={`upload-entry-state upload-${entry.status}`}>{entry.status === "pending" ? "Waiting" : entry.status === "uploading" ? "Uploading…" : entry.status === "success" ? "Uploaded" : "Not uploaded"}</span>{entry.status === "error" && entry.message && ( <p role="alert">{entry.message}</p> )}</li>))}</ul></div> )}{" "}
-    {downloadError && <p className="form-error" role="alert">{downloadError}</p>}{sampleMode && visibleArtifacts.length > 0 && <p className="form-hint">Sample files are practice records; previews and downloads are available in your private workspace.</p>}{visibleArtifacts.length ? (
-      <div className="table-scroll"><table className={`data-table files-table ${expert ? "" : "files-table-simple"}`}>
-        <caption className="sr-only">Artifacts in {artifactScopeIdentity(scope, expert)}</caption>
-        <thead><tr><th scope="col">File</th><th scope="col">Actions</th>{expert && <><th scope="col">Role</th><th scope="col">Scope</th><th scope="col">Revision</th><th scope="col">Updated</th><th scope="col">State</th><th scope="col">SHA-256</th></>}</tr></thead>
-        <tbody>{visibleArtifacts.map((file) => (
-          <tr key={file.id}>
-            <td><span className="file-name"><Icon name="file" size={18} /><span><strong>{file.name}</strong><small>{file.size}{!expert && <> · <span>{file.role}</span> · <span>{artifactRevisionLabel(file, false)}</span></>}</small></span></span></td>
-            <td><div className="file-preview-actions">{canPreviewArtifact(file.name) && <button type="button" className="button button-quiet" aria-label={`Preview ${file.name}`} disabled={sampleMode} onClick={() => setPreviewFile(file)}>Preview</button>}<button type="button" className="button button-quiet" aria-label={`Download ${file.name}`} disabled={sampleMode || downloadingId !== undefined} onClick={() => { void downloadFile(file); }}>{downloadingId === file.id ? "Downloading…" : "Download"}</button></div></td>
-            {expert && <><td>{file.role}</td><td className="file-scope-cell">{artifactIdentityLabel(file, true)}</td><td>{artifactRevisionLabel(file, true)}</td><td>{file.updated}</td><td>{file.status}</td><td><code className="hash-cell">{file.hash}</code></td></>}
-          </tr>
-        ))}</tbody>
-      </table></div>
-    ) : fileQuery.trim() ? <div className="files-empty"><strong>No matching files</strong><button type="button" className="text-button" onClick={() => setFileQuery("")}>Clear file search</button></div> : ( <div className="files-empty"><Icon name="folder" size={20} /><strong>{scope.kind === "all" ? "No files in this workspace yet." : "No files in this revision yet."}</strong><span>{scope.kind === "all" ? expert ? "Legacy and unbound files will appear here when they are retained by the service." : "Files not assigned to a current revision will appear here." : "Add the editable source or first export when you have one."}</span></div> )}{" "}
-    {previewFile && <LazyArtifactPreview key={previewFile.id} file={previewFile} onClose={() => setPreviewFile(undefined)} />}
-    {expert && ( <details className="expert-detail file-manifest-detail"><summary>Show manifest details</summary><div className="manifest-grid"><span>Binding</span><strong>{bindingLabel}</strong><span>Scope</span><strong>{artifactScopeIdentity(scope, true)}</strong><span>Retention</span><strong> {" "}Older revision files remain auditable when the service records them.{" "} </strong><span>Download</span><strong>Files are checked against their SHA-256 before saving. Downloads never execute files.</strong></div></details> )}
-  </section> );
+    {uploadRun && ( <div className={`upload-status ${errorCount ? "has-errors" : ""}`} role="status" aria-live="polite"><div className="upload-status-heading"><strong>{uploadRun.active ? `Uploading ${Math.min((uploadRun.currentIndex ?? uploadRun.completed) + 1, uploadRun.total)} of ${uploadRun.total}` : `${successCount} of ${uploadRun.total} file${uploadRun.total === 1 ? "" : "s"} uploaded`}</strong><span>{currentEntry?.name ?? (errorCount ? `${errorCount} failed` : `Target: ${uploadRun.targetLabel}`)}</span></div><Progress value={uploadRun.total ? uploadRun.completed / uploadRun.total * 100 : 0} aria-label="Artifact upload progress" /><ul>{uploadRun.entries.map((entry) => ( <li key={`${entry.name}-${entry.role}`}><span><strong>{entry.name}</strong><small>{entry.role}</small></span><span className={`upload-entry-state upload-${entry.status}`}>{entry.status === "pending" ? "Waiting" : entry.status === "uploading" ? "Uploading…" : entry.status === "success" ? "Uploaded" : "Not uploaded"}</span>{entry.status === "error" && entry.message && ( <Alert asChild><p role="alert">{entry.message}</p></Alert> )}</li>))}</ul></div> )}{" "}
+    {downloadError && <Alert asChild><p className="form-error" role="alert">{downloadError}</p></Alert>}{sampleMode && visibleArtifacts.length > 0 && <p className="form-hint">Sample files are practice records; previews and downloads are available in your private workspace.</p>}{fileQuery.trim() && !visibleArtifacts.length ? <div className="files-empty"><strong>No matching files</strong><Button variant="ghost" onClick={() => setFileQuery("")}>Clear file search</Button></div> : <div className="project-file-groups">{fileGroups.map(group => <section key={group.id} className={`project-file-group${group.files.length ? "" : " is-empty"}`} aria-label={group.label}><div className="file-group-heading"><h3>{group.label}</h3>{group.files.length > 0 && <p>{group.guidance}</p>}</div>{group.files.length ? group.files.map(file => <div key={file.id} className={`project-file-row ${detailsFile?.id === file.id ? "is-selected" : ""}`}><Icon name={group.id === "print" ? "box" : group.id === "electronics" ? "circuit" : group.id === "cad" ? "code" : "file"} size={23}/><Button variant="ghost" className="project-file-name" onClick={event => { detailsTrigger.current = event.currentTarget; setDetailsFileId(file.id); }} aria-label={`Details for ${file.name}`}><strong>{file.name}</strong><small>{artifactRevisionLabel(file, expert)} · {file.role}{file.status === "superseded" ? " · Superseded" : ""}{file.machine ? ` · ${file.machine}` : ""}{file.material ? ` · ${file.material}` : ""}</small></Button><div className="file-preview-actions">{artifactPreviewKind(file.name) ? <Button variant="outline" aria-label={`Preview ${file.name}`} disabled={sampleMode} onClick={() => { setDetailsFileId(file.id); setPreviewFile(file); }}>Preview</Button> : <Button variant="outline" aria-label={`Download ${file.name}`} disabled={sampleMode || downloadingId !== undefined} onClick={() => { void downloadFile(file); }}>{downloadingId === file.id ? "Downloading…" : file.name.toLowerCase().endsWith(".3mf") ? "Download 3MF" : "Download"}</Button>}</div></div>) : <div className="file-group-empty"><span>{scope.kind === "all" ? "No recorded files" : "No current files"}</span>{!uploadsDisabled && <Button variant="ghost" aria-label={`Add ${group.label.toLowerCase()} files`} onClick={() => { setShowUpload(true); fileInput.current?.click(); }}>Add file</Button>}</div>}</section>)}</div>}</div>{detailsFile && <aside ref={detailsRef} tabIndex={-1} className="project-file-details" aria-label={`File details: ${detailsFile.name}`}><Button variant="ghost" size="icon" className="file-details-close" aria-label="Close file details" onClick={() => { setDetailsFileId(undefined); detailsTrigger.current?.focus(); }}><Icon name="close" size={18}/></Button><h3>{detailsFile.name}</h3><p>{artifactRevisionLabel(detailsFile, expert)} · {detailsFile.role}</p><dl><div><dt>File size</dt><dd>{detailsFile.size}</dd></div><div><dt>Recorded state</dt><dd>{detailsFile.status === "validated" ? "Digital validation recorded" : detailsFile.status === "superseded" ? "Superseded" : "Candidate file"}</dd></div>{detailsFile.machine && <div><dt>Machine</dt><dd>{detailsFile.machine}</dd></div>}{detailsFile.material && <div><dt>Material</dt><dd>{detailsFile.material}</dd></div>}<div><dt>Updated</dt><dd>{detailsFile.updated}</dd></div><div><dt>Revision</dt><dd>{artifactIdentityLabel(detailsFile, expert)}</dd></div></dl><div className="file-details-actions">{artifactPreviewKind(detailsFile.name) && <Button variant="outline" disabled={sampleMode} onClick={() => setPreviewFile(detailsFile)}>Preview file</Button>}<Button disabled={sampleMode || downloadingId !== undefined} onClick={() => { void downloadFile(detailsFile); }}>{downloadingId === detailsFile.id ? "Downloading…" : "Download file"}</Button></div>{/\.(3mf|stl|gcode|bgcode)$/i.test(detailsFile.name) && <section className="slicer-check-guidance"><h4>Check in your slicer</h4><ol><li>Confirm printer and nozzle.</li><li>Check material and supports.</li><li>Review the toolpath preview.</li></ol><p>Download the file, then open it in your slicer. Opening a file does not start a print.</p></section>}{!artifactPreviewKind(detailsFile.name) && <p className="form-hint">A browser preview is unavailable for this file. Download it to review in a suitable application.</p>}<Disclosure><DisclosureTrigger>File verification details</DisclosureTrigger><DisclosureContent><p>SHA-256</p><code className="file-detail-hash">{detailsFile.hash}</code><p>Downloads are checked against this recorded hash before saving.</p></DisclosureContent></Disclosure></aside>}</div>
+    {previewFile && <ArtifactPreview key={previewFile.id} file={previewFile} onClose={() => setPreviewFile(undefined)} />}
+    {!sampleMode && <Disclosure ref={imageSectionRef} className="project-images-disclosure" open={view.showImages ?? false} onOpenChange={showImages => saveView({ ...view, showImages })}><DisclosureTrigger>Project image</DisclosureTrigger><DisclosureContent><ProjectProductImageEditor key={`${project.id}:${project.serverRevisionId}`} project={project} onSaved={onProjectRefresh}/></DisclosureContent></Disclosure>}
+    {expert && ( <Disclosure className="expert-detail file-manifest-detail"><DisclosureTrigger>Show manifest details</DisclosureTrigger><DisclosureContent><div className="manifest-grid"><span>Binding</span><strong>{bindingLabel}</strong><span>Scope</span><strong>{artifactScopeIdentity(scope, true)}</strong><span>Retention</span><strong> {" "}Older revision files remain auditable when the service records them.{" "} </strong><span>Download</span><strong>Files are checked against their SHA-256 before saving. Downloads never execute files.</strong></div></DisclosureContent></Disclosure> )}
+  </section></Card> );
 }
+export function combinedProjectSummary(projects: Project[], items: InventoryItem[]): ReturnType<typeof calculateProjectSummary> {
+  const summaries = projects.filter(project => project.status !== "archived").map(project => ({ project, summary: calculateProjectSummary(project, items) }));
+  const result: ReturnType<typeof calculateProjectSummary> = { totalLines: 0, readyLines: 0, inspectLines: 0, missingLines: 0, optionalLines: 0, readyDecisionLines: 0, checkLines: 0, decideLines: 0, sourceLines: 0, partialLines: 0, readinessUnavailable: false, lineStatuses: [] };
+  for (const { project, summary } of summaries) {
+    for (const key of ["totalLines", "readyLines", "inspectLines", "missingLines", "optionalLines", "readyDecisionLines", "checkLines", "decideLines", "sourceLines", "partialLines"] as const) result[key] += summary[key];
+    result.readinessUnavailable ||= summary.readinessUnavailable;
+    result.lineStatuses.push(...summary.lineStatuses.map(row => ({ ...row, line: { ...row.line, label: `${project.name} · ${row.line.label}` } })));
+  }
+  return result;
+}
+
 type ShoppingOffer = (typeof fixtureOffers)[number];
 type ShoppingRow = { readonly line: BomLineStatus; readonly offers: readonly ShoppingOffer[]; };
 
 /** Keep the copied proposal empty when there are no required Source rows. */
 export function shoppingDraftText(rows: readonly ShoppingRow[]): string {
-  return rows.map(({ line, offers: lineOffers }) => {
+  if (!rows.length) return "";
+  const lines = rows.map(({ line, offers: lineOffers }) => {
     const selectedOffer = lineOffers.find((offer) => offer.preferred) ?? lineOffers[0];
     const unit = line.gap?.unit ?? line.line.unit;
     const required = line.gap?.requiredQuantity ?? line.line.required;
-    return `${line.line.label}: ${formatQuantity(line.remaining || required, unit)}${selectedOffer ? ` · ${selectedOffer.supplier} · ${formatMoney(selectedOffer.priceMinor, selectedOffer.currency)}` : ""}`;
-  }).join("\n");
+    const heading = `${line.line.label}: ${formatQuantity(line.remaining || required, unit)} to source`;
+    if (!selectedOffer) return `${heading}\n  No supplier offer recorded.`;
+    const url = recordedOfferUrl(selectedOffer);
+    return `${heading}\n  ${selectedOffer.supplier} · ${selectedOffer.title}\n  ${formatMoney(selectedOffer.priceMinor, selectedOffer.currency)} ${selectedOffer.currency} per recorded package · ${selectedOffer.pack}\n  Price recorded ${selectedOffer.observed}${url ? `\n  ${url}` : ""}`;
+  });
+  return `Draft shopping list — review before ordering\nRecorded package prices are not a quantity-adjusted order total. Check package sizes, current prices, shipping and tax.\n\n${lines.join("\n\n")}`;
 }
 
 /** Only an explicitly recorded HTTP(S) URL may become a supplier link. */
@@ -2097,16 +2371,17 @@ export function ShoppingList({ project: _project, summary, offers, expert, onToa
     }
   };
   const emptyState = shoppingEmptyState(summary);
-  const canCopy = !summary.readinessUnavailable && rows.length > 0;
-  return ( <section className="surface shopping-section"><div className="shopping-header"><div><span className="eyebrow">Shopping list</span><h2>What to buy</h2><p>Recorded offers for requirements that still need sourcing. BenchLedger does not place orders.</p></div></div><div className="sourcing-lead"><p><strong>{rows.length} {rows.length === 1 ? "thing" : "things"} to buy</strong>{currencies.length ? <> · est. {currencies.map((currency) => formatMoney(totalsByCurrency[currency] ?? 0, currency)).join(" + ")}</> : rows.length ? " · no priced offers yet" : null}</p><button type="button" className="button button-secondary" onClick={() => { void copyDraftList(); }} disabled={!canCopy}><Icon name="copy" size={16} />Copy list</button></div>{summary.readinessUnavailable ? ( <EmptyState icon="warning" title={emptyState.title} description={emptyState.description} /> ) : rows.length ? ( <div className="shopping-list">{rows.map(({ line, offers: lineOffers }) => { const unit = line.gap?.unit ?? line.line.unit; const required = line.gap?.requiredQuantity ?? line.line.required; return ( <div className="shopping-row" key={line.line.id}><div className="shopping-item"><span className="bom-state-mark mark-bad">!</span><div><strong>{line.line.label}</strong><span>{formatQuantity(line.remaining || required, unit)}{" "} required{" "} </span></div></div><div className="offer-stack">{lineOffers.length ? ( lineOffers.map((offer) => { const url = recordedOfferUrl(offer); const content = ( <><span className="offer-supplier">{offer.preferred && ( <Icon name="check-circle" size={14} /> )}{" "}{offer.supplier}</span><span className="offer-title">{offer.title}<small>{offer.pack} · price recorded {offer.observed}</small></span><strong>{formatMoney(offer.priceMinor, offer.currency)}</strong><span className="offer-eta">{offer.eta}</span>{url && <Icon name="external" size={14} />}</> ); return url ? ( <a className={`offer-row ${offer.preferred ? "is-preferred" : ""}`} href={url} target="_blank" rel="noreferrer" key={offer.id}>{content}<span className="sr-only">Opens in a new tab.</span> </a> ) : ( <div className={`offer-row offer-row-unlinked ${offer.preferred ? "is-preferred" : ""}`} key={offer.id}>{content}</div> ); }) ) : ( <div className="offer-empty"><Icon name="info" size={15} /><span> {" "}No supplier offer is recorded. Copy the draft list and source this item outside BenchLedger.{" "} </span></div> )}</div></div> ); })}</div> ) : ( <EmptyState icon="check-circle" title={emptyState.title} description={emptyState.description} /> )}{" "}{expert && ( <details className="expert-detail offer-notes"><summary>Offer matching rules</summary><p> {" "}BenchLedger uses exact or confirmed-alternative candidates from canonical readiness. Check and Decide lines never enter this proposal. Each offer retains its supplier, source currency, package quantity, and observation date. An offer is never purchase authority.{" "} </p></details> )}<div className="shopping-actions"><button type="button" className="button button-quiet" onClick={onBackToPlan}> {" "}Back to plan<Icon name="arrow-left" size={16} /></button></div> {showManualCopy && ( <textarea className="manual-copy-text" aria-label="Shopping list to copy manually" readOnly value={draftList} onFocus={(event) => event.currentTarget.select()} /> )} </section> );
+  return ( <Card asChild><section className="surface shopping-section"><div className="shopping-header"><div><h2>Review what to source</h2><p> {" "}
+            Review recorded offers for requirements that still need sourcing.
+            BenchLedger does not place orders.{" "} </p></div><div className="shopping-total" aria-label="Recorded offer prices by currency"><span>Recorded offer prices</span>{currencies.length ? ( <div className="shopping-total-values">{currencies.map((currency) => ( <span className="shopping-total-line" key={currency}><strong>{formatMoney(totalsByCurrency[currency] ?? 0, currency)}</strong><small>{currency}</small></span>))}</div> ) : ( <strong className="shopping-total-empty">No priced offers</strong> )}<small>{selectedOffers.length} of {rows.length} requirements priced</small></div></div>{currencies.length > 0 && <p className="shopping-price-note">One recorded package per priced requirement, using the preferred offer or first available record. Check package quantities, current prices, shipping and tax before ordering.</p>}{summary.readinessUnavailable ? ( <EmptyState icon="warning" title={emptyState.title} description={emptyState.description} /> ) : rows.length ? ( <div className="shopping-list">{rows.map(({ line, offers: lineOffers }) => { const unit = line.gap?.unit ?? line.line.unit; const required = line.gap?.requiredQuantity ?? line.line.required; return ( <div className="shopping-row" key={line.line.id}><div className="shopping-item"><span className="bom-state-mark mark-bad">!</span><div><strong>{line.line.label}</strong><span>{formatQuantity(line.remaining || required, unit)}{" "} required{" "} </span></div></div><div className="offer-stack">{lineOffers.length ? ( lineOffers.map((offer) => { const url = recordedOfferUrl(offer); const content = ( <><span className="offer-supplier">{offer.preferred && ( <Icon name="check-circle" size={14} /> )}{" "}{offer.supplier}</span><span className="offer-title">{offer.title}<small>{offer.pack} · price recorded {offer.observed}</small></span><strong>{formatMoney(offer.priceMinor, offer.currency)}</strong><span className="offer-eta">{offer.eta}</span>{url && <Icon name="external" size={14} />}</> ); return url ? ( <a className={`offer-row ${offer.preferred ? "is-preferred" : ""}`} href={url} target="_blank" rel="noreferrer" key={offer.id}>{content}<span className="sr-only">Opens in a new tab.</span> </a> ) : ( <div className={`offer-row offer-row-unlinked ${offer.preferred ? "is-preferred" : ""}`} key={offer.id}>{content}</div> ); }) ) : ( <div className="offer-empty"><Icon name="info" size={15} /><span> {" "}No supplier offer is recorded. Copy the draft list and source this item outside BenchLedger.{" "} </span></div> )}</div></div> ); })}</div> ) : ( <EmptyState icon="check-circle" title={emptyState.title} description={emptyState.description} /> )}{" "}{expert && ( <Disclosure className="expert-detail offer-notes"><DisclosureTrigger>Offer matching rules</DisclosureTrigger><DisclosureContent><p> {" "}BenchLedger uses exact or confirmed-alternative candidates from canonical readiness. Check and Decide lines never enter this proposal. Each offer retains its supplier, source currency, package quantity, and observation date. An offer is never purchase authority.{" "} </p></DisclosureContent></Disclosure> )}<div className="shopping-actions"><Button variant="outline" className="button button-secondary" onClick={() => { void copyDraftList(); }} disabled={summary.readinessUnavailable || rows.length === 0}><Icon name="copy" size={16} /> Copy draft list{" "} </Button><Button variant="ghost" type="button" className="button button-quiet" onClick={onBackToPlan}> {" "}Back to parts<Icon name="arrow-left" size={16} /></Button></div> {showManualCopy && ( <Textarea className="manual-copy-text" aria-label="Shopping list to copy manually" readOnly value={draftList} onFocus={(event) => event.currentTarget.select()} /> )} </section></Card> );
 } export function CapabilitiesPage({ expert: _expert, onCopy }: { expert: boolean; onCopy: (message: string, tone?: ToastTone) => void; }) {
   const capabilityText = `BenchLedger workspace context\n\nRead benchledger://capabilities for the current tool names, then refresh the project and inventory context before making recommendations or writes.\nUse Preview before Commit wherever the live capability contract offers that flow, and commit only after the required approval.\nUse inventory and project evidence to classify confirmed reuse, inspect-first checks, missing specifications, and source gaps.\nTreat Ready as counted or commissioned only. Treat Check as inspect-first, never as available.\nOnly required Source lines belong in a shopping proposal. Never purchase, add to cart, reserve or consume stock, publish, deploy, start or heat a printer, flash firmware, or overwrite retained evidence without explicit approval.\nUse browser Files to upload or download. An agent with host filesystem permission can use node scripts/artifact-transfer.mjs --help with privately configured credentials. MCP handles metadata, never file bytes or local paths.`;
   const copyContext = async () => { if (await copyTextWithFallback(capabilityText)) onCopy("Agent context copied to your clipboard."); else onCopy( "Copy did not work. Select the visible context block and copy it manually.", "error" ); };
   return ( <>
     <PageHeader eyebrow="Agent access" title="Agent workspace context" description="Read the same inventory and project evidence through the web interface, REST API, or MCP." action="Copy context" actionIcon="copy" onAction={copyContext} />
     <section className="agent-callout"><div className="agent-callout-icon"><Icon name="code" size={21} /></div><div><strong>Read capabilities before using tools.</strong><p> {" "}Use inventory and project evidence to identify reuse, required checks, and missing parts.{" "} </p></div><span className="api-status">Live contract</span></section>
-    <div className="capabilities-layout"><section className="surface context-section"><SectionHeading eyebrow="Technical quickstart" title="Workspace rules" action="Copy" onAction={copyContext} /><pre className="context-block"><code>{capabilityText}</code></pre><div className="context-footer"><span><Icon name="info" size={15} /> Live tool names come from the
-              capability contract.{" "} </span><code>benchledger://capabilities</code></div></section><section className="surface capability-list-section"><SectionHeading eyebrow="Safe workflow" title="How agents should work" /><ol className="capability-list agent-workflow-list"> <li><strong>Read live capabilities</strong> <span>
+    <div className="capabilities-layout"><Card asChild><section className="surface context-section"><SectionHeading eyebrow="Technical quickstart" title="Workspace rules" action="Copy" onAction={copyContext} /><pre className="context-block"><code>{capabilityText}</code></pre><div className="context-footer"><span><Icon name="info" size={15} /> Live tool names come from the
+              capability contract.{" "} </span><code>benchledger://capabilities</code></div></section></Card><Card asChild><section className="surface capability-list-section"><SectionHeading eyebrow="Safe workflow" title="How agents should work" /><ol className="capability-list agent-workflow-list"> <li><strong>Read live capabilities</strong> <span>
                 Use the capability URI for current tool names and supported
                 operations.
               </span></li> <li> <strong>Refresh context</strong><span>
@@ -2119,91 +2394,43 @@ export function ShoppingList({ project: _project, summary, offers, expert, onToa
                 Purchases, stock use, printer control, publishing, deployment,
                 and destructive changes need explicit approval.
               </span></li> </ol> <p className="context-footer"> <Icon name="info" size={15} /> Artifact upload and download bytes
-            stay in the authenticated browser or HTTP Files flow.{" "}</p></section></div>
-    <section className="surface agent-prompts"><SectionHeading eyebrow="Example requests" title="Common tasks" /><div className="prompt-list"><Prompt text="Can I build this with what I have?" onCopy={onCopy} /><Prompt text="Prepare a sourced shopping list. Do not place an order." onCopy={onCopy} /><Prompt text="Which stock needs a physical count before I reserve it?" onCopy={onCopy} /><Prompt text="Read the latest project revision and list the changes." onCopy={onCopy} /></div></section>
+            stay in the authenticated browser or HTTP Files flow.{" "}</p></section></Card></div>
+    <Card asChild><section className="surface agent-prompts"><SectionHeading eyebrow="Example requests" title="Common tasks" /><div className="prompt-list"><Prompt text="Can I build this with what I have?" onCopy={onCopy} /><Prompt text="Prepare a sourced shopping list. Do not place an order." onCopy={onCopy} /><Prompt text="Which stock needs a physical count before I reserve it?" onCopy={onCopy} /><Prompt text="Read the latest project revision and list the changes." onCopy={onCopy} /></div></section></Card>
   </> );
-} export function Prompt({ text, onCopy }: { text: string; onCopy: (message: string, tone?: ToastTone) => void; }) { const [showManualCopy, setShowManualCopy] = useState(false); const copy = async () => { if (await copyTextWithFallback(text)) { setShowManualCopy(false); onCopy("Request copied."); } else { setShowManualCopy(true); onCopy( "Copy did not work. Select the request below and copy it manually.", "error" ); } }; return ( <div className="prompt-copy-control"> <button type="button" className="prompt-row" onClick={() => { void copy(); }}><Icon name="code" size={15} /><span>{text}</span><Icon name="copy" size={14} /></button> {showManualCopy && ( <textarea className="manual-copy-text" aria-label="Request to copy manually" readOnly value={text} onFocus={(event) => event.currentTarget.select()} /> )} </div> ); } export function SettingsPage({ expert, sampleMode, connection, categories, categoriesLoading, categoriesError, onRetryCategories, onCreateCategory, onUpdateCategory, onArchiveCategory, hideLogout, onExpert, onLogout }: { expert: boolean; sampleMode: boolean; connection: ConnectionState; categories: readonly ManagedInventoryCategory[]; categoriesLoading: boolean; categoriesError?: string | undefined; onRetryCategories: () => void; onCreateCategory: (input: CategoryCreateInput) => Promise<ManagedInventoryCategory | undefined>; onUpdateCategory: (id: string, input: CategoryUpdateInput, expectedVersion: number) => Promise<ManagedInventoryCategory | undefined>; onArchiveCategory: (id: string, expectedVersion: number) => Promise<ManagedInventoryCategory | undefined>; hideLogout: boolean; onExpert: () => void; onLogout: () => void; }) {
-  const connected = connection === "ready"; const [systemOpen, setSystemOpen] = useState(expert); const technicalDetailsHelpId = useId(); const activeCategoryCount = categories.filter( (category) => !category.archived ).length; return ( <><PageHeader eyebrow="Workspace" title="Settings" description="Choose how much detail to show and manage your workspace." /><div className="settings-layout"><section className="surface settings-section"><SectionHeading eyebrow="Display" title="Display detail" /><div className="setting-row"><div><strong>Technical details</strong><span id={technicalDetailsHelpId}> {expert ? "Hide identifiers and technical evidence for a simpler view." : "Show identifiers, evidence, and compatibility details when you need them."} </span></div><button type="button" className={`mode-toggle setting-control ${expert ? "is-expert" : ""}`} aria-pressed={expert} aria-describedby={technicalDetailsHelpId} onClick={onExpert}><span className="mode-dot" />{expert ? "Hide technical details" : "Show technical details"}</button></div></section>{categoriesLoading && ( <div className="category-loading" role="status" aria-live="polite"><Icon name="refresh" size={16} /> Loading inventory categories…{" "} </div> )}{" "}{categoriesError ? ( <section className="surface settings-section category-load-error" role="alert"><Icon name="warning" size={18} /><div><strong>Could not load inventory categories.</strong><span>{categoriesError}</span></div><button type="button" className="button button-secondary" onClick={onRetryCategories}> {" "}Try again{" "} </button></section> ) : !categoriesLoading ? ( <details className="surface settings-section settings-category-details"> <summary> <span> <span className="eyebrow">Inventory</span> <strong>Categories · {activeCategoryCount}</strong> <small>Organise items and subcategories</small> </span> <Icon name="chevron-down" size={15} /> </summary> <div className="settings-category-content"> <CategoryManager categories={categories} onCreate={onCreateCategory} onUpdate={onUpdateCategory} onArchive={onArchiveCategory} /> </div> </details> ) : null}<details className="surface settings-section settings-system-details" open={systemOpen} onToggle={(event) => setSystemOpen(event.currentTarget.open)} > <summary> <span> <span className="eyebrow">System</span> <strong>{expert ? "Connection details" : "Connection and agent access"}</strong> {expert && <small>API connection and agent access</small>} </span> <Icon name="chevron-down" size={15} /> </summary> <section className="settings-system-content"><SectionHeading eyebrow="Connection" title={expert ? "Private API" : "Workspace connection"} /><div className="connection-panel"><div className="connection-panel-top"><span className="connection-icon"><Icon name="link" size={18} /></span><div><strong>{sampleMode ? "Sample workspace" : expert ? "Local workspace adapter" : "Your private workspace"}</strong><span>{sampleMode ? "Practice data" : expert ? "Connected to /api/v1" : "Connected to your workspace"}</span></div><span className="connection-badge"><span className={`online-dot ${connected || sampleMode ? "" : "is-offline"}`} /> {sampleMode ? "Sample mode" : connected ? "Connected" : "Session error"}</span></div><p>{sampleMode ? (expert ? "This workspace contains synthetic records. Changes remain in the sample workspace." : "This workspace contains practice data. Changes remain in the sample workspace.") : expert ? "The browser sends supported reads and writes to the authenticated private service. It reports failed writes." : "Your private workspace is connected. Changes stay in this workspace."}</p></div><div className="setting-row setting-row-last"><div><strong>{expert ? "MCP endpoint" : "Agent connection"}</strong><span> {" "}{expert ? "Use a scoped token. Read the capability manifest before you use tools." : "Your connected agent can read the workspace when you allow it."}{" "} </span></div>{expert ? <code className="setting-value">benchledger://capabilities</code> : <span className="setting-value">Agent access</span>}</div>{!hideLogout && ( <button className="button button-quiet settings-logout" onClick={onLogout}><Icon name="arrow-left" size={16} /> {sampleMode ? "Close sample workspace" : "Sign out"}</button> )}</section></details> {expert && ( <section className="surface settings-section"><SectionHeading eyebrow="Decision states" title="Inventory evidence rules" /><div className="evidence-legend"><Legend tone="good" title="Ready" text="A physical count or commissioning record confirms the stock." /><Legend tone="warn" title="Check" text="Count delivered or uncertain stock before you reuse it." /><Legend tone="bad" title="Source" text="Confirmed compatible stock does not cover the requirement." /></div></section> )} </div></> );
+} export function Prompt({ text, onCopy }: { text: string; onCopy: (message: string, tone?: ToastTone) => void; }) { const [showManualCopy, setShowManualCopy] = useState(false); const copy = async () => { if (await copyTextWithFallback(text)) { setShowManualCopy(false); onCopy("Request copied."); } else { setShowManualCopy(true); onCopy( "Copy did not work. Select the request below and copy it manually.", "error" ); } }; return ( <div className="prompt-copy-control"> <Button variant="ghost" type="button" className="prompt-row" onClick={() => { void copy(); }}><Icon name="code" size={15} /><span>{text}</span><Icon name="copy" size={14} /></Button> {showManualCopy && ( <Textarea className="manual-copy-text" aria-label="Request to copy manually" readOnly value={text} onFocus={(event) => event.currentTarget.select()} /> )} </div> ); } export function SettingsPage({ appearanceControls, onOpenAgents, expert, sampleMode, connection, categories, categoriesLoading, categoriesError, onRetryCategories, onCreateCategory, onUpdateCategory, onArchiveCategory, hideLogout, onExpert, onLogout }: { appearanceControls?: ReactNode; onOpenAgents?: (() => void) | undefined; expert: boolean; sampleMode: boolean; connection: ConnectionState; categories: readonly ManagedInventoryCategory[]; categoriesLoading: boolean; categoriesError?: string | undefined; onRetryCategories: () => void; onCreateCategory: (input: CategoryCreateInput) => Promise<ManagedInventoryCategory | undefined>; onUpdateCategory: (id: string, input: CategoryUpdateInput, expectedVersion: number) => Promise<ManagedInventoryCategory | undefined>; onArchiveCategory: (id: string, expectedVersion: number) => Promise<ManagedInventoryCategory | undefined>; hideLogout: boolean; onExpert: () => void; onLogout: () => void; }) {
+  const connected = connection === "ready"; const [systemOpen, setSystemOpen] = useState(expert); const technicalDetailsHelpId = useId(); const activeCategoryCount = categories.filter( (category) => !category.archived ).length; return ( <><PageHeader eyebrow="Workspace" title="Settings" description="Choose how much detail to show and manage your workspace." /><div className="settings-layout">{appearanceControls}{!hideLogout && ( <Button variant="ghost" className="button button-quiet settings-logout" onClick={onLogout}><Icon name="arrow-left" size={16} /> {sampleMode ? "Close sample workspace" : "Sign out"}</Button> )}<Card asChild><section className="surface settings-section"><SectionHeading eyebrow="Display" title="Display detail" /><div className="setting-row"><div><strong>Technical details</strong><span id={technicalDetailsHelpId}> {expert ? "Hide identifiers and technical evidence for a simpler view." : "Show identifiers, evidence, and compatibility details when you need them."} </span></div><Label className="setting-control"><Switch checked={expert} onCheckedChange={onExpert} aria-label="Technical details" aria-describedby={technicalDetailsHelpId}/><span>{expert ? "Hide technical details" : "Show technical details"}</span></Label></div></section></Card>{categoriesLoading && ( <div className="category-loading" role="status" aria-live="polite"><Icon name="refresh" size={16} /> Loading inventory categories…{" "} </div> )}{" "}{categoriesError ? ( <Alert asChild><section className="surface settings-section category-load-error" role="alert"><Icon name="warning" size={18} /><div><strong>Could not load inventory categories.</strong><span>{categoriesError}</span></div><Button variant="outline" type="button" className="button button-secondary" onClick={onRetryCategories}> {" "}Try again{" "} </Button></section></Alert> ) : !categoriesLoading ? ( <Disclosure className="surface settings-section settings-category-details"> <DisclosureTrigger> <span> <strong>Categories · {activeCategoryCount}</strong> <small>Organise items and subcategories</small> </span> <Icon name="chevron-down" size={15} /> </DisclosureTrigger><DisclosureContent> <div className="settings-category-content"> <CategoryManager categories={categories} onCreate={onCreateCategory} onUpdate={onUpdateCategory} onArchive={onArchiveCategory} /> </div> </DisclosureContent></Disclosure> ) : null}<Disclosure className="surface settings-section settings-system-details" open={systemOpen} onOpenChange={(open) => setSystemOpen(open)} > <DisclosureTrigger> <span> <strong>{expert ? "Connection details" : "Connection and agent access"}</strong> {expert && <small>API connection and agent access</small>} </span> <Icon name="chevron-down" size={15} /> </DisclosureTrigger><DisclosureContent> <section className="settings-system-content"><SectionHeading eyebrow="Connection" title={expert ? "Private API" : "Workspace connection"} /><div className="connection-panel"><div className="connection-panel-top"><span className="connection-icon"><Icon name="link" size={18} /></span><div><strong>{sampleMode ? "Sample workspace" : expert ? "Local workspace adapter" : "Your private workspace"}</strong><span>{sampleMode ? "Practice data" : expert ? "Connected to /api/v1" : "Connected to your workspace"}</span></div><span className="connection-badge"><span className={`online-dot ${connected || sampleMode ? "" : "is-offline"}`} /> {sampleMode ? "Sample mode" : connected ? "Connected" : "Session error"}</span></div><p>{sampleMode ? (expert ? "This workspace contains synthetic records. Changes remain in the sample workspace." : "This workspace contains practice data. Changes remain in the sample workspace.") : expert ? "The browser sends supported reads and writes to the authenticated private service. It reports failed writes." : "Your private workspace is connected. Changes stay in this workspace."}</p></div><div className="setting-row setting-row-last"><div><strong>{expert ? "MCP endpoint" : "Agent connection"}</strong><span> {" "}{expert ? "Use a scoped token. Read the capability manifest before you use tools." : "Your connected agent can read the workspace when you allow it."}{" "} </span></div>{expert ? <code className="setting-value">benchledger://capabilities</code> : <span className="setting-value">Agent access</span>}</div>{onOpenAgents && <Button variant="outline" className="settings-agent-link" onClick={onOpenAgents}>For agents<Icon name="arrow-right" size={16}/></Button>}</section></DisclosureContent></Disclosure> {expert && ( <Card asChild><section className="surface settings-section"><SectionHeading eyebrow="Decision states" title="Inventory evidence rules" /><div className="evidence-legend"><Legend tone="good" title="Ready" text="A physical count or commissioning record confirms the stock." /><Legend tone="warn" title="Check" text="Count delivered or uncertain stock before you reuse it." /><Legend tone="bad" title="Source" text="Confirmed compatible stock does not cover the requirement." /></div></section></Card> )} </div></> );
 }
 
 function Legend({ tone, title, text }: { tone: StockLabelTone; title: string; text: string; }) { return ( <div className="legend-row"><span className={`legend-mark mark-${tone}`}>{tone === "good" ? "✓" : tone === "warn" ? "?" : "!"}</span><div><strong>{title}</strong><span>{text}</span></div></div> ); }
 
-const focusableOverlaySelector = "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], summary, [tabindex]:not([tabindex='-1'])";
 
-function useOverlayBehavior(containerRef: React.RefObject<HTMLElement | null>, onClose: () => void, active = true) {
-  const closeRef = useRef(onClose);
-  const activeRef = useRef(active); const returnFocusRef = useRef<HTMLElement | undefined>( typeof document !== "undefined" && document.activeElement instanceof HTMLElement ? document.activeElement : undefined ); closeRef.current = onClose;
-  activeRef.current = active;
-  useEffect(() => {
-    const previousFocus = returnFocusRef.current;
-    const container = containerRef.current;
-    const focusFirstControl = () => {
-      const first = container?.querySelector<HTMLElement>("[data-autofocus]")
-        ?? container?.querySelector<HTMLElement>("form input:not([disabled]), form textarea:not([disabled]), form select:not([disabled])")
-        ?? container?.querySelector<HTMLElement>(focusableOverlaySelector);
-      first?.focus({ preventScroll: true }); if (container) container.scrollTop = 0; };
-    focusFirstControl();
-    // Lazily loaded dialog content can bring its explicit initial control later.
-    const stopLateAutofocus = container && !container.querySelector("[data-autofocus]") ? watchLateAutofocus(container, document.activeElement) : () => undefined;
-    // The background becomes inert in the same render as the dialog. Some
-    // browsers clear focus from the triggering control after that attribute
-    // changes, so repeat the handoff after the browser applies inertness.
-    const deferredFocus = window.setTimeout(focusFirstControl, 0);
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (!activeRef.current) return;
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closeRef.current();
-        return;
-      }
-      if (event.key !== "Tab" || !container) return;
-      const focusable = [...container.querySelectorAll<HTMLElement>(focusableOverlaySelector)];
-      if (!focusable.length) {
-        event.preventDefault();
-        container.focus();
-        return;
-      }
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (!container.contains(document.activeElement)) {
-        event.preventDefault();
-        first?.focus();
-      } else if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last?.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first?.focus();
-      }
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      window.clearTimeout(deferredFocus); stopLateAutofocus();
-      if (previousFocus?.isConnected) {
-        let restoreAttempts = 0;
-        const restoreFocus = () => {
-          if (!previousFocus.isConnected) return;
-          const focused = document.activeElement;
-          // Respect focus set by a later navigation or newly opened dialog.
-          if (focused instanceof HTMLElement && focused !== document.body && focused !== previousFocus && focused.isConnected && !container?.contains(focused) && !focused.closest("[inert]")) return;
-          previousFocus.focus({ preventScroll: true });
-          restoreAttempts += 1;
-          if (document.activeElement !== previousFocus && restoreAttempts < 3) window.setTimeout(restoreFocus, 16);
-        };
-        window.setTimeout(restoreFocus, 0);
-      }
-    };
-  }, [containerRef]);
+export function InventoryDrawer({ nested = false, ...props }: React.ComponentProps<typeof InventoryDrawerContent> & { nested?: boolean }) {
+  const parentGuard = useContext(UnsavedWorkContext);
+  const guard = useNavigationGuard(nested ? parentGuard : null);
+  if (!nested) return <InventoryDrawerContent {...props} />;
+  // Closing this supporting task must not discard the requirement beneath it.
+  // This boundary still protects this drawer's counts, metadata and image drafts.
+  return <UnsavedWorkContext.Provider value={guard.registry}>
+    <InventoryDrawerContent {...props} suspended={props.suspended || Boolean(guard.pending)} onClose={() => guard.registry.request(props.onClose)} />
+    {guard.pending && <Dialog title={guard.pending.unresolved ? "Finish the pending save" : "Discard this item draft?"} role="alertdialog" onClose={guard.cancel}><p>{guard.pending.unresolved ? "Keep this observation and retry unchanged before returning to your requirement." : "The inventory item is saved. Discard only the unsaved item changes to return to your requirement."}</p><div className="dialog-actions"><Button onClick={guard.cancel}>Keep editing</Button>{!guard.pending.unresolved && <Button variant="destructive" onClick={guard.discard}>Discard item changes</Button>}</div></Dialog>}
+  </UnsavedWorkContext.Provider>;
 }
 
-export function InventoryDrawer({ item, suspended = false, sampleMode = false, items = [item], usedIn, onOpenProject, categories, categoriesLoading, categoriesError, expert, onClose, onCount, onCommission, onUpdate, onDelete, onLinkProduct, onCreateReplacement }: { item: InventoryItem; /** Projects whose requirements reference this item, when known. */ usedIn?: readonly { id: string; name: string }[] | undefined; onOpenProject?: ((projectId: string) => void) | undefined; sampleMode?: boolean; suspended?: boolean; items?: readonly InventoryItem[]; categories: readonly ManagedInventoryCategory[]; categoriesLoading: boolean; categoriesError?: string | undefined; expert: boolean; onClose: () => void; onCount: (id: string, quantity: number) => Promise<InventoryItem>; onCommission: (id: string, input: InventoryCommissionInput, expectedVersion: number) => Promise<InventoryItem>; onUpdate: (id: string, input: Partial<InventoryUpdateInput>, expectedVersion?: number) => Promise<InventoryItem>; onDelete?: (item: InventoryItem) => Promise<void>; onLinkProduct?: (item: InventoryItem) => void; onCreateReplacement?: (item: InventoryItem) => void; }) {
+function InventoryDrawerContent({ returnContext, item, resumeObservation, initialCountQuantity, initialCountExpanded = false, projects, onOpenProjectPart, onCountIntentConsumed, countReceipt, onCountSaved, doneLabel = "Done", onAddAnother, onPendingObservation, nextStep, nextStepHasAction = false, suspended = false, sampleMode = false, items = [item], categories, categoriesLoading, categoriesError, expert, onClose, onCount, onCommission, onUpdate, onDelete, onLinkProduct, onCreateReplacement }: { returnContext?: string | undefined; item: InventoryItem; initialCountExpanded?: boolean; projects?: readonly Project[] | undefined; onOpenProjectPart?: ((projectId: string, lineId: string) => void) | undefined; resumeObservation?: PendingStockObservation | undefined; initialCountQuantity?: number | undefined; onCountIntentConsumed?: (() => void) | undefined; countReceipt?: string | undefined; onCountSaved?: ((receipt: string | undefined) => void) | undefined; doneLabel?: string | undefined; onAddAnother?: (() => void) | undefined; onPendingObservation?: ((value: PendingStockObservation | undefined) => void) | undefined; nextStep?: ReactNode; nextStepHasAction?: boolean; sampleMode?: boolean; suspended?: boolean; items?: readonly InventoryItem[]; categories: readonly ManagedInventoryCategory[]; categoriesLoading: boolean; categoriesError?: string | undefined; expert: boolean; onClose: () => void; onCount: (id: string, quantity: number) => Promise<InventoryItem>; onCommission: (id: string, input: InventoryCommissionInput, expectedVersion: number) => Promise<InventoryItem>; onUpdate: (id: string, input: Partial<InventoryUpdateInput>, expectedVersion?: number) => Promise<InventoryItem>; onDelete?: (item: InventoryItem) => Promise<void>; onLinkProduct?: (item: InventoryItem) => void; onCreateReplacement?: (item: InventoryItem) => void; }) {
   const unverifiedQuantity = item.evidence === "delivered" || item.evidence === "ordered";
-  const [quantity, setQuantity] = useState(unverifiedQuantity ? "" : String(item.quantity));
+  const [quantity, setQuantity] = useState(resumeObservation?.kind === "count" ? String(resumeObservation.quantity) : initialCountQuantity !== undefined ? String(initialCountQuantity) : unverifiedQuantity || initialCountExpanded ? "" : String(item.quantity));
   const [countSaving, setCountSaving] = useState(false);
-  const [countError, setCountError] = useState<string>();
-  const [countSaved, setCountSaved] = useState<string>();
-  const [mutationReview, setMutationReview] = useState<InventoryMutationReview>();
+  const [countError, setCountError] = useState<string | undefined>(resumeObservation?.kind === "count" ? resumeObservation.uncertain ? "The count save is not confirmed. Retry unchanged to check the same observation." : "This observation was not saved. Review it before retrying." : undefined);
+  const [countSaved, setCountSaved] = useState<string | undefined>(countReceipt);
+  const [countExpanded, setCountExpanded] = useState(Boolean(resumeObservation || initialCountQuantity !== undefined || initialCountExpanded || unverifiedQuantity));
+  const receiptRef = useRef<HTMLElement>(null);
+  const [mutationReview, setMutationReview] = useState<PendingStockObservation | undefined>(resumeObservation ?? (initialCountQuantity !== undefined ? { kind: "count", quantity: initialCountQuantity, item, uncertain: false } : undefined));
+  const [stockUncertain, setStockUncertain] = useState(resumeObservation?.uncertain ?? false);
+  // Mount the sheet before its restored review so their modal layers cannot hide each other.
+  const [reviewLayerReady, setReviewLayerReady] = useState(!resumeObservation && initialCountQuantity === undefined);
+  useEffect(() => { setReviewLayerReady(true); if (initialCountQuantity !== undefined) onCountIntentConsumed?.(); }, []);
+  useEffect(() => { if (countSaved) receiptRef.current?.focus(); }, [countSaved]);
+  const [countBaseline, setCountBaseline] = useState(unverifiedQuantity || initialCountExpanded ? "" : String(item.quantity));
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string>();
@@ -2215,13 +2442,16 @@ export function InventoryDrawer({ item, suspended = false, sampleMode = false, i
     finally { setDeleting(false); }
   };
 
-  const [commissionQuantity, setCommissionQuantity] = useState("");
-  const [commissionSource, setCommissionSource] = useState(item.provenance?.source ?? "");
-  const [commissionSourceId, setCommissionSourceId] = useState(item.provenance?.sourceId ?? "");
-  const [commissionObservedAt, setCommissionObservedAt] = useState(() => localDateTimeValue(item.provenance?.observedAt));
-  const [commissionNote, setCommissionNote] = useState("");
+  const [commissionQuantity, setCommissionQuantity] = useState(resumeObservation?.kind === "commission" ? String(resumeObservation.input.quantity) : "");
+  const [commissionSource, setCommissionSource] = useState(resumeObservation?.kind === "commission" ? resumeObservation.input.source : item.provenance?.source ?? "");
+  const [commissionSourceId, setCommissionSourceId] = useState(resumeObservation?.kind === "commission" ? resumeObservation.input.sourceId ?? "" : item.provenance?.sourceId ?? "");
+  const [commissionObservedAt, setCommissionObservedAt] = useState(() => localDateTimeValue(resumeObservation?.kind === "commission" ? resumeObservation.input.observedAt : item.provenance?.observedAt));
+  const [commissionNote, setCommissionNote] = useState(resumeObservation?.kind === "commission" ? resumeObservation.input.note ?? "" : "");
+  const commissionDraft = JSON.stringify([commissionQuantity, commissionSource, commissionSourceId, commissionObservedAt, commissionNote]);
+  const [commissionBaseline, setCommissionBaseline] = useState(() => JSON.stringify(["", item.provenance?.source ?? "", item.provenance?.sourceId ?? "", localDateTimeValue(item.provenance?.observedAt), ""]));
   const [commissionSaving, setCommissionSaving] = useState(false);
-  const [commissionError, setCommissionError] = useState<string>();
+  useUnsavedWork(quantity !== countBaseline || commissionDraft !== commissionBaseline, "stock observation", countSaving || commissionSaving || stockUncertain);
+  const [commissionError, setCommissionError] = useState<string | undefined>(resumeObservation?.kind === "commission" ? resumeObservation.uncertain ? "The commissioning save is not confirmed. Retry unchanged to check the same observation." : "This observation was not saved. Review it before retrying." : undefined);
   const [commissionSaved, setCommissionSaved] = useState<string>();
   const [editing, setEditing] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
@@ -2234,44 +2464,28 @@ export function InventoryDrawer({ item, suspended = false, sampleMode = false, i
   const [location, setLocation] = useState(item.location === "Unassigned" ? "" : item.location);
   const [tags, setTags] = useState(item.tags.join(", "));
   const [categoryNodeId, setCategoryNodeId] = useState(item.categoryNodeId ?? "");
-  const editDirty = editing && (name !== item.name || description !== item.description || model !== (item.model ?? "") || manufacturer !== (item.manufacturer ?? "") || sku !== (item.sku ?? "") || location !== (item.location === "Unassigned" ? "" : item.location) || tags !== item.tags.join(", ") || categoryNodeId !== (item.categoryNodeId ?? ""));
-  // Closing the drawer goes through the navigation guard, which asks before
-  // discarding these edits; a scrim click never discards them.
-  useUnsavedWork(editDirty, "item edit", editSaving);
-  // An open stock review is an unconfirmed change: leaving asks first, and a
-  // save in flight cannot be abandoned.
-  useUnsavedWork(Boolean(mutationReview), mutationReview?.kind === "commission" ? "commissioning review" : "physical count review", countSaving || commissionSaving);
-  const countInputRef = useRef<HTMLInputElement>(null);
-  const commissionInputRef = useRef<HTMLInputElement>(null);
-  const countReviewButtonRef = useRef<HTMLButtonElement>(null);
-  const commissionReviewButtonRef = useRef<HTMLButtonElement>(null);
-  // Leaving a review returns focus to what started it: the field (Enter) or the review button.
-  const reviewReturnRef = useRef<"input" | "button">("button");
-  const leaveReview = () => {
-    if (!mutationReview || countSaving || commissionSaving) return;
-    const toInput = reviewReturnRef.current === "input";
-    const target = mutationReview.kind === "count" ? (toInput ? countInputRef : countReviewButtonRef) : (toInput ? commissionInputRef : commissionReviewButtonRef);
-    setMutationReview(undefined); setCountError(undefined); setCommissionError(undefined);
-    window.requestAnimationFrame(() => target.current?.focus());
-  };
   const drawerRef = useRef<HTMLElement>(null);
   const drawerTitleId = useId();
-  const availableForReuse = item.availableQuantity ?? Math.max(item.quantity - item.reserved, 0);
+  const availableForReuse = item.availableQuantity;
   const itemIdentity = inventoryCandidateText(item, items, expert);
-  // Escape leaves an open stock review before it can close the drawer.
-  useOverlayBehavior(drawerRef, () => { if (mutationReview) leaveReview(); else onClose(); }, !deleteOpen && !suspended);
+  const editDirty = name !== item.name || description !== item.description || model !== (item.model ?? "")
+    || manufacturer !== (item.manufacturer ?? "") || sku !== (item.sku ?? "")
+    || location !== (item.location === "Unassigned" ? "" : item.location)
+    || tags !== item.tags.join(", ") || categoryNodeId !== (item.categoryNodeId ?? "");
+  useUnsavedWork(editing && editDirty, "item details", editSaving);
+
+
   const reviewCount = (event: FormEvent) => {
     event.preventDefault();
     const parsed = Number(quantity);
     setCountError(undefined);
     setCountSaved(undefined);
-    if (mutationReview) return;
     if (!quantity.trim() || !Number.isFinite(parsed) || parsed < 0) {
       setCountError("Enter a quantity of zero or greater.");
       return;
     }
-    reviewReturnRef.current = document.activeElement === countInputRef.current ? "input" : "button";
-    setMutationReview({ kind: "count", quantity: parsed });
+    setStockUncertain(false);
+    setMutationReview({ kind: "count", quantity: parsed, item, uncertain: false });
   };
 
   const submitCount = async () => {
@@ -2279,12 +2493,25 @@ export function InventoryDrawer({ item, suspended = false, sampleMode = false, i
     setCountSaving(true);
     setCountError(undefined);
     try {
-      const result = await onCount(item.id, mutationReview.quantity);
+      onPendingObservation?.({ ...mutationReview, uncertain: stockUncertain });
+      const result = await onCount(mutationReview.item.id, mutationReview.quantity);
       setQuantity(String(result.quantity));
-      setCountSaved(`Confirmed ${formatQuantity(result.quantity, result.unit)} as the on-hand quantity.`);
+      setCountBaseline(String(result.quantity));
+      setStockUncertain(false);
+      const receipt = `Confirmed ${formatQuantity(result.quantity, result.unit)} as the on-hand quantity.`;
+      setCountSaved(receipt);
+      setCountExpanded(false);
+      onCountSaved?.(receipt);
       setMutationReview(undefined);
+      onPendingObservation?.(undefined);
     } catch (error: unknown) {
-      setCountError(normalizeApiError(error).message);
+      const failure = normalizeApiError(error);
+      const unresolved = stockUncertain || failure.kind === "offline" || failure.kind === "server";
+      const retained = { ...mutationReview, uncertain: unresolved };
+      setMutationReview(retained);
+      onPendingObservation?.(unresolved || failure.kind === "unauthenticated" || failure.kind === "csrf" ? retained : undefined);
+      setStockUncertain(unresolved);
+      setCountError(unresolved ? "The count save is not confirmed. Retry unchanged to check the same observation." : failure.message);
     } finally {
       setCountSaving(false);
     }
@@ -2312,9 +2539,11 @@ export function InventoryDrawer({ item, suspended = false, sampleMode = false, i
       setCommissionError("Reload this item before commissioning it.");
       return;
     }
-    reviewReturnRef.current = document.activeElement === commissionInputRef.current ? "input" : "button";
     setMutationReview({
       kind: "commission",
+      uncertain: false,
+      item,
+      expectedVersion: item.version,
       input: {
         quantity: parsed,
         source: commissionSource.trim(),
@@ -2326,17 +2555,28 @@ export function InventoryDrawer({ item, suspended = false, sampleMode = false, i
   };
 
   const submitCommission = async () => {
-    if (mutationReview?.kind !== "commission" || commissionSaving || item.version === undefined) return;
+    if (mutationReview?.kind !== "commission" || commissionSaving || mutationReview.expectedVersion === undefined) return;
     setCommissionSaving(true);
     setCommissionError(undefined);
     try {
-      const result = await onCommission(item.id, mutationReview.input, item.version);
+      onPendingObservation?.({ ...mutationReview, uncertain: stockUncertain });
+      const result = await onCommission(mutationReview.item.id, mutationReview.input, mutationReview.expectedVersion);
       setCommissionQuantity(String(result.quantity));
+      setCommissionBaseline(JSON.stringify([String(result.quantity), commissionSource, commissionSourceId, commissionObservedAt, commissionNote]));
       setQuantity(String(result.quantity));
+      setCountBaseline(String(result.quantity));
+      setStockUncertain(false);
       setCommissionSaved(`Commissioned ${formatQuantity(result.quantity, result.unit)} as confirmed stock.`);
       setMutationReview(undefined);
+      onPendingObservation?.(undefined);
     } catch (error: unknown) {
-      setCommissionError(normalizeApiError(error).message);
+      const failure = normalizeApiError(error);
+      const unresolved = stockUncertain || failure.kind === "offline" || failure.kind === "server";
+      const retained = { ...mutationReview, uncertain: unresolved };
+      setMutationReview(retained);
+      onPendingObservation?.(unresolved || failure.kind === "unauthenticated" || failure.kind === "csrf" ? retained : undefined);
+      setStockUncertain(unresolved);
+      setCommissionError(unresolved ? "The commissioning save is not confirmed. Retry unchanged to check the same observation." : failure.message);
     } finally {
       setCommissionSaving(false);
     }
@@ -2383,101 +2623,111 @@ export function InventoryDrawer({ item, suspended = false, sampleMode = false, i
   };
 
   return ( <>
-    <div className="drawer-scrim" aria-hidden="true" onClick={() => { if (!editDirty && !editSaving && !mutationReview) onClose(); }} />
-    <aside ref={drawerRef} className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby={drawerTitleId} aria-hidden={deleteOpen || suspended ? true : undefined} inert={deleteOpen || suspended ? true : undefined} tabIndex={-1}>
-      <div className="drawer-header"><span className={`item-glyph accent-${item.accent}`} aria-hidden="true"><Icon name={categoryIcons[item.category]} size={18} /></span><div><span className="eyebrow">{managedInventoryLabel(categories, item)}</span><h2 id={drawerTitleId}>{itemIdentity}</h2></div><button type="button" className="icon-button" data-autofocus aria-label="Close item details" onClick={onClose}><Icon name="close" size={20} /></button></div>
-      <div className="drawer-body">
-        <section className="drawer-summary" aria-label="Stock summary">
-          <div className="drawer-summary-quantity"><span>On hand</span><strong>{item.unitStatus === "needs_correction" ? "Fix unit" : formatQuantity(Math.max(item.quantity - item.reserved, 0), item.unit)}</strong>{item.reserved > 0 && item.unitStatus !== "needs_correction" && <small>{formatQuantity(item.reserved, item.unit)} reserved of {formatQuantity(item.quantity, item.unit)}</small>}</div>
-          <div className="drawer-summary-status"><span>Status</span><StatusPill state={displayedInventoryState(item)} {...(item.unitStatus === "needs_correction" ? { label: "Fix unit" } : assumedStockLabel(item) ? { label: assumedStockLabel(item)! } : {})} /></div>
-          <div className="drawer-summary-location"><span>Location</span><strong>{inventoryLocationLabel(item.location)}</strong></div>
-        </section>
-        <div className="drawer-title-actions">{!editing && ( <button type="button" className="button button-secondary" onClick={() => setEditing(true)}> {" "}Edit item{" "} </button> )}</div>
-        {item.unitStatus === "needs_correction" && ( <section className="unit-correction-callout" role="alert"><strong>This record cannot be used yet</strong><span>{" "}
+
+    <WorkspaceModal kind="sheet" onClose={onClose}><aside ref={drawerRef} className={`detail-drawer inventory-item-sheet${countSaved ? " has-count-receipt" : ""}`} role="dialog" aria-modal="true" aria-labelledby={drawerTitleId} aria-hidden={mutationReview || deleteOpen || suspended ? true : undefined} inert={mutationReview || deleteOpen || suspended ? true : undefined} tabIndex={-1}>
+      <div className="drawer-header"><span className={`item-glyph accent-${item.accent}`} aria-hidden="true"><Icon name={categoryIcons[item.category]} size={18} /></span><div><span className="inventory-drawer-location">{inventoryLocationLabel(item.location)}</span><SheetTitle id={drawerTitleId}>{itemIdentity}</SheetTitle></div><Button variant="ghost" type="button" className="icon-button" data-autofocus aria-label="Close item details" onClick={onClose}><Icon name="close" size={20} /></Button></div>
+      <div className="drawer-body">{returnContext && <p className="dialog-context inventory-return-context">{returnContext}</p>}
+
+
+        <div className="drawer-title-actions" hidden={Boolean(countSaved)}><StatusPill state={displayedInventoryState(item)} label={item.unitStatus === "needs_correction" ? "Fix unit" : inventoryStockLabel(item)} />{!editing && ( <Button variant="outline" type="button" className="button button-secondary" onClick={() => setEditing(true)}> {" "}Edit item{" "} </Button> )}</div>
+        <div hidden={editing}>
+        {countSaved ? <section ref={receiptRef} tabIndex={-1} className="drawer-quantity inventory-count-receipt" aria-labelledby="count-saved-heading" role="status">
+          <div className="inventory-receipt-result"><span className="inventory-receipt-check" aria-hidden="true"><Icon name="check" size={30} /></span><strong id="count-saved-heading">Physical count saved</strong><p>{countSaved}</p><p>{itemIdentity} · {inventoryLocationLabel(item.location)}</p><p className="form-hint">Compatibility with a project is checked separately. Check its exact variant and specification before use.</p></div>
+          <div className="drawer-form-actions">{!nextStepHasAction && <Button type="button" onClick={onClose}>{doneLabel}</Button>}{onAddAnother && <Button variant="outline" type="button" onClick={onAddAnother}>Add another item</Button>}<Button variant="ghost" type="button" onClick={() => { setCountSaved(undefined); onCountSaved?.(undefined); setCountExpanded(true); }}>Update count</Button></div>
+        </section> : <section className="drawer-quantity" aria-labelledby="physical-count-heading"><div><strong id="physical-count-heading">{item.unitStatus === "needs_correction" ? "Quantity blocked" : countExpanded ? (unverifiedQuantity ? "Receive and count" : "Count stock") : "Stock on hand"}</strong><span>{item.unitStatus === "needs_correction" ? "Create and count a corrected replacement before reusing this stock." : unverifiedQuantity ? `Recorded quantity: ${formatQuantity(item.quantity, item.unit)}.` : `${formatQuantity(item.quantity, item.unit)} on hand.`}</span>{item.unitStatus !== "needs_correction" && item.reserved > 0 && <span>{`${formatQuantity(item.reserved, item.unit)} reserved${availableForReuse === undefined ? "; availability not reported" : `; ${formatQuantity(availableForReuse, item.unit)} currently available for reuse`}.`}</span>}<p>{item.unitStatus === "needs_correction" ? "The recorded quantity is retained as history until its unit is corrected." : countExpanded ? "Count the pieces or measure the remaining amount, including reserved stock." : assumedStockLabel(item) ? `${assumedStockLabel(item)}. This counts as in stock because of your stock setting. Count it to record that you received it.` : evidenceLabel(item.evidence, item.serverEvidence)}</p></div>
+          {item.unitStatus !== "needs_correction" && (countExpanded ? <form className="count-form" onSubmit={reviewCount}><p className="inventory-count-condition">Recorded condition: <strong>{item.condition?.replaceAll("_", " ") ?? "Unknown"}</strong>. A count changes quantity only.</p><Label htmlFor="count-quantity">Counted quantity</Label><div><Input autoFocus id="count-quantity" type="number" min="0" step="any" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={countSaving} /><span>{inventoryUnitLabel(item.unit, expert, item.serverUnit)}</span></div><Button variant="outline" type="submit" className="button button-secondary" disabled={countSaving}>{countSaving ? "Saving…" : "Review physical count"}</Button>{countError && <Alert asChild><p className="form-error" role="alert">{countError}</p></Alert>}</form> : <Button variant="outline" type="button" onClick={() => setCountExpanded(true)}>{unverifiedQuantity ? "Receive and count" : "Count stock"}</Button>)}
+        </section>}
+
+        {!countSaved && doneLabel !== "Done" && <Button variant="outline" type="button" onClick={onClose}>{doneLabel}</Button>}
+        {nextStep}
+        {item.unitStatus === "needs_correction" && ( <Alert asChild><section className="unit-correction-callout" role="alert"><strong>This record cannot be used yet</strong><span>{" "}
                 This unit does not match this item type. Create a corrected
                 replacement before you use this record. The original stays
-                blocked as history.{" "} </span>{onCreateReplacement && ( <button type="button" className="button button-secondary" onClick={() => onCreateReplacement(item)}> {" "}
-                  Fix unit{" "} </button> )}{" "}{expert && ( <small> {" "}Recorded unit: {" "} <code>{inventoryUnitLabel(item.unit, true, item.serverUnit)}</code>{" "}. Historical quantities and evidence are not rewritten.{" "} </small> )}</section> )}{" "} {!item.kind && ( <section className="unit-correction-callout" role="status"> <strong>Item type not recorded</strong> <span>
+                blocked as history.{" "} </span>{onCreateReplacement && ( <Button variant="outline" type="button" className="button button-secondary" onClick={() => onCreateReplacement(item)}> {" "}
+                  Fix unit{" "} </Button> )}{" "}{expert && ( <small> {" "}Recorded unit: {" "} <code>{inventoryUnitLabel(item.unit, true, item.serverUnit)}</code>{" "}. Historical quantities and evidence are not rewritten.{" "} </small> )}</section></Alert> )}{" "} {!item.kind && ( <section className="unit-correction-callout" role="status"> <strong>Item type not recorded</strong> <span>
                 Create a corrected record before using this item in a project.
                 The original evidence and reservations stay unchanged.
-              </span> {onCreateReplacement && ( <button type="button" className="button button-secondary" onClick={() => onCreateReplacement(item)} >
+              </span> {onCreateReplacement && ( <Button variant="outline" type="button" className="button button-secondary" onClick={() => onCreateReplacement(item)} >
                   Create corrected record
-                </button> )}</section> )}{" "}
-        {editing ? ( <form className="inventory-edit-form" onSubmit={(event) => { void submitEdit(event); }} aria-busy={editSaving}>
-          <p className="drawer-section-copy"> {" "}Edit item identification and storage fields. Change quantity with a physical count.{" "} </p>
-          <label className="form-field"><span>Name</span><input autoFocus required value={name} onChange={(event) => setName(event.target.value)} disabled={editSaving} /></label>
-          <label className="form-field"><span>Description</span><textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} disabled={editSaving} /></label>
+                </Button> )}</section> )}{" "}
+        </div>
+        {editing ? ( <form aria-label="Edit item" className="inventory-edit-form inventory-detail-edit" onSubmit={(event) => { void submitEdit(event); }} aria-busy={editSaving}>
+          <h3>Edit item</h3>
+          <p className="drawer-section-copy">Update identification and storage details. Record stock separately with a physical count.</p>
+          <Label className="form-field"><span>Name</span><Input autoFocus required value={name} onChange={(event) => setName(event.target.value)} disabled={editSaving} /></Label>
+          <Label className="form-field"><span>Description</span><Textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} disabled={editSaving} /></Label>
           <div className="inventory-edit-grid">
-            <label className="form-field"><span>Model or variant</span><input value={model} onChange={(event) => setModel(event.target.value)} disabled={editSaving} /></label>
-            <label className="form-field"><span>Manufacturer</span><input value={manufacturer} onChange={(event) => setManufacturer(event.target.value)} disabled={editSaving} /></label>
-            <label className="form-field"><span>SKU</span><input value={sku} onChange={(event) => setSku(event.target.value)} disabled={editSaving} /></label>
-            <label className="form-field"><span>Location</span><input value={location} onChange={(event) => setLocation(event.target.value)} disabled={editSaving} /></label>
+            <Label className="form-field"><span>Model or variant</span><Input value={model} onChange={(event) => setModel(event.target.value)} disabled={editSaving} /></Label>
+            <Label className="form-field"><span>Manufacturer</span><Input value={manufacturer} onChange={(event) => setManufacturer(event.target.value)} disabled={editSaving} /></Label>
+            <Label className="form-field"><span>SKU</span><Input value={sku} onChange={(event) => setSku(event.target.value)} disabled={editSaving} /></Label>
+            <Label className="form-field"><span>Location</span><Input value={location} onChange={(event) => setLocation(event.target.value)} disabled={editSaving} /></Label>
           </div>
-          <label className="form-field"><span>Tags</span><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="Separate tags with commas" disabled={editSaving} /></label>
-          {categoriesError ? ( <p className="field-hint category-edit-note" role="alert"> {" "}Managed categories are unavailable: {categoriesError}</p> ) : categoriesLoading ? ( <p className="field-hint category-edit-note" role="status"> {" "}Loading active categories…{" "} </p> ) : ( <CategorySelection categories={categories} value={categoryNodeId} onChange={setCategoryNodeId} required={Boolean(item.categoryNodeId)} ariaInvalid={Boolean(item.categoryNodeId && !managedCategoryForId(categories, item.categoryNodeId))} /> )}{" "}
-          {editError && ( <p className="form-error" role="alert">{editError}</p> )}
-          <div className="drawer-form-actions"><button type="button" className="button button-quiet" onClick={cancelEdit} disabled={editSaving}> {" "}Cancel{" "} </button><button type="submit" className="button button-primary" disabled={!name.trim() || editSaving}>{editSaving ? "Saving…" : "Save changes"}</button></div>
+          <Label className="form-field"><span>Tags</span><Input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="Separate tags with commas" disabled={editSaving} /></Label>
+          {categoriesError ? ( <Alert asChild><p className="field-hint category-edit-note" role="alert"> {" "}Managed categories are unavailable: {categoriesError}</p></Alert> ) : categoriesLoading ? ( <p className="field-hint category-edit-note" role="status"> {" "}Loading active categories…{" "} </p> ) : ( <CategorySelection categories={categories} value={categoryNodeId} onChange={setCategoryNodeId} required={Boolean(item.categoryNodeId)} ariaInvalid={Boolean(item.categoryNodeId && !managedCategoryForId(categories, item.categoryNodeId))} /> )}{" "}
+          {editError && ( <Alert asChild><p className="form-error" role="alert">{editError}</p></Alert> )}
+          <div className="drawer-form-actions"><Button variant="ghost" type="button" className="button button-quiet" onClick={cancelEdit} disabled={editSaving}> {" "}Cancel{" "} </Button><Button variant="default" type="submit" className="button button-primary" disabled={!name.trim() || editSaving}>{editSaving ? "Saving…" : "Save changes"}</Button></div>
         </form> ) : ( <>
-          <p className="drawer-description">{item.description}</p>
-          {(item.category === "Filament" || item.category === "Printers") && ( <div className={`exact-product-callout ${exactProductLabel(item) !== "Product identity incomplete" && item.productProfile?.linkState === "confirmed" ? "is-confirmed" : ""}`}><strong>{expert ? exactProductLabel(item) : "Product match"}</strong><span>{exactProductLabel(item) === "Product identity incomplete" ? "This catalog record does not include the recorded bundle or variant." : item.productProfile?.linkState === "confirmed" ? "Product identity confirmed for setup matching." : "Check the physical item before you link an exact product."}</span> {onLinkProduct && ( <button type="button" className="text-button" onClick={() => onLinkProduct(item)} > {item.productProfile ? "Change exact product" : "Link exact product"} <Icon name="arrow-right" size={14} /> </button> )} </div> )}
-          <div className="drawer-facts"><div><span>Item type</span><strong>{item.kind ?? "Not recorded"}</strong></div>{item.category === "Printers" && ( <div className="printer-volume-fact"> <span> {isExactProductConfirmed(item) ? "Confirmed build volume" : "Recorded build volume"} </span> <strong> {printerBuildVolumeCopy(item) ?? "Not recorded"} </strong> </div> )} {item.variant ? ( <div><span>Model or variant</span><strong>{item.variant}</strong></div> ) : ( <div><span>Model or variant</span><strong>Model not recorded</strong></div> )}<div><span>Location</span><strong>{inventoryLocationLabel(item.location)}</strong></div>{item.manufacturer && ( <div><span>Manufacturer</span><strong>{item.manufacturer}</strong></div> )}{" "}{item.sku && ( <div><span>SKU</span><code>{item.sku}</code></div> )}{" "}{item.productProfile?.filament?.lotBatch && ( <div><span>Lot or batch</span><strong>{item.productProfile.filament.lotBatch}</strong></div> )}{" "}{item.productProfile?.printer?.assetLabel && ( <div><span>Asset label</span><strong>{item.productProfile.printer.assetLabel}</strong></div> )}</div>
-        </> )}{" "}
+          <div hidden={Boolean(countSaved)}><InventoryProjectNeeds item={item} projects={projects} onOpenProjectPart={onOpenProjectPart} /><Disclosure className="inventory-inspector-disclosure"><DisclosureTrigger>Identity & compatibility</DisclosureTrigger><DisclosureContent><p className="drawer-description">{item.description || "No description recorded."}</p>
+          {(item.category === "Filament" || item.category === "Printers") && ( <div className={`exact-product-callout ${exactProductLabel(item) !== "Product identity incomplete" && item.productProfile?.linkState === "confirmed" ? "is-confirmed" : ""}`}><strong>{expert ? exactProductLabel(item) : "Product match"}</strong><span>{exactProductLabel(item) === "Product identity incomplete" ? "This catalog record does not include the recorded bundle or variant." : item.productProfile?.linkState === "confirmed" ? "Product identity confirmed for setup matching." : "Check the physical item before you link an exact product."}</span> {onLinkProduct && ( <Button variant="ghost" type="button" className="text-button" onClick={() => onLinkProduct(item)} > {item.productProfile ? "Change exact product" : "Link exact product"} <Icon name="arrow-right" size={14} /> </Button> )} </div> )}
+          <div className="drawer-facts"><div><span>Category</span><strong>{managedInventoryLabel(categories, item, expert)}</strong></div><div><span>Item type</span><strong>{itemTypeOptions.find((option) => option.value === item.kind)?.label ?? "Not recorded"}</strong></div>{item.category === "Printers" && ( <div className="printer-volume-fact"> <span> {isExactProductConfirmed(item) ? "Confirmed build volume" : "Recorded build volume"} </span> <strong> {printerBuildVolumeCopy(item) ?? "Not recorded"} </strong> </div> )} {item.variant ? ( <div><span>Model or variant</span><strong>{item.variant}</strong></div> ) : ( <div><span>Model or variant</span><strong>Model not recorded</strong></div> )}<div><span>Location</span><strong>{inventoryLocationLabel(item.location)}</strong></div>{item.manufacturer && ( <div><span>Manufacturer</span><strong>{item.manufacturer}</strong></div> )}{" "}{item.sku && ( <div><span>SKU</span><code>{item.sku}</code></div> )}{" "}{item.productProfile?.filament?.lotBatch && ( <div><span>Lot or batch</span><strong>{item.productProfile.filament.lotBatch}</strong></div> )}{" "}{item.productProfile?.printer?.assetLabel && ( <div><span>Asset label</span><strong>{item.productProfile.printer.assetLabel}</strong></div> )}</div></DisclosureContent></Disclosure>
+        </div></> )}{" "}
 
-        <div className="drawer-images-strip"><InventoryImages key={item.id} itemId={item.id} sampleMode={sampleMode} /></div>
+        <div hidden={editing || Boolean(countSaved)}>
+        {expert && !countSaved && unverifiedQuantity && item.unitStatus !== "needs_correction" && ( <section className="drawer-quantity" aria-labelledby="commission-heading"><div><span className="eyebrow" id="commission-heading"> {" "}
+                    Technical stock evidence{" "} </span><strong>Commission received stock</strong><span> {" "}Record a physical observation while retaining the delivery evidence.{" "} </span><p> {" "}Use this only when you need an explicit source and observation time in the audit trail.{" "} </p></div><form className="count-form" onSubmit={(event) => reviewCommission(event)}><Label htmlFor="commission-quantity">Observed quantity</Label><div><Input id="commission-quantity" type="number" min="0" step="any" inputMode="decimal" value={commissionQuantity} onChange={(event) => setCommissionQuantity(event.target.value)} disabled={commissionSaving} /><span>{inventoryUnitLabel(item.unit, expert, item.serverUnit)}</span></div><Label className="form-field"><span>Source</span><Input required value={commissionSource} maxLength={500} placeholder="Physical check, delivery record, or project log" onChange={(event) => setCommissionSource(event.target.value)} disabled={commissionSaving} /></Label><Label className="form-field"><span>Observed</span><Input required type="datetime-local" value={commissionObservedAt} onChange={(event) => setCommissionObservedAt(event.target.value)} disabled={commissionSaving} /></Label><Label className="form-field"><span> {" "}Source ID <small>(optional)</small></span><Input value={commissionSourceId} maxLength={500} placeholder="Evidence reference" onChange={(event) => setCommissionSourceId(event.target.value)} disabled={commissionSaving} /></Label><Label className="form-field"><span> {" "}Note <small>(optional)</small></span><Textarea rows={2} maxLength={1000} value={commissionNote} placeholder="What did you observe?" onChange={(event) => setCommissionNote(event.target.value)} disabled={commissionSaving} /></Label><Button variant="outline" type="submit" className="button button-secondary" disabled={commissionSaving}>{commissionSaving ? "Saving…" : "Review commissioning"}</Button>{commissionError && ( <Alert asChild><p className="form-error" role="alert">{commissionError}</p></Alert> )}{" "}{commissionSaved && ( <p className="form-success" role="status">{commissionSaved}</p> )}</form></section> )}
+
+
+
+        <InventoryImages key={item.id} itemId={item.id} sampleMode={sampleMode} />
         {!editing && <PrintItemLabel key={`label-${item.id}`} item={{ id: item.id, name: item.name, variant: item.variant, location: item.location }} />}
-        {usedIn && usedIn.length > 0 && ( <section className="drawer-used-in" aria-labelledby="drawer-used-in-heading"><h3 id="drawer-used-in-heading">Used in projects</h3><ul>{usedIn.map((project) => <li key={project.id}>{onOpenProject ? <button type="button" className="text-button" onClick={() => onOpenProject(project.id)}>{project.name}<Icon name="arrow-right" size={14} /></button> : project.name}</li>)}</ul></section> )}
-        {expert && unverifiedQuantity && item.unitStatus !== "needs_correction" && ( <section className="drawer-quantity" aria-labelledby="commission-heading"><div><span className="eyebrow" id="commission-heading"> {" "}
-                    Technical stock evidence{" "} </span><strong>Commission received stock</strong><span> {" "}Record a physical observation while retaining the delivery evidence.{" "} </span><p> {" "}Use this only when you need an explicit source and observation time in the audit trail.{" "} </p></div><form className="count-form" onSubmit={(event) => reviewCommission(event)}><label htmlFor="commission-quantity">Observed quantity</label><div><input ref={commissionInputRef} id="commission-quantity" type="number" min="0" step="any" inputMode="decimal" value={commissionQuantity} onChange={(event) => setCommissionQuantity(event.target.value)} disabled={commissionSaving || mutationReview?.kind === "commission"} /><span>{inventoryUnitLabel(item.unit, expert, item.serverUnit)}</span></div><label className="form-field"><span>Source</span><input required value={commissionSource} maxLength={500} placeholder="Physical check, delivery record, or project log" onChange={(event) => setCommissionSource(event.target.value)} disabled={commissionSaving} /></label><label className="form-field"><span>Observed</span><input required type="datetime-local" value={commissionObservedAt} onChange={(event) => setCommissionObservedAt(event.target.value)} disabled={commissionSaving} /></label><label className="form-field"><span> {" "}Source ID <small>(optional)</small></span><input value={commissionSourceId} maxLength={500} placeholder="Evidence reference" onChange={(event) => setCommissionSourceId(event.target.value)} disabled={commissionSaving} /></label><label className="form-field"><span> {" "}Note <small>(optional)</small></span><textarea rows={2} maxLength={1000} value={commissionNote} placeholder="What did you observe?" onChange={(event) => setCommissionNote(event.target.value)} disabled={commissionSaving} /></label>{mutationReview?.kind === "commission" ? null : <button ref={commissionReviewButtonRef} type="submit" className="button button-secondary" disabled={commissionSaving || mutationReview !== undefined}>Review commissioning</button>}{commissionError && mutationReview?.kind !== "commission" && ( <p className="form-error" role="alert">{commissionError}</p> )}{" "}{commissionSaved && ( <p className="form-success" role="status">{commissionSaved}</p> )}</form>{mutationReview?.kind === "commission" && <InlineMutationReview item={item} review={mutationReview} saving={commissionSaving} error={commissionError} onBack={leaveReview} onConfirm={() => { void submitCommission(); }} />}</section> )}
-
-        <section className="drawer-quantity" aria-labelledby="physical-count-heading"><div><span className="eyebrow">Stock check</span><strong id="physical-count-heading"> {item.unitStatus === "needs_correction" ? "Quantity blocked" : item.serverEvidence === "delivered_uncounted" || item.serverEvidence === "ordered_unverified" ? "Receive and count" : "Confirm physical count"} </strong><span>{item.unitStatus === "needs_correction" ? "Create and count a corrected replacement before reusing this stock." : item.reserved ? `${formatQuantity(item.reserved, item.unit)} reserved; ${formatQuantity(availableForReuse, item.unit)} currently available for reuse.` : `Recorded quantity: ${formatQuantity(item.quantity, item.unit)}.`}</span><p> {item.unitStatus === "needs_correction" ? "The recorded quantity is retained as history until its unit is corrected." : assumedStockLabel(item) ? "This counts as in stock because of your stock setting. Count it to record that you received it." : "Count what is physically in front of you, then enter that quantity here."} </p></div> {item.unitStatus !== "needs_correction" && ( <form className="count-form" onSubmit={(event) => reviewCount(event)}><label htmlFor="count-quantity">Counted quantity</label><div><input ref={countInputRef} id="count-quantity" type="number" min="0" step="any" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={countSaving || mutationReview?.kind === "count"} /><span>{inventoryUnitLabel(item.unit, expert, item.serverUnit)}</span></div>{mutationReview?.kind === "count" ? null : <button ref={countReviewButtonRef} type="submit" className="button button-secondary" disabled={countSaving || mutationReview !== undefined}>Review physical count</button>}{countError && mutationReview?.kind !== "count" && ( <p className="form-error" role="alert">{countError}</p> )}{" "}{countSaved && ( <p className="form-success" role="status">{countSaved}</p> )}</form> )}{mutationReview?.kind === "count" && <InlineMutationReview item={item} review={mutationReview} saving={countSaving} error={countError} onBack={leaveReview} onConfirm={() => { void submitCount(); }} />} </section>
-
+        <div className="drawer-maintenance">{onDelete && <Button variant="destructive" type="button" className="button button-danger" disabled={editing || countSaving || commissionSaving} onClick={() => { setDeleteError(undefined); setDeleteOpen(true); }}><Icon name="trash" size={16} />{item.kind === "printer" ? "Delete printer" : "Delete item"}</Button>}</div>
         {expert && ( <section className="provenance-panel" aria-labelledby="provenance-heading"><div><span className="eyebrow" id="provenance-heading"> {" "}Provenance{" "} </span><strong>{evidenceLabel(item.evidence, item.serverEvidence)}</strong></div><dl><div><dt>Source</dt><dd>{item.provenance?.source ?? "Not recorded"}</dd></div><div><dt>Observed</dt><dd>{item.provenance?.observedAt ? item.provenance.observedAt.slice(0, 10) : "Not recorded"}</dd></div>{item.provenance?.sourceId && ( <div><dt>Source record</dt><dd><code>{item.provenance.sourceId}</code></dd></div> )}{" "}{item.provenance?.note && ( <div><dt>Note</dt><dd>{item.provenance.note}</dd></div> )}</dl></section> )}{" "}
 
-        {expert && ( <details className="expert-detail" open><summary>Technical evidence</summary><div className="detail-grid"><div><span>Item ID</span><div className="expert-value"><code>{item.id}</code><CopyValueButton value={item.id} /></div></div><div><span>Item kind</span><code>{item.kind ?? "Not recorded"}</code></div><div><span>Category node</span><code>{item.categoryNodeId ?? "Not assigned"}</code></div><div><span>Evidence state</span><code>{item.evidence}</code></div><div><span>Exact link state</span><code>{item.productProfile?.linkState ?? "not linked"}</code></div><div><span>Catalog product</span><code>{item.catalogProduct?.id ?? "Not recorded"}</code></div><div><span>Version</span><code>{item.version ?? "Not recorded"}</code></div><div><span>Dimensions</span><code>{item.dimensions ? formatDimensions(item.dimensions) : "Not recorded"}</code></div><div><span>Tags</span><code>{item.tags.join(" · ") || "None"}</code></div></div><div className="compatibility-box"><span>Compatibility notes</span>{item.compatibility.length ? ( <ul>{item.compatibility.map((note) => ( <li key={note}>{note}</li>))}</ul> ) : ( <p>No compatibility evidence is recorded.</p> )}</div></details> )}
-        {onDelete && ( <section className="drawer-danger-zone" aria-label="Delete this record"><p>Deleting hides this record from inventory. Its history is kept.</p><button type="button" className="button button-danger" disabled={editing || countSaving || commissionSaving} onClick={() => { setDeleteError(undefined); setDeleteOpen(true); }}><Icon name="trash" size={16} />{item.kind === "printer" ? "Delete printer" : "Delete item"}</button></section> )}
+        {expert && ( <Disclosure className="expert-detail" defaultOpen><DisclosureTrigger>Technical evidence</DisclosureTrigger><DisclosureContent><div className="detail-grid"><div><span>Item ID</span><div className="expert-value"><code>{item.id}</code><CopyValueButton value={item.id} /></div></div><div><span>Item kind</span><code>{item.kind ?? "Not recorded"}</code></div><div><span>Category node</span><code>{item.categoryNodeId ?? "Not assigned"}</code></div><div><span>Evidence state</span><code>{item.evidence}</code></div><div><span>Exact link state</span><code>{item.productProfile?.linkState ?? "not linked"}</code></div><div><span>Catalog product</span><code>{item.catalogProduct?.id ?? "Not recorded"}</code></div><div><span>Version</span><code>{item.version ?? "Not recorded"}</code></div><div><span>Dimensions</span><code>{item.dimensions ? formatDimensions(item.dimensions) : "Not recorded"}</code></div><div><span>Tags</span><code>{item.tags.join(" · ") || "None"}</code></div></div><div className="compatibility-box"><span>Compatibility notes</span>{item.compatibility.length ? ( <ul>{item.compatibility.map((note) => ( <li key={note}>{note}</li>))}</ul> ) : ( <p>No compatibility evidence is recorded.</p> )}</div></DisclosureContent></Disclosure> )}
+        </div>
       </div>
-    </aside>
+    </aside></WorkspaceModal>
     {deleteOpen && <Dialog title={`Delete ${item.name}?`} role="alertdialog" onClose={() => { if (!deleting) setDeleteOpen(false); }}>
       <p className="dialog-intro">This removes the item from inventory and printer choices. Its stock records and project history are kept. Existing plans may need a replacement. This cannot be undone.</p>
-      {deleteError && <p className="form-error" role="alert">{deleteError}</p>}
-      <div className="dialog-actions"><button type="button" className="button button-quiet" disabled={deleting} onClick={() => setDeleteOpen(false)}>Cancel</button><button type="button" className="button button-danger" disabled={deleting || item.version === undefined} aria-busy={deleting} onClick={() => { void confirmDelete(); }}>{deleting ? "Deleting…" : item.kind === "printer" ? "Delete printer" : "Delete item"}</button></div>
-      {item.version === undefined && <p role="alert">Reload this item before deleting it.</p>}
+      {deleteError && <Alert asChild><p className="form-error" role="alert">{deleteError}</p></Alert>}
+      <div className="dialog-actions"><Button variant="ghost" type="button" className="button button-quiet" disabled={deleting} onClick={() => setDeleteOpen(false)}>Cancel</Button><Button variant="destructive" type="button" className="button button-danger" disabled={deleting || item.version === undefined} aria-busy={deleting} onClick={() => { void confirmDelete(); }}>{deleting ? "Deleting…" : item.kind === "printer" ? "Delete printer" : "Delete item"}</Button></div>
+      {item.version === undefined && <Alert asChild><p role="alert">Reload this item before deleting it.</p></Alert>}
     </Dialog>}
+    {mutationReview && reviewLayerReady && ( <InventoryMutationReviewDialog item={mutationReview.item} review={mutationReview} unresolved={stockUncertain} error={mutationReview.kind === "count" ? countError : commissionError} saving={mutationReview.kind === "count" ? countSaving : commissionSaving} onClose={() => { if (!countSaving && !commissionSaving && !stockUncertain) { setMutationReview(undefined); onPendingObservation?.(undefined); } }} onConfirm={() => { void (mutationReview.kind === "count" ? submitCount() : submitCommission()); }} /> )}
   </> );
 }
 
-/**
- * Inline before/after confirmation for a stock change, shown in place of the
- * form's review button. Nothing is saved until Confirm; a failed save keeps
- * the exact reviewed value so Confirm retries it unchanged.
- */
-function InlineMutationReview({ item, review, saving, error, onBack, onConfirm }: { item: InventoryItem; review: InventoryMutationReview; saving: boolean; error?: string | undefined; onBack: () => void; onConfirm: () => void; }) {
-  const headingId = useId();
-  const confirmRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => { const frame = window.requestAnimationFrame(() => confirmRef.current?.focus({ preventScroll: false })); return () => window.cancelAnimationFrame(frame); }, []);
+function InventoryMutationReviewDialog({ item, review, saving, unresolved, error, onClose, onConfirm }: { item: InventoryItem; review: InventoryMutationReview; saving: boolean; unresolved: boolean; error?: string | undefined; onClose: () => void; onConfirm: () => void; }) {
   const isCount = review.kind === "count";
   const newQuantity = isCount ? review.quantity : review.input.quantity;
+  const oldEvidence = evidenceLabel(item.evidence, item.serverEvidence);
+  const newEvidence = isCount ? "Physically counted" : "Commissioned";
   const effect = isCount
-    ? "Records this physical count and updates the quantity available for reuse."
+    ? "Records the on-hand quantity. Reservations and recorded condition stay unchanged."
     : "Marks the received stock as commissioned and makes the observed quantity available for reuse; delivery evidence remains retained.";
-  return ( <div className="inline-review" role="group" aria-labelledby={headingId}>
-    <strong id={headingId}>{isCount ? "Review physical count" : "Review stock commissioning"}</strong>
-    <dl className="inline-review-change">
-      <div><dt>Before</dt><dd>{formatQuantity(item.quantity, item.unit)}<small>{evidenceLabel(item.evidence, item.serverEvidence)}</small></dd></div>
-      <span className="inline-review-arrow" aria-hidden="true"><Icon name="arrow-right" size={16} /></span>
-      <div><dt>After</dt><dd>{formatQuantity(newQuantity, item.unit)}<small>{isCount ? "Physically counted" : "Commissioned"}</small></dd></div>
-    </dl>
-    <p>{effect} Nothing is saved until you confirm.</p>
-    {!isCount && <p className="inline-review-observation">Observation: {review.input.source} · {review.input.observedAt}</p>}
-    {error && <p className="form-error" role="alert">{error}{" "}Confirm again to retry the same value.</p>}
-    <div className="inline-review-actions"><button type="button" className="button button-quiet" onClick={onBack} disabled={saving}>{isCount ? "Change count" : "Change details"}</button><button ref={confirmRef} type="button" className="button button-primary" onClick={onConfirm} disabled={saving} aria-busy={saving || undefined}>{isCount ? "Confirm physical count" : "Commission stock"}<Icon name="check" size={16} /></button></div>
-    {saving && <p role="status" className="field-hint">Saving…</p>}
-  </div> );
-} export function NewProjectDialog({ items = [], suspended = false, onClose, onAddPrinter, onCreate, onGuided }: { items?: InventoryItem[]; suspended?: boolean; onGuided?: (() => void) | undefined; onClose: () => void; onAddPrinter?: (() => void) | undefined; onCreate: (input: ProjectCreateInput) => Promise<ProjectCreateOutcome>; }) {
+  return ( <Dialog title={isCount ? "Review physical count" : "Review stock commissioning"} role="alertdialog" onClose={onClose}>
+    <p className="dialog-intro">Check the exact item, its location and the amount you observed.</p>
+    <div className="inventory-selection-summary inventory-count-review">
+      <span className="inventory-review-identity"><strong>{item.name}</strong><small>{[item.manufacturer, item.model ?? item.variant, item.sku].filter(Boolean).join(" · ")}</small><span>{inventoryLocationLabel(item.location)}</span><small>Record: {item.id}</small></span>
+      <span><strong>Before this count</strong>{formatQuantity(item.quantity, item.unit)}<small>{oldEvidence}</small></span>
+      <span><strong>After this count</strong>{formatQuantity(newQuantity, item.unit)}<small>{newEvidence}</small></span>
+      <span><strong>Recorded condition</strong>{item.condition?.replaceAll("_", " ") ?? "Unknown"}<small>This observation does not change condition.</small></span>
+      <span><strong>Effect</strong>{effect}</span>
+      <p className="inventory-compatibility-reminder"><Icon name="info" size={17} />Compatibility is checked separately. This count does not confirm that the item fits a project.</p>
+      {!isCount && ( <span><strong>Observation</strong>{review.input.source} · {review.input.observedAt}</span> )}
+    </div>
+    {error && <Alert asChild><p className="form-error" role="alert">{error}</p></Alert>}
+    <div className="dialog-actions"><Button variant="ghost" type="button" className="button button-quiet" onClick={onClose} disabled={saving || unresolved}> {" "}Back to item{" "} </Button><Button variant="default" type="button" className="button button-primary" onClick={onConfirm} disabled={saving} aria-busy={saving}>{saving ? "Saving…" : unresolved ? "Retry unchanged observation" : error ? "Retry observation" : isCount ? "Confirm physical count" : "Commission stock"}<Icon name="check" size={16} /></Button></div>
+  </Dialog> );
+} export function NewProjectDialog({ items = [], suspended = false, dismissalPending = false, onClose, onAddPrinter, onCreate, onGuided }: { items?: InventoryItem[]; suspended?: boolean; dismissalPending?: boolean; onGuided?: ((draft: ProjectCreateInput, mode: "template" | "import") => void) | undefined; onClose: () => void; onAddPrinter?: (() => void) | undefined; onCreate: (input: ProjectCreateInput) => Promise<ProjectCreateOutcome>; }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [fabricationRoute, setFabricationRoute] = useState<FabricationRoute>("undecided"); const [printer, setPrinter] = useState<InventoryItem>(); const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string>();
+  const [unconfirmed, setUnconfirmed] = useState(false);
+  const [planningOpen, setPlanningOpen] = useState(false);
+  const pendingCreate = useRef<ProjectCreateInput | undefined>(undefined);
+  useUnsavedWork(Boolean(name || description || fabricationRoute !== "undecided"), "new project", submitting || unconfirmed);
   if (suspended) return null;
   const printers = items.filter(isUsableOwnedPrinter); const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -2485,8 +2735,11 @@ function InlineMutationReview({ item, review, saving, error, onBack, onConfirm }
     setSubmitting(true);
     setFormError(undefined);
     try {
-      const outcome = await onCreate({ name: name.trim(), description: description.trim(), fabricationRoute, ...(fabricationRoute === "printed" && printer ? { intendedPrinterItemId: printer.id } : {}) });
-      if (outcome === "failed") setFormError("The project was not created. Check the service connection and try again.");
+      const input = pendingCreate.current ?? { name: name.trim(), description: description.trim(), fabricationRoute, ...(fabricationRoute === "printed" && printer ? { intendedPrinterItemId: printer.id } : {}) };
+      const outcome = await onCreate(input);
+      if (outcome === "ambiguous") { pendingCreate.current = input; setUnconfirmed(true); }
+      if (outcome === "created") { pendingCreate.current = undefined; setUnconfirmed(false); }
+      if (outcome === "failed") setFormError(unconfirmed ? "The retry was not confirmed. Your original project details are retained. Retry the unchanged project." : "The project was not created. Check the service connection and try again.");
       if (typeof outcome === "object") setFormError(outcome.error);
       if (outcome === "ambiguous") setFormError(ambiguousProjectCreationMessage);
     } catch (error: unknown) {
@@ -2494,20 +2747,38 @@ function InlineMutationReview({ item, review, saving, error, onBack, onConfirm }
     } finally {
       setSubmitting(false);
     }
-  }; return ( <Dialog title="Create project" dirty={Boolean(name.trim() || description.trim() || fabricationRoute !== "undecided" || printer)} onClose={onClose}>{onGuided && <button type="button" className="button button-secondary setup-entry" onClick={onGuided}>Use a template or import a BOM</button>}<form onSubmit={(event) => { void submit(event); }}><p className="dialog-intro"> {" "}
-          Enter a project name and goal, then choose how you might build it. You
-          can change this later.{" "} </p> <label className="form-field"> <span>Project name</span> <input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Desk sensor enclosure" disabled={submitting} /> </label><label className="form-field"><span>Project goal</span><textarea required value={description} onChange={(event) => setDescription(event.target.value)} rows={4} placeholder="Describe the required result" disabled={submitting} /></label><fieldset className="fabrication-route-options" aria-describedby="fabrication-route-help" ><legend>How will you build it?</legend> {fabricationRouteOptions.map((option) => ( <label className={`fabrication-route-option ${fabricationRoute === option.value ? "is-selected" : ""}`} key={option.value}><input type="radio" name="fabrication-route" value={option.value} checked={fabricationRoute === option.value} onChange={() => setFabricationRoute(option.value)} disabled={submitting} /><span> <strong>{option.label}</strong><small>{option.description}</small> </span></label> ))} <p id="fabrication-route-help"> {" "}
-            You can change this later.{" "} </p> </fieldset> {fabricationRoute === "printed" && ( <div className="route-printer-picker"> {printers.length ? ( <OwnedItemCombobox category="Printers" items={printers} value={printer} onSelect={setPrinter} label="Printer for this project" helper="Leave blank if you have not decided yet." showInitialChoices /> ) : ( <div className="printer-reassurance"> <strong>No owned printer recorded yet.</strong><span> {" "}
-                  Add a printer later, or use ready-made parts or electronics-only assembly.{" "} </span> {onAddPrinter && ( <button type="button" className="text-button" onClick={onAddPrinter} disabled={submitting} > {" "}
-                    Add printer <Icon name="plus" size={14} /></button> )} </div> )} </div> )}{" "} {formError && ( <p className="form-error" role="alert">{formError}</p> )}<div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose} disabled={submitting}> {" "}Cancel{" "} </button><button type="submit" className="button button-primary" disabled={!name.trim() || !description.trim() || submitting} aria-busy={submitting}>{submitting ? "Creating…" : "Create project"} {" "} {!submitting && <Icon name="arrow-right" size={16} />}</button></div></form></Dialog> ); } export function revisionInputForRoute({ name, status, notes, fabricationRoute, intendedPrinterItemId, printerSelectionTouched = false, buildConfig }: { name: string; status: string; notes: string; fabricationRoute: FabricationRoute; intendedPrinterItemId?: string | null; printerSelectionTouched?: boolean; buildConfig?: BuildConfigInput; }): RevisionInput { return { name: name.trim(), status: status || "concept", ...(notes.trim() ? { notes: notes.trim() } : {}), fabricationRoute, ...(printerSelectionTouched ? { intendedPrinterItemId: fabricationRoute === "printed" ? (intendedPrinterItemId ?? null) : null } : {}), ...(fabricationRoute === "printed" && buildConfig ? { buildConfig } : {}) } as RevisionInput;
+  };
+  const projectDraft = (): ProjectCreateInput => ({ name, description, fabricationRoute, ...(fabricationRoute === "printed" && printer ? { intendedPrinterItemId: printer.id } : {}) });
+  return <Dialog title="Create project" onClose={onClose} suspended={dismissalPending}>
+    <form onSubmit={(event) => { void submit(event); }}>
+      <p className="dialog-intro">Give your idea a name. Add its parts, materials and tools next; choose equipment when you need it.</p>
+      <Label className="form-field"><span>Project name</span><Input autoFocus required maxLength={240} value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Desk sensor enclosure" disabled={submitting || unconfirmed} /></Label>
+      <Label className="form-field"><span>Project goal <small>(optional)</small></span><Textarea aria-label="Project goal" maxLength={5000} value={description} onChange={(event) => setDescription(event.target.value)} rows={2} placeholder="What should it do?" disabled={submitting || unconfirmed} /></Label>
+      {onGuided && <div className="project-start-options"><Button variant="ghost" type="button" className="text-button setup-entry" onClick={() => onGuided(projectDraft(), "template")} disabled={submitting || unconfirmed}>Start from a template</Button><Button variant="ghost" type="button" className="text-button setup-entry" onClick={() => onGuided(projectDraft(), "import")} disabled={submitting || unconfirmed}>Import a parts list (CSV)</Button></div>}
+      <Disclosure className="project-planning-details" open={planningOpen} onOpenChange={setPlanningOpen}><DisclosureTrigger>Planning details</DisclosureTrigger><DisclosureContent>
+        <fieldset className="fabrication-route-options" aria-describedby="fabrication-route-help"><legend>How will you build it?</legend>
+          <RadioGroup aria-label="How will you build it?" value={fabricationRoute} onValueChange={(next) => setFabricationRoute(next as FabricationRoute)} disabled={submitting || unconfirmed}>{fabricationRouteOptions.map((option) => <Label className={`fabrication-route-option ${fabricationRoute === option.value ? "is-selected" : ""}`} key={option.value}><RadioGroupItem value={option.value} /><span><strong>{option.label}</strong><small>{option.description}</small></span></Label>)}</RadioGroup>
+          <p id="fabrication-route-help">You can choose later. This records a plan; it does not reserve stock.</p>
+        </fieldset>
+        {fabricationRoute === "printed" && <div className="route-printer-picker"><fieldset className="correction-fields" disabled={submitting || unconfirmed} inert={submitting || unconfirmed || undefined}>
+          {<OwnedItemCombobox candidateFilter={isUsableOwnedPrinter} category="Printers" items={printers} value={printer} onSelect={setPrinter} label="Printer for this project" helper="Leave blank if you have not decided yet." showInitialChoices />}{printers.length === 0 && <div className="printer-reassurance"><strong>Search your owned printers or add one below.</strong><span>Add a printer later, or use ready-made parts or electronics-only assembly.</span>{onAddPrinter && <Button variant="ghost" type="button" className="text-button" onClick={onAddPrinter} disabled={submitting || unconfirmed}>Add printer <Icon name="plus" size={14} /></Button>}</div>}
+        </fieldset></div>}
+      </DisclosureContent></Disclosure>
+      {formError && <Alert asChild><p className="form-error" role="alert">{formError}</p></Alert>}
+      <div className="dialog-actions"><Button variant="ghost" type="button" className="button button-quiet" onClick={onClose} disabled={submitting}>Cancel</Button><Button variant="default" type="submit" className="button button-primary" disabled={!name.trim() || submitting} aria-busy={submitting}>{submitting ? "Creating…" : unconfirmed ? "Retry unchanged project" : "Create project"}{!submitting && <Icon name="arrow-right" size={16} />}</Button></div>
+    </form>
+  </Dialog>;
+} export function revisionInputForRoute({ name, status, notes, fabricationRoute, intendedPrinterItemId, printerSelectionTouched = false, buildConfig }: { name: string; status: string; notes: string; fabricationRoute: FabricationRoute; intendedPrinterItemId?: string | null; printerSelectionTouched?: boolean; buildConfig?: BuildConfigInput; }): RevisionInput { return { name: name.trim(), status: status || "concept", ...(notes.trim() ? { notes: notes.trim() } : {}), fabricationRoute, ...(printerSelectionTouched ? { intendedPrinterItemId: fabricationRoute === "printed" ? (intendedPrinterItemId ?? null) : null } : {}), ...(fabricationRoute === "printed" && buildConfig ? { buildConfig } : {}) } as RevisionInput;
 }
 
-export function NewRevisionDialog({ project, items, expert, suspended = false, onClose, onAddPrinterDetails, onAddPrinter, onCreate }: { project: Project; items: InventoryItem[]; expert: boolean; suspended?: boolean; onClose: () => void; onAddPrinterDetails?: ((item: InventoryItem) => void) | undefined; onAddPrinter?: (() => void) | undefined; onCreate: (input: RevisionInput) => Promise<boolean>; }) {
+export function NewRevisionDialog({ project, items, expert, suspended = false, dismissalPending = false, onClose, onAddPrinterDetails, onAddPrinter, onCreate }: { project: Project; items: InventoryItem[]; expert: boolean; suspended?: boolean; dismissalPending?: boolean; onClose: () => void; onAddPrinterDetails?: ((item: InventoryItem) => void) | undefined; onAddPrinter?: (() => void) | undefined; onCreate: (input: RevisionInput) => Promise<boolean>; }) {
   const carriedPrinterId = projectIntendedPrinterId(project); const carriedPrinter = carriedPrinterId ? items.find((item) => item.id === carriedPrinterId) : undefined; const carriedFilament = project.buildConfigSnapshot?.filamentItemId ? items.find( (item) => item.id === project.buildConfigSnapshot?.filamentItemId ) : undefined; const selectablePrinters = items.filter(isUsableOwnedPrinter); const [name, setName] = useState("");
   const [status, setStatus] = useState("concept");
-  const [fabricationRoute, setFabricationRoute] = useState<FabricationRoute>( () => project.fabricationRoute ?? (carriedPrinter ? "printed" : "undecided") ); const [notes, setNotes] = useState("");
-  const [printer, setPrinter] = useState<InventoryItem | undefined>( carriedPrinter ); const [printerChanged, setPrinterChanged] = useState(false);
-  const [filament, setFilament] = useState<InventoryItem | undefined>( carriedFilament );
+  const [fabricationRoute, setFabricationRoute] = useState<FabricationRoute>( () => project.fabricationRoute ?? (carriedPrinterId ? "printed" : "undecided") ); const [notes, setNotes] = useState("");
+  const [selectedPrinter, setPrinter] = useState<InventoryItem | undefined>(carriedPrinter); const [printerChanged, setPrinterChanged] = useState(false);
+  const printer = printerChanged ? selectedPrinter : carriedPrinter;
+  const [selectedFilament, setFilament] = useState<InventoryItem | undefined>(carriedFilament); const [filamentChanged, setFilamentChanged] = useState(false);
+  const filament = filamentChanged ? selectedFilament : carriedFilament;
   const [hotendSide, setHotendSide] = useState("");
   const [nozzleDiameter, setNozzleDiameter] = useState("");
   const [nozzleMaterial, setNozzleMaterial] = useState("");
@@ -2520,7 +2791,12 @@ export function NewRevisionDialog({ project, items, expert, suspended = false, o
   const [calibration, setCalibration] = useState("");
   const [unknowns, setUnknowns] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [formError, setFormError] = useState<string>(); if (suspended) return null; const printerEligibility = printer ? buildItemEligibility(printer, "Printers") : { eligible: false, reason: "Choose an exact owned printer before saving build setup." };
+  const [formError, setFormError] = useState<string>();
+  const [uncertain, setUncertain] = useState(false);
+  const pendingSave = useRef<RevisionInput | undefined>(undefined);
+  const dirty = Boolean(name || notes || status !== "concept" || fabricationRoute !== (project.fabricationRoute ?? (carriedPrinterId ? "printed" : "undecided")) || (printerChanged && printer?.id !== carriedPrinterId) || (filamentChanged && filament?.id !== project.buildConfigSnapshot?.filamentItemId) || [hotendSide, nozzleDiameter, nozzleMaterial, buildPlate, accessories, firmware, slicer, slicerVersion, profile, calibration, unknowns].some(Boolean));
+  useUnsavedWork(dirty, "revision draft", submitting || uncertain);
+  if (suspended) return null; const printerEligibility = printer ? buildItemEligibility(printer, "Printers") : { eligible: false, reason: "Choose an exact owned printer before saving build setup." };
   const printerNeedsDetails = Boolean( printer && printer.unitStatus !== "needs_correction" && !isExactProductIdentityComplete(printer) ); const filamentEligibility = filament ? buildItemEligibility(filament, "Filament") : { eligible: true };
   const setupWarnings = expert && fabricationRoute === "printed" ? [ ...(printer && !isUsableOwnedPrinter(printer) ? [ "This printer is not available as an owned capability until it is physically counted or commissioned." ] : []), ...(printer && !printerEligibility.eligible ? [ printerNeedsDetails ? "Add the exact printer model and variant before saving this setup." : (printerEligibility.reason ?? "This printer cannot be used for this setup yet.") ] : []),
     ...(filament && !filamentEligibility.eligible ? [ filamentEligibility.reason ?? "Choose physical filament with confirmed evidence before saving this setup." ] : [])
@@ -2532,21 +2808,23 @@ export function NewRevisionDialog({ project, items, expert, suspended = false, o
     ...(Number.isFinite(Number(nozzleDiameter)) && Number(nozzleDiameter) > 0 ? { nozzleDiameterMm: Number(nozzleDiameter) } : {}),
     ...(nozzleMaterial.trim() ? { nozzleMaterial: nozzleMaterial.trim() } : {}), ...(buildPlate.trim() ? { buildPlate: buildPlate.trim() } : {}), accessories: splitSetupValues(accessories), ...(firmware.trim() ? { firmware: firmware.trim() } : {}), ...(slicer.trim() ? { slicer: slicer.trim() } : {}), ...(slicerVersion.trim() ? { slicerVersion: slicerVersion.trim() } : {}), ...(profile.trim() ? { profile: profile.trim() } : {}), ...(calibration.trim() ? { calibration: calibration.trim() } : {}), unknowns: splitSetupValues(unknowns) }; const submit = async (event: FormEvent) => { event.preventDefault(); if (!name.trim() || submitting) return; setSubmitting(true); setFormError(undefined); try { // Beginner mode records only planning context. An immutable setup
 // snapshot is an Expert action and still needs exact, usable identities.
-const exactBuildConfig = expert && printer && isUsableOwnedPrinter(printer) && printerEligibility.eligible && !printerNeedsDetails && filamentEligibility.eligible ? buildConfig : undefined; const created = await onCreate( revisionInputForRoute({ name, status: expert ? status : "concept", notes, fabricationRoute, ...(printer?.id === undefined ? {} : { intendedPrinterItemId: printer.id }), printerSelectionTouched: printerChanged, ...(exactBuildConfig ? { buildConfig: exactBuildConfig } : {}) }) ); if (!created) setFormError( "The revision was not created. Check the service connection and try again." ); } catch (error: unknown) { setFormError(normalizeApiError(error).message); } finally { setSubmitting(false); } }; return ( <Dialog title={`New revision for ${project.name}`} dirty={Boolean(name.trim() || notes.trim())} onClose={onClose}> <form onSubmit={(event) => { void submit(event); }} > <p className="dialog-intro"> {" "}
+const exactBuildConfig = expert && printer && isUsableOwnedPrinter(printer) && printerEligibility.eligible && !printerNeedsDetails && filamentEligibility.eligible ? buildConfig : undefined; const input = pendingSave.current ?? revisionInputForRoute({ name, status: expert ? status : "concept", notes, fabricationRoute, ...(printer?.id === undefined ? {} : { intendedPrinterItemId: printer.id }), printerSelectionTouched: printerChanged, ...(exactBuildConfig ? { buildConfig: exactBuildConfig } : {}) }); pendingSave.current = input; const created = await onCreate(input); if (created) { pendingSave.current = undefined; setUncertain(false); } else if (!uncertain) pendingSave.current = undefined; if (!created) setFormError( "The revision was not created. Check the service connection and try again." ); } catch (error: unknown) { const failure = normalizeApiError(error); const unresolved = uncertain || failure.kind === "offline" || failure.kind === "server"; if (unresolved) setUncertain(true); else pendingSave.current = undefined; setFormError(unresolved ? "The revision save is not confirmed. Your original draft is kept; retry unchanged to check the same request." : failure.message); } finally { setSubmitting(false); } }; return ( <ScopedDraftDialog title={`New revision for ${project.name}`} dirty={dirty} unresolved={submitting || uncertain} suspended={dismissalPending} onClose={onClose}>{(requestClose) => <form onSubmit={(event) => { void submit(event); }} > <fieldset disabled={submitting || uncertain} className="correction-fields"><p className="dialog-intro"> {" "}
           Choose how this revision will be built. You can carry the previous
-          approach forward and change it later.{" "} </p> <label className="form-field"> <span>Revision name</span> <input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. R02 enclosure fit" disabled={submitting} /> </label> <fieldset className="fabrication-route-options" aria-describedby="revision-fabrication-route-help" > <legend>How will you build it?</legend> {fabricationRouteOptions.map((option) => ( <label className={`fabrication-route-option ${fabricationRoute === option.value ? "is-selected" : ""}`} key={option.value} > <input type="radio" name="revision-fabrication-route" value={option.value} checked={fabricationRoute === option.value} onChange={() => setFabricationRoute(option.value)} disabled={submitting} /> <span> <strong>{option.label}</strong> <small>{option.description}</small> </span> </label> ))} <p id="revision-fabrication-route-help"> {" "}
-            Planning only; you can change it later.{" "} </p> </fieldset> {fabricationRoute === "printed" && ( <> <div className="setup-picker-grid"> <OwnedItemCombobox category="Printers" items={selectablePrinters} value={printer} onSelect={(selection) => { setPrinter(selection); setPrinterChanged(true); }} onResolveItem={ printerNeedsDetails ? onAddPrinterDetails : undefined } label="Printer for this revision" helper="Leave blank if you have not decided yet." /> {expert && ( <OwnedItemCombobox category="Filament" items={items} value={filament} onSelect={setFilament} label="Filament (optional technical setup)" /> )} </div> {!printer && ( <div className="printer-reassurance"> <strong>No printer selected yet.</strong> <span> {" "}
-                  Choose or add an owned printer when needed.{" "} </span> {onAddPrinter && ( <button type="button" className="text-button" onClick={onAddPrinter} disabled={submitting} > {" "}
-                    Add printer <Icon name="plus" size={14} /> </button> )} </div> ) }{" "} {setupWarnings.length > 0 && ( <div className="setup-warnings" role="status"> <strong>Setup details need attention</strong> {setupWarnings.map((warning) => ( <span key={warning}>{warning}</span> ))} </div> ) }{" "} {expert && printer && ( <BuildSetupSummary input={buildConfig} printer={printer} filament={filament} expert heading="Read-only setup record for this revision" /> )} </> ) }{" "} {expert && ( <details className="advanced-setup" open> <summary>Technical details</summary> <label className="form-field"> <span> {" "}
-                Starting state <small>(technical override)</small> </span> <select value={status} onChange={(event) => setStatus(event.target.value)} disabled={submitting}><option value="concept">Concept</option> <option value="CAD complete">CAD complete</option> <option value="DFAM reviewed">DFAM reviewed</option> </select> </label> {fabricationRoute === "printed" && ( <div className="advanced-setup-grid"><label className="form-field"><span>Hotend side</span><input value={hotendSide} onChange={(event) => setHotendSide(event.target.value)} placeholder="Single nozzle / left / right" disabled={submitting} /></label><label className="form-field"><span>Nozzle diameter (mm)</span><input type="number" min="0.1" step="0.01" value={nozzleDiameter} onChange={(event) => setNozzleDiameter(event.target.value)} placeholder="0.4" disabled={submitting} /></label><label className="form-field"><span>Nozzle material</span><input value={nozzleMaterial} onChange={(event) => setNozzleMaterial(event.target.value)} placeholder="Hardened steel" disabled={submitting} /></label><label className="form-field"><span>Build plate</span><input value={buildPlate} onChange={(event) => setBuildPlate(event.target.value)} placeholder="Textured PEI" disabled={submitting} /></label><label className="form-field"><span>Accessories</span><input value={accessories} onChange={(event) => setAccessories(event.target.value)} placeholder="AMS 2 Pro, dryer" disabled={submitting} /></label> <label className="form-field"><span>Firmware</span><input value={firmware} onChange={(event) => setFirmware(event.target.value)} placeholder="Version or not recorded" disabled={submitting} /> </label><label className="form-field"> <span>Slicer</span><input value={slicer} onChange={(event) => setSlicer(event.target.value)} placeholder="Bambu Studio / Cura" disabled={submitting} /></label><label className="form-field"><span>Slicer version</span><input value={slicerVersion} onChange={(event) => setSlicerVersion(event.target.value)} placeholder="e.g. 1.10.0" disabled={submitting} /></label><label className="form-field"><span>Profile</span><input value={profile} onChange={(event) => setProfile(event.target.value)} placeholder="0.20 mm Standard" disabled={submitting} /></label><label className="form-field"><span>Calibration state</span><input value={calibration} onChange={(event) => setCalibration(event.target.value)} placeholder="Flow / first layer / date" disabled={submitting} /></label><label className="form-field advanced-unknowns"><span>Explicit unknowns</span><textarea value={unknowns} onChange={(event) => setUnknowns(event.target.value)} rows={2} placeholder="One unknown per line" disabled={submitting} /></label></div> )} </details> )} <label className="form-field"><span> {" "}
-            Notes <small>(optional)</small> </span><textarea value={notes} onChange={(event) => setNotes(event.target.value)} rows={3} placeholder="What changed or what should be checked?" disabled={submitting} /></label> {formError && ( <p className="form-error" role="alert"> {formError} </p> )} <div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose} disabled={submitting} > {" "}
-            Cancel{" "} </button> <button type="submit" className="button button-primary" disabled={!name.trim() || submitting} aria-busy={submitting} > {submitting ? "Creating…" : "Create revision"}{" "} {!submitting && <Icon name="arrow-right" size={16} />} </button></div></form></Dialog> ); } export function EditBuildApproachDialog({ project, items, expert, suspended = false, onClose, onAddPrinter, onSave }: { project: Project; items: InventoryItem[]; expert: boolean; suspended?: boolean; onClose: () => void; onAddPrinter?: (() => void) | undefined; onSave: (input: ProjectRevisionUpdateInput) => Promise<boolean>; }) { const route = projectFabricationRoute(project); const carriedPrinterId = projectIntendedPrinterId(project); const carriedPrinter = carriedPrinterId ? items.find( (item) => item.id === carriedPrinterId && isUsableOwnedPrinter(item) ) : undefined; const selectablePrinters = items.filter(isUsableOwnedPrinter); const [fabricationRoute, setFabricationRoute] = useState<FabricationRoute>(route); const [printer, setPrinter] = useState<InventoryItem | undefined>( carriedPrinter ); const [submitting, setSubmitting] = useState(false); const [formError, setFormError] = useState<string>(); useEffect(() => { if (fabricationRoute !== "printed") setPrinter(undefined); }, [fabricationRoute]); if (suspended) return null; const submit = async (event: FormEvent) => { event.preventDefault(); if (submitting) return; setSubmitting(true); setFormError(undefined); try { const saved = await onSave({ fabricationRoute, intendedPrinterItemId: fabricationRoute === "printed" ? (printer?.id ?? null) : null }); if (!saved) setFormError( "The build approach was not saved. Check the service connection and try again." ); } catch (error: unknown) { setFormError(normalizeApiError(error).message); } finally { setSubmitting(false); } }; return ( <Dialog title="Edit build approach" onClose={onClose}><form className="edit-build-approach-form" onSubmit={(event) => { void submit(event); }} > <p className="dialog-intro"> {" "}
+          approach forward and change it later.{" "} </p> <Label className="form-field"> <span>Revision name</span> <Input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. R02 enclosure fit" disabled={submitting} /> </Label> <fieldset className="fabrication-route-options" aria-describedby="revision-fabrication-route-help" > <legend>How will you build it?</legend> <RadioGroup aria-label="How will you build it?" value={fabricationRoute} onValueChange={next => setFabricationRoute(next as typeof fabricationRoute)} disabled={submitting}>{fabricationRouteOptions.map((option) => ( <Label className={`fabrication-route-option ${fabricationRoute === option.value ? "is-selected" : ""}`} key={option.value} > <RadioGroupItem value={option.value} /> <span> <strong>{option.label}</strong> <small>{option.description}</small> </span> </Label> ))}</RadioGroup> <p id="revision-fabrication-route-help"> {" "}
+            This is planning context only. It does not buy, reserve, or
+            build anything.{" "} </p> </fieldset> {fabricationRoute === "printed" && ( <> <div className="setup-picker-grid"> <OwnedItemCombobox candidateFilter={isUsableOwnedPrinter} category="Printers" items={selectablePrinters} value={printer} onSelect={(selection) => { setPrinter(selection); setPrinterChanged(true); }} onResolveItem={ printerNeedsDetails ? onAddPrinterDetails : undefined } label="Printer for this revision" helper="Leave blank if you have not decided yet." /> {expert && ( <OwnedItemCombobox category="Filament" items={items} value={filament} onSelect={(selection) => { setFilament(selection); setFilamentChanged(true); }} label="Filament (optional technical setup)" /> )} </div> {!printer && ( <div className="printer-reassurance"> <strong>No printer selected yet.</strong> <span> {" "}
+                  Choose or add an owned printer when needed.{" "} </span> {onAddPrinter && ( <Button variant="ghost" type="button" className="text-button" onClick={onAddPrinter} disabled={submitting} > {" "}
+                    Add printer <Icon name="plus" size={14} /> </Button> )} </div> ) }{" "} {setupWarnings.length > 0 && ( <div className="setup-warnings" role="status"> <strong>Setup details need attention</strong> {setupWarnings.map((warning) => ( <span key={warning}>{warning}</span> ))} </div> ) }{" "} {expert && printer && ( <BuildSetupSummary input={buildConfig} printer={printer} filament={filament} expert heading="Read-only setup record for this revision" /> )} </> ) }{" "} {expert && ( <Disclosure className="advanced-setup" defaultOpen> <DisclosureTrigger>Technical details</DisclosureTrigger><DisclosureContent> <Label className="form-field"> <span> {" "}
+                Starting state <small>(technical override)</small> </span> <NativeSelect value={status} onChange={(event) => setStatus(event.target.value)} disabled={submitting}><NativeSelectOption value="concept">Concept</NativeSelectOption> <NativeSelectOption value="CAD complete">CAD complete</NativeSelectOption> <NativeSelectOption value="DFAM reviewed">DFAM reviewed</NativeSelectOption> </NativeSelect> </Label> {fabricationRoute === "printed" && ( <div className="advanced-setup-grid"><Label className="form-field"><span>Hotend side</span><Input value={hotendSide} onChange={(event) => setHotendSide(event.target.value)} placeholder="Single nozzle / left / right" disabled={submitting} /></Label><Label className="form-field"><span>Nozzle diameter (mm)</span><Input type="number" min="0.1" step="0.01" value={nozzleDiameter} onChange={(event) => setNozzleDiameter(event.target.value)} placeholder="0.4" disabled={submitting} /></Label><Label className="form-field"><span>Nozzle material</span><Input value={nozzleMaterial} onChange={(event) => setNozzleMaterial(event.target.value)} placeholder="Hardened steel" disabled={submitting} /></Label><Label className="form-field"><span>Build plate</span><Input value={buildPlate} onChange={(event) => setBuildPlate(event.target.value)} placeholder="Textured PEI" disabled={submitting} /></Label><Label className="form-field"><span>Accessories</span><Input value={accessories} onChange={(event) => setAccessories(event.target.value)} placeholder="AMS 2 Pro, dryer" disabled={submitting} /></Label> <Label className="form-field"><span>Firmware</span><Input value={firmware} onChange={(event) => setFirmware(event.target.value)} placeholder="Version or not recorded" disabled={submitting} /> </Label><Label className="form-field"> <span>Slicer</span><Input value={slicer} onChange={(event) => setSlicer(event.target.value)} placeholder="Bambu Studio / Cura" disabled={submitting} /></Label><Label className="form-field"><span>Slicer version</span><Input value={slicerVersion} onChange={(event) => setSlicerVersion(event.target.value)} placeholder="e.g. 1.10.0" disabled={submitting} /></Label><Label className="form-field"><span>Profile</span><Input value={profile} onChange={(event) => setProfile(event.target.value)} placeholder="0.20 mm Standard" disabled={submitting} /></Label><Label className="form-field"><span>Calibration state</span><Input value={calibration} onChange={(event) => setCalibration(event.target.value)} placeholder="Flow / first layer / date" disabled={submitting} /></Label><Label className="form-field advanced-unknowns"><span>Explicit unknowns</span><Textarea value={unknowns} onChange={(event) => setUnknowns(event.target.value)} rows={2} placeholder="One unknown per line" disabled={submitting} /></Label></div> )} </DisclosureContent></Disclosure> )} <Label className="form-field"><span> {" "}
+            Notes <small>(optional)</small> </span><Textarea value={notes} onChange={(event) => setNotes(event.target.value)} rows={3} placeholder="What changed or what should be checked?" disabled={submitting} /></Label> </fieldset>{formError && ( <Alert asChild><p className="form-error" role="alert"> {formError} </p></Alert> )} <div className="dialog-actions"><Button variant="ghost" type="button" className="button button-quiet" onClick={requestClose} disabled={submitting} > {" "}
+            Cancel{" "} </Button> <Button variant="default" type="submit" className="button button-primary" disabled={!name.trim() || submitting} aria-busy={submitting} > {submitting ? "Creating…" : uncertain ? "Retry unchanged revision" : "Create revision"}{" "} {!submitting && <Icon name="arrow-right" size={16} />} </Button></div></form>}</ScopedDraftDialog> ); } export function EditBuildApproachDialog({ project, items, expert, suspended = false, dismissalPending = false, onClose, onAddPrinter, onSave }: { project: Project; items: InventoryItem[]; expert: boolean; suspended?: boolean; dismissalPending?: boolean; onClose: () => void; onAddPrinter?: (() => void) | undefined; onSave: (input: ProjectRevisionUpdateInput) => Promise<boolean>; }) { const route = projectFabricationRoute(project); const carriedPrinterId = projectIntendedPrinterId(project); const carriedPrinter = carriedPrinterId ? items.find( (item) => item.id === carriedPrinterId && isUsableOwnedPrinter(item) ) : undefined; const selectablePrinters = items.filter(isUsableOwnedPrinter); const [fabricationRoute, setFabricationRoute] = useState<FabricationRoute>(route); const [selectedPrinter, setPrinter] = useState<InventoryItem | undefined>(carriedPrinter); const [printerChanged, setPrinterChanged] = useState(false); const printer = printerChanged ? selectedPrinter : carriedPrinter; const [submitting, setSubmitting] = useState(false); const [formError, setFormError] = useState<string>(); const [uncertain, setUncertain] = useState(false); const pendingSave = useRef<ProjectRevisionUpdateInput | undefined>(undefined); const dirty = fabricationRoute !== route || (printerChanged && printer?.id !== carriedPrinterId); useUnsavedWork(dirty, "build approach", submitting || uncertain); if (suspended) return null; const submit = async (event: FormEvent) => { event.preventDefault(); if (submitting) return; setSubmitting(true); setFormError(undefined); try { const input = pendingSave.current ?? { fabricationRoute, intendedPrinterItemId: fabricationRoute === "printed" ? (printerChanged ? (printer?.id ?? null) : (carriedPrinterId ?? null)) : null }; pendingSave.current = input; const saved = await onSave(input); if (saved) { pendingSave.current = undefined; setUncertain(false); } else if (!uncertain) pendingSave.current = undefined; if (!saved) setFormError( "The build approach was not saved. Check the service connection and try again." ); } catch (error: unknown) { const failure = normalizeApiError(error); const unresolved = uncertain || failure.kind === "offline" || failure.kind === "server"; if (unresolved) setUncertain(true); else pendingSave.current = undefined; setFormError(unresolved ? "The build approach save is not confirmed. Your original choices are kept; retry unchanged to check the same request." : failure.message); } finally { setSubmitting(false); } }; return ( <ScopedDraftDialog title="Edit build approach" dirty={dirty} unresolved={submitting || uncertain} suspended={dismissalPending} onClose={onClose}>{(requestClose) => <form className="edit-build-approach-form" onSubmit={(event) => { void submit(event); }} > <fieldset disabled={submitting || uncertain} className="correction-fields"><p className="dialog-intro"> {" "}
           Choose how this project will be built. You can change it again as the
-          project becomes clearer.{" "} </p><fieldset className="fabrication-route-options" aria-describedby="edit-fabrication-route-help" ><legend>How will you build it?</legend> {fabricationRouteOptions.map((option) => ( <label className={`fabrication-route-option ${fabricationRoute === option.value ? "is-selected" : ""}`} key={option.value} ><input type="radio" name="edit-fabrication-route" value={option.value} checked={fabricationRoute === option.value} onChange={() => setFabricationRoute(option.value)} disabled={submitting} /><span> <strong>{option.label}</strong><small>{option.description}</small> </span></label> ))} <p id="edit-fabrication-route-help"> {" "}
-            Planning only; you can change it later.{" "} </p></fieldset> {fabricationRoute === "printed" && ( <div className="route-printer-picker"><OwnedItemCombobox category="Printers" items={selectablePrinters} value={printer} onSelect={setPrinter} label="Printer for this project" helper="Leave blank if you have not decided yet." /> {!printer && ( <div className="printer-reassurance"> <strong>No printer selected yet.</strong><span> {" "}
-                  Choose or add an owned printer when needed.{" "} </span> {onAddPrinter && ( <button type="button" className="text-button" onClick={onAddPrinter} disabled={submitting} > {" "}
-                    Add printer <Icon name="plus" size={14} /></button> )} </div> )}{" "} {printer && ( <p className="printer-build-volume-note"> {printerBuildVolumeCopy(printer) ?? "Build volume not recorded"}
-                . Fit is checked only after a printable part is added.{" "} </p> )} </div> )}{" "} {expert && ( <details className="expert-detail" open><summary>Planning details</summary> <div className="detail-grid"> <div> <span>Revision</span><code> {project.serverRevisionId ?? project.currentRevision} </code> </div> <div> <span>Selected printer</span> <code>{printer?.id ?? "Not selected"}</code></div></div> </details> )}{" "} {formError && ( <p className="form-error" role="alert">{formError}</p> )}<div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose} disabled={submitting}> {" "}Cancel{" "} </button><button type="submit" className="button button-primary" disabled={submitting} aria-busy={submitting}>{submitting ? "Saving…" : "Save build approach"}{" "} {!submitting && <Icon name="check" size={16} />}</button></div></form></Dialog> );
+          project becomes clearer.{" "} </p><fieldset className="fabrication-route-options" aria-describedby="edit-fabrication-route-help" ><legend>How will you build it?</legend> <RadioGroup aria-label="How will you build it?" value={fabricationRoute} onValueChange={next => setFabricationRoute(next as typeof fabricationRoute)} disabled={submitting}>{fabricationRouteOptions.map((option) => ( <Label className={`fabrication-route-option ${fabricationRoute === option.value ? "is-selected" : ""}`} key={option.value} ><RadioGroupItem value={option.value} /><span> <strong>{option.label}</strong><small>{option.description}</small> </span></Label> ))}</RadioGroup> <p id="edit-fabrication-route-help"> {" "}
+            This changes planning context only. It does not buy, reserve, or
+            build anything.{" "} </p></fieldset> {fabricationRoute === "printed" && ( <div className="route-printer-picker"><OwnedItemCombobox candidateFilter={isUsableOwnedPrinter} category="Printers" items={selectablePrinters} value={printer} onSelect={(selection) => { setPrinter(selection); setPrinterChanged(true); }} label="Printer for this project" helper="Leave blank if you have not decided yet." /> {!printer && ( <div className="printer-reassurance"> <strong>No printer selected yet.</strong><span> {" "}
+                  Choose or add an owned printer when needed.{" "} </span> {onAddPrinter && ( <Button variant="ghost" type="button" className="text-button" onClick={onAddPrinter} disabled={submitting} > {" "}
+                    Add printer <Icon name="plus" size={14} /></Button> )} </div> )}{" "} {printer && ( <p className="printer-build-volume-note"> {printerBuildVolumeCopy(printer) ?? "Build volume not recorded"}
+                . Fit is checked only after a printable part is added.{" "} </p> )} </div> )}{" "} {expert && ( <Disclosure className="expert-detail" defaultOpen><DisclosureTrigger>Planning details</DisclosureTrigger><DisclosureContent> <div className="detail-grid"> <div> <span>Revision</span><code> {project.serverRevisionId ?? project.currentRevision} </code> </div> <div> <span>Selected printer</span> <code>{printer?.id ?? "Not selected"}</code></div></div> </DisclosureContent></Disclosure> )}{" "} </fieldset>{formError && ( <Alert asChild><p className="form-error" role="alert">{formError}</p></Alert> )}<div className="dialog-actions"><Button variant="ghost" type="button" className="button button-quiet" onClick={requestClose} disabled={submitting}> {" "}Cancel{" "} </Button><Button variant="default" type="submit" className="button button-primary" disabled={submitting} aria-busy={submitting}>{submitting ? "Saving…" : uncertain ? "Retry unchanged build approach" : "Save build approach"}{" "} {!submitting && <Icon name="check" size={16} />}</Button></div></form>}</ScopedDraftDialog> );
 }
 
 const bomUnitOptions: readonly { value: BomInput["unit"]; label: string }[] = [
@@ -2556,16 +2834,37 @@ const bomUnitOptions: readonly { value: BomInput["unit"]; label: string }[] = [
   { value: "millimetre", label: "millimetres" },
   { value: "millilitre", label: "millilitres" },
   { value: "set", label: "sets" }
-]; export function AddBomDialog({ items, project, expert, onClose, onCreate }: { items: InventoryItem[]; project: Project; expert: boolean; onClose: () => void; onCreate: (input: BomInput) => Promise<boolean | { error: string }>; }) {
-  const [name, setName] = useState("");
-  const [quantity, setQuantity] = useState("1");
-  const [unit, setUnit] = useState<BomInput["unit"]>("each");
-  const [role, setRole] = useState<NonNullable<BomInput["role"]>>("consumed"); const [itemId, setItemId] = useState("");
-  const [itemSearch, setItemSearch] = useState("");
-  const [optional, setOptional] = useState(false);
-  const [note, setNote] = useState("");
+];
+export interface RequirementDraft {
+  name: string; quantity: string; unit: BomInput["unit"]; role: NonNullable<BomInput["role"]>;
+  itemId: string; itemSearch: string | undefined; optional: boolean; note: string;
+}
+const emptyRequirementDraft = (): RequirementDraft => ({ name: "", quantity: "1", unit: "each", role: "consumed", itemId: "", itemSearch: undefined, optional: false, note: "" });
+export function AddBomDialog({ items, project, expert, dismissalPending = false, suspended = false, draft: suppliedDraft, onDraftChange, onAddOwnedItem, onClose, onCreate, onSearchOwnedItems }: { onSearchOwnedItems?: OwnedItemSearch | undefined; items: InventoryItem[]; project: Project; expert: boolean; dismissalPending?: boolean; suspended?: boolean; draft?: RequirementDraft; onDraftChange?: (draft: RequirementDraft) => void; onAddOwnedItem?: ((name: string) => void) | undefined; onClose: () => void; onCreate: (input: BomInput) => Promise<boolean | { error: string }>; }) {
+  const [localDraft, setLocalDraft] = useState(emptyRequirementDraft);
+  const draft = suppliedDraft ?? localDraft;
+  const { name, quantity, unit, role, itemId, itemSearch, optional, note } = draft;
+  const changeDraft = (change: Partial<RequirementDraft>) => { const next = { ...draft, ...change }; if (onDraftChange) onDraftChange(next); else setLocalDraft(next); };
+  const setName = (name: string) => changeDraft({ name });
+  const setQuantity = (quantity: string) => changeDraft({ quantity });
+  const setUnit = (unit: BomInput["unit"]) => changeDraft({ unit });
+  const setRole = (role: NonNullable<BomInput["role"]>) => changeDraft({ role });
+  const setItemId = (itemId: string) => changeDraft({ itemId });
+  const setItemSearch = (itemSearch: string | undefined) => changeDraft({ itemSearch });
+  const setOptional = (optional: boolean) => changeDraft({ optional });
+  const setNote = (note: string) => changeDraft({ note });
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string>();
+  const submitRef = useRef<HTMLButtonElement>(null);
+  const wasSuspended = useRef(suspended);
+  useEffect(() => {
+    const returning = wasSuspended.current && !suspended;
+    wasSuspended.current = suspended;
+    if (!returning) return;
+    const timeout = window.setTimeout(() => submitRef.current?.focus(), 0);
+    return () => window.clearTimeout(timeout);
+  }, [suspended]);
+  useUnsavedWork(Boolean(name || quantity !== "1" || unit !== "each" || role !== "consumed" || itemId || itemSearch || optional || note), "new requirement", submitting);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const requiredQuantity = Number(quantity);
@@ -2582,18 +2881,34 @@ const bomUnitOptions: readonly { value: BomInput["unit"]; label: string }[] = [
       setSubmitting(false);
     }
   };
-  const filteredItems = items.filter((item) => {
-    const needle = itemSearch.trim().toLocaleLowerCase();
-    return item.category !== "Printers" && (item.id === itemId || !needle || [item.name, item.variant, item.location, item.manufacturer, item.sku, inventoryDiscriminator(item)].filter(Boolean).join(" ").toLocaleLowerCase().includes(needle) );
-  });
-  const selectedItem = items.find((item) => item.id === itemId);
-  return ( <Dialog title={ expert ? `Add a requirement to ${project.currentRevision}` : "Add a part, material, or tool" } dirty={Boolean(name.trim() || note.trim() || itemId || itemSearch.trim() || quantity !== "1")} onClose={onClose}><form onSubmit={(event) => { void submit(event); }}><p className="dialog-intro"> {expert ? "Describe one requirement and optionally choose stock you already own. Its availability and compatibility will be checked after saving." : "Tell BenchLedger what you need. If you already own it, choose the item below so it can be checked before you shop."} </p><label className="form-field"><span>What do you need?</span><input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. ESP32 development board" disabled={submitting} /></label><div className="form-row"><label className="form-field"><span>Quantity</span><input type="number" min="0.01" step="any" required value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={submitting} /></label><label className="form-field"><span>Unit</span><select value={unit} onChange={(event) => setUnit(event.target.value as BomInput["unit"])} disabled={submitting}>{bomUnitOptions.map((option) => ( <option key={option.value} value={option.value}>{option.label}</option>))}</select></label></div><label className="form-field"> <span>How will you use it?</span> <select aria-label="How will you use it?" required value={role} onChange={(event) => setRole(event.target.value as NonNullable<BomInput["role"]>) } disabled={submitting} > <option value="consumed"> {" "}
-              Part or material (used up or built in){" "} </option> <option value="reusable">Reusable tool or equipment</option> </select> </label> {( <div className="form-field matching-stock-field"><span> {" "}Use an item I already own <small>(optional)</small></span><input aria-label="Search matching inventory" value={itemSearch} onChange={(event) => setItemSearch(event.target.value)} placeholder="Search name, colour, location, or SKU" disabled={submitting} /><select aria-label="Choose matching inventory" value={itemId} onChange={(event) => setItemId(event.target.value)} disabled={submitting}><option value="">No owned item selected</option>{filteredItems.map((item) => ( <option key={item.id} value={item.id}>{inventoryCandidateText(item, items)}</option>))}</select>{selectedItem && ( <small className="matching-stock-hint"> {" "}Selected: {inventoryCandidateText(selectedItem, items)}. Choose this item only if it meets the requirement. Stock is recorded in {inventoryUnitLabels[selectedItem.unit]}.</small> )} </div> )}{" "} {expert && ( <details className="expert-detail requirement-expert-detail" open> <summary>Technical details</summary> <div className="detail-grid"> <div> <span>Project revision</span> <code>{project.serverRevisionId ?? "Not recorded"}</code> </div> <div> <span>Revision label</span> <code>{project.currentRevision}</code> </div><div> <span>Requirement role</span> <code>{role}</code> </div> <div> <span>Matching</span> <code> {itemId ? "Manual item selected" : "No inventory item selected"}</code> </div></div> </details> )} <label className="form-field"><span> {" "}Requirement note <small>(optional)</small></span><textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} placeholder="Fit, material, or compatibility detail" disabled={submitting} /></label><label className="check-field"><input type="checkbox" checked={optional} onChange={(event) => setOptional(event.target.checked)} disabled={submitting} /><span>Mark as optional</span></label>{formError && ( <p className="form-error" role="alert">{formError}</p> )}<div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose} disabled={submitting}> {" "}Cancel{" "} </button><button type="submit" className="button button-primary" disabled={!name.trim() || submitting} aria-busy={submitting}>{submitting ? "Adding…" : "Add requirement"} {" "} {!submitting && <Icon name="arrow-right" size={16} />}</button></div></form></Dialog> );
+  return <Dialog title="Add a part" onClose={onClose} active={!suspended} suspended={dismissalPending}>
+    <form className="add-part-form" onSubmit={(event) => { void submit(event); }}>
+      <div className="add-part-fields">
+      <p className="dialog-context">{project.name} · {project.currentRevision}</p>
+      <Label className="form-field"><span>Part name</span><Input autoFocus required maxLength={240} value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. LED strip" disabled={submitting} /></Label>
+      <div className="form-row requirement-quantity-row"><Label className="form-field"><span>Amount needed</span><Input type="number" min="0.000001" step="any" required value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={submitting} /></Label><Label className="form-field"><span>Unit</span><NativeSelect aria-label="Unit" value={unit} onChange={(event) => setUnit(event.target.value as BomInput["unit"])} disabled={submitting}>{bomUnitOptions.map((option) => <NativeSelectOption key={option.value} value={option.value}>{option.label}</NativeSelectOption>)}</NativeSelect></Label></div>
+      <Label className="form-field"><span>Specification <small>(optional)</small></span><Textarea value={note} onChange={(event) => setNote(event.target.value)} maxLength={2000} rows={3} placeholder="Size, material or compatibility details" disabled={submitting} /></Label>
+      <Disclosure className="requirement-details"><DisclosureTrigger>Alternatives and notes</DisclosureTrigger><DisclosureContent>
+        <Label className="form-field"><span>How will you use it?</span><NativeSelect aria-label="How will you use it?" required value={role} onChange={(event) => setRole(event.target.value as NonNullable<BomInput["role"]>)} disabled={submitting}><NativeSelectOption value="consumed">Part or material (used up or built in)</NativeSelectOption><NativeSelectOption value="reusable">Reusable tool or equipment</NativeSelectOption></NativeSelect></Label>
+        <Label className="check-field"><Checkbox checked={optional} onCheckedChange={(checked) => setOptional(checked === true)} disabled={submitting} /><span>Mark as optional</span></Label>
+        {expert && <div className="detail-grid"><div><span>Project revision</span><code>{project.serverRevisionId ?? "Not recorded"}</code></div><div><span>Revision label</span><code>{project.currentRevision}</code></div><div><span>Requirement role</span><code>{role}</code></div><div><span>Matching</span><code>{itemId ? "Manual item selected" : "No inventory item selected"}</code></div></div>}
+      </DisclosureContent></Disclosure>
+      <Disclosure className="requirement-details" defaultOpen={Boolean(itemId)}><DisclosureTrigger>{itemId ? "Matched stock" : "Match from your stock"}</DisclosureTrigger><DisclosureContent>
+        <RequirementOwnedItems onAddOwnedItem={onAddOwnedItem ? () => onAddOwnedItem(name.trim()) : undefined} onSearch={onSearchOwnedItems} items={items} requirementName={name} selectedId={itemId} onSelect={setItemId} unit={unit} onUnitChange={setUnit} queryOverride={itemSearch} onQueryChange={setItemSearch} disabled={submitting} />
+      </DisclosureContent></Disclosure>
+      {!itemId && <p className="form-hint">You can match this to your stock next.</p>}
+      </div>
+      <div className="add-part-recovery">
+      {formError && <Alert asChild><div className="form-error" role="alert"><strong>Couldn’t save. Your entries are kept.</strong><p>{formError}</p></div></Alert>}
+      <div className="dialog-actions"><Button variant="ghost" type="button" className="button button-quiet" onClick={onClose} disabled={submitting}>Cancel</Button><Button ref={submitRef} variant="default" type="submit" className="button button-primary" disabled={!name.trim() || submitting} aria-busy={submitting}>{submitting ? "Adding…" : formError ? "Try saving again" : "Add part"}{!submitting && <Icon name="arrow-right" size={16} />}</Button></div>
+      </div>
+    </form>
+  </Dialog>;
 }
 
 type InventoryItemType = | "printer" | "filament" | "tool" | "accessory" | "consumable" | "electronic" | "fastener" | "wire" | "adhesive" | "other";
 const defaultCategoryIdForItemType: Readonly< Record<InventoryItemType, string> > = { printer: "category-printers", filament: "category-filament", tool: "category-tools", accessory: "category-printer-accessories", consumable: "category-consumables", electronic: "category-electronics", fastener: "category-fasteners", wire: "category-electrical", adhesive: "category-adhesives", other: "category-other" }; const itemTypeOptions: readonly { value: InventoryItemType; label: string }[] = [
-  { value: "printer", label: "Printer" }, { value: "filament", label: "Filament" }, { value: "tool", label: "Tool" }, { value: "accessory", label: "Accessory" }, { value: "consumable", label: "Consumable" }, { value: "electronic", label: "Electronic" }, { value: "fastener", label: "Fastener" }, { value: "wire", label: "Wire & cable" }, { value: "adhesive", label: "Adhesive" }, { value: "other", label: "Other" }
+  { value: "printer", label: "Printer" }, { value: "filament", label: "Filament" }, { value: "tool", label: "Tool" }, { value: "accessory", label: "Accessory" }, { value: "consumable", label: "Consumable" }, { value: "electronic", label: "Electronic component" }, { value: "fastener", label: "Fastener" }, { value: "wire", label: "Wire & cable" }, { value: "adhesive", label: "Adhesive" }, { value: "other", label: "Other" }
 ];
 
 function displayInventoryUnit(unit: ReturnType<typeof defaultUnitForItemKind>): InventoryItem["unit"] {
@@ -2608,6 +2923,8 @@ const inventoryUnitLabels: Readonly<Record<InventoryItem["unit"], string>> = {
   | { readonly kind: "count"; readonly quantity: number }
   | { readonly kind: "commission"; readonly input: InventoryCommissionInput };
 
+export type PendingStockObservation = InventoryMutationReview & { readonly item: InventoryItem; readonly expectedVersion?: number; readonly uncertain: boolean };
+
 function displayCategoryForKind(kind: InventoryItemType): InventoryCategory {
   if (kind === "printer") return "Printers";
   if (kind === "filament") return "Filament";
@@ -2618,97 +2935,111 @@ function displayCategoryForKind(kind: InventoryItemType): InventoryCategory {
   return "Accessories";
 }
 
-export function NewInventoryDialog({ expert, replacementFor, categories, categoriesLoading, categoriesError, catalogQuery, catalogProducts, onCatalogQuery, onResetCatalog, onSearchCatalog, onSearchCatalogPage, onCreateCatalogProduct, onCreateExact, onLinkExact, onClose, onGoSettings, onCreate }: { expert: boolean; replacementFor?: InventoryItem | undefined; categories: readonly ManagedInventoryCategory[]; categoriesLoading: boolean; categoriesError?: string | undefined; catalogQuery: string; catalogProducts: CatalogProduct[]; onCatalogQuery: (query: string) => void; onResetCatalog: () => void; onSearchCatalog: (kind: "filament" | "printer", query: string, options?: CatalogSearchOptions) => Promise<CatalogProduct[]>; onSearchCatalogPage: (kind: "filament" | "printer", query: string, options?: CatalogSearchOptions) => Promise<CatalogProductPage>; onCreateCatalogProduct: (input: CatalogProductDraft) => Promise<CatalogProduct | undefined>; onCreateExact: (input: ExactInventoryInput) => Promise<boolean>; onLinkExact: ( item: InventoryItem, input: ExactInventoryInput ) => Promise<boolean>; onClose: () => void; onGoSettings: () => void; onCreate: (input: InventoryCreateInput, countedNow?: boolean) => Promise<boolean>; }) {
+export interface InventoryCaptureIntent { reviewCount: boolean }
+export interface NewInventoryDraft {
+  itemType: InventoryItemType | undefined; categoryNodeId: string; selectionConfirmed: boolean; manualDetails: boolean;
+  name: string; manufacturer: string; model: string; sku: string; location: string; description: string;
+  quantity: string; unit: InventoryItem["unit"]; counted: boolean; uncertain: boolean;
+}
+export function NewInventoryDialog({ expert, receiving, requirementName, initialDraft, onDraftChange, dismissalPending = false, replacementFor, categories, categoriesLoading, categoriesError, catalogQuery, catalogProducts, onCatalogQuery, onResetCatalog, onSearchCatalog, onSearchCatalogPage, onCreateCatalogProduct, onCreateExact, onLinkExact, onClose, onGoSettings, onCreate }: { expert: boolean; receiving?: StockReceiptContext | undefined; requirementName?: string | undefined; initialDraft?: NewInventoryDraft | undefined; onDraftChange?: ((draft: NewInventoryDraft) => void) | undefined; dismissalPending?: boolean; replacementFor?: InventoryItem | undefined; categories: readonly ManagedInventoryCategory[]; categoriesLoading: boolean; categoriesError?: string | undefined; catalogQuery: string; catalogProducts: CatalogProduct[]; onCatalogQuery: (query: string) => void; onResetCatalog: () => void; onSearchCatalog: (kind: "filament" | "printer", query: string, options?: CatalogSearchOptions) => Promise<CatalogProduct[]>; onSearchCatalogPage: (kind: "filament" | "printer", query: string, options?: CatalogSearchOptions) => Promise<CatalogProductPage>; onCreateCatalogProduct: (input: CatalogProductDraft) => Promise<CatalogProduct | undefined>; onCreateExact: (input: ExactInventoryInput) => Promise<boolean>; onLinkExact: ( item: InventoryItem, input: ExactInventoryInput ) => Promise<boolean>; onClose: () => void; onGoSettings: () => void; onCreate: (input: InventoryCreateInput, intent?: InventoryCaptureIntent) => Promise<boolean>; }) {
   const replacementType = replacementFor?.kind as InventoryItemType | undefined;
-  const linkTarget = replacementFor && (replacementFor.kind === "printer" || replacementFor.kind === "filament") && replacementFor.unitStatus !== "needs_correction" ? replacementFor : undefined;
-  const [itemType, setItemType] = useState<InventoryItemType | undefined>(replacementType);
-  const [categoryNodeId, setCategoryNodeId] = useState(replacementFor?.categoryNodeId ?? "");
-  const [name, setName] = useState(replacementFor ? `${replacementFor.name} (corrected)` : "");
-  const [manufacturer, setManufacturer] = useState(replacementFor?.manufacturer ?? ""); const [model, setModel] = useState(replacementFor?.model ?? ""); const [sku, setSku] = useState(replacementFor?.sku ?? ""); const [location, setLocation] = useState(replacementFor?.location === "Unassigned" ? "" : (replacementFor?.location ?? "")); const [description, setDescription] = useState(""); const [quantity, setQuantity] = useState(replacementFor ? String(replacementFor.quantity) : "1");
-  const [unit, setUnit] = useState<InventoryItem["unit"]>(replacementType ? displayInventoryUnit(defaultUnitForItemKind(replacementType)) : "each");
+  const linkTarget = replacementFor && (replacementFor.kind === "printer" || replacementFor.kind === "filament") && replacementFor.unitStatus !== "needs_correction" ? replacementFor : undefined; const [itemType, setItemType] = useState<InventoryItemType | undefined>(initialDraft?.itemType ?? replacementType);
+  const [categoryNodeId, setCategoryNodeId] = useState(initialDraft?.categoryNodeId ?? replacementFor?.categoryNodeId ?? "");
+  const [selectionConfirmed, setSelectionConfirmed] = useState(initialDraft?.selectionConfirmed ?? Boolean(replacementType && replacementFor?.categoryNodeId));
+  const initialName = replacementFor ? `${replacementFor.name} (corrected)` : receiving?.lineName ?? requirementName ?? "";
+  const [name, setName] = useState(initialDraft?.name ?? initialName);
+  const [manufacturer, setManufacturer] = useState(initialDraft?.manufacturer ?? replacementFor?.manufacturer ?? ""); const [model, setModel] = useState(initialDraft?.model ?? replacementFor?.model ?? ""); const [sku, setSku] = useState(initialDraft?.sku ?? replacementFor?.sku ?? ""); const [location, setLocation] = useState(initialDraft?.location ?? (replacementFor?.location === "Unassigned" ? "" : replacementFor?.location ?? "")); const [description, setDescription] = useState(initialDraft?.description ?? ""); const [quantity, setQuantity] = useState(initialDraft?.quantity ?? (replacementFor ? String(replacementFor.quantity) : receiving ? "" : "1"));
+  const [unit, setUnit] = useState<InventoryItem["unit"]>(initialDraft?.unit ?? (replacementType ? displayInventoryUnit(defaultUnitForItemKind(replacementType)) : "each"));
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string>();
-  const [manualDetails, setManualDetails] = useState(false); const categoryHintId = useId(); const typeLegendId = useId();
-  const [countedNow, setCountedNow] = useState(false);
-  const [initialDraft] = useState(() => JSON.stringify([replacementFor ? `${replacementFor.name} (corrected)` : "", replacementFor?.manufacturer ?? "", replacementFor?.model ?? "", replacementFor?.sku ?? "", replacementFor?.location === "Unassigned" ? "" : (replacementFor?.location ?? ""), "", replacementFor ? String(replacementFor.quantity) : "1"]));
-  const detailsDirty = JSON.stringify([name, manufacturer, model, sku, location, description, quantity]) !== initialDraft;
+  const [manualDetails, setManualDetails] = useState(initialDraft?.manualDetails ?? false); const categoryHintId = useId();
+  const [catalogDraft, setCatalogDraft] = useState({ dirty: false, busy: false });
+  const [discardAction, setDiscardAction] = useState<(() => void)>();
+  const [counted, setCounted] = useState(initialDraft?.counted ?? false);
+  const [uncertain, setUncertain] = useState(initialDraft?.uncertain ?? false);
+  const captureDraft = { itemType, categoryNodeId, selectionConfirmed, manualDetails, name, manufacturer, model, sku, location, description, quantity, unit, counted, uncertain };
+  const draftValue = JSON.stringify(captureDraft);
+  useEffect(() => { onDraftChange?.(JSON.parse(draftValue) as NewInventoryDraft); }, [draftValue, onDraftChange]);
+  const busy = submitting || catalogDraft.busy;
+  const locked = busy || uncertain;
+  const dirty = counted || catalogDraft.dirty || (itemType !== undefined && unit !== displayInventoryUnit(defaultUnitForItemKind(itemType))) || name !== initialName || manufacturer !== (replacementFor?.manufacturer ?? "") || model !== (replacementFor?.model ?? "") || sku !== (replacementFor?.sku ?? "") || location !== (replacementFor?.location === "Unassigned" ? "" : replacementFor?.location ?? "") || Boolean(description) || quantity !== (replacementFor ? String(replacementFor.quantity) : receiving || manualDetails && itemType === "filament" ? "" : "1");
+  useUnsavedWork(dirty, "new inventory item", locked);
+  const requestAction = (action: () => void) => { if (busy || uncertain) return; if (dirty) setDiscardAction(() => action); else action(); };
+  const requestClose = () => requestAction(onClose);
+  const frame = (title: string, children: ReactNode) => <><Dialog title={title} onClose={requestClose} suspended={dismissalPending || Boolean(discardAction)}><div className="inventory-capture">{receiving && <StockReceiptReference context={receiving} />}{requirementName !== undefined && <p className="form-hint">Your requirement draft is kept. This item will be selected after you add it; check its fit before saving the requirement.</p>}{children}</div></Dialog>{discardAction && <Dialog title="Discard this item draft?" role="alertdialog" onClose={() => setDiscardAction(undefined)}><p>Your item has not been added. Keep editing to finish it.</p><div className="dialog-actions"><Button variant="outline" onClick={() => setDiscardAction(undefined)}>Keep editing</Button><Button variant="destructive" onClick={() => { const action = discardAction; setDiscardAction(undefined); action(); }}>Discard draft</Button></div></Dialog>}</>;
+
   const selectedCategory = managedCategoryForId(categories, categoryNodeId);
-  /** Changing type keeps what the person typed that still applies (name, location, quantity, notes). */
-  const setType = (next: InventoryItemType) => { if (next === itemType) return; onResetCatalog(); setItemType(next); setManualDetails(false); setFormError(undefined); setManufacturer(""); setModel(""); setSku(""); setUnit(displayInventoryUnit(defaultUnitForItemKind(next))); const suggested = categories.find((category) => !category.archived && category.id === defaultCategoryIdForItemType[next]); setCategoryNodeId(suggested?.id ?? ""); };
-  const exactCategory = itemType === "filament" ? "Filament" : itemType === "printer" ? "Printers" : undefined;
-  const activeCategoryCount = categories.filter((category) => !category.archived).length;
-  const categoryMissing = Boolean(itemType && !categoryNodeId && !categoriesLoading && !categoriesError);
-  const categoriesUnavailable = Boolean(categoriesError) || (!categoriesLoading && activeCategoryCount === 0) || categoryMissing;
-  const categoryReady = !categoriesLoading && !categoriesError && selectedCategory !== undefined;
+  const setType = (next: InventoryItemType) => { onResetCatalog(); setItemType(next); setSelectionConfirmed(false); setManualDetails(false); setFormError(undefined); setName(initialName); setManufacturer(""); setModel(""); setSku(""); setLocation(""); setDescription(""); setCounted(false); setUncertain(false); setQuantity(receiving ? "" : "1"); setUnit(receiving && validUnitsForItemKind(next).map(displayInventoryUnit).includes(receiving.unit) ? receiving.unit : displayInventoryUnit(defaultUnitForItemKind(next))); const suggested = categories.find((category) => !category.archived && category.id === defaultCategoryIdForItemType[next] ); setCategoryNodeId(suggested?.id ?? ""); };
+  const resetSelection = () => { onResetCatalog(); setItemType(undefined); setCategoryNodeId(""); setSelectionConfirmed(false); setManualDetails(false); setFormError(undefined); };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!itemType || !categoryReady || !name.trim() || (manualDetails && (!manufacturer.trim() || !model.trim())) || submitting) return;
+    if (!itemType || !categoryNodeId || !name.trim() || submitting) return;
+    if ((receiving || counted) && (!quantity.trim() || !Number.isFinite(Number(quantity)) || Number(quantity) < 0)) { setFormError(receiving ? "Enter the quantity that arrived, using the selected unit." : "Enter the quantity you counted, using the selected unit."); return; }
     setSubmitting(true);
     setFormError(undefined);
     try {
-      const created = await onCreate({ name: name.trim(), category: displayCategoryForKind(itemType), categoryNodeId, kind: itemType, quantity: Math.max(Number(quantity) || 0, 0), unit, ...(manufacturer.trim() ? { manufacturer: manufacturer.trim() } : {}), ...(model.trim() ? { model: model.trim() } : {}), ...(sku.trim() ? { sku: sku.trim() } : {}), ...(location.trim() ? { location: location.trim() } : {}), ...(description.trim() ? { description: description.trim() } : {}) }, countedNow && !replacementFor);
+      const input: InventoryCreateInput = { name: name.trim(), category: displayCategoryForKind(itemType), categoryNodeId, kind: itemType, quantity: Math.max(Number(quantity) || 0, 0), unit, ...(manufacturer.trim() ? { manufacturer: manufacturer.trim() } : {}), ...(model.trim() ? { model: model.trim() } : {}), ...(sku.trim() ? { sku: sku.trim() } : {}), ...(location.trim() ? { location: location.trim() } : {}), ...(description.trim() ? { description: description.trim() } : {}) };
+      const created = counted ? await onCreate(input, { reviewCount: true }) : await onCreate(input);
       if (!created) setFormError("The item was not added. Check the service connection and try again.");
     } catch (error: unknown) {
-      setFormError(normalizeApiError(error).message);
+      const failure = normalizeApiError(error);
+      const unresolved = uncertain || failure.kind === "offline" || failure.kind === "server";
+      setUncertain(unresolved);
+      onDraftChange?.({ ...captureDraft, uncertain: unresolved });
+      setFormError(unresolved ? "The item save is not confirmed. Retry unchanged to check the same item before adding anything else." : failure.message);
     } finally {
       setSubmitting(false);
     }
   };
-  const typeLabel = itemTypeOptions.find((option) => option.value === itemType)?.label;
-  const title = linkTarget ? (linkTarget.productProfile ? "Change exact product" : "Link exact product") : replacementFor ? "Create corrected replacement" : "Add to inventory";
-  const showCatalog = Boolean(exactCategory && !manualDetails);
-  const categoryField = expert || categoriesUnavailable
-    ? <><CategorySelection categories={categories} value={categoryNodeId} onChange={setCategoryNodeId} disabled={categoriesLoading || Boolean(categoriesError) || activeCategoryCount === 0 || submitting} ariaInvalid={categoriesUnavailable} ariaDescribedBy={categoryHintId} /><p id={categoryHintId} className="field-hint">{categoriesLoading ? "Refreshing active categories…" : categoriesError ? categoriesError : activeCategoryCount === 0 ? "No active categories are available. Add one in Settings before creating inventory." : selectedCategory ? `Suggested for ${typeLabel ?? "this type"}: ${selectedCategory.name}.` : "Choose an active category or subcategory."}</p></>
-    : <details className="category-disclosure"><summary>Files under <strong>{selectedCategory?.name ?? (categoriesLoading ? "…" : "No category")}</strong> <span className="text-button">Change</span></summary><CategorySelection categories={categories} value={categoryNodeId} onChange={setCategoryNodeId} disabled={categoriesLoading || submitting} /></details>;
-  const unavailableNotice = itemType && categoriesUnavailable && !categoriesLoading ? <div className="category-unavailable" role="alert"><span>{categoriesError ? "Inventory categories could not be loaded." : categoryMissing && activeCategoryCount > 0 ? "The matching inventory category is unavailable. Choose another category." : "Inventory needs one active managed category before a new item can be added."}</span><button type="button" className="text-button" onClick={onGoSettings}>Open Settings <Icon name="arrow-right" size={15} /></button></div> : null;
-  return ( <Dialog title={title} dirty={detailsDirty || Boolean(catalogQuery.trim())} onClose={onClose}>
-    {replacementFor ? <div className="inventory-selection-summary"><span><strong>Item type</strong>{typeLabel ?? "Not recorded"}</span>{expert && selectedCategory && <span><strong>Category</strong>{selectedCategory.name}</span>}</div>
-      : <fieldset className="item-type-chips" role="radiogroup" aria-labelledby={typeLegendId}><legend id={typeLegendId}>{expert ? "Item type" : "What are you adding?"}</legend><div className="item-type-chip-list">{itemTypeOptions.map((option, index) => <label key={option.value} className={`item-type-chip${itemType === option.value ? " is-selected" : ""}`}><input type="radio" name="new-item-type" value={option.value} checked={itemType === option.value} onChange={() => setType(option.value)} disabled={submitting} autoFocus={index === 0 && !itemType} data-autofocus={index === 0 && !itemType ? true : undefined} /><span>{option.label}</span></label>)}</div></fieldset>}
-    {!itemType && <p className="field-hint item-type-hint">Choose a type to see the matching fields. BenchLedger files the item in the matching category.</p>}
-    {unavailableNotice}
-    {showCatalog && exactCategory && <>
-      {!linkTarget && <div className="add-manual-choice"><span>{exactCategory === "Filament" ? "Not in the catalog, or no label to hand?" : "Not in the catalog?"}</span><button type="button" className="button button-quiet" onClick={() => { onResetCatalog(); setManualDetails(true); setQuantity(exactCategory === "Filament" ? "" : "1"); }}>Add details myself</button></div>}
-      {categoryReady ? <CatalogInventoryFlow category={exactCategory} products={catalogProducts.filter((product) => product.kind === (exactCategory === "Filament" ? "filament" : "printer"))} query={catalogQuery} onQueryChange={onCatalogQuery} onSearch={onSearchCatalog} onSearchPage={onSearchCatalogPage} onCreateProduct={onCreateCatalogProduct} onCreate={(input) => linkTarget ? onLinkExact(linkTarget, { ...input, categoryNodeId }) : onCreateExact({ ...input, categoryNodeId })} {...(linkTarget ? { existingItem: linkTarget } : {})} /> : null}
-      {((expert && !linkTarget) || !categoryReady) && categoryField}
-    </>}
-    {itemType && !showCatalog && <form className="inventory-add-form" onSubmit={(event) => { void submit(event); }}>
-      {manualDetails && <><button type="button" className="text-button category-back" onClick={() => setManualDetails(false)} disabled={submitting}><Icon name="arrow-left" size={15} />Search the catalog instead</button><p className="unit-replacement-note">The exact product is not confirmed. This item will stay in Check until you identify and physically verify it.</p></>}
-      {replacementFor && <p className="unit-replacement-note">The old record remains blocked as history. This replacement starts with a compatible unit and must be physically counted before it can supply a project.</p>}
-      <label className="form-field"><span>Name</span><input required value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. JST-PH 2-pin leads" disabled={submitting} /></label>
-      {manualDetails && <><div className="form-row manual-product-fields"><label className="form-field"><span>Brand or manufacturer</span><input required value={manufacturer} onChange={(event) => setManufacturer(event.target.value)} placeholder={itemType === "filament" ? "e.g. Polymaker" : "e.g. Prusa Research"} disabled={submitting} /></label><label className="form-field"><span>{itemType === "filament" ? "Material and type" : "Model"}</span><input required value={model} onChange={(event) => setModel(event.target.value)} placeholder={itemType === "filament" ? "e.g. PLA, matte" : "e.g. MK4S"} disabled={submitting} /></label></div>
-        <label className="form-field"><span>Product code <small>(optional)</small></span><input value={sku} onChange={(event) => setSku(event.target.value)} disabled={submitting} /></label>
-        <label className="form-field"><span>Planning notes <small>(optional)</small></span><textarea rows={2} value={description} onChange={(event) => setDescription(event.target.value)} placeholder={itemType === "filament" ? "Colour, diameter, or other details to confirm" : "Capabilities or details to confirm"} disabled={submitting} /></label></>}
-      <div className="form-row"><label className="form-field"><span>{countedNow ? "Quantity counted" : "Quantity received"}</span><input type="number" min="0" step="any" value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={submitting} /></label><label className="form-field"><span>Unit</span><select value={unit} onChange={(event) => setUnit(event.target.value as InventoryItem["unit"])} disabled={submitting}>{validUnitsForItemKind(itemType).map(displayInventoryUnit).map((option) => ( <option key={option} value={option}>{inventoryUnitLabels[option]}</option>))}</select></label></div>
-      <div className="form-row"><label className="form-field"><span>Location <small>(optional)</small></span><input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Shelf, drawer or bin" disabled={submitting} /></label><div className="form-field-group">{categoryField}</div></div>
-      {!replacementFor && <label className="check-field counted-now-field"><input type="checkbox" checked={countedNow} onChange={(event) => setCountedNow(event.target.checked)} disabled={submitting} /><span>I've counted this now <small>Records a physical count for this quantity so the item is ready to use.</small></span></label>}
-      {!countedNow && <p className="field-hint">Without a count, the item starts as <strong>Check</strong>: the quantity comes from a delivery or source record, not a physical count.</p>}
-      {formError && ( <p className="form-error" role="alert">{formError}</p> )}
-      <div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose} disabled={submitting}>Cancel</button><button type="submit" className="button button-primary" disabled={!name.trim() || !categoryReady || (manualDetails && (!manufacturer.trim() || !model.trim())) || submitting} aria-busy={submitting}>{submitting ? "Adding…" : replacementFor ? "Create replacement" : "Add item"} {!submitting && <Icon name="plus" size={16} />}</button></div>
-    </form>}
-    {!itemType && <div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose}>Cancel</button></div>}
-  </Dialog> );
+  const chooseItemType = (event: ChangeEvent<HTMLSelectElement>) => { const next = event.target.value as InventoryItemType; if (next) setType(next); };
+  const exactCategory = itemType === "filament" ? "Filament" : itemType === "printer" ? "Printers" : undefined;
+  const categoryAvailable = !categoriesLoading && !categoriesError && selectedCategory !== undefined;
+  if (!itemType || !categoryAvailable || !selectionConfirmed) {
+    const activeCategoryCount = categories.filter((category) => !category.archived).length;
+    const defaultCategoryMissing = Boolean( itemType && !categories.some((category) => !category.archived && category.id === defaultCategoryIdForItemType[itemType]) && !categoriesLoading && !categoriesError ); const categoriesUnavailable = Boolean(categoriesError) || (!categoriesLoading && activeCategoryCount === 0) ;
+    return frame("Add to inventory", <form className="inventory-start-form" onSubmit={(event) => { event.preventDefault(); }}><p className="dialog-intro"> {expert ? "Choose the item type and managed category." : "Choose the kind of item. You can add its name, amount and location next."} </p><Label className="form-field"><span> {expert ? ( <> {" "}Item type <small>(required)</small></> ) : ( "What are you adding?" )} </span><NativeSelect autoFocus required value={itemType ?? ""} onChange={chooseItemType}><NativeSelectOption value="">Choose an item type</NativeSelectOption>{itemTypeOptions.map((option) => ( <NativeSelectOption value={option.value} key={option.value}>{option.label}</NativeSelectOption>))}</NativeSelect></Label> {(expert || defaultCategoryMissing) && ( <> <CategorySelection categories={categories} value={categoryNodeId} onChange={(id) => { setCategoryNodeId(id); setSelectionConfirmed(false); }} disabled={categoriesLoading || categoriesUnavailable} ariaInvalid={categoriesUnavailable || (selectionConfirmed && !categoryNodeId)} ariaDescribedBy={categoryHintId} /><p id={categoryHintId} className="field-hint">{categoriesLoading ? "Refreshing active categories…" : categoriesError ? categoriesError : activeCategoryCount === 0 ? "No active categories are available. Add one in Settings before creating inventory." : itemType && categoryNodeId ? `Suggested category: ${selectedCategory?.name ?? displayCategoryForKind(itemType)}.` : "Choose an active category or subcategory."}</p> </> )}{" "} {categoriesUnavailable && ( <Alert asChild><div className="category-unavailable" role="alert"><span>{categoriesError ? "Inventory categories could not be loaded." : defaultCategoryMissing ? "The matching inventory category is unavailable." : "Inventory needs one active managed category before a new item can be added."}</span><Button variant="ghost" type="button" className="text-button" onClick={onGoSettings}> {" "}Open Settings <Icon name="arrow-right" size={15} /></Button></div></Alert> )}<div className="dialog-actions"><Button variant="ghost" type="button" className="button button-quiet" onClick={requestClose}> {" "}Cancel{" "} </Button><Button variant="default" type="button" className="button button-primary" disabled={!itemType || !categoryNodeId || categoriesUnavailable} onClick={() => setSelectionConfirmed(true)}> {" "}Continue <Icon name="arrow-right" size={16} /></Button></div></form> );
+  }
+  const availableCategory = selectedCategory!;
+  if (exactCategory && !manualDetails) return frame(linkTarget ? linkTarget.productProfile ? "Change exact product" : "Link exact product" : exactCategory === "Filament" ? "Add filament" : "Add a printer", <><div className="inventory-selection-summary"><span><strong>Item type</strong>{itemTypeOptions.find((option) => option.value === itemType)?.label}</span> {expert && ( <span><strong>Category</strong>{availableCategory.name}</span> )} <Button variant="ghost" type="button" className="text-button" onClick={() => requestAction(resetSelection)}> {" "}Change selection{" "} </Button></div><CatalogInventoryFlow initialQuantity={receiving ? "" : undefined} onDraftChange={setCatalogDraft} category={exactCategory} products={catalogProducts.filter((product) => product.kind === (exactCategory === "Filament" ? "filament" : "printer"))} query={catalogQuery} onQueryChange={onCatalogQuery} onSearch={onSearchCatalog} onSearchPage={onSearchCatalogPage} onCreateProduct={onCreateCatalogProduct} onCreate={(input) => linkTarget ? onLinkExact(linkTarget, { ...input, categoryNodeId }) : onCreateExact({ ...input, categoryNodeId })} {...(linkTarget ? { existingItem: linkTarget } : { onAddManually: () => { onResetCatalog(); setManualDetails(true); setName(initialName); setQuantity(receiving || exactCategory === "Filament" ? "" : "1"); } })} /></> );
+  const compatibleUnits = validUnitsForItemKind(itemType).map(displayInventoryUnit);
+  return frame(replacementFor ? "Create corrected replacement" : receiving ? "Record arrival" : "Add an inventory item", <form className="inventory-capture-form" onSubmit={(event) => { void submit(event); }}>
+    <div className="inventory-capture-context"><span>{itemTypeOptions.find(option => option.value === itemType)?.label}{expert ? ` · ${availableCategory.name}` : ""}</span><Button variant="ghost" type="button" className="text-button category-back" onClick={() => requestAction(manualDetails ? () => setManualDetails(false) : resetSelection)} disabled={locked}>{manualDetails ? "Choose an exact product" : "Change selection"}</Button></div>
+    {replacementFor && <p className="unit-replacement-note">The original remains blocked as history. Count this replacement before using it in a project.</p>}
+    <p className="dialog-intro">{receiving ? "Record the amount that arrived. Confirm its physical count separately." : "Record what you have. The quantity stays unconfirmed until you count it."}</p>
+    <Label className="form-field"><span>Name</span><Input autoFocus required value={name} onChange={event => setName(event.target.value)} placeholder="e.g. JST-PH 2-pin leads" disabled={locked} /></Label>
+    <div className="form-row"><Label className="form-field"><span>{receiving ? "Quantity received" : "Recorded quantity"}</span><Input required={Boolean(receiving || counted)} type="number" min="0" step="any" inputMode="decimal" value={quantity} onChange={event => setQuantity(event.target.value)} disabled={locked} /></Label><Label className="form-field"><span>Unit</span><NativeSelect value={unit} onChange={event => setUnit(event.target.value as InventoryItem["unit"])} disabled={locked}>{compatibleUnits.map(option => <NativeSelectOption key={option} value={option}>{inventoryUnitLabels[option]}</NativeSelectOption>)}</NativeSelect></Label></div>
+    <Label className="form-field"><span>Location <small>(optional)</small></span><Input value={location} onChange={event => setLocation(event.target.value)} placeholder="Shelf or drawer" disabled={locked} /></Label>
+    <Disclosure className="inventory-capture-details" defaultOpen={Boolean(manufacturer || model || sku || description)}><DisclosureTrigger>Specifications & identity</DisclosureTrigger><DisclosureContent>
+      {manualDetails && <p className="field-hint">The exact product is not recorded. Add what you know; you can link a product later.</p>}
+      <Label className="form-field"><span>Details and specifications <small>(optional)</small></span><Textarea rows={2} value={description} onChange={event => setDescription(event.target.value)} placeholder={itemType === "electronic" ? "e.g. ESP32-WROOM-32, 3.3 V, USB-C, pin spacing" : itemType === "filament" ? "Colour, diameter, or other details to confirm" : itemType === "fastener" ? "e.g. M3 × 10 mm, countersunk, stainless steel" : "Size, material, rating, or details to confirm"} disabled={locked} /></Label>
+      <div className="form-row"><Label className="form-field"><span>Brand or manufacturer <small>(if known)</small></span><Input value={manufacturer} onChange={event => setManufacturer(event.target.value)} disabled={locked} /></Label><Label className="form-field"><span>{itemType === "filament" ? "Material and type" : "Model"} <small>(if known)</small></span><Input value={model} onChange={event => setModel(event.target.value)} disabled={locked} /></Label></div>
+      <Label className="form-field"><span>Product code <small>(optional)</small></span><Input value={sku} onChange={event => setSku(event.target.value)} disabled={locked} /></Label>
+    </DisclosureContent></Disclosure>
+    <div className="inventory-capture-count"><Label className="check-field"><Checkbox checked={counted} onCheckedChange={checked => setCounted(checked === true)} disabled={locked} /><span>I have counted these</span></Label><p className="form-hint">{counted ? "After adding the item, review and confirm this quantity as a separate physical count." : "You can confirm the physical count after saving."}</p></div>
+    {(uncertain || formError) && <Alert asChild><p className="form-error" role="alert">{formError ?? "The item save is not confirmed. Retry unchanged to check the same item before adding anything else."}</p></Alert>}
+    <div className="dialog-actions"><Button variant="ghost" type="button" className="button button-quiet" onClick={requestClose} disabled={locked}>Cancel</Button><Button variant="default" type="submit" className="button button-primary" disabled={!name.trim() || submitting} aria-busy={submitting}>{submitting ? "Adding…" : uncertain ? "Retry unchanged item" : replacementFor ? "Create replacement" : counted ? "Add item and review count" : "Add item"}{!submitting && <Icon name="plus" size={16} />}</Button></div>
+  </form>);
 }
 
-export function Dialog({ title, role = "dialog", dirty = false, onClose, children }: { title: string; role?: "dialog" | "alertdialog"; /** Typed input that a scrim click or Escape must not silently discard. */ dirty?: boolean; onClose: () => void; children: ReactNode; }) {
+export function ScopedDraftDialog({ title, dirty, unresolved, suspended = false, onClose, children }: { title: string; dirty: boolean; unresolved: boolean; suspended?: boolean; onClose(): void; children(close: () => void): ReactNode }) {
+  const [reviewClose, setReviewClose] = useState(false);
+  const close = () => { if (dirty || unresolved) setReviewClose(true); else onClose(); };
+  return <><Dialog title={title} suspended={suspended || reviewClose} onClose={close}>{children(close)}</Dialog>{reviewClose && <Dialog title={unresolved ? "Finish the pending save" : "Discard this draft?"} role="alertdialog" onClose={() => setReviewClose(false)}><p>{unresolved ? "This save has not been confirmed. Keep the draft and retry unchanged before leaving." : "Your changes have not been saved. Keep editing or discard this draft."}</p><div className="dialog-actions"><Button data-autofocus onClick={() => setReviewClose(false)}>Keep editing</Button>{!unresolved && <Button variant="destructive" onClick={onClose}>Discard draft</Button>}</div></Dialog>}</>;
+}
+
+function Dialog({ title, className, role = "dialog", active = true, suspended = false, onClose, children }: { title: string; className?: string; role?: "dialog" | "alertdialog"; active?: boolean; suspended?: boolean; onClose: () => void; children: ReactNode; }) {
   const titleId = useId();
-  const dialogRef = useRef<HTMLElement>(null);
-  const draft = useDraftAwareClose(onClose, dirty);
-  useOverlayBehavior(dialogRef, draft.requestClose);
-  return ( <><div className="dialog-scrim" aria-hidden="true" onClick={draft.scrimClose} /><section ref={dialogRef} className="dialog" role={role} aria-modal="true" aria-labelledby={titleId} tabIndex={-1}><div className="dialog-header"><h2 id={titleId}>{title}</h2><button type="button" className="icon-button" aria-label="Close dialog" onClick={draft.requestClose}><Icon name="close" size={19} /></button></div>{draft.confirming && <DiscardDraftPrompt onKeep={draft.keep} onDiscard={draft.discard} />}<DialogDraftContext.Provider value={draft.setDirty}>{children}</DialogDraftContext.Provider></section></> );
+  const Title = role === "alertdialog" ? AlertDialogTitle : DialogTitle;
+  return <WorkspaceModal kind={role} active={active} onClose={onClose}><section className={["dialog", className].filter(Boolean).join(" ")} role={role} aria-labelledby={titleId} aria-hidden={suspended || undefined} inert={suspended || undefined}><div className="dialog-header"><Title id={titleId}>{title}</Title><Button type="button" variant="ghost" size="icon" aria-label="Close dialog" onClick={onClose}><Icon name="close" size={19} /></Button></div>{children}</section></WorkspaceModal>;
 }
 
 function EmptyState({ icon, title, description, action, onAction }: { icon: Parameters<typeof Icon>[0]["name"]; title: string; description: string; action?: string; onAction?: () => void; }) {
-  return ( <div className="empty-state"><span className="empty-icon"><Icon name={icon} size={23} /></span><h2>{title}</h2><p>{description}</p>{action && ( <button className="button button-secondary" onClick={onAction}>{action}<Icon name="arrow-right" size={15} /></button> )}</div> );
+  return ( <div className="empty-state"><span className="empty-icon"><Icon name={icon} size={23} /></span><h2>{title}</h2><p>{description}</p>{action && ( <Button variant="outline" className="button button-secondary" onClick={onAction}>{action}<Icon name="arrow-right" size={15} /></Button> )}</div> );
 }
 
 function formatDimensions(dimensions: NonNullable<InventoryItem["dimensions"]>): string {
   if (dimensions.diameter) return `Ø${dimensions.diameter} ${dimensions.unit}`;
   return ( [dimensions.length, dimensions.width, dimensions.height].filter((value) => value !== undefined).join(" × ") + ` ${dimensions.unit}` );
-}
-
-function formatShortDate(iso: string): string {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? "—" : new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", year: "numeric" }).format(date);
 }
 
 function formatBytes(bytes: number): string {

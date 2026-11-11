@@ -200,7 +200,7 @@ describe("inventory item by id", () => {
   it("fetches a single item for a deep link", async () => {
     vi.stubGlobal("document", { cookie: "forge_csrf=csrf" });
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ id: "item-9", name: "Deep linked", kind: "tool", quantity: 1, availableQuantity: 1, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" }, createdAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-31T10:00:00.000Z", version: 3 }));
-    const item = await createWorkspaceAdapter().getInventoryItem("item-9");
+    const item = await createWorkspaceAdapter().readInventoryItem("item-9");
     expect(item).toMatchObject({ id: "item-9", name: "Deep linked", version: 3, updatedAt: "2026-08-31T10:00:00.000Z" });
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/v1/inventory/item-9");
   });
@@ -209,7 +209,7 @@ describe("inventory item by id", () => {
     const { createSampleWorkspaceAdapter } = await import("./api");
     const adapter = createSampleWorkspaceAdapter();
     const first = (await adapter.listInventory({ limit: 1 })).items[0]!;
-    await expect(adapter.getInventoryItem(first.id)).resolves.toMatchObject({ id: first.id });
-    await expect(adapter.getInventoryItem("missing")).rejects.toMatchObject({ status: 404 });
+    await expect(adapter.readInventoryItem(first.id)).resolves.toMatchObject({ id: first.id });
+    await expect(adapter.readInventoryItem("missing")).rejects.toMatchObject({ status: 404 });
   });
 });

@@ -1,3 +1,9 @@
+import { Alert } from "./components/ui/alert";
+import { Disclosure, DisclosureTrigger, DisclosureContent } from "./components/ui/disclosure";
+import { Label } from "./components/ui/label";
+import { NativeSelect, NativeSelectOption } from "./components/ui/native-select";
+import { Button } from "./components/ui/button";
+import { Input } from "./components/ui/input";
 import { useEffect, useRef, useState } from "react";
 import type { AddInventoryImage, InventoryImageGallery } from "@benchledger/api-contract";
 import { ApiError, inventoryImageUrl, workflowCommandKey, workflowRequest } from "./api";
@@ -55,23 +61,23 @@ export function InventoryImages({ itemId, sampleMode = false }: { itemId: string
       {!gallery && !error && <p role="status">Loading images…</p>}
       {gallery?.images.length === 0 && <p>No images yet. Add a photo or a reference image.</p>}
       {image && <figure><img className="inventory-image-main" src={inventoryImageUrl(itemId, image.id)} alt={image.caption || image.filename} /><figcaption><span>{labels[image.sourceKind]}</span>{image.caption && <p>{image.caption}</p>}</figcaption></figure>}
-      {gallery && gallery.images.length > 1 && <div className="inventory-image-thumbnails">{gallery.images.map(entry => <button type="button" key={entry.id} aria-label={`View ${entry.caption || entry.filename}`} aria-pressed={entry.id === image?.id} onClick={() => setSelected(entry.id)}><img src={inventoryImageUrl(itemId, entry.id)} alt="" loading="lazy" /></button>)}</div>}
-      {gallery && gallery.images.length < 12 && <details><summary>Add image</summary><form onSubmit={event => { event.preventDefault(); void save(); }}>
+      {gallery && gallery.images.length > 1 && <div className="inventory-image-thumbnails">{gallery.images.map(entry => <Button variant="ghost" type="button" key={entry.id} aria-label={`View ${entry.caption || entry.filename}`} aria-pressed={entry.id === image?.id} onClick={() => setSelected(entry.id)}><img src={inventoryImageUrl(itemId, entry.id)} alt="" loading="lazy" /></Button>)}</div>}
+      {gallery && gallery.images.length < 12 && <Disclosure><DisclosureTrigger>Add image</DisclosureTrigger><DisclosureContent><form onSubmit={event => { event.preventDefault(); void save(); }}>
         <fieldset disabled={busy || Boolean(pending)}>
-          <label className="form-field"><span>Image file</span><input ref={input} type="file" accept="image/png,image/jpeg,image/webp" onChange={event => {
+          <Label className="form-field"><span>Image file</span><Input ref={input} type="file" accept="image/png,image/jpeg,image/webp" onChange={event => {
             const candidate = event.target.files?.[0]; setError(undefined);
             if (candidate && (candidate.size > 2 * 1024 * 1024 || !["image/png", "image/jpeg", "image/webp"].includes(candidate.type))) { setFile(undefined); event.target.value = ""; setError("Choose a PNG, JPEG or WebP image up to 2 MiB."); return; }
             setFile(candidate);
-          }} /></label>
-          <label className="form-field"><span>Image source</span><select value={sourceKind} onChange={event => setSource(event.target.value as AddInventoryImage["sourceKind"])}>{Object.entries(labels).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-          <label className="form-field"><span>Caption (optional)</span><input value={caption} maxLength={500} onChange={event => setCaption(event.target.value)} /></label>
+          }} /></Label>
+          <Label className="form-field"><span>Image source</span><NativeSelect value={sourceKind} onChange={event => setSource(event.target.value as AddInventoryImage["sourceKind"])}>{Object.entries(labels).map(([value,label]) => <NativeSelectOption key={value} value={value}>{label}</NativeSelectOption>)}</NativeSelect></Label>
+          <Label className="form-field"><span>Caption (optional)</span><Input value={caption} maxLength={500} onChange={event => setCaption(event.target.value)} /></Label>
         </fieldset>
         <p className="inventory-image-help">PNG, JPEG or WebP · up to 2 MiB. Images do not confirm stock, condition or compatibility.</p>
-        <button type="submit" className="button button-secondary" disabled={!file || busy}>{busy ? "Adding image…" : pending ? "Retry image upload" : "Save image"}</button>
+        <Button variant="outline" type="submit" className="button button-secondary" disabled={!file || busy}>{busy ? "Adding image…" : pending ? "Retry image upload" : "Save image"}</Button>
         {pending && !busy && <p role="status">The result is uncertain. Retry the same upload to confirm it without adding a duplicate.</p>}
-      </form></details>}
-      {error && <p className="form-error" role="alert">{error}</p>}
-      {!gallery && error && <button type="button" className="button button-secondary" onClick={() => setReload(value => value + 1)}>Retry loading images</button>}
+      </form></DisclosureContent></Disclosure>}
+      {error && <Alert asChild><p className="form-error" role="alert">{error}</p></Alert>}
+      {!gallery && error && <Button variant="outline" type="button" className="button button-secondary" onClick={() => setReload(value => value + 1)}>Retry loading images</Button>}
     </>}
   </section>;
 }

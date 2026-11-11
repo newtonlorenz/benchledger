@@ -1,0 +1,3 @@
+.deferred-view-message { padding: 16px; overflow-wrap: anywhere; }
+.deferred-view-message p + p { margin-top: 8px; }
+.deferred-view-message .button { margin-top: 12px; }

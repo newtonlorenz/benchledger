@@ -1,4 +1,5 @@
-import { renderToStaticMarkup } from "react-dom/server";
+// @vitest-environment jsdom
+import { renderToStaticMarkup } from "./test-render-markup";
 import { describe, expect, it } from "vitest";
 import {
   BuildApproachCard,
@@ -123,7 +124,7 @@ describe("build route UI", () => {
 
   it("shows actionable beginner workshop copy and responsive printer cards", () => {
     const markup = renderToStaticMarkup(<OverviewPage items={[]} projects={[{ ...projects[0]!, fabricationRoute: "none" }]} expert={false} sampleMode={false} onNavigate={noop} onOpenProject={noop} onSelectItem={noop} onNewProject={noop} onAddPrinter={noop} />);
-    expect(markup).toContain("Electronics and ready-made builds do not need a printer.");
+    expect(markup).toContain("Add equipment in inventory when your project needs it.");
     expect(markup).toContain("Add inventory");
     expect(markup).toContain("Workspace attention queue");
     expect(markup).not.toContain("workshop-agent-link");
@@ -133,7 +134,7 @@ describe("build route UI", () => {
 
     const printer = inventory.find((item) => item.category === "Printers")!;
     const cards = renderToStaticMarkup(<OverviewPage items={[printer]} projects={[]} expert={false} sampleMode={false} onNavigate={noop} onOpenProject={noop} onSelectItem={noop} onNewProject={noop} />);
-    expect(cards).toContain("workshop-printer-card");
+    expect(cards).toContain("home-equipment-item");
     expect(cards).toContain(printerBuildVolumeCopy(printer)!);
   });
 
@@ -145,7 +146,7 @@ describe("build route UI", () => {
 
     const item = { ...inventory[0]!, version: 1 };
     const markup = renderToStaticMarkup(<BulkInventoryDialog selectedItems={[item]} onClose={noop} onDone={noop} onApply={async () => ({ updated: [], unchanged: [], audits: [], correlationId: "bulk-test", replayed: false })} />);
-    expect(markup).toMatch(/<button type="submit"[^>]*disabled="">\s+Review changes/u);
+    expect(markup).toMatch(/<button[^>]*type="submit"[^>]*disabled="">\s+Review changes/u);
   });
 
   it("directs agents to the live contract without advertising stale tools", () => {

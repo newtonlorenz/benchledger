@@ -1,6 +1,9 @@
 import { useEffect, useId, useState } from "react";
 import type { InventoryItem } from "./domain";
 import { Icon } from "./icons";
+import { Button } from "./components/ui/button";
+import { RadioGroup, RadioGroupItem } from "./components/ui/radio-group";
+import { Disclosure, DisclosureTrigger, DisclosureContent } from "./components/ui/disclosure";
 
 /** When recorded stock counts as in stock (mirrors the API contract). */
 export type StockReceivingPolicy = "on_purchase" | "on_delivery" | "on_receipt";
@@ -155,26 +158,28 @@ export function StockReceivingPolicySection({ preferences, canChange, readOnlyRe
     <p className="stock-receiving-intro" id={helpId}>This decides which stock projects can use and reserve. Recorded evidence never changes: delivered or ordered items keep showing that they have not been counted.</p>
     <fieldset className="stock-receiving-options" aria-describedby={helpId} disabled={!canChange || busy}>
       <legend className="sr-only">When does stock count as in stock?</legend>
+      <RadioGroup name="stock-receiving-policy" value={selected} onValueChange={(value) => choose(value as StockReceivingPolicy)} disabled={!canChange || busy}>
       {STOCK_RECEIVING_OPTIONS.map((option) => (
         <label key={option.value} className={`stock-receiving-option ${selected === option.value ? "is-selected" : ""}`}>
-          <input type="radio" name="stock-receiving-policy" value={option.value} checked={selected === option.value} onChange={() => choose(option.value)} />
+          <RadioGroupItem value={option.value} />
           <span><strong>{option.label}{option.value === DEFAULT_STOCK_RECEIVING_POLICY ? <small> · Default</small> : null}</strong><small>{option.description}</small></span>
         </label>
       ))}
+      </RadioGroup>
     </fieldset>
     {!canChange && <p className="stock-receiving-note" role="note">{readOnlyReason ?? "Only a workspace administrator can change this setting."}</p>}
     {canChange && changed && phase.kind !== "review" && phase.kind !== "saving" && (
-      <div className="stock-receiving-actions"><button type="button" className="button button-secondary" onClick={() => { void review(); }} disabled={busy} aria-busy={phase.kind === "previewing" || undefined}>{phase.kind === "previewing" ? "Checking inventory…" : "Review change"}<Icon name="arrow-right" size={16} /></button><button type="button" className="button button-quiet" onClick={() => choose(current)} disabled={busy}>Cancel</button></div>
+      <div className="stock-receiving-actions"><Button variant="outline" type="button" className="button button-secondary" onClick={() => { void review(); }} disabled={busy} aria-busy={phase.kind === "previewing" || undefined}>{phase.kind === "previewing" ? "Checking inventory…" : "Review change"}<Icon name="arrow-right" size={16} /></Button><Button variant="ghost" type="button" className="button button-quiet" onClick={() => choose(current)} disabled={busy}>Cancel</Button></div>
     )}
     {(phase.kind === "review" || phase.kind === "saving") && (
       <div className="stock-receiving-review" role="group" aria-label="Confirm stock setting change">
         <strong>Change to “{stockReceivingPolicyLabel(phase.impact.to)}”?</strong>
         <ul className="stock-receiving-impact">{stockReceivingImpactSummary(phase.impact).map((line) => <li key={line}>{line}</li>)}</ul>
-        {phase.impact.gained.length > 0 && <details><summary>Items that will count</summary><ul>{phase.impact.gained.slice(0, 20).map((row) => <li key={row.itemId}>{row.name} · {row.evidenceState === "ordered_unverified" ? "ordered, not yet delivered" : "delivered, not counted"}</li>)}</ul></details>}
-        {phase.impact.lost.length > 0 && <details><summary>Items that will stop counting</summary><ul>{phase.impact.lost.slice(0, 20).map((row) => <li key={row.itemId}>{row.name}</li>)}</ul></details>}
+        {phase.impact.gained.length > 0 && <Disclosure><DisclosureTrigger>Items that will count</DisclosureTrigger><DisclosureContent><ul>{phase.impact.gained.slice(0, 20).map((row) => <li key={row.itemId}>{row.name} · {row.evidenceState === "ordered_unverified" ? "ordered, not yet delivered" : "delivered, not counted"}</li>)}</ul></DisclosureContent></Disclosure>}
+        {phase.impact.lost.length > 0 && <Disclosure><DisclosureTrigger>Items that will stop counting</DisclosureTrigger><DisclosureContent><ul>{phase.impact.lost.slice(0, 20).map((row) => <li key={row.itemId}>{row.name}</li>)}</ul></DisclosureContent></Disclosure>}
         {phase.impact.blockedBy.length > 0 && <p className="form-error" role="alert">{itemCount(phase.impact.blockedBy.length)} with project reservations would stop counting: {phase.impact.blockedBy.map((row) => row.name).join(", ")}. Count them or release their reservations first.</p>}
         <p className="stock-receiving-note">Project readiness, reservations and the shopping list update after you save.</p>
-        <div className="stock-receiving-actions"><button type="button" className="button button-primary" onClick={() => { void save(phase.impact); }} disabled={phase.kind === "saving" || phase.impact.blockedBy.length > 0} aria-busy={phase.kind === "saving" || undefined}>{phase.kind === "saving" ? "Saving…" : "Save setting"}</button><button type="button" className="button button-quiet" onClick={() => choose(current)} disabled={phase.kind === "saving"}>Cancel</button></div>
+        <div className="stock-receiving-actions"><Button variant="default" type="button" className="button button-primary" onClick={() => { void save(phase.impact); }} disabled={phase.kind === "saving" || phase.impact.blockedBy.length > 0} aria-busy={phase.kind === "saving" || undefined}>{phase.kind === "saving" ? "Saving…" : "Save setting"}</Button><Button variant="ghost" type="button" className="button button-quiet" onClick={() => choose(current)} disabled={phase.kind === "saving"}>Cancel</Button></div>
       </div>
     )}
     {error && <p className="form-error" role="alert">{error}</p>}

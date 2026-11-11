@@ -169,6 +169,9 @@ function validateInventoryItemQuantityInvariant(
 export const inventoryItemSchema = inventoryItemShape.superRefine(validateInventoryItemQuantityInvariant);
 
 export const inventoryListQuerySchema = z.object({
+  stockView: z.enum(["available", "check", "reserved", "depleted"]).optional(),
+  sort: z.enum(["name", "name_desc", "location"]).optional(),
+  location: z.string().max(256).optional(),
   q: z.string().max(200).optional(),
   kind: itemKindSchema.optional(),
   evidence: stockEvidenceSchema.optional(),
@@ -1110,6 +1113,7 @@ export const artifactListQuerySchema = z.union([
 ]);
 
 export const uploadSessionSchema = z.object({
+  receivedBytes: z.number().int().nonnegative().optional(),
   id: idSchema,
   artifactId: idSchema,
   expiresAt: isoDateSchema,

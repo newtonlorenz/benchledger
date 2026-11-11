@@ -1,0 +1,249 @@
+import { navigateWorkspace } from "./workspace-controls";
+import { expect, test, type Page } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
+
+async function login(page: Page) {
+  await page.goto("/");
+  await page.getByLabel("Workspace password").fill("demo-password-please-change");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
+}
+const records = Array.from({ length: 32 }, (_, i) => ({ id: `inspector-part-${i}`, name: `Inspector part ${String(i).padStart(2,"0")}`, kind: "electronic", quantity: 10, availableQuantity: i < 28 ? 0 : 8, allocatedQuantity: i < 28 ? 0 : 2, unit: "each", location: i % 2 === 0 ? "Drawer A" : "Drawer B", manufacturer: "Example Components", model: `EX-${i}`, tags: ["test fixture"], links: [], evidence: { state: i < 28 ? "delivered_uncounted" : "physically_counted", source: "synthetic fixture", observedAt: "2026-09-19T08:00:00Z" }, createdAt: "2026-09-19T08:00:00Z", updatedAt: "2026-09-19T08:00:00Z", version: 1 }));
+async function fixtureInventory(page: Page) {
+  await page.route("**/api/v1/inventory?**", async (route) => {
+    const url = new URL(route.request().url());
+    const query = url.searchParams;
+    let rows = records.filter((row) => (!query.get("q") || row.name.toLowerCase().includes(query.get("q")!.toLowerCase())) && (!query.get("location") || row.location === query.get("location")) && (query.get("stockView") === "available" || query.get("stockView") === "reserved" ? row.availableQuantity > 0 : query.get("stockView") === "check" ? row.availableQuantity === 0 : query.get("stockView") === "depleted" ? false : true));
+    rows = rows.sort((a,b) => (query.get("sort") === "name_desc" ? -1 : 1) * a.name.localeCompare(b.name));
+    const offset = Number(query.get("cursor") ?? "0"), limit = Number(query.get("limit") ?? "25");
+    const data = rows.slice(offset, offset + limit);
+    await route.fulfill({ json: { data, limit, total: rows.length, ...(offset + data.length < rows.length ? { nextCursor: String(offset + data.length) } : {}) } });
+  });
+}
+
+test("inventory inspector supports keyboard review, explicit editing and clipboard fallback", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.addInitScript(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined }));
+  await login(page); await fixtureInventory(page);
+  await navigateWorkspace(page, "Inventory");
+  const inspector = page.getByRole("complementary", { name: "Inventory inspector" });
+  await expect(inspector).toHaveCount(0);
+  await page.locator(".inventory-table .table-item").filter({ hasText: "Inspector part 00" }).click();
+  await expect(inspector.getByRole("heading", { name: "Inspector part 00", exact: true })).toBeVisible();
+  await expect(inspector).toContainText("not been physically confirmed");
+  const first = page.locator(".inventory-table tbody tr").first();
+  await first.focus(); await page.keyboard.press("ArrowDown");
+  await expect(inspector.getByRole("heading", { name: "Inspector part 01", exact: true })).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await inspector.getByRole("button", { name: "Use with an AI assistant" }).click();
+  await inspector.getByRole("button", { name: "Copy for AI", exact: true }).click();
+  const brief = JSON.parse(await inspector.getByRole("textbox", { name: "Inventory brief" }).inputValue());
+  expect(brief.items).toHaveLength(1); expect(brief.items[0].id).toBe("inspector-part-1");
+  expect(brief.items[0].availableQuantity).toBe(0); expect(brief.scope).toContain("not a complete inventory");
+  await inspector.getByRole("button", { name: "Hide item inspector" }).click();
+  await expect(inspector).toHaveCount(0);
+  await page.locator(".inventory-table .table-item").filter({ hasText: "Inspector part 02" }).click();
+  await expect(inspector.getByRole("heading", { name: "Inspector part 02", exact: true })).toBeVisible();
+});
+
+test("stock views sort before paging, clear bulk selections, and persist saved filters through reload", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await login(page); await fixtureInventory(page);
+  await navigateWorkspace(page, "Inventory");
+  await expect(page.locator(".inventory-page-status")).toHaveText("Showing 25 of 32 items");
+  await page.getByRole("button", { name: "Load more", exact: true }).click();
+  await expect(page.locator(".inventory-page-status")).toHaveText("Showing 32 of 32 items");
+  await page.getByRole("checkbox", { name: /^Select Inspector part 00/u }).check();
+  await page.getByRole("navigation", { name: "Inventory stock views", exact: true }).getByRole("button", { name: "Available", exact: true }).click();
+  await expect(page.locator(".inventory-page-status")).toHaveText("Showing 4 of 4 items");
+  await expect(page.getByRole("button", { name: "Bulk edit", exact: true })).toHaveCount(0);
+  await expect(page.getByText("Selection cleared because the search or filters changed.")).toBeVisible();
+  await page.getByRole("button", { name: "View options", exact: true }).click();
+  await page.getByLabel("Sort inventory", { exact: true }).selectOption("name_desc");
+  await expect(page.locator(".inventory-table tbody tr").first()).toContainText("Inspector part 31");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Filters", exact: true }).click();
+  await page.getByLabel("Filter inventory by exact location").fill("Drawer B");
+  await expect(page.locator(".inventory-page-status")).toHaveText("Showing 2 of 2 items");
+  await page.getByRole("button", { name: "View options", exact: true }).click();
+  await page.getByRole("button", { name: "Save view…", exact: true }).click();
+  await page.getByLabel("Inventory view name").fill("Available boards");
+  await page.getByRole("button", { name: "Save view", exact: true }).click();
+  await expect(page.getByLabel("Saved inventory view")).toHaveValue("Available boards");
+  await page.getByRole("button", { name: "Reset filters", exact: true }).click();
+  await expect(page.locator(".inventory-page-status")).toHaveText("Showing 25 of 32 items");
+  await page.getByLabel("Saved inventory view").selectOption("Available boards");
+  await expect(page.locator(".inventory-page-status")).toHaveText("Showing 2 of 2 items");
+  await page.reload();
+  await page.getByRole("button", { name: "View options", exact: true }).click();
+  await expect(page.getByLabel("Saved inventory view")).toHaveValue("Available boards");
+  await expect(page.locator(".inventory-table tbody tr").first()).toContainText("Inspector part 31");
+  await expect(page.getByLabel("Sort inventory", { exact: true })).toHaveValue("name_desc");
+  await page.getByRole("button", { name: "Remove saved view", exact: true }).click();
+  await expect(page.getByLabel("Saved inventory view")).toHaveValue("");
+});
+
+test("inventory register and inspector remain accessible in light, dark and narrow layouts", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await login(page); await fixtureInventory(page);
+  await navigateWorkspace(page, "Inventory");
+  await expect(page.locator(".inventory-page-status")).toHaveText("Showing 25 of 32 items");
+  // These evidence columns remain available on demand in the compact register.
+  // Enable them explicitly so the narrow-layout checks cover every stock field.
+  await page.getByRole("button", { name: "View options", exact: true }).click();
+  const columns = page.getByRole("group", { name: "Additional columns" });
+  await columns.getByRole("checkbox", { name: "Recorded", exact: true }).check();
+  await columns.getByRole("checkbox", { name: "Status", exact: true }).check();
+  await page.keyboard.press("Escape");
+  await page.locator(".inventory-table .table-item").filter({ hasText: "Inspector part 00" }).click();
+  await expect(page.getByRole("complementary", { name: "Inventory inspector" })).toBeVisible();
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate((value) => document.documentElement.dataset.theme = value, theme);
+    const results = await new AxeBuilder({ page }).include(".inventory-workstation").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
+    expect(results.violations).toEqual([]);
+  }
+  await page.getByRole("button", { name: "Hide item inspector", exact: true }).click();
+  for (const width of [768, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    const firstRow = page.locator(".inventory-table tbody tr").first();
+    for (const cell of [".inventory-name-cell", ".inventory-recorded-cell", ".inventory-available-cell", ".inventory-status-cell"]) {
+      // Responsive panel changes can remount the table; retry the full
+      // measurement while keeping every stock/evidence cell within the viewport.
+      await expect(async () => {
+        await firstRow.locator(cell).scrollIntoViewIfNeeded();
+        const bounds = await firstRow.locator(cell).boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.x).toBeGreaterThanOrEqual(0);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+      }).toPass({ timeout: 5_000 });
+    }
+    await page.getByRole("columnheader", { name: "Item", exact: true }).getByRole("button").focus();
+    await page.keyboard.press("Tab");
+    const locationHeader = page.getByRole("columnheader", { name: "Location", exact: true });
+    await expect(locationHeader.getByRole("button")).toBeFocused();
+    expect(await locationHeader.evaluate((element) => getComputedStyle(element).clipPath)).toBe("none");
+    expect((await locationHeader.boundingBox())!.width).toBeGreaterThan(20);
+    const inspect = page.locator(".inventory-table .table-item").filter({ hasText: "Inspector part 01" });
+    await inspect.click();
+    await expect(page.getByRole("dialog").getByRole("heading", { name: "Inspector part 01", exact: true })).toBeVisible();
+    await expect(page.getByLabel("Counted quantity")).toBeVisible();
+    await page.getByRole("button", { name: "Close item details" }).click();
+  }
+});
+
+test("inventory keeps categories in local filters and restores configurable desktop layout", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await login(page); await fixtureInventory(page);
+  await navigateWorkspace(page, "Inventory");
+  await expect(page.getByRole("region", { name: "Inventory navigator" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Project navigator" })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Search inventory", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("navigation", { name: "Inventory stock views", exact: true }).getByRole("button")).toHaveText(["All", "Available", "Needs checking", "Reserved"]);
+  await page.getByRole("button", { name: "Filters", exact: true }).click();
+  await page.getByLabel("Filter inventory by category").selectOption("category-electronics");
+  await expect(page.getByLabel("Filter inventory by category")).toHaveValue("category-electronics");
+  await expect(page).toHaveURL(/categoryNodeId=category-electronics/);
+  await expect(page.locator(".inventory-active-filters")).toContainText("Electronics");
+  await page.getByLabel("Filter inventory by category").selectOption("");
+  await expect(page.getByLabel("Filter inventory by category")).toHaveValue("");
+  await expect(page).not.toHaveURL(/categoryNodeId=/);
+  await page.getByRole("button", { name: "Filters", exact: true }).click();
+  const item = page.locator(".inventory-table .table-item").filter({ hasText: "Inspector part 02" });
+  await item.click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("complementary", { name: "Inventory inspector" })).toContainText("Inspector part 02");
+  await item.dblclick(); await expect(page.getByRole("dialog")).toBeVisible(); await page.keyboard.press("Escape");
+  await item.focus(); await page.keyboard.press("F2"); await expect(page.getByRole("dialog")).toBeVisible(); await page.keyboard.press("Escape");
+  await page.getByRole("columnheader", { name: "Item", exact: true }).getByRole("button").click();
+  await expect(page.locator(".inventory-table tbody tr").first()).toContainText("Inspector part 31");
+  await page.getByRole("button", { name: "View options", exact: true }).click();
+  await expect(page.getByLabel("Sort inventory", { exact: true })).toHaveValue("name_desc");
+  const columns = page.getByRole("group", { name: "Additional columns" });
+  await columns.getByRole("checkbox", { name: "SKU / part number" }).check();
+  await columns.getByRole("checkbox", { name: "Location", exact: true }).uncheck();
+  await expect(page.getByRole("columnheader", { name: "SKU / part number" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Location", exact: true })).toHaveCount(0);
+  const splitter = page.getByRole("separator", { name: "Resize item inspector" });
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Inventory view options" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "View options", exact: true })).toBeFocused();
+  const panel = page.locator('[data-slot="resizable-panel"]').last();
+  const before = (await panel.boundingBox())!.width;
+  await splitter.focus(); await page.keyboard.press("ArrowLeft");
+  await expect.poll(async () => (await panel.boundingBox())!.width).toBeGreaterThan(before);
+  const firstKeyboardWidth = (await panel.boundingBox())!.width;
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("benchledger.inventory.layout.v1.workspace") ?? "{}").inspectorWidth)).toBe(Math.round(firstKeyboardWidth));
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(async () => (await panel.boundingBox())!.width).toBeLessThan(firstKeyboardWidth);
+  const resized = (await panel.boundingBox())!.width;
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("benchledger.inventory.layout.v1.workspace") ?? "{}").inspectorWidth)).toBe(Math.round(resized));
+  const bounds = await splitter.boundingBox();
+  await page.mouse.move(bounds!.x + bounds!.width / 2, bounds!.y + 60);
+  await page.mouse.down(); await page.mouse.move(bounds!.x + bounds!.width / 2 - 30, bounds!.y + 60); await page.mouse.up();
+  await expect.poll(async () => (await panel.boundingBox())!.width).toBeGreaterThan(resized);
+  const savedWidth = (await panel.boundingBox())!.width;
+  await page.reload();
+  await expect.poll(async () => Math.abs((await panel.boundingBox())!.width - savedWidth)).toBeLessThan(2);
+  await expect(page.getByRole("columnheader", { name: "SKU / part number" })).toBeVisible();
+  await page.getByRole("button", { name: "Hide item inspector" }).click(); await page.reload();
+  await expect(page.getByRole("complementary", { name: "Inventory inspector" })).toHaveCount(0);
+  await page.getByRole("button", { name: "View options", exact: true }).click(); await page.getByRole("button", { name: "Reset layout" }).click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("complementary", { name: "Inventory inspector" })).toHaveCount(0);
+  await page.getByRole("button", { name: "View options", exact: true }).click();
+  await page.getByRole("button", { name: "Inspector", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await expect.poll(async () => Math.abs((await panel.boundingBox())!.width - 420)).toBeLessThan(2);
+  await expect(page.getByRole("columnheader", { name: "Location", exact: true })).toBeVisible();
+  await navigateWorkspace(page, "Projects");
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Project views", exact: true })).toBeVisible();
+});
+
+
+test("filters disclose secondary controls and keep active conditions clear when closed", async ({ page }) => {
+  await login(page); await fixtureInventory(page);
+  await navigateWorkspace(page, "Inventory");
+  await expect(page.locator(".inventory-page-status")).toHaveText("Showing 25 of 32 items");
+  const filters = page.getByRole("button", { name: "Filters", exact: true });
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(filters).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByLabel("Filter inventory by category")).toBeHidden();
+    await expect(page.getByLabel("Saved inventory view")).toBeHidden();
+    await filters.click();
+    await expect(page.getByLabel("Filter inventory by category")).toBeVisible();
+    await expect(page.getByLabel("Saved inventory view")).toBeHidden();
+    await page.getByRole("button", { name: "View options", exact: true }).click();
+    await expect(page.getByLabel("Saved inventory view")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await page.getByLabel("Filter inventory by availability").selectOption("available");
+    await filters.click();
+    await expect(page.getByLabel("Filter inventory by availability")).toBeHidden();
+    await expect(page.locator(".inventory-active-filters")).toContainText("Available for reuse");
+    await page.locator(".inventory-active-filters").getByRole("button", { name: "Clear filters" }).click();
+    await expect(page.locator(".inventory-active-filters")).toHaveCount(0);
+  }
+});
+
+test("empty inventory offers its first item while an empty search offers filter recovery", async ({ page }) => {
+  await login(page);
+  await page.route("**/api/v1/inventory?**", route => route.fulfill({ json: { data: [], total: 0, limit: 25 } }));
+  await navigateWorkspace(page, "Inventory");
+  await expect(page.getByRole("heading", { name: "Start with what you have", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Search inventory", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Add first item", exact: true }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.goto("/?q=missing+component#/inventory");
+  await expect(page.getByLabel("Search inventory", { exact: true })).toHaveValue("missing component");
+  await expect(page.getByRole("heading", { name: "No matching items" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add first item", exact: true })).toHaveCount(0);
+  await page.locator(".inventory-active-filters").getByRole("button", { name: "Clear filters" }).click();
+  await expect(page.getByRole("heading", { name: "Start with what you have", exact: true })).toBeVisible();
+});

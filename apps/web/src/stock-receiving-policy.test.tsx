@@ -45,7 +45,7 @@ describe("StockReceivingPolicySection", () => {
     const onSaved = vi.fn();
     render(<StockReceivingPolicySection preferences={{ stockReceivingPolicy: "on_receipt", version: 3 }} canChange onPreview={onPreview} onSave={onSave} onSaved={onSaved} />);
     expect(screen.getByRole("heading", { name: "When does stock count as in stock?" })).toBeTruthy();
-    expect((screen.getByRole("radio", { name: /When I've received and checked it/u }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByRole("radio", { name: /When I've received and checked it/u }).getAttribute("aria-checked")).toBe("true");
     expect(screen.queryByRole("button", { name: /Review change/u })).toBeNull();
     fireEvent.click(screen.getByRole("radio", { name: /When it's delivered/u }));
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Review change/u })); });

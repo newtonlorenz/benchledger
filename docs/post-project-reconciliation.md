@@ -1,6 +1,8 @@
 # Post-project inventory reconciliation
 
-Status: implemented and release-verified on the private LAN deployment.
+Status: application workflow implemented. The current browser layout and each
+deployment require their own verification; historical release evidence below
+does not establish the deployed identity of a later UI revision.
 
 ## Decision
 
@@ -54,14 +56,17 @@ inventory-write authority.
 
 The UI highlights active reservation-bearing requirements for review, shows
 planned, reserved, and unaccounted quantities, and previews every stock change
-before confirmation. Zero-reservation requirements remain visible in the full
-preview but do not require individual review input.
+before confirmation. The review and final confirmation both name the affected
+stock, proposed quantities and on-hand/available balances returned by the
+service. Missing balances remain explicit. After saving, the receipt cannot
+commit the same changes again. Zero-reservation requirements remain visible in
+the full preview but do not require individual review input.
 Beginner mode uses plain-language outcomes; expert detail exposes ancestry,
 versions, basis hash, evidence, event IDs, audit ID, and replay state.
 
 ## Implemented surface
 
-- Project dossier **Close out** tab with focused active-reservation line review.
+- **Build → Record actual stock use** with focused active-reservation line review.
 - Server-generated preview before the confirmation action is enabled.
 - Atomic REST read, draft-save, and commit operations beneath a project revision.
 - Matching MCP read, draft-save, and commit tools using bounded BOM scopes.
@@ -70,6 +75,6 @@ versions, basis hash, evidence, event IDs, audit ID, and replay state.
 - Stable idempotency keys for ambiguous browser retries, stale-basis rejection,
   immutable stock events, reusable-asset creation, and an auditable receipt.
 
-The release was promoted only after a verified production backup and separate
-restore check, a healthy container upgrade, preserved inventory/project counts,
+The historical release was promoted only after a verified production backup and
+separate restore check, a healthy container upgrade, preserved inventory/project counts,
 reconciliation-table migration, and read-only neighbour-service verification.

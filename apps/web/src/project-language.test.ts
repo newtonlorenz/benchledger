@@ -23,7 +23,7 @@ describe("project language", () => {
   });
 
   it("uses the same four decision words", () => {
-    expect(["ready", "check", "decide", "source"].map((state) => decisionDisplay(state as "ready" | "check" | "decide" | "source").label)).toEqual(["Ready to use", "Check stock", "Decide", "Need to buy"]);
+    expect(["ready", "check", "decide", "source"].map((state) => decisionDisplay(state as "ready" | "check" | "decide" | "source").label)).toEqual(["Ready", "Check", "Decide", "Source"]);
   });
 
   it("keeps requirement counts grammatical at zero, one, and many", () => {

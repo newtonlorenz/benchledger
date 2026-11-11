@@ -436,8 +436,8 @@ export class ApplicationService {
     return this.artifactModule.beginArtifactUpload(input, ctx);
   }
 
-  writeArtifactUpload(sessionId: string, body: Uint8Array) {
-    return this.artifactModule.writeArtifactUpload(sessionId, body);
+  writeArtifactUpload(sessionId: string, body: Uint8Array, expectedOffset?: number) {
+    return this.artifactModule.writeArtifactUpload(sessionId, body, expectedOffset);
   }
 
   finalizeArtifactUpload(sessionId: string, ctx: RequestContext): Promise<Mutation<Artifact>> {

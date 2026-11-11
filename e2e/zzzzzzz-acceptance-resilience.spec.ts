@@ -1,3 +1,4 @@
+import { openBuildTool, clickProjectAction, navigateWorkspace, openProject, openProjectSection } from "./workspace-controls";
 import { expect, test, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import AxeBuilder from "@axe-core/playwright";
@@ -13,7 +14,7 @@ async function fixture(page: Page, reserve = true) {
   closeFixture = async () => { const closed = app.close(); app.server.closeAllConnections(); await closed; await rm(directory, { recursive: true, force: true }); };
   const base = await app.listen({ port: 0, host: "127.0.0.1" });
   await page.goto(base);
-  await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
   const id = `accept-${randomUUID()}`, revision = `${id}-r1`, itemId = `${id}-stock`;
   const csrf = (await page.context().cookies()).find((cookie) => cookie.name === "forge_csrf")!.value;
   const post = async (path: string, data: object) => {
@@ -36,9 +37,9 @@ async function result(page: Page) {
   await page.getByLabel("Quantity for result 1", { exact: true }).fill("4");
   await page.getByLabel("How did you check for result 1", { exact: true }).selectOption("physically_counted");
 }
-const tab = (page: Page, name: string) => page.getByRole("tab", { name: new RegExp(`^${name}`, "u") }).click();
+const tab = openProjectSection;
 test("used-stock results survive attempted navigation until a deliberate discard", async ({ page }) => {
-  await fixture(page); await result(page); await tab(page, "Plan");
+  await fixture(page); await result(page); await tab(page, "Requirements");
   await expect(page.getByRole("alertdialog")).toBeVisible();
   await page.getByRole("button", { name: "Keep editing", exact: true }).click();
   await expect(page.getByLabel("Quantity for result 1")).toHaveValue("4");
@@ -64,9 +65,12 @@ test("a committed stock update is read-only and the original preview is not edit
   await expect(page.getByLabel("Saved result 1", { exact: true })).toContainText("4 each");
   await expect(page.getByLabel("Saved result 1", { exact: true })).toContainText("Stock item: Synthetic acceptance fasteners");
   await expect(page.getByRole("heading", { name: "Recorded stock changes", exact: true })).toBeVisible();
-  await expect(page.locator(".reconciliation-preview-details")).toContainText("changes recorded");
-  await expect(page.locator(".reconciliation-preview-details")).not.toContainText("changes to apply");
-  await expect(page.getByRole("heading", { name: "Saved stock movements", exact: true })).toBeVisible();
+  await expect(page.locator(".reconciliation-preview-details")).toContainText("1 stock record changed. Review the quantities below.");
+  await expect(page.locator(".reconciliation-preview-details")).not.toContainText("will change");
+  const movements = page.getByRole("table", { name: "Saved stock movements", exact: true });
+  await expect(movements).toBeVisible();
+  await expect(movements.getByRole("columnheader", { name: "Recorded", exact: true })).toBeVisible();
+  await expect(page.getByRole("table", { name: "Proposed stock quantities", exact: true })).toHaveCount(0);
   const stock = await (await page.request.get(`${base}/api/v1/inventory/${itemId}`)).json(); expect(stock.quantity).toBe(6);
 });
 test("a lost review response freezes its inputs and resolves by an unchanged retry", async ({ page }) => {
@@ -145,55 +149,81 @@ test("inspection confirmation isolates focus and preserves the exact reviewed in
   const dialog = page.getByRole("dialog", { name: "Record the result", exact: true });
   await expect(page.getByRole("combobox", { name: "Inspection result", exact: true })).toBeFocused();
   await page.getByRole("combobox", { name: "Inspection result", exact: true }).selectOption("confirmed");
-  await page.getByLabel("Observed quantity (each)").fill("3"); await page.getByRole("combobox", { name: "How did you check?", exact: true }).selectOption("Physical check");
+  await page.getByLabel("Observed quantity (pieces)", { exact: true }).fill("3"); await page.getByRole("combobox", { name: "How did you check?", exact: true }).selectOption("Physical check");
   await dialog.getByRole("button", { name: "Preview changes", exact: true }).click();
-  await expect(dialog.getByRole("button", { name: "Confirm result", exact: true })).toBeVisible();
+  const review = page.getByRole("dialog", { name: "Review the result", exact: true });
+  await expect(review.getByRole("button", { name: "Confirm result", exact: true })).toBeVisible();
+  await expect(review.getByLabel("Observed quantity (pieces)", { exact: true })).toHaveValue("3");
+  await expect(review.getByRole("region", { name: "Server preview", exact: true })).toContainText("nothing has changed yet");
   let first = true; const keys: string[] = [];
   await page.route("**/completion-commit", async (route) => { keys.push(route.request().headers()["idempotency-key"]!); if (first) { first = false; await route.fetch(); await route.abort("failed"); } else await route.continue(); });
-  await dialog.getByRole("button", { name: "Confirm result", exact: true }).click();
-  await expect(dialog.getByRole("button", { name: "Retry unchanged result", exact: true })).toBeVisible();
+  await review.getByRole("button", { name: "Confirm result", exact: true }).click();
+  await expect(review.getByRole("button", { name: "Retry unchanged result", exact: true })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "Inspection result", exact: true })).toBeDisabled();
-  await page.keyboard.press("Escape"); await expect(dialog).toBeVisible();
-  await dialog.getByRole("button", { name: "Retry unchanged result", exact: true }).click();
-  await expect(dialog).toHaveCount(0); expect(keys).toHaveLength(2); expect(keys[0]).toBe(keys[1]);
+  await page.keyboard.press("Escape"); await expect(review).toBeVisible();
+  await review.getByRole("button", { name: "Retry unchanged result", exact: true }).click();
+  await expect(review).toHaveCount(0); expect(keys).toHaveLength(2); expect(keys[0]).toBe(keys[1]);
 });
-test("project refresh reads external updates without losing an in-progress stock draft", async ({ page }) => {
-  const { revision, post } = await fixture(page);
-  await result(page); await page.getByRole("button", { name: "Refresh project", exact: true }).click();
-  await expect(page.getByRole("alertdialog")).toBeVisible(); await page.getByRole("button", { name: "Keep editing", exact: true }).click();
+test("project navigation protects a stock draft before refreshing external updates from the gallery", async ({ page }) => {
+  const { id, revision, post } = await fixture(page);
+  await result(page); await navigateWorkspace(page, "Projects");
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  await page.getByRole("button", { name: "Keep editing", exact: true }).click();
   await expect(page.getByLabel("Quantity for result 1")).toHaveValue("4");
-  await tab(page, "Plan"); await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click();
+  await tab(page, "Parts"); await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click();
   await post(`/project-revisions/${revision}/bom`, { name: "Requirement added by another client", requiredQuantity: 1, unit: "each", role: "consumed", optional: false, constraints: {}, alternatives: [] });
-  const writes: string[] = []; page.on("request", (request) => { if (request.url().includes("/api/") && !["GET", "HEAD", "OPTIONS"].includes(request.method())) writes.push(request.url()); });
-  await page.getByRole("button", { name: "Refresh project", exact: true }).click();
+  const writes: string[] = [];
+  page.on("request", request => { if (request.url().includes("/api/") && !["GET", "HEAD", "OPTIONS"].includes(request.method())) writes.push(request.url()); });
+  await navigateWorkspace(page, "Projects");
+  await page.getByRole("button", { name: "Filters and view options", exact: true }).click();
+  await page.getByRole("button", { name: "Refresh workspace", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Refresh workspace", exact: true })).toBeEnabled();
+  await openProject(page, `Acceptance fixture ${id}`, "Parts");
   await expect(page.locator(".bom-row").filter({ hasText: "Requirement added by another client" })).toBeVisible();
-  await expect(page.getByText("Project refreshed from the workspace.", { exact: true })).toBeVisible(); expect(writes).toEqual([]);
+  expect(writes).toEqual([]);
 });
-test("a project refresh failure preserves confirmed records and explains the stale view", async ({ page }) => {
-  await fixture(page, false); await tab(page, "Plan");
-  await page.route("**/workspace", (route) => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: { message: "Synthetic workspace outage" } }) }));
-  await page.getByRole("button", { name: "Refresh project", exact: true }).click();
-  await expect(page.locator(".project-management-bar").getByRole("alert")).toContainText("Previous records remain visible");
+test("a failed stock-results retry preserves saved parts and recovers when the service returns", async ({ page }) => {
+  await fixture(page, false); await tab(page, "Parts");
+  await page.route("**/project-revisions/*/gaps", route => route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "Synthetic readiness outage" } } }));
+  await page.getByRole("button", { name: "Edit requirement Mounting fasteners", exact: true }).click();
+  await page.getByLabel("Specification and notes", { exact: true }).fill("Synthetic saved part remains visible during the outage.");
+  await page.getByRole("button", { name: "Save requirement", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  const unavailable = page.locator(".project-readiness-error");
+  await expect(unavailable).toContainText("Stock results are unavailable");
+  await page.route("**/workspace", route => route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "Synthetic workspace outage" } } }));
+  const failedRefresh = page.waitForResponse(response => new URL(response.url()).pathname === "/api/v1/workspace" && response.status() === 503);
+  await unavailable.getByRole("button", { name: "Retry stock results", exact: true }).click();
+  await failedRefresh;
+  await expect(unavailable).toBeVisible();
+  await expect(page.locator(".bom-row").filter({ hasText: "Mounting fasteners" })).toBeVisible();
+  await page.unroute("**/workspace"); await page.unroute("**/project-revisions/*/gaps");
+  await unavailable.getByRole("button", { name: "Retry stock results", exact: true }).click();
+  await expect(unavailable).toHaveCount(0);
   await expect(page.locator(".bom-row").filter({ hasText: "Mounting fasteners" })).toBeVisible();
 });
-test("explicit refresh discard resets the local build editor rather than claiming a stale draft was refreshed", async ({ page }) => {
-  await fixture(page, false); await tab(page, "Build planning");
-  await page.getByRole("button", { name: "Create build plan", exact: true }).click();
+test("explicit navigation discard resets the local build editor when the project is reopened", async ({ page }) => {
+  const { id } = await fixture(page, false); await tab(page, "Build");
+  await page.getByRole("button", { name: "Parts and print plates, optional", exact: true }).click();
+  await openBuildTool(page, "print"); await page.getByRole("button", { name: "Create build plan", exact: true }).click();
   await page.getByLabel("Build plan name", { exact: true }).fill("Unsaved local name");
-  await page.getByRole("button", { name: "Refresh project", exact: true }).click();
+  await navigateWorkspace(page, "Inventory");
   await page.getByRole("button", { name: "Discard changes and leave", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Inventory", exact: true })).toBeVisible();
+  await openProject(page, `Acceptance fixture ${id}`, "Build");
+  const optionalPlan = page.getByRole("button", { name: "Parts and print plates, optional", exact: true });
+  if (await optionalPlan.getAttribute("aria-expanded") === "false") await optionalPlan.click();
   await expect(page.getByRole("button", { name: "Create build plan", exact: true })).toBeVisible();
   await expect(page.getByLabel("Build plan name", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("Project refreshed from the workspace.", { exact: true })).toBeVisible();
 });
 test("workstream pagination cannot drop a dirty assignment", async ({ page }) => {
   const { id, post } = await fixture(page, false);
   for (let i = 0; i < 21; i++) await post(`/projects/${id}/workstreams`, { name: `Workstream ${i.toString().padStart(2, "0")}`, kind: "assembly" });
-  await tab(page, "Build planning"); await page.locator(".workstream-row > summary").first().click();
-  await page.locator(".workstream-row").first().getByRole("textbox", { name: "Workstream notes", exact: true }).fill("Keep this assignment");
-  await page.getByRole("button", { name: "Next workstreams", exact: true }).click();
+  await tab(page, "Build steps"); await openBuildTool(page, "tasks"); await page.locator(".workstream-row > [data-disclosure='trigger']").first().click();
+  await page.locator(".workstream-row").first().getByRole("textbox", { name: "Task group notes", exact: true }).fill("Keep this assignment");
+  await page.getByRole("button", { name: "Next task groups", exact: true }).click();
   await expect(page.getByRole("alertdialog")).toBeVisible(); await page.getByRole("button", { name: "Keep editing", exact: true }).click();
-  await expect(page.locator(".workstream-row").first().getByRole("textbox", { name: "Workstream notes", exact: true })).toHaveValue("Keep this assignment");
+  await expect(page.locator(".workstream-row").first().getByRole("textbox", { name: "Task group notes", exact: true })).toHaveValue("Keep this assignment");
 });
 for (const colour of ["light", "dark"] as const) test(`durable stock review and approval are accessible at phone width in ${colour}`, async ({ page }) => {
   await page.emulateMedia({ colorScheme: colour, reducedMotion: "reduce" });
@@ -210,4 +240,56 @@ for (const colour of ["light", "dark"] as const) test(`durable stock review and 
   const dialog = page.getByRole("dialog", { name: "Apply these changes?" });
   await expect(dialog.getByRole("button", { name: "Apply stock changes", exact: true })).toBeInViewport();
   await audit(); await page.keyboard.press("Escape"); await expect(dialog).toHaveCount(0);
+});
+
+
+test("sets stock aside through the UI before recording actual use", async ({ page }) => {
+  const { itemId, base } = await fixture(page, false);
+  await tab(page, "Build steps");
+  await openBuildTool(page, "stock");
+  await page.getByLabel("Requirement and confirmed stock").selectOption({ label: "Mounting fasteners — Synthetic acceptance fasteners" });
+  await page.getByLabel("Quantity to set aside (each)", { exact: true }).fill("4");
+  await page.getByRole("button", { name: "Review stock to set aside", exact: true }).click();
+  let stock = await (await page.request.get(`${base}/api/v1/inventory/${itemId}`)).json();
+  expect(stock.quantity).toBe(10); expect(stock.availableQuantity).toBe(10);
+  await page.getByRole("button", { name: "Confirm set aside", exact: true }).click();
+  await expect(page.getByText("Stock set aside. Record what was actually used after the build.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Release stock", exact: true })).toBeEnabled();
+  stock = await (await page.request.get(`${base}/api/v1/inventory/${itemId}`)).json();
+  expect(stock.quantity).toBe(10); expect(stock.availableQuantity).toBe(6);
+  await page.getByRole("button", { name: "Record actual stock use", exact: true }).click();
+  await result(page);
+  await page.getByRole("button", { name: "Review changes", exact: true }).click();
+  await page.getByRole("button", { name: "Apply stock changes", exact: true }).click();
+  await page.getByRole("dialog", { name: "Apply these changes?", exact: true }).getByRole("button", { name: "Apply stock changes", exact: true }).click();
+  await expect(page.locator(".reconciliation-committed")).toBeVisible();
+  stock = await (await page.request.get(`${base}/api/v1/inventory/${itemId}`)).json();
+  expect(stock.quantity).toBe(6); expect(stock.availableQuantity).toBe(6);
+});
+
+
+test("mobile build tables keep neighbouring stock controls and warnings within the viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+  await fixture(page, false); await tab(page, "Build steps");
+  await page.getByRole("button", { name: "Parts and print plates, optional", exact: true }).click();
+  await openBuildTool(page, "print"); await page.getByRole("button", { name: "Create build plan", exact: true }).click();
+  await page.getByRole("button", { name: "Add build part", exact: true }).click();
+  await page.getByLabel("Build part 1 name", { exact: true }).fill("Sensor mounting plate");
+  await page.getByLabel("Build part 1 quantity", { exact: true }).fill("2");
+  await page.getByRole("button", { name: "Review build plan", exact: true }).click();
+  await page.getByRole("button", { name: "Save build plan", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Before you build", exact: true })).toBeVisible();
+  await expect(page.getByText("Sensor mounting plate: no versioned build file is attached.", { exact: true })).toBeVisible();
+  // The approved build page groups its controls into five sequential steps.
+  // Check the steps and their actions, not just the outer list's bounding box.
+  await expect(page.getByRole("list", { name: "Build sequence", exact: true }).locator(":scope > li")).toHaveCount(5);
+  const bounds = await page.locator('.build-workspace > *, .build-workspace .build-journey > li, .build-workspace .build-journey-step > button, .build-workspace .dialog-actions button:visible, [aria-label="Build checks"]').evaluateAll((elements) => elements.map((element) => {
+    const rect = element.getBoundingClientRect();
+    return { text: element.textContent?.slice(0, 50), left: rect.left, right: rect.right, viewport: innerWidth };
+  }));
+  expect(bounds.length).toBeGreaterThan(4);
+  for (const element of bounds) { expect(element.left, JSON.stringify(element)).toBeGreaterThanOrEqual(0); expect(element.right, JSON.stringify(element)).toBeLessThanOrEqual(element.viewport); }
+  await page.getByRole("button", { name: "Record actual stock use", exact: true }).scrollIntoViewIfNeeded();
+  await expect(page.getByRole("button", { name: "Record actual stock use", exact: true })).toBeInViewport();
 });

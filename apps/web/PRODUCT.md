@@ -34,7 +34,7 @@ welcoming enough for a first project, and quietly satisfying during repeated use
 
 Not a generic AI dashboard, crypto terminal, enterprise warehouse system, or
 marketing landing page disguised as a tool. Avoid purple gradients, glassmorphism,
-decorative blobs, warm-cream SaaS styling, nested rounded cards, fake headline
+decorative blobs, ornamental SaaS styling, nested rounded cards, fake headline
 metrics, ornamental blueprints, jargon-first labels, and motion without state.
 
 ## Design Principles
@@ -63,6 +63,50 @@ visible if a continuation request fails. Filter changes and inventory mutations
 restart at page one. Pagination is read-committed, so concurrent writes can
 shift later pages; the current offset cursor is opaque and keyset snapshots are
 deferred.
+
+## Capture and reuse
+
+A name is enough to start a project. Its first useful action is recording what it
+needs; build method and equipment remain optional until they affect the plan.
+Requirement creation and editing share explicit owned-item selection. Search
+uses bounded server results across the inventory, preserves the selected item,
+and never implies fit or changes units silently. Referenced stock details are
+loaded for the active project so reloads do not turn known selections into
+apparently missing stock.
+
+Projects opens a visual Gallery or compact List. A selected project opens
+Overview, Parts, Files and Build; sourcing is within Parts, while Assembly, PCB
+and actual-stock-use review are secondary Build tools. A new workspace offers Start a project and
+Add inventory, without empty search/filter controls. Archived-only workspaces,
+failed reads and empty filtered results retain their own recovery actions.
+
+Inventory capture records what is known, including storage location and optional
+specifications. Catalogue identity can be completed later. A maker can explicitly
+choose to review a physical count using the quantity entered during capture.
+Creating the record and confirming that count remain separate writes and
+decisions. A successful count ends with a receipt and a useful continuation.
+Requirement entry can add an unlisted owned item without losing its draft;
+selection still does not establish compatibility. Supporting manual-capture and
+requirement drafts remain in memory across reconnection, not in browser storage.
+
+## Current web composition
+
+The desktop header gives Projects and Inventory equal prominence; phone
+navigation keeps those two destinations at the bottom. Settings holds appearance
+and agent-access controls. The current palette is warm white, graphite and
+cobalt, with semantic status text and equivalent dark/system appearance.
+
+Overview holds the selected project image and next action. Parts opens around
+requirements and owned-stock decisions. Files groups revision-scoped records by
+3D print, Electronics, CAD & firmware and Instructions. Build follows the work
+from preparation to assembly, verification notes and a reviewed stock-use receipt.
+Detailed plate plans, task groups, reservations and geometry tools remain
+available through contextual disclosures and secondary routes.
+
+File access does not launch a slicer or start fabrication. Physical verification
+is recorded through observations, notes and evidence; it is not inferred from
+file presence, model geometry or task completion. Product images identify a
+project and must not substitute for a file preview.
 
 ## Stock receiving setting
 

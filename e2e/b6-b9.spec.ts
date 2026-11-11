@@ -1,3 +1,4 @@
+import { navigateWorkspace, openProjectSection, openProject } from "./workspace-controls";
 import { expect, test, type Page } from "@playwright/test";
 
 const demoPassword = "demo-password-please-change";
@@ -6,16 +7,11 @@ async function signIn(page: Page): Promise<void> {
   await page.goto("/");
   await page.getByLabel("Workspace password").fill(demoPassword);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("heading", { name: "Workspace overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
 }
 
 async function openInventory(page: Page): Promise<void> {
-  if (await page.getByRole("button", { name: "Open navigation" }).count()) {
-    await page.getByRole("button", { name: "Open navigation" }).click();
-    await page.getByRole("dialog", { name: "Primary navigation" }).getByRole("button", { name: "Inventory", exact: true }).click();
-  } else {
-    await page.getByRole("button", { name: "Inventory", exact: true }).click();
-  }
+  await navigateWorkspace(page, "Inventory");
   await expect(page.getByRole("heading", { name: "Inventory" })).toBeVisible();
 }
 
@@ -38,11 +34,12 @@ function inventoryRecord(id: string, name: string) {
 
 test("launches inventory before sequential typing from the topbar", async ({ page }) => {
   await signIn(page);
-  const topbarSearch = page.getByRole("button", { name: "Search inventory" });
+  const topbarSearch = page.getByRole("button", { name: "Open workspace commands" });
   await expect(topbarSearch).toBeVisible();
   await topbarSearch.focus();
   await expect(topbarSearch).toBeFocused();
   await topbarSearch.click();
+  await page.getByRole("dialog", { name: "Workspace commands", exact: true }).getByRole("option", { name: /^Inventory Open inventory/u }).click();
   const inventorySearch = page.getByRole("textbox", { name: "Search inventory" });
   await expect(inventorySearch).toBeFocused();
 
@@ -55,7 +52,7 @@ test("launches inventory before sequential typing from the topbar", async ({ pag
 
 test("Cmd/Ctrl+K launches inventory and focuses its single search field", async ({ page }) => {
   await signIn(page);
-  const topbarSearch = page.getByRole("button", { name: "Search inventory" });
+  const topbarSearch = page.getByRole("button", { name: "Open workspace commands" });
   await expect(topbarSearch).toBeVisible();
   await topbarSearch.evaluate((element) => {
     element.addEventListener("focus", () => { document.body.dataset.topbarSearchFocused = "true"; }, { once: true });
@@ -72,7 +69,8 @@ test("keeps one local inventory search and lets the shared shortcut focus it", a
 
   const search = page.getByRole("textbox", { name: "Search inventory" });
   await expect(search).toBeVisible();
-  await expect(page.locator(".global-search")).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Search inventory", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Open workspace commands", exact: true })).toBeVisible();
   await page.keyboard.press("Control+K");
   await expect(search).toBeFocused();
 
@@ -135,7 +133,7 @@ test("only reports a cleared selection when a selection existed before filtering
 test("keeps inventory and shopping actions usable at 390px without horizontal overflow", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await signIn(page);
-  const launcher = page.getByRole("button", { name: "Search inventory" });
+  const launcher = page.getByRole("button", { name: "Open workspace commands" });
   await expect(launcher).toBeVisible();
   const restingLauncherBox = await launcher.boundingBox();
   expect(restingLauncherBox?.width ?? 0).toBeGreaterThanOrEqual(44);
@@ -146,27 +144,27 @@ test("keeps inventory and shopping actions usable at 390px without horizontal ov
   expect(focusedLauncherBox?.height ?? 0).toBeGreaterThanOrEqual(44);
   await openInventory(page);
 
-  await expect(page.locator(".global-search")).toHaveCount(0);
-  const inventoryControls = page.locator(".inventory-toolbar .field-search, .inventory-toolbar .category-control");
+  await expect(page.getByRole("textbox", { name: "Search inventory", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Open workspace commands", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Filters", exact: true }).click();
+  const inventoryControls = page.locator(".inventory-toolbar .field-search, .inventory-toolbar .category-control:visible");
   for (const control of await inventoryControls.all()) {
     const box = await control.boundingBox();
     expect(box?.width ?? 0).toBeGreaterThanOrEqual(44);
     expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
   }
   await page.getByLabel("Select all loaded inventory items").check();
-  const selectionButton = page.locator(".inventory-selection-bar .button");
+  const selectionButton = page.getByRole("button", { name: "Bulk edit", exact: true });
   await expect(selectionButton).toBeVisible();
   const selectionBox = await selectionButton.boundingBox();
   expect(selectionBox?.width ?? 0).toBeGreaterThanOrEqual(44);
   expect(selectionBox?.height ?? 0).toBeGreaterThanOrEqual(44);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 
-  await page.getByRole("button", { name: "Open navigation" }).click();
-  await page.getByRole("dialog", { name: "Primary navigation" }).getByRole("button", { name: /^Projects/ }).click();
-  await page.getByRole("button", { name: /^Continue: /u }).click();
-  await page.getByRole("tab", { name: /^Shopping list/ }).click();
+  await openProject(page, "Synthetic H2D desk lamp");
+  await openProjectSection(page, "To source");
   await page.getByText("Inventory-linked supplier records", { exact: true }).click(); await expect(page.locator(".shopping-section")).toBeVisible();
-  const shoppingControls = page.locator(".shopping-actions .button, .shopping-section .sourcing-lead .button, .shopping-section .offer-row, .shopping-section .expert-detail > summary");
+  const shoppingControls = page.locator(".shopping-actions .button, .shopping-section .offer-row, .shopping-section .expert-detail > [data-disclosure='trigger']");
   for (const control of await shoppingControls.all()) {
     const box = await control.boundingBox();
     if (box) {

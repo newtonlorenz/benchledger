@@ -1,3 +1,5 @@
+import { Alert } from "./components/ui/alert";
+import { Button } from "./components/ui/button";
 import { useEffect, useRef, useState } from "react";
 import { AmbientLight, Color, DirectionalLight, GridHelper, Mesh, MeshStandardMaterial, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from "three";
 import type { BufferGeometry, Material } from "three";
@@ -80,9 +82,11 @@ export default function StlPreview({ bytes }: { bytes: ArrayBuffer }) {
   const [error, setError] = useState<string>();
   const [size, setSize] = useState<ModelSize>();
   const [step, setStep] = useState<number>();
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     const container = host.current;
     if (!container) return;
+    setError(undefined);
     let renderer: WebGLRenderer | undefined;
     let controls: OrbitControls | undefined;
     let observer: ResizeObserver | undefined;
@@ -101,6 +105,10 @@ export default function StlPreview({ bytes }: { bytes: ArrayBuffer }) {
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.domElement.setAttribute("aria-label", `STL model preview, ${formatModelSize(modelSize)}`);
       renderer.domElement.setAttribute("role", "img");
+      renderer.domElement.addEventListener("webglcontextlost", event => {
+        event.preventDefault();
+        if (!disposed) { reset.current = () => undefined; dispose(); setError("The graphics connection was lost. Retry to restore the preview."); }
+      });
       container.append(renderer.domElement);
       const scene = new Scene();
       const colours = viewerColours(container);
@@ -129,11 +137,11 @@ export default function StlPreview({ bytes }: { bytes: ArrayBuffer }) {
       };
       observer = new ResizeObserver(resize); observer.observe(container); resize();
     } catch (cause) { dispose(); setError(cause instanceof Error ? cause.message : "The 3D viewer is unavailable. Download the STL to view it locally."); }
-    return dispose;
-  }, [bytes]);
-  return error ? <p role="alert">{error}</p> : <div className="viewer-preview">
-    <div className="viewer-toolbar"><p className="viewer-readout">{size && <><strong>{formatModelSize(size)}</strong><span>Model bounds · Z up{step ? ` · grid ${step} mm` : ""}</span></>}</p><button type="button" className="button button-secondary" onClick={() => reset.current()}>Reset view</button></div>
-    <div ref={host} className="artifact-preview-stl viewer-stage" />
-    <p className="viewer-hint">Drag to rotate. Scroll or pinch to zoom. Units assumed to be millimetres; this view does not check printability or fit.</p>
+    return () => { reset.current = () => undefined; dispose(); };
+  }, [bytes, attempt]);
+  return <div className="viewer-preview">
+    {error ? <div><Alert asChild><p role="alert">{error}</p></Alert><Button variant="outline" type="button" className="button button-secondary" onClick={() => setAttempt(value => value + 1)}>Retry STL preview</Button></div> : <div className="viewer-toolbar"><p className="viewer-readout">{size && <><strong>{formatModelSize(size)}</strong><span>Model bounds · Z up{step ? ` · grid ${step} mm` : ""}</span></>}</p><Button variant="outline" type="button" className="button button-secondary" onClick={() => reset.current()}>Reset view</Button></div>}
+    <div ref={host} className="artifact-preview-stl viewer-stage" hidden={Boolean(error)} />
+    {!error && <p className="viewer-hint">Drag to rotate. Scroll or pinch to zoom. Units assumed to be millimetres; this view does not check printability or fit.</p>}
   </div>;
 }

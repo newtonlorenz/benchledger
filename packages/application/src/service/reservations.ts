@@ -15,6 +15,9 @@ export class ReservationModule extends ServiceModule {
     const parentId = requireId(revisionId, "revision id");
     return this.mutate(ctx, "project.reservation.create", "reservation", parsed.id ?? "pending", async () => {
       await this.assertProjectActiveFromRevision(parentId);
+      if ((await this.ports.reconciliations?.getDraft(parentId))?.status === "committed") {
+        throw conflict("This revision's stock review is complete. Create a new project revision before reserving more stock.");
+      }
       const lines = await this.ports.projects.listBomLines(parentId);
       const line = lines.find((candidate) => candidate.id === parsed.lineId);
       if (line === undefined) throw notFound("BOM line", parsed.lineId);

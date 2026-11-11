@@ -69,6 +69,28 @@ describe("safe names and hashing", () => {
 });
 
 describe("upload lifecycle", () => {
+  it("reports durable partial bytes, rejects stale offsets and permits a fresh upload after expiry", async () => {
+    let now = Date.parse("2026-08-30T10:00:00.000Z");
+    const store = await makeStore({ clock: () => now });
+    const bytes = Buffer.from("synthetic bytes");
+    const input = uploadInput({ expectedBytes: bytes.length, expectedSha256: digestBytesForTest(bytes) });
+    const begun = await store.beginUpload(input);
+    expect(begun.ok).toBe(true); if (!begun.ok) return;
+    const id = begun.value.sessionId;
+    expect((await store.writeUpload(id, Readable.from(bytes.subarray(0, 4)), 0)).ok).toBe(true);
+    expect(await store.getUploadSession(id)).toMatchObject({ ok: true, value: { bytesWritten: 4 } });
+    expect(await store.writeUpload(id, Readable.from(bytes), 0)).toMatchObject({ ok: false, error: { code: "CONFLICT" } });
+    expect((await store.writeUpload(id, Readable.from(bytes.subarray(4)), 4)).ok).toBe(true);
+    now += 15 * 60_000;
+    expect(await store.finalizeUpload(id)).toMatchObject({ ok: false, error: { code: "UPLOAD_STATE" } });
+    expect(await store.getUploadSession(id)).toMatchObject({ ok: true, value: { status: "expired" } });
+    const fresh = await store.beginUpload(input);
+    expect(fresh.ok).toBe(true); if (!fresh.ok) return;
+    expect(fresh.value.sessionId).not.toBe(id);
+    expect((await store.writeUpload(fresh.value.sessionId, Readable.from(bytes), 0)).ok).toBe(true);
+    expect(await store.finalizeUpload(fresh.value.sessionId)).toMatchObject({ ok: true, value: { sha256: digestBytesForTest(bytes) } });
+  });
+
   it("persists an explicit fifteen-minute expiry and upgrades legacy sessions", async () => {
     let now = Date.parse("2026-08-30T10:00:00.000Z");
     const store = await makeStore({ clock: () => now });

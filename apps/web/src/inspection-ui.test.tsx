@@ -1,7 +1,11 @@
-import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { renderToStaticMarkup } from "./test-render-markup";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { InspectionQueuePanel, InspectionResultDialog, alternativeChanges, effectsLabel, formatObservedAt, formatQuantityConversion, gapQuantities, inspectionActionAccessibleNames, lineReferences, previewDescription } from "./inspection-ui";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { InspectionAction } from "./inspection-ui";
+
+afterEach(cleanup);
 
 function action(index: number): InspectionAction {
   const lineId = `bom-line-${index}`;
@@ -65,7 +69,7 @@ describe("Project Plan Checks", () => {
     expect(markup).toContain("bom-line-1 · v2");
     expect(markup).toContain("item-1 · v4");
     expect(markup).toContain("delivered_uncounted · supplier label");
-    expect(markup).toContain("{&quot;kind&quot;:&quot;physical_quantity&quot;}");
+    expect(markup).toContain("{\"kind\":\"physical_quantity\"}");
     expect(markup).toContain("each");
     expect(markup).toContain("Updates physical quantity evidence.");
   });
@@ -169,4 +173,28 @@ describe("Project Plan Checks", () => {
     expect(dialogMarkup).toContain("Technical traceability");
     expect(dialogMarkup).toContain("Recheck affected project requirements.");
   });
+});
+
+
+it("restores focus to the stock-check trigger after loading disables it", async () => {
+  const check = { ...action(1), question: "Count Candidate item 1 in each." };
+  const read = vi.fn(async () => check);
+  render(<InspectionQueuePanel actions={[check]} onReadInspection={read} />);
+  const trigger = screen.getByRole("button", { name: "Check Candidate item 1: Count Candidate item 1 in pieces." });
+  trigger.focus(); fireEvent.click(trigger);
+  expect(trigger).toHaveProperty("disabled", true);
+  await screen.findByRole("dialog", { name: "Record the result" });
+  expect(screen.getByLabelText("Observed quantity (pieces)")).toBeTruthy();
+  expect(screen.queryByText("Item item-1 · version 4")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(document.activeElement).toBe(trigger));
+  expect(read).toHaveBeenCalledOnce();
+});
+
+it("returns focus to the stock check after its refresh fails", async () => {
+  render(<InspectionQueuePanel actions={[action(1)]} onReadInspection={async () => { throw new Error("Check unavailable"); }} />);
+  const trigger = screen.getByRole("button", { name: /Check Candidate item 1/u });
+  trigger.focus(); fireEvent.click(trigger);
+  await screen.findByRole("alert");
+  await waitFor(() => expect(document.activeElement).toBe(trigger));
 });

@@ -1,6 +1,6 @@
 # Assembly explorer
 
-Every project fabrication route can use the **Assembly** tab. It presents one
+Every project fabrication route can use the **Build → Assembly** route. It presents one
 revision-bound assembly with a model viewport, assembled/exploded controls,
 separation slider, selectable parts and an optional build guide. No viewer code
 is specific to a project. Source files remain unchanged.
@@ -9,15 +9,18 @@ is specific to a project. Source files remain unchanged.
 
 1. Upload model files in **Files**, attached to the selected project revision or
    an exact workstream revision within that project.
-2. Open **Assembly**, select sources (or **Select all files**), and choose
+2. Open **Build → Assembly**, select sources (or **Select all files**), and choose
    **Open assembly**. Per-file **Coordinates** holds unit and up-axis overrides.
    Imports open an unsaved draft in viewing mode; **Save assembly** persists it.
 3. Inspect the assembled dimensions. **Exploded** suggests radial spacing;
    concentric parts receive different axial directions. A single part remains
    assembled. Use **Find a part** to search names or groups, then select, hide
    or isolate parts. The list scrolls independently of the selected-part controls.
+   Choose **Isometric**, **Front** or **Rear** to inspect the same separation
+   from another angle. Changing separation keeps the chosen camera view.
 4. **Edit assembly** exposes names, colours, materials, fixing notes, requirement
-   links and position/rotation/separation adjustments. Position and separation
+   links, with **Placement and separation** disclosing position/rotation/separation
+   adjustments. Position and separation
    are millimetres; XYZ rotations are degrees around the part's bounding centre.
    **Add another placement** reuses a source mesh without duplicating CAD.
    **Done editing** returns to viewing without saving or discarding edits.
@@ -31,10 +34,15 @@ may need to be installed in a different direction from their display offset.
 A project without geometry continues to use Files, requirements and build plans.
 Archived projects retain their saved view but cannot save changes.
 
+If browser graphics are unavailable or the graphics connection is lost, the
+parts list, fixing notes and edits remain available. **Retry 3D viewer** reopens
+the model without clearing the current draft, selection or separation.
+
 ## Supported sources
 
 | Format | Import behaviour |
 | --- | --- |
+| KiCad PCB | Native board substrate, holes, outer copper and source footprint outlines. No external component models. See [PCB viewer](pcb-viewer.md) for support and omissions. |
 | STEP / STP | Separate tessellated parts and hierarchy where the export preserves them. Declared file units are converted to millimetres. |
 | GLB | Static glTF 2.0 triangle meshes, nested transforms and repeated mesh placements. Materials supply an illustrative base colour. |
 | STL | One part per file, with user-supplied units and placement. Disconnected shells are not guessed into an assembly. |
@@ -48,7 +56,7 @@ record. STEP's declared units take precedence over the coordinate unit choice.
 STEP exporter placeholder names are replaced with readable source filenames;
 meaningful CAD names and source geometry are preserved. Separate files retain
 their exported positions and can need placement adjustments.
-Imports normalise viewing geometry to millimetres and Z up. Other native CAD
+Imports normalise viewing geometry to millimetres and Z up. KiCad PCB sources use fixed millimetres and Z up. Other native CAD
 formats need a STEP or GLB export. Compressed GLB extensions, skinning, animations,
 non-triangle primitives and sparse accessors are rejected with actionable errors.
 External buffers are rejected; textures are not loaded. No external URL is fetched.
@@ -114,3 +122,28 @@ and [Open CASCADE licensing](https://dev.opencascade.org/resources/licensing).
 
 The synthetic STEP test fixture consists of two boxes created with CadQuery.
 It contains no real project geometry or identifiers.
+
+## Visual regression review
+
+After building, run the focused browser review with:
+
+```sh
+npx playwright test e2e/assembly-review.spec.ts e2e/assembly.spec.ts e2e/visual-review.spec.ts
+```
+
+The review generates four labelled PNG contact sheets and a JSON manifest in
+Playwright's per-test output directory, attached to the test results. It covers
+three camera views and five separation values across light/dark and desktop/phone
+layouts. The manifest identifies the synthetic source hash, project revision and
+unsaved inspected draft; it does not imply a persisted assembly version.
+
+The checks assert visible rendered geometry, stable assembled dimensions,
+camera/separation state, selection/isolation and layout bounds, and fail on
+unexpected page errors. A synthetic blank-image control checks that the image
+analysis can reject a blank model. The separate recovery scenario disables WebGL,
+edits notes and retries before and after restoring graphics support.
+
+Inspect the sheets for visual correctness. These are review artifacts rather
+than approved pixel baselines, collision checks, manufacturing checks or proof
+of physical fit. The existing `npm run check` gate includes these tests. No
+additional rendering library or browser harness is required.

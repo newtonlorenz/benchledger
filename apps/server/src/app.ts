@@ -24,7 +24,7 @@ import {
   inspectionObservationSchema, commitInspectionCompletionBodySchema,
   updateWorkspacePreferencesSchema, stockReceivingPolicyImpactQuerySchema
 } from "@benchledger/api-contract";
-import { ApplicationError, ApplicationService } from "@benchledger/application";
+import { ApplicationError, ApplicationService, hydrateProject } from "@benchledger/application";
 import type { ApplicationPorts, BuildConfigurationListOptions, CatalogProductListOptions, GapEvaluation, Mutation, Page, ProjectListOptions, RequestContext } from "@benchledger/application";
 import { createDemoRuntime, createProductionRuntime } from "@benchledger/runtime";
 import { createApplicationMcpProtocol, createMcpHttpHandler } from "@benchledger/mcp";
@@ -39,7 +39,7 @@ import type {
   WorkspaceSecurityMutation, WorkspacePreferences as ApiWorkspacePreferences
 } from "@benchledger/api-contract";
 import { AuthManager, assertStrongSessionSecret, type AuthConfig, type AuthScope, type Principal, hashBearerToken } from "./auth.js";
-import { ArtifactTransferManager, TRANSFER_RESPONSE_HEADERS, TRANSFER_TOKEN_HEADER, type FinalizeCapabilityBody, type TransferCapability } from "./artifact-transfer.js";
+import { ArtifactTransferManager, ARTIFACT_DOWNLOAD_HEADERS, TRANSFER_RESPONSE_HEADERS, TRANSFER_TOKEN_HEADER, type FinalizeCapabilityBody, type TransferCapability } from "./artifact-transfer.js";
 import { positiveIntegerFromEnvironment, publicBaseUrlFromEnvironment } from "./config.js";
 import { jsonOpenApi } from "./openapi.js";
 
@@ -134,7 +134,7 @@ const SPA_CSP = [
  * attachment disposition.
  */
 const SAFE_ARTIFACT_MEDIA_TYPES = new Set([
-  "application/octet-stream", "application/pdf", "application/zip", "application/json",
+  "application/octet-stream", "application/pdf", "application/zip", "application/x-zip-compressed", "application/json", "application/x-kicad-pcb",
   "image/jpeg", "image/png", "image/webp", "image/gif",
   "model/step", "model/stl", "model/gltf-binary", "model/3mf", "application/vnd.ms-package.3dmanufacturing-3mf",
   "text/plain", "text/markdown", "text/csv"
@@ -739,26 +739,8 @@ async function workspaceSnapshot(service: ApplicationService, projectIds?: Reado
     service.getWorkspacePreferences()
   ]);
   const enrichedProjects = await Promise.all(projects.data.map(async (project): Promise<WorkspaceProject> => {
-    const [workItems, artifacts] = await Promise.all([
-      service.listWorkItems(project.id),
-      service.listArtifacts(project.id)
-    ]);
-    if (project.currentRevisionId === undefined) return { ...project, workItems, bom: [], artifacts };
-    const revision = await service.getProjectRevision(project.currentRevisionId);
-    const [bom, revisionArtifacts, gapEvaluation] = await Promise.all([
-      service.listBomLines(revision.id),
-      service.listArtifacts(project.id, { projectRevisionId: revision.id }),
-      service.evaluateBomGaps(revision.id),
-    ]);
-    const latestConfiguration = await service.getLatestBuildConfiguration(revision.id);
-    const currentRevision = {
-      ...revision,
-      bom,
-      artifacts: revisionArtifacts,
-      gapEvaluation,
-      ...(latestConfiguration === null ? {} : { buildConfigSnapshot: latestConfiguration })
-    };
-    return { ...project, workItems, bom, artifacts, currentRevision };
+    const { presentation: _presentation, ...hydrated } = await hydrateProject(service, project, false);
+    return hydrated;
   }));
   const hydratedInventory = await hydrateWorkspaceInventory(service, inventory.data);
   return {
@@ -767,7 +749,7 @@ async function workspaceSnapshot(service: ApplicationService, projectIds?: Reado
     offers: offers.data,
     source: "api",
     fetchedAt: new Date().toISOString(),
-    capabilities: [...(service.assemblies.supports() ? ["assembly.read", "assembly.write"] : []), ...(service.inventoryImages.supports() ? ["inventory.images.read", "inventory.images.write"] : []), ...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : []), ...(service.makerWorkflows.supports() ? ["maker_workflows.read", "maker_workflows.write"] : [])],
+    capabilities: [...(service.assemblies.supports() ? ["assembly.read", "assembly.write", "pcb.read"] : []), ...(service.inventoryImages.supports() ? ["inventory.images.read", "inventory.images.write"] : []), ...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : []), ...(service.makerWorkflows.supports() ? ["maker_workflows.read", "maker_workflows.write", "project_library.read", "project_presentation.read", "project_presentation.write"] : [])],
     preferences,
     pagination: {
       inventory: { limit: inventory.limit, ...(inventory.total === undefined ? {} : { total: inventory.total }), ...(inventory.nextCursor === undefined ? {} : { nextCursor: inventory.nextCursor }) },
@@ -907,7 +889,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   if (runtime?.close !== undefined) app.addHook("onClose", async () => runtime.close?.());
   await app.register(cookie);
   await app.register(swagger, { openapi: jsonOpenApi(service.getVersion()) });
-  for (const contentType of ["application/octet-stream", "application/pdf", "image/jpeg", "image/png", "image/webp", "model/step", "model/stl", "model/gltf-binary", "application/vnd.ms-package.3dmanufacturing-3mf", "text/plain"]) {
+  for (const contentType of ["application/octet-stream", "application/pdf", "image/jpeg", "image/png", "image/webp", "model/step", "model/stl", "model/gltf-binary", "application/x-kicad-pcb", "application/vnd.ms-package.3dmanufacturing-3mf", "text/plain"]) {
     app.addContentTypeParser(contentType, { parseAs: "buffer" }, (_request, body, done) => done(null, body));
   }
   app.decorateRequest("principal", undefined as unknown as Principal);
@@ -1157,7 +1139,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     authentication: { accessModes: ["lan_open", "password"], access: "/api/v1/auth/access", explicitLanSession: "/api/v1/auth/lan-session", bearerRequiredForMcp: true },
     vocabulary: { confirmed: "physically counted or commissioned stock", assumed: "delivered or ordered stock that counts as in stock only because the workspace stock receiving policy trusts it; evidence is unchanged", inspect_first: "recorded stock requiring a physical count", ordered: "ordered stock not yet counted as in stock", missing: "no confirmed or inspect-first candidate" },
     stockReceivingPolicy: { policies: ["on_purchase", "on_delivery", "on_receipt"], default: "on_receipt", read: "/api/v1/workspace/preferences", impact: "/api/v1/workspace/preferences/stock-receiving-impact", change: "human workspace administrator browser session only" },
-    actions: [...(service.assemblies.supports() ? ["assembly.read", "assembly.write"] : []), ...(service.inventoryImages.supports() ? ["inventory.images.read", "inventory.images.write"] : []), "inventory.read", "inventory.write", "workspace.preferences.read", "inventory.categories.read", "inventory.categories.write", "catalog.read", "catalog.write", "inventory.product_profile.read", "inventory.product_profile.write", "projects.read", "projects.write", "projects.remove", "projects.removed_history", "build_configurations.read", "build_configurations.create", "bom.evaluate", "artifacts.version", "offers.compare", "events.subscribe", ...(service.makerWorkflows.supports() ? ["project_setup.guided", "requirement_offers.read", "requirement_offers.write", "build_plan.read", "build_plan.write", "workstreams.read", "workstreams.write", "bom.import"] : []), ...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : [])],
+    actions: [...(service.assemblies.supports() ? ["assembly.read", "assembly.write", "pcb.read"] : []), ...(service.inventoryImages.supports() ? ["inventory.images.read", "inventory.images.write"] : []), "inventory.read", "inventory.write", "workspace.preferences.read", "inventory.categories.read", "inventory.categories.write", "catalog.read", "catalog.write", "inventory.product_profile.read", "inventory.product_profile.write", "projects.read", "projects.write", "projects.remove", "projects.removed_history", "build_configurations.read", "build_configurations.create", "bom.evaluate", "artifacts.version", "offers.compare", "events.subscribe", ...(service.makerWorkflows.supports() ? ["project_library.read", "project_presentation.read", "project_presentation.write", "project_setup.guided", "requirement_offers.read", "requirement_offers.write", "build_plan.read", "build_plan.write", "workstreams.read", "workstreams.write", "bom.import"] : []), ...(service.supportsReconciliation() ? ["reconciliation.read", "reconciliation.write"] : [])],
     approvalBoundaries: ["purchasing", "external publication", "permanent deletion", "credential changes", "printer control"]
   }));
   app.get(route("/openapi.json"), async () => jsonOpenApi(service.getVersion()));
@@ -1306,6 +1288,11 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   app.get(route("/auth/session"), async (request) => { const principal = requirePrincipal(request); return { authenticated: true, actor: principal.actor, source: principal.source, scopes: [...principal.scopes], projectIds: principal.projectIds ? [...principal.projectIds] : undefined, ...(principal.memberId ? { memberId: principal.memberId, memberVersion: principal.memberVersion } : {}), teamEnabled: teamState.enabled }; });
 
   app.get(route("/workspace"), async (request) => { const principal = requireScope(request, "read", auth); if (principal.via === "bearer") rejectScopedGlobalAccess(request); return workspaceSnapshot(service, principal.projectIds); });
+  app.get(route("/project-library"), async (request) => {
+    const principal = requireScope(request, "read", auth);
+    const query = request.query as Record<string, unknown>;
+    return service.makerWorkflows.projectLibrary({ ...query, ...(query.limit === undefined ? {} : { limit: Number(query.limit) }) }, principal.projectIds === undefined ? undefined : [...principal.projectIds]);
+  });
   app.get(route("/workspace/preferences"), async (request, reply) => {
     requireScope(request, "read", auth);
     const preferences = await service.getWorkspacePreferences();
@@ -1395,7 +1382,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     rejectScopedGlobalAccess(request);
     return service.bulkUpdateInventoryItems(parseBody(inventoryBulkUpdateSchema, request.body), requestContext(request));
   });
-  app.get(route("/inventory/:id"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; return service.getInventoryItem(params.id); });
+  app.get(route("/inventory/:id"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; const item = await service.getInventoryItem(params.id); return request.principal?.projectIds === undefined ? (await hydrateWorkspaceInventory(service, [item]))[0] : item; });
   app.post(route("/inventory/:id/count"), async (request, reply) => {
     requireScope(request, "write", auth);
     rejectScopedGlobalAccess(request);
@@ -1620,7 +1607,8 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const mutation = await service.beginArtifactUpload(input, requestContext(request));
     return reply.code(201).send(mutation);
   });
-  app.put(route("/artifacts/uploads/:id"), { bodyLimit: uploadBodyLimit }, async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id, true); const body = request.body; if (!(body instanceof Uint8Array)) throw new ApplicationError("validation", "Upload body must be binary"); return service.writeArtifactUpload(params.id, body); });
+  app.get(route("/artifacts/uploads/:id"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id, true); return (await service.getUploadSessionDetails(params.id)).session; });
+  app.put(route("/artifacts/uploads/:id"), { bodyLimit: uploadBodyLimit }, async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id, true); const body = request.body; if (!(body instanceof Uint8Array)) throw new ApplicationError("validation", "Upload body must be binary"); const offset = request.headers["upload-offset"]; if (offset !== undefined && (typeof offset !== "string" || !/^(0|[1-9]\d*)$/u.test(offset) || !Number.isSafeInteger(Number(offset)))) throw new ApplicationError("validation", "Upload-Offset must be a non-negative integer"); return service.writeArtifactUpload(params.id, body, offset === undefined ? undefined : Number(offset)); });
   app.post(route("/artifacts/uploads/:id/finalize"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id, true); return service.finalizeArtifactUpload(params.id, requestContext(request)); });
   app.put(route("/transfers/uploads/:id"), { bodyLimit: uploadBodyLimit }, async (request, reply) => {
     const params = request.params as { id: string };
@@ -1656,7 +1644,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     return mutation;
   });
   app.get(route("/artifacts/:id"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id); return service.getArtifact(params.id); });
-  app.get(route("/artifacts/:id/download"), async (request, reply) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id); const downloaded = await service.readArtifact(params.id); return reply.type(artifactResponseType(downloaded.artifact.mediaType)).header("content-disposition", artifactContentDisposition(downloaded.artifact.filename)).send(Buffer.from(downloaded.body)); });
+  app.get(route("/artifacts/:id/download"), async (request, reply) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id); const downloaded = await service.readArtifact(params.id); for (const [name, value] of Object.entries(ARTIFACT_DOWNLOAD_HEADERS)) reply.header(name, value); return reply.type(artifactResponseType(downloaded.artifact.mediaType)).header("content-disposition", artifactContentDisposition(downloaded.artifact.filename)).send(Buffer.from(downloaded.body)); });
   app.get(route("/transfers/artifacts/:id/download"), async (request, reply) => {
     const params = request.params as { id: string };
     const token = request.headers[TRANSFER_TOKEN_HEADER];
@@ -1670,7 +1658,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
       artifactTransfer.releaseDownload(token, params.id);
       throw error;
     }
-    for (const [name, value] of Object.entries(TRANSFER_RESPONSE_HEADERS)) reply.header(name, value);
+    for (const [name, value] of Object.entries(ARTIFACT_DOWNLOAD_HEADERS)) reply.header(name, value);
     return reply.type(artifactResponseType(downloaded.artifact.mediaType)).header("content-disposition", artifactContentDisposition(downloaded.artifact.filename)).send(Buffer.from(downloaded.body));
   });
   app.delete(route("/artifacts/:id"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.retireArtifact(params.id, parseExpectedVersion(request), requestContext(request)); });

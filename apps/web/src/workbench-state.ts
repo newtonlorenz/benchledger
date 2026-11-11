@@ -1,17 +1,18 @@
+import { projectFabricationRoute, projectIntendedPrinterId, isUsableOwnedPrinter } from "./project-build-readiness";
 import { calculateProjectSummary } from "./domain";
 import type { Project, InventoryItem } from "./domain";
 import { matchesInventorySearch } from "@benchledger/domain/inventory-search";
 export type HomeTaskKind = "setup" | "requirements" | "decide" | "check" | "source" | "files" | "refresh" | "review";
 export interface HomeTask { id: string; projectId: string; projectName: string; kind: HomeTaskKind; label: string; detail: string; count: number }
 export interface HomeProject { project: Project; tasks: HomeTask[]; ready: number; required: number; unknown: boolean }
-export type HomeFilter = "active" | "attention" | "pinned" | "complete" | "all";
-export interface HomePreferences { pins: string[]; recent: string[]; filter: HomeFilter; sort: "recent" | "name" | "attention" }
-export const defaultHomePreferences: HomePreferences = { pins: [], recent: [], filter: "active", sort: "recent" };
+export type HomeFilter = "active" | "attention" | "pinned" | "complete" | "archived" | "all";
+export interface HomePreferences { view: "gallery" | "list"; pins: string[]; recent: string[]; filter: HomeFilter; sort: "recent" | "name" | "attention" }
+export const defaultHomePreferences: HomePreferences = { view: "gallery", pins: [], recent: [], filter: "active", sort: "recent" };
 const ids = (value: unknown): string[] => Array.isArray(value) ? [...new Set(value.filter((id): id is string => typeof id === "string" && id.length > 0 && id.length <= 240))].slice(0, 100) : [];
 export function parseHomePreferences(raw: string | null): HomePreferences {
   try { const data: unknown = JSON.parse(raw ?? "null"); if (!data || typeof data !== "object" || Array.isArray(data)) return { ...defaultHomePreferences };
     const value = data as Record<string, unknown>;
-    return { pins: ids(value.pins), recent: ids(value.recent).slice(0, 12), filter: ["active", "attention", "pinned", "complete", "all"].includes(String(value.filter)) ? value.filter as HomeFilter : "active", sort: ["recent", "name", "attention"].includes(String(value.sort)) ? value.sort as HomePreferences["sort"] : "recent" };
+    return { view: value.view === "list" ? "list" : "gallery", pins: ids(value.pins), recent: ids(value.recent).slice(0, 12), filter: ["active", "attention", "pinned", "complete", "archived", "all"].includes(String(value.filter)) ? value.filter as HomeFilter : "active", sort: ["recent", "name", "attention"].includes(String(value.sort)) ? value.sort as HomePreferences["sort"] : "recent" };
   } catch { return { ...defaultHomePreferences }; }
 }
 export function homePreferenceKey(sample: boolean): string { return `benchledger.home.v1.${sample ? "sample" : "workspace"}`; }
@@ -24,26 +25,29 @@ export function deriveHomeProjects(projects: readonly Project[], items: Inventor
     const lines = summary.lineStatuses.filter((line) => !line.line.optional);
     const unknown = project.readinessUnavailable === true || summary.readinessUnavailable;
     const required = project.bom.filter((line) => !line.optional).length;
-    const route = project.fabricationRoute ?? (project.intendedPrinterItemId !== undefined ? project.intendedPrinterItemId ? "printed" : "undecided" : project.buildConfigSnapshot?.printerItemId ? "printed" : "undecided");
+    const route = projectFabricationRoute(project);
+    const printerId = projectIntendedPrinterId(project);
+    const printer = items.find((item) => item.id === printerId);
     const tasks: HomeTask[] = [];
     const add = (kind: HomeTaskKind, label: string, detail: string, count = 1) => tasks.push({ id: `${project.id}:${kind}`, projectId: project.id, projectName: project.name, kind, label, detail, count });
     if (project.status !== "complete") {
+      if (!project.bom.length) add("requirements", "Add requirements", "Start with one part, material or tool. Choose how to build it later.");
       if (unknown) add("refresh", "Refresh stock results", "The current stock result is unavailable.");
-      if (route === "undecided") add("setup", "Set build approach", "Choose how this project will be made.");
-      if (!project.bom.length) add("requirements", "Add requirements", "Record the parts, materials or tools required.");
       if (!unknown) for (const kind of ["decide", "check", "source"] as const) {
         const count = lines.filter((line) => line.decision === kind).length;
         if (count) add(kind, kind === "decide" ? "Review requirements" : kind === "check" ? "Check stock" : "Review sourcing", `${count} required ${count === 1 ? "line" : "lines"} ${kind === "source" ? count === 1 ? "has a stock gap" : "have stock gaps" : `${count === 1 ? "needs" : "need"} ${kind === "decide" ? "more detail" : "a physical or compatibility check"}`}.`, count);
       }
+      if (project.bom.length > 0 && route === "undecided") add("setup", "Set build approach", "Choose how this project will be made when its requirements are known.");
+      if (project.bom.length > 0 && route === "printed" && (!printer || !isUsableOwnedPrinter(printer))) add("setup", printer ? "Review printer setup" : "Choose a printer", "Choose an owned printer with confirmed stock and exact product details before checking this build.");
       const currentWork = new Map((project.workItems ?? []).map((item) => [item.id, item.currentRevisionId ?? item.currentRevision?.id]));
       const hasDesign = (project.allArtifacts ?? project.artifacts).some((file) => ["STL", "STEP", "Build plate", "Editable CAD"].includes(file.role) && (file.workItemId ? Boolean(file.workItemRevisionId) && currentWork.get(file.workItemId) === file.workItemRevisionId : Boolean(project.serverRevisionId) && file.projectRevisionId === project.serverRevisionId));
-      if (route === "printed" && !hasDesign) add("files", "Add design files", "No design file is attached to a current project or work-item revision.");
+      if (project.bom.length > 0 && route === "printed" && !hasDesign) add("files", "Add design files", "No design file is attached to a current project or work-item revision.");
     }
     return { project, tasks, required, ready: unknown ? 0 : lines.filter((line) => line.decision === "ready").length, unknown };
   });
 }
 export function filterHomeProjects(rows: readonly HomeProject[], query: string, preferences: HomePreferences): HomeProject[] {
-  const filtered = rows.filter(({ project, tasks }) => matchesInventorySearch([project.name, project.description, project.currentRevision], query) && (preferences.filter === "all" || preferences.filter === "pinned" && preferences.pins.includes(project.id) || preferences.filter === "complete" && project.status === "complete" || preferences.filter === "active" && project.status !== "complete" || preferences.filter === "attention" && tasks.length > 0));
+  const filtered = rows.filter(({ project, tasks }) => matchesInventorySearch([project.name, project.description, project.currentRevision], query) && (preferences.filter === "all" || preferences.filter === "pinned" && preferences.pins.includes(project.id) || preferences.filter === "complete" && project.status === "complete" || preferences.filter === "archived" && project.status === "archived" || preferences.filter === "active" && project.status !== "complete" && project.status !== "archived" || preferences.filter === "attention" && tasks.length > 0));
   const compareDate = (value: string) => { const date = Date.parse(value); return Number.isFinite(date) ? date : 0; };
   return [...filtered].sort((a, b) => {
     const pin = Number(preferences.pins.includes(b.project.id)) - Number(preferences.pins.includes(a.project.id));

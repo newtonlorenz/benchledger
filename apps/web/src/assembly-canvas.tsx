@@ -1,14 +1,17 @@
+import { Alert } from "./components/ui/alert";
+import { Button } from "./components/ui/button";
 import { useEffect, useRef, useState } from "react";
 import { ACESFilmicToneMapping, SRGBColorSpace, AmbientLight, Box3, Box3Helper, BufferGeometry, Color, DirectionalLight, Euler, Float32BufferAttribute, Mesh, MeshStandardMaterial, PerspectiveCamera, Raycaster, Scene, Vector2, Vector3, WebGLRenderer } from "three";
 import type { GridHelper } from "three";
 import { buildPlaneGrid, disposeGrid, formatModelSize, viewerColours } from "./stl-preview";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { AssemblyGeometry, AssemblyPart } from "@benchledger/api-contract";
-export interface AssemblyCanvasProps { geometry: AssemblyGeometry[]; parts: AssemblyPart[]; hidden: Set<string>; selected: string | undefined; explosion: number; view: "front" | "rear" | "iso"; fit: number; onSelect(id: string): void }
+export interface AssemblyCanvasProps { geometry: AssemblyGeometry[]; parts: AssemblyPart[]; hidden: Set<string>; selected: string | undefined; explosion: number; view: "front" | "rear" | "iso" | "top" | "bottom"; fit: number; onSelect(id: string): void }
 export default function AssemblyCanvas(props: AssemblyCanvasProps) {
   const host = useRef<HTMLDivElement>(null), latest = useRef(props), update = useRef<() => void>(() => {}), fitView = useRef<() => void>(() => {});
   latest.current = props;
   const [error, setError] = useState<string>(), [dimensions, setDimensions] = useState("");
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     const container = host.current; if (!container) return;
     let renderer: WebGLRenderer | undefined, controls: OrbitControls | undefined, observer: ResizeObserver | undefined, themeObserver: MutationObserver | undefined;
@@ -48,9 +51,10 @@ export default function AssemblyCanvas(props: AssemblyCanvasProps) {
       fitView.current = () => {
         const box = bounds(); if (box.isEmpty()) return;
         const centre = box.getCenter(new Vector3()), radius = Math.max(box.getSize(new Vector3()).length() / 2, 1);
-        const direction = new Vector3(...(latest.current.view === "rear" ? [1, 2, 0.8] as const : latest.current.view === "front" ? [0, -2, 0.25] as const : [1, -1.8, 1] as const)).normalize();
+        const direction = new Vector3(...(latest.current.view === "top" ? [0, 0, 1] as const : latest.current.view === "bottom" ? [0, 0, -1] as const : latest.current.view === "rear" ? [1, 2, 0.8] as const : latest.current.view === "front" ? [0, -2, 0.25] as const : [1, -1.8, 1] as const)).normalize();
         const fov = Math.min(camera.fov * Math.PI / 180, 2 * Math.atan(Math.tan(camera.fov * Math.PI / 360) * camera.aspect));
         const distance = radius / Math.sin(fov / 2) * 1.15;
+        camera.up.set(0, latest.current.view === "top" || latest.current.view === "bottom" ? 1 : 0, latest.current.view === "top" || latest.current.view === "bottom" ? 0 : 1);
         camera.position.copy(centre).addScaledVector(direction, distance); camera.near = Math.max(0.01, distance / 10000); camera.far = Math.max(1000, distance * 10); camera.updateProjectionMatrix(); controls!.target.copy(centre); controls!.update(); render();
       };
       update.current = () => {
@@ -75,12 +79,23 @@ export default function AssemblyCanvas(props: AssemblyCanvasProps) {
         const rect = renderer!.domElement.getBoundingClientRect(), ray = new Raycaster(); ray.setFromCamera(new Vector2((e.clientX - rect.left) / rect.width * 2 - 1, -(e.clientY - rect.top) / rect.height * 2 + 1), camera);
         const hit = ray.intersectObjects([...objects.values()].map(v => v.mesh).filter(m => m.visible))[0]; if (hit) latest.current.onSelect(hit.object.userData.partId as string);
       });
-      renderer.domElement.addEventListener("webglcontextlost", e => { e.preventDefault(); if (!disposed) setError("The graphics context was lost. Reopen Assembly to restore the view."); });
+      renderer.domElement.addEventListener("webglcontextlost", e => {
+        e.preventDefault();
+        if (!disposed) {
+          update.current = () => {}; fitView.current = () => {};
+          dispose();
+          setError("The graphics connection was lost.");
+        }
+      });
       setError(undefined); update.current(); resize();
-    } catch (cause) { dispose(); setError(cause instanceof Error ? cause.message : "3D viewing is unavailable in this browser."); }
+    } catch (cause) {
+      update.current = () => {}; fitView.current = () => {};
+      dispose();
+      setError(!renderer ? "3D viewing is unavailable in this browser. Check its graphics support, then retry." : cause instanceof Error ? cause.message : "3D viewing is unavailable in this browser.");
+    }
     return () => { update.current = () => {}; fitView.current = () => {}; dispose(); };
-  }, [props.geometry, props.parts.map(p => `${p.id}:${p.artifactId}:${p.nodeId}`).join("|")]);
+  }, [props.geometry, props.parts.map(p => `${p.id}:${p.artifactId}:${p.nodeId}`).join("|"), attempt]);
   useEffect(() => update.current(), [props.parts, props.hidden, props.selected, props.explosion]);
   useEffect(() => fitView.current(), [props.fit, props.view]);
-  return <><div className="assembly-dimensions">{dimensions}<small>Assembled bounds · Z up</small></div>{error && <p role="alert" className="assembly-render-error">{error} The parts list and assembly notes remain available.</p>}<div className="assembly-canvas" ref={host} /></>;
+  return <><div className="assembly-dimensions">{dimensions}<small>Assembled bounds · Z up</small></div>{error && <div className="assembly-render-error"><Alert asChild><p role="alert">{error} The parts list, notes and edits remain available.</p></Alert><Button variant="outline" type="button" className="button button-secondary" onClick={() => setAttempt(value => value + 1)}>Retry 3D viewer</Button></div>}<div className="assembly-canvas" ref={host} hidden={Boolean(error)} /></>;
 }

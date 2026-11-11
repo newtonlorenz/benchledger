@@ -1,3 +1,4 @@
+import { matchesInventoryStockView, compareInventoryRecords } from "@benchledger/domain/inventory-workspace";
 import { matchesInventorySearch } from "@benchledger/domain/inventory-search";
 import { catalogProducts as fallbackCatalogProducts, inventory as fallbackInventory, offers as fallbackOffers, projects as fallbackProjects } from "./mock-data";
 import type {
@@ -88,11 +89,11 @@ type ServerGapLine = { lineId: string; name?: string; optional?: boolean; status
 type ServerGapEvaluation = { lines: ServerGapLine[]; totals: { requiredLines: number; optionalLines: number; readyLines?: number; checkLines?: number; decideLines?: number; sourceLines?: number; partialLines: number; missingLines: number } };
 type ServerArtifact = { id: string; projectId: string; workItemId?: string; revisionId?: string; projectRevisionId?: string; workItemRevisionId?: string; role: string; filename: string; mediaType: string; byteSize: number; sha256: string; author?: string; source?: string; machineBinding?: Record<string, string>; currentCandidate: boolean; retired: boolean; createdAt: string; version: number };
 type ServerRevision = { id: string; projectId: string; number: number; name: string; notes?: string; status: string; fabricationRoute?: FabricationRoute; intendedPrinterItemId?: string | null; createdAt: string; version: number; workItemId?: string; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; gapEvaluation?: ServerGapEvaluation; inspections?: unknown[]; buildConfigSnapshot?: unknown; buildConfiguration?: unknown };
-type ServerProject = { id: string; name: string; description?: string; status: string; currentRevisionId?: string; createdAt: string; updatedAt: string; version: number; removedAt?: string; removedBy?: string; lastLifecycleStatus?: string; workItems?: ServerWorkItem[]; projectRevisions?: ServerRevision[]; revisions?: ServerRevision[]; workItemRevisions?: ServerRevision[]; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; currentRevision?: ServerRevision };
+type ServerProject = { id: string; name: string; description?: string; status: string; currentRevisionId?: string; createdAt: string; updatedAt: string; version: number; removedAt?: string; removedBy?: string; lastLifecycleStatus?: string; workItems?: ServerWorkItem[]; projectRevisions?: ServerRevision[]; revisions?: ServerRevision[]; workItemRevisions?: ServerRevision[]; bom?: ServerBomLine[]; artifacts?: ServerArtifact[]; currentRevision?: ServerRevision; presentation?: import("@benchledger/api-contract").ProjectPresentation | null };
 type ServerProjectTombstone = { id: string; name: string; removedAt: string; removedBy: string; lastLifecycleStatus: string; releasedReservationIds: string[]; version: number; auditId?: string };
 type ServerOffer = { id: string; itemId?: string; name: string; supplier: string; url: string; priceMinor: number; currency: CurrencyCode; packageQuantity?: number; observedAt: string; staleAfterDays?: number; version: number };
 type ServerWorkspace = { inventory: ServerInventoryItem[]; projects: ServerProject[]; offers: ServerOffer[]; source: "api"; fetchedAt: string; capabilities?: unknown; preferences?: unknown };
-type ServerUploadSession = { id: string; artifactId: string; expiresAt: string; maxBytes: number; uploadUrl: string; status: "pending" | "finalized" | "expired" };
+type ServerUploadSession = { receivedBytes?: number; id: string; artifactId: string; expiresAt: string; maxBytes: number; uploadUrl: string; status: "pending" | "finalized" | "expired" };
 type ServerReconciliationEvidence = { state: string; source?: string; sourceId?: string; observedAt?: string; note?: string; condition?: string; uncertainty?: number };
 type ServerReconciliationConvertedAsset = { id?: string; name: string; kind: string; quantity: number; unit: string; location?: string; tags?: string[]; links?: unknown[]; evidence?: ServerReconciliationEvidence };
 type ServerReconciliationOutcome = { reservationId?: string; itemId?: string; kind: string; quantity: number; unit: string; evidence: ServerReconciliationEvidence; convertedAsset?: ServerReconciliationConvertedAsset };
@@ -232,6 +233,9 @@ export interface WorkspaceSnapshot { inventory: InventoryItem[]; projects: Proje
 export interface InventoryCategoryPage { data: readonly ManagedInventoryCategory[]; nextCursor?: string; limit: number; total?: number }
 export type InventoryKindQuery = "printer" | "tool" | "accessory" | "consumable" | "electronic" | "fastener" | "filament" | "wire" | "adhesive" | "other";
 export interface InventoryListQuery {
+  stockView?: import("@benchledger/domain/inventory-workspace").InventoryStockView;
+  sort?: import("@benchledger/domain/inventory-workspace").InventorySortOrder;
+  location?: string;
   q?: string;
   kind?: InventoryKindQuery;
   evidence?: InventoryEvidenceState;
@@ -301,9 +305,9 @@ export interface WorkspaceAdapter {
    * failed keeps its previous evaluation with `readinessUnavailable: true`.
    */
   refreshProjectReadiness(projectIds?: readonly string[]): Promise<Project[]>;
-  /** One inventory record by id (deep links to an item that is not loaded). */
-  getInventoryItem(id: string): Promise<InventoryItem>;
-  listInventory(query: InventoryListQuery): Promise<InventoryPage>;
+  listInventory(query: InventoryListQuery, options?: { signal?: AbortSignal }): Promise<InventoryPage>;
+  /** One inventory record by id (also used for deep links to an item that is not loaded). */
+  readInventoryItem(itemId: string, options?: { signal?: AbortSignal }): Promise<InventoryItem>;
   bulkUpdateInventory(input: InventoryBulkUpdateInput): Promise<InventoryBulkUpdateResult>;
   recordCount(itemId: string, quantity: number): Promise<InventoryItem>;
   commissionInventoryItem(itemId: string, input: InventoryCommissionInput, expectedVersion: number): Promise<InventoryItem>;
@@ -1057,7 +1061,7 @@ export function mapInventoryItem(item: ServerInventoryItem): InventoryItem {
     id: item.id, name: item.name, kind: item.kind, category, ...(item.categoryNodeId ? { categoryNodeId: item.categoryNodeId } : {}),
     variant: item.model ?? item.sku ?? "",
     ...(item.model ? { model: item.model } : {}),
-    description: item.description?.trim() || "No description recorded.", quantity: item.quantity, availableQuantity: item.availableQuantity, unit: mapUnit(item.unit),
+    description: item.description?.trim() || "", quantity: item.quantity, availableQuantity: item.availableQuantity, unit: mapUnit(item.unit),
     reserved: confirmed ? Math.max(item.quantity - item.availableQuantity, 0) : 0,
     state, evidence: mapEvidence(item.evidence.state), serverEvidence: mapServerEvidence(item.evidence.state), ...(policyAvailability === undefined ? {} : { policyAvailability }), ...(mapPrimaryImage(item.id, item.primaryImage) ?? {}), location: item.location?.trim() || "Unassigned",
     ...(dimensions ? { dimensions } : {}), ...(item.manufacturer ? { manufacturer: item.manufacturer } : {}), ...(item.sku ? { sku: item.sku } : {}),
@@ -1367,6 +1371,8 @@ function mapArtifact(artifact: ServerArtifact, revision?: ServerRevision, hint?:
     revision: revisionLabel,
     size: formatBytes(artifact.byteSize),
     hash: artifact.sha256,
+    mediaType: artifact.mediaType,
+    byteSize: artifact.byteSize,
     updated: artifact.createdAt.slice(0, 10),
     status: artifact.retired ? "superseded" : artifact.currentCandidate ? "candidate" : "validated",
     ...(machine ? { machine } : {}),
@@ -1534,6 +1540,7 @@ function mapProject(project: ServerProject): Project {
     ...(projectRevisions.length === 0 ? {} : { projectRevisions }),
     ...(workItems.length === 0 ? {} : { workItems }),
     ...(allArtifacts.length === 0 ? {} : { allArtifacts }),
+    ...(Object.hasOwn(project, "presentation") ? { projectLibraryAvailable: true, presentation: project.presentation ?? null } : {}),
     ...(gapEvaluation === undefined ? {} : { gapEvaluation }),
     ...(inspectionActions.length === 0 ? {} : { inspectionActions }),
     ...(revision?.fabricationRoute === undefined ? {} : { fabricationRoute: revision.fabricationRoute }),
@@ -1560,6 +1567,7 @@ function withoutRevisionScopedProjectState(project: Project): Project {
     fabricationRoute: _fabricationRoute,
     intendedPrinterItemId: _intendedPrinterItemId,
     buildConfigSnapshot: _buildConfigSnapshot,
+    presentation: _presentation,
     ...projectState
   } = project;
   return projectState as Project;
@@ -2286,6 +2294,8 @@ export interface UploadOptions {
   onProgress?: (fraction: number) => void;
   /** Aborts the byte transfer; the promise rejects with an AbortError. */
   signal?: AbortSignal;
+  /** Resume offset sent as Upload-Offset when continuing an earlier attempt. */
+  expectedOffset?: number;
 }
 
 export const UPLOAD_TIMEOUT_MS = 10 * 60_000;
@@ -2308,6 +2318,7 @@ function xhrUpload<T>(target: string, body: ArrayBuffer, csrfToken: string, opti
     xhr.setRequestHeader("Accept", "application/json");
     xhr.setRequestHeader("Content-Type", "application/octet-stream");
     xhr.setRequestHeader("X-CSRF-Token", csrfToken);
+    if (options.expectedOffset !== undefined) xhr.setRequestHeader("Upload-Offset", String(options.expectedOffset));
     xhr.upload.onprogress = (event: ProgressEvent) => { if (event.lengthComputable && event.total > 0) options.onProgress?.(event.loaded / event.total); };
     xhr.onload = () => {
       cleanup();
@@ -2343,7 +2354,7 @@ export async function binaryRequest<T>(url: string, body: ArrayBuffer, csrfToken
   let response: Response;
   try {
     const timeout = AbortSignal.timeout(UPLOAD_TIMEOUT_MS);
-    response = await fetch(target, { method: "PUT", body, credentials: "include", redirect: "error", signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout, headers: { "Accept": "application/json", "Content-Type": "application/octet-stream", "X-CSRF-Token": csrfToken } });
+    response = await fetch(target, { method: "PUT", body, credentials: "include", redirect: "error", signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout, headers: { "Accept": "application/json", "Content-Type": "application/octet-stream", "X-CSRF-Token": csrfToken, ...(options.expectedOffset === undefined ? {} : { "Upload-Offset": String(options.expectedOffset) }) } });
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError" && options.signal?.aborted) throw error;
     const timedOut = error instanceof Error && error.name === "TimeoutError";
@@ -2364,12 +2375,6 @@ function syntheticSnapshot(): WorkspaceSnapshot {
     version: typeof item.version === "number" && Number.isSafeInteger(item.version) && item.version > 0 ? item.version : 1
   }));
   return { inventory, projects: structuredClone(fallbackProjects), offers: structuredClone(fallbackOffers), source: "synthetic", fetchedAt: new Date().toISOString(), capabilities: [] };
-}
-
-function compareInventoryItems(left: Pick<InventoryItem, "name" | "id">, right: Pick<InventoryItem, "name" | "id">): number {
-  return left.name.trim().toLocaleLowerCase().localeCompare(right.name.trim().toLocaleLowerCase())
-    || left.name.localeCompare(right.name)
-    || left.id.localeCompare(right.id);
 }
 
 function canonicalSampleEvidence(item: InventoryItem): InventoryEvidenceState {
@@ -2400,6 +2405,8 @@ function sampleInventoryPage(items: readonly InventoryItem[], query: InventoryLi
   const offset = cursor === undefined ? 0 : Number(cursor);
   const normalized = query.q?.trim().toLocaleLowerCase();
   const filtered = items.filter((item) => {
+    if (!matchesInventoryStockView({ ...item, allocatedQuantity: item.reserved, evidence: { state: canonicalSampleEvidence(item) } }, query.stockView)) return false;
+    if (query.location !== undefined && (item.location === "Unassigned" ? "" : item.location) !== query.location) return false;
     if (query.kind !== undefined && item.kind !== query.kind) return false;
     if (query.evidence !== undefined && canonicalSampleEvidence(item) !== query.evidence) return false;
     if (query.available !== undefined && ((item.availableQuantity ?? 0) > 0) !== query.available) return false;
@@ -2407,7 +2414,7 @@ function sampleInventoryPage(items: readonly InventoryItem[], query: InventoryLi
     if (query.unassigned === true && item.categoryNodeId !== undefined) return false;
     if (!normalized) return true;
     return matchesInventorySearch([item.name, item.variant, item.description, item.location, item.manufacturer, item.model, item.sku, ...item.tags], normalized);
-  }).sort(compareInventoryItems);
+  }).sort((a, b) => compareInventoryRecords(a, b, query.sort));
   const selected = filtered.slice(offset, offset + query.limit);
   const nextOffset = offset + selected.length < filtered.length ? offset + selected.length : undefined;
   return { items: selected.map((item) => structuredClone(item)), limit: query.limit, total: filtered.length, ...(nextOffset === undefined ? {} : { nextCursor: String(nextOffset) }) };
@@ -2512,11 +2519,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     async listArchivedProjects() { return structuredClone(state.projects.filter((project) => project.status === "archived")); },
     async refreshProjectReadiness(projectIds) { return structuredClone(state.projects.filter((project) => project.status !== "archived" && (projectIds === undefined || projectIds.includes(project.id)))); },
     async listInventory(query) { return sampleInventoryPage(state.inventory, query); },
-    async getInventoryItem(id) {
-      const found = state.inventory.find((item) => item.id === id);
-      if (!found) throw new ApiError("Inventory item not found", { kind: "validation", status: 404, code: "not_found" });
-      return structuredClone(found);
-    },
+    async readInventoryItem(itemId) { const item = state.inventory.find((entry) => entry.id === itemId); if (!item) throw new ApiError("Inventory item not found", { kind: "validation", status: 404 }); return structuredClone(item); },
     async bulkUpdateInventory(input) {
       const prepared = prepareBulkInventoryInput(input);
       const currentById = new Map(state.inventory.map((item) => [item.id, item] as const));
@@ -2608,7 +2611,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     },
     async createInventoryItem(input) {
       const kind = input.kind ?? serverItemKind(input.category);
-      const item: InventoryItem = { id: `sample-item-${Date.now()}`, name: input.name, kind, category: mapCategory(kind), ...(input.categoryNodeId ? { categoryNodeId: input.categoryNodeId } : {}), variant: input.model?.trim() || "Variant not recorded", ...(input.model?.trim() ? { model: input.model.trim() } : {}), description: input.description?.trim() || "No description recorded.", quantity: input.quantity, availableQuantity: 0, unit: input.unit, reserved: 0, state: "inspect-first", evidence: "delivered", serverEvidence: "unknown", provenance: { source: "sample workspace" }, location: input.location?.trim() || "Unassigned", ...(input.manufacturer?.trim() ? { manufacturer: input.manufacturer.trim() } : {}), ...(input.sku?.trim() ? { sku: input.sku.trim() } : {}), tags: [input.category.toLowerCase()], compatibility: [], accent: mapAccent(input.category), version: 1 };
+      const item: InventoryItem = { id: `sample-item-${Date.now()}`, name: input.name, kind, category: mapCategory(kind), ...(input.categoryNodeId ? { categoryNodeId: input.categoryNodeId } : {}), variant: input.model?.trim() || "Variant not recorded", ...(input.model?.trim() ? { model: input.model.trim() } : {}), description: input.description?.trim() || "", quantity: input.quantity, availableQuantity: 0, unit: input.unit, reserved: 0, state: "inspect-first", evidence: "delivered", serverEvidence: "unknown", provenance: { source: "sample workspace" }, location: input.location?.trim() || "Unassigned", ...(input.manufacturer?.trim() ? { manufacturer: input.manufacturer.trim() } : {}), ...(input.sku?.trim() ? { sku: input.sku.trim() } : {}), tags: [input.category.toLowerCase()], compatibility: [], accent: mapAccent(input.category), version: 1 };
       state.inventory = [item, ...state.inventory];
       return item;
     },
@@ -2912,6 +2915,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
   const pendingBuildConfigCommands = new Map<string, PendingBuildConfigCommand>();
   const pendingBomRoleCommands = new Map<string, PendingBomRoleCommand>();
   const pendingProjectCommands = new Map<string, PendingProjectCommand>();
+  const pendingUploads = new Map<string, { beginKey: string; finalizeKey: string; body: string; session?: ServerUploadSession; bytesUploaded: boolean; byteWriteAttempted: boolean }>();
   const pendingProjectRemovalCommands = new Map<string, PendingProjectRemovalCommand>();
   const pendingExactInventoryCommands = new Map<string, PendingExactInventoryCommand>();
   const pendingInventoryCommands = new Map<string, PendingInventoryCommand>();
@@ -2922,6 +2926,8 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
   const pendingInspectionCompletionCommands = new Map<string, PendingInspectionCompletionCommand>();
   const pendingRequirementCommands = new Map<string, string>();
   const pendingProjectEdits = new Map<string, string>();
+  const pendingStockObservations = new Map<string, { key: string; body: string; version?: number }>();
+  const pendingRevisionEdits = new Map<string, { key: string; body: ProjectRevisionUpdateInput }>();
   const retiredRequirementOwners = new Map<string, { projectId: string; revisionId: string; version: number }>();
   const confirmedRequirement = (payload: { data?: ServerBomLine }, revisionId: string, expectedId?: string): BomLine => {
     const saved = mutationData(payload);
@@ -2942,6 +2948,13 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       return refreshed;
     } catch { return committed; }
   };
+  const retainLibraryLifecycleState = async (saved: Project, current: Project | undefined): Promise<Project> => {
+    // Lifecycle replies contain project metadata, not the hydrated library. Keep
+    // only the same revision's files and presentation, then re-evaluate stock:
+    // archiving releases reservations and restoring does not recreate them.
+    if (!librarySupported || !current || !current.serverRevisionId || saved.serverRevisionId !== current.serverRevisionId) return saved;
+    return refreshChangedBom({ ...current, name: saved.name, subtitle: saved.subtitle, description: saved.description, status: saved.status, version: saved.version!, updated: saved.updated, accent: saved.accent }, current.bom);
+  };
   const changeRequirement = async (projectId: string, lineId: string, expectedVersion: number, operation: "update" | "retire" | "restore", input?: BomUpdateInput): Promise<Project> => {
     const token = csrfToken ?? cookieValue("forge_csrf");
     const current = projectCache.get(projectId);
@@ -2950,7 +2963,8 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
     if (operation === "restore" ? (retiredRequirementOwners.get(lineId)?.projectId !== projectId || retiredRequirementOwners.get(lineId)?.revisionId !== current.serverRevisionId) : !current.bom.some((line) => line.id === lineId)) throw new ApiError("Read this requirement in the selected project before changing it.", { kind: "validation", status: 409 });
     const body = input === undefined ? undefined : { ...(input.name === undefined ? {} : { name: input.name }), ...(input.requiredQuantity === undefined ? {} : { requiredQuantity: input.requiredQuantity }), ...(input.unit === undefined ? {} : { unit: input.unit === "g" ? "gram" : input.unit === "m" ? "metre" : input.unit }), ...(input.role === undefined ? {} : { role: input.role }), ...(input.itemId === undefined ? {} : { itemId: input.itemId }), ...(input.optional === undefined ? {} : { optional: input.optional }), ...(input.note === undefined ? {} : { notes: input.note }) };
     const commandId = JSON.stringify({ projectId, lineId, expectedVersion, operation, body });
-    const key = pendingRequirementCommands.get(commandId) ?? idempotencyKey("requirement");
+    const pending = pendingRequirementCommands.get(commandId);
+    const key = pending ?? idempotencyKey("requirement");
     pendingRequirementCommands.set(commandId, key);
     let line: BomLine;
     try {
@@ -2958,7 +2972,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       line = confirmedRequirement(result, current.serverRevisionId, lineId);
       pendingRequirementCommands.delete(commandId);
     } catch (error) {
-      if (!mutationFailureIsAmbiguous(error)) pendingRequirementCommands.delete(commandId);
+      if (pending === undefined && !mutationFailureIsAmbiguous(error)) pendingRequirementCommands.delete(commandId);
       throw error;
     }
     const latest = projectCache.get(projectId) ?? current;
@@ -2968,13 +2982,32 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
     if (operation === "restore") retiredRequirementOwners.delete(lineId);
     return refreshChangedBom(latest, bom);
   };
+  let librarySupported = false;
+  const readLibraryProjects = async (status: "active" | "archived"): Promise<ServerProject[]> => {
+    const rows: ServerProject[] = [], cursors = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      const params = new URLSearchParams({ status, limit: "100" });
+      if (cursor !== undefined) params.set("cursor", cursor);
+      const page = await request<{ data: ServerProject[]; nextCursor?: string }>(`/project-library?${params}`);
+      if (!Array.isArray(page.data)) throw new ApiError("The project library could not be confirmed. Retry loading the workspace.", { kind: "server", status: 502 });
+      rows.push(...page.data);
+      cursor = page.nextCursor;
+      if (cursor !== undefined) {
+        if (typeof cursor !== "string" || cursors.has(cursor)) throw new ApiError("Project paging did not advance. Retry loading the workspace.", { kind: "server", status: 502 });
+        cursors.add(cursor);
+      }
+    } while (cursor !== undefined);
+    return [...new Map(rows.map((project) => [project.id, project])).values()];
+  };
   const adapter: WorkspaceAdapter = {
     clearAuthenticatedState() {
       csrfToken = undefined;
       serverUnits.clear();
       inventoryCache.clear();
       projectCache.clear();
-      pendingRequirementCommands.clear(); pendingProjectEdits.clear(); retiredRequirementOwners.clear();
+      pendingRequirementCommands.clear(); pendingProjectEdits.clear(); pendingRevisionEdits.clear(); retiredRequirementOwners.clear();
+      // Unconfirmed stock writes retain their replay keys across session renewal.
     },
     async checkHealth() { health = await request<ServerHealth>("/health"); return health; },
     async getWorkspaceAccess() {
@@ -3112,10 +3145,11 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       const workspace = await request<ServerWorkspace>("/workspace");
       inventoryCache.clear();
       const mappedInventory = workspace.inventory.map((item) => { const mapped = mapInventoryItem(item); serverUnits.set(item.id, item.unit); inventoryCache.set(item.id, mapped); return mapped; });
-      const mappedProjects = workspace.projects.map(mapProject);
+      const capabilities = Array.isArray(workspace.capabilities) ? workspace.capabilities.filter((action): action is string => typeof action === "string") : [];
+      librarySupported = capabilities.includes("project_library.read");
+      const mappedProjects = (librarySupported ? await readLibraryProjects("active") : workspace.projects).map(mapProject);
       projectCache.clear();
       mappedProjects.forEach((project) => projectCache.set(project.id, project));
-      const capabilities = Array.isArray(workspace.capabilities) ? workspace.capabilities.filter((action): action is string => typeof action === "string") : [];
       const preferences = mapWorkspacePreferences(workspace.preferences);
       return { inventory: mappedInventory, projects: mappedProjects, offers: workspace.offers.map(mapOffer), source: "api", fetchedAt: workspace.fetchedAt || new Date().toISOString(), health: currentHealth, capabilities, session: currentSession, ...(preferences === undefined ? {} : { preferences }) };
     },
@@ -3142,8 +3176,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       return preferences;
     },
     async listArchivedProjects() {
-      const payload = await request<unknown>("/projects?status=archived&limit=200");
-      const values = responseList(payload);
+      const values = librarySupported ? await readLibraryProjects("archived") : responseList(await request<unknown>("/projects?status=archived&limit=200"));
       const archived = values.map((value) => mapProject(value as ServerProject));
       archived.forEach((project) => projectCache.set(project.id, project));
       return archived;
@@ -3168,19 +3201,20 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       refreshed.forEach((project) => projectCache.set(project.id, project));
       return refreshed;
     },
-    async getInventoryItem(id) {
-      const payload = await request<unknown>(`/inventory/${encodeURIComponent(id)}`);
-      const record = asRecord(payload);
-      const raw = (record && "data" in record && asRecord(record.data) ? record.data : payload) as ServerInventoryItem;
+    async readInventoryItem(itemId, options) {
+      const raw = await request<ServerInventoryItem>(`/inventory/${encodeURIComponent(itemId)}`, options?.signal ? { signal: options.signal } : undefined);
+      if (!raw || raw.id !== itemId || typeof raw.name !== "string" || !Number.isSafeInteger(raw.version)) throw new ApiError("The inventory item could not be confirmed. Retry loading its details.", { kind: "server", status: 502 });
       const item = mapInventoryItem(raw);
-      serverUnits.set(item.id, raw.unit);
-      inventoryCache.set(item.id, item);
+      if (!options?.signal?.aborted) { serverUnits.set(item.id, raw.unit); inventoryCache.set(item.id, item); }
       return item;
     },
-    async listInventory(query) {
+    async listInventory(query, options) {
       const params = new URLSearchParams();
       const normalizedQuery = query.q?.trim().slice(0, MAX_INVENTORY_SEARCH_LENGTH);
       if (normalizedQuery) params.set("q", normalizedQuery);
+      if (query.stockView) params.set("stockView", query.stockView);
+      if (query.sort) params.set("sort", query.sort);
+      if (query.location !== undefined) params.set("location", query.location);
       if (query.kind) params.set("kind", query.kind);
       if (query.evidence) params.set("evidence", query.evidence);
       if (query.available !== undefined) params.set("available", String(query.available));
@@ -3188,7 +3222,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       if (query.unassigned !== undefined) params.set("unassigned", String(query.unassigned));
       params.set("limit", String(query.limit));
       if (query.cursor !== undefined) params.set("cursor", query.cursor);
-      const payload = await request<unknown>(`/inventory?${params.toString()}`);
+      const payload = await request<unknown>(`/inventory?${params.toString()}`, options?.signal ? { signal: options.signal } : undefined);
       const record = asRecord(payload);
       const rawData = record?.data;
       const values = Array.isArray(rawData) ? rawData : asRecord(rawData)?.data && Array.isArray(asRecord(rawData)?.data) ? asRecord(rawData)?.data as unknown[] : [];
@@ -3232,42 +3266,58 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
     async recordCount(itemId, quantity) {
       const token = csrfToken ?? cookieValue("forge_csrf");
       if (!token) throw new ApiError("Your session needs a fresh CSRF token before changing stock", { kind: "csrf", status: 403 });
-      const payload = await request<{ data: { event: unknown; item: ServerInventoryItem } }>(`/inventory/${encodeURIComponent(itemId)}/count`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey("count") }, body: JSON.stringify({ quantity }) }, token);
-      const item = payload.data?.item;
-      if (!item) throw new ApiError("The service returned an incomplete count", { kind: "server", status: 502 });
-      serverUnits.set(item.id, item.unit);
-      const mapped = mapInventoryItem(item);
-      inventoryCache.set(mapped.id, mapped);
-      return mapped;
+      const commandId = JSON.stringify({ operation: "count", itemId, quantity });
+      const pending = pendingStockObservations.get(commandId);
+      const command = pending ?? { key: idempotencyKey("count"), body: JSON.stringify({ quantity }) };
+      pendingStockObservations.set(commandId, command);
+      try {
+        const payload = await request<{ data: { event: unknown; item: ServerInventoryItem } }>(`/inventory/${encodeURIComponent(itemId)}/count`, { method: "POST", redirect: "error", signal: AbortSignal.timeout(120_000), headers: { "Idempotency-Key": command.key }, body: command.body }, token);
+        const item = payload.data?.item;
+        if (!item || item.id !== itemId || !Number.isSafeInteger(item.version) || item.version < 1 || !Number.isFinite(item.quantity)) throw new ApiError("The service returned an incomplete count", { kind: "server", status: 502 });
+        serverUnits.set(item.id, item.unit);
+        const mapped = mapInventoryItem(item);
+        inventoryCache.set(mapped.id, mapped);
+        pendingStockObservations.delete(commandId);
+        return mapped;
+      } catch (error) {
+        if (pending === undefined && !mutationFailureIsAmbiguous(error)) pendingStockObservations.delete(commandId);
+        throw error;
+      }
     },
     async commissionInventoryItem(itemId, input, expectedVersion) {
       const token = csrfToken ?? cookieValue("forge_csrf");
       if (!token) throw new ApiError("Your session needs a fresh CSRF token before commissioning stock", { kind: "csrf", status: 403 });
       const source = input.source.trim();
       if (!source || !input.observedAt.trim()) throw new ApiError("Commissioning requires a source and observed time", { kind: "validation", status: 400 });
+      const commandId = JSON.stringify({ operation: "commission", itemId, input, expectedVersion });
+      const pending = pendingStockObservations.get(commandId);
       const cached = inventoryCache.get(itemId);
       const unit = serverUnits.get(itemId) ?? (cached === undefined ? "each" : serverUnitFor(cached));
-      const payload = await request<{ data: { event: unknown; item: ServerInventoryItem } }>(`/inventory/${encodeURIComponent(itemId)}/commission`, {
-        method: "POST",
-        headers: { "If-Match": String(expectedVersion), "Idempotency-Key": idempotencyKey("commission") },
-        body: JSON.stringify({
-          quantity: input.quantity,
-          unit,
-          evidence: {
-            state: "commissioned",
-            source,
-            ...(input.sourceId?.trim() ? { sourceId: input.sourceId.trim() } : {}),
-            observedAt: input.observedAt,
-            ...(input.note?.trim() ? { note: input.note.trim() } : {})
-          }
-        })
-      }, token);
-      const item = payload.data?.item;
-      if (!item) throw new ApiError("The service returned an incomplete commissioning result", { kind: "server", status: 502 });
-      serverUnits.set(item.id, item.unit);
-      const mapped = mapInventoryItem(item);
-      inventoryCache.set(mapped.id, mapped);
-      return mapped;
+      const command = pending ?? {
+        key: idempotencyKey("commission"), version: expectedVersion,
+        body: JSON.stringify({ quantity: input.quantity, unit, evidence: {
+          state: "commissioned", source,
+          ...(input.sourceId?.trim() ? { sourceId: input.sourceId.trim() } : {}),
+          observedAt: input.observedAt,
+          ...(input.note?.trim() ? { note: input.note.trim() } : {})
+        } })
+      };
+      pendingStockObservations.set(commandId, command);
+      try {
+        const payload = await request<{ data: { event: unknown; item: ServerInventoryItem } }>(`/inventory/${encodeURIComponent(itemId)}/commission`, {
+          method: "POST", redirect: "error", signal: AbortSignal.timeout(120_000), headers: { "If-Match": String(command.version), "Idempotency-Key": command.key }, body: command.body
+        }, token);
+        const item = payload.data?.item;
+        if (!item || item.id !== itemId || !Number.isSafeInteger(item.version) || item.version < 1 || !Number.isFinite(item.quantity)) throw new ApiError("The service returned an incomplete commissioning result", { kind: "server", status: 502 });
+        serverUnits.set(item.id, item.unit);
+        const mapped = mapInventoryItem(item);
+        inventoryCache.set(mapped.id, mapped);
+        pendingStockObservations.delete(commandId);
+        return mapped;
+      } catch (error) {
+        if (pending === undefined && !mutationFailureIsAmbiguous(error)) pendingStockObservations.delete(commandId);
+        throw error;
+      }
     },
     async deleteInventoryItem(itemId, expectedVersion) {
       const token = csrfToken ?? cookieValue("forge_csrf");
@@ -3321,7 +3371,9 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         if (pendingInventoryCommands.get(commandId)?.key === command.key) pendingInventoryCommands.delete(commandId);
         return mapped;
       } catch (error: unknown) {
-        if (!mutationFailureIsAmbiguous(error) && pendingInventoryCommands.get(commandId)?.key === command.key) pendingInventoryCommands.delete(commandId);
+        // A rejected replay cannot prove that an earlier ambiguous request did
+        // not commit. Retain its identity across sign-in and later retries.
+        if (pending === undefined && !mutationFailureIsAmbiguous(error) && pendingInventoryCommands.get(commandId)?.key === command.key) pendingInventoryCommands.delete(commandId);
         throw error;
       }
     },
@@ -3474,7 +3526,8 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         const project = mapProject({
           ...created.project,
           currentRevisionId: created.revision.id,
-          currentRevision: { ...created.revision, bom: [], artifacts: [] }
+          currentRevision: { ...created.revision, bom: [], artifacts: [] },
+          ...(librarySupported ? { presentation: null } : {})
         });
         projectCache.set(project.id, project);
         // A successful response resolves this logical command. The next
@@ -3482,7 +3535,8 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         if (pendingProjectCommands.get(commandId)?.key === command.key) pendingProjectCommands.delete(commandId);
         return project;
       } catch (error: unknown) {
-        if (!mutationFailureIsAmbiguous(error) && pendingProjectCommands.get(commandId)?.key === command.key) pendingProjectCommands.delete(commandId);
+        // A rejected retry cannot settle an earlier attempt whose response was lost.
+        if (pending === undefined && !mutationFailureIsAmbiguous(error) && pendingProjectCommands.get(commandId)?.key === command.key) pendingProjectCommands.delete(commandId);
         throw error;
       }
     },
@@ -3492,7 +3546,8 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       if (!token) throw new ApiError("Sign in again before editing the project.", { kind: "csrf", status: 403 });
       if (!current || current.status === "archived" || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1) throw new ApiError("Restore or reload this project before editing it.", { kind: "validation", status: 409 });
       const commandId = JSON.stringify({ projectId, input, expectedVersion });
-      const key = pendingProjectEdits.get(commandId) ?? idempotencyKey("project-edit");
+      const pending = pendingProjectEdits.get(commandId);
+      const key = pending ?? idempotencyKey("project-edit");
       pendingProjectEdits.set(commandId, key);
       try {
         const payload = await request<{ data: ServerProject }>(`/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", headers: { "If-Match": String(expectedVersion), "Idempotency-Key": key }, body: JSON.stringify(input) }, token);
@@ -3500,7 +3555,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         if (saved.id !== projectId || saved.version === undefined || !Number.isSafeInteger(saved.version) || saved.version < 1) throw new ApiError("The service did not confirm the project version. Reload before retrying.", { kind: "server", status: 502 });
         const project: Project = { ...current, name: saved.name, description: saved.description, status: saved.status, version: saved.version, updated: saved.updated };
         pendingProjectEdits.delete(commandId); projectCache.set(projectId, project); return project;
-      } catch (error) { if (!mutationFailureIsAmbiguous(error)) pendingProjectEdits.delete(commandId); throw error; }
+      } catch (error) { if (pending === undefined && !mutationFailureIsAmbiguous(error)) pendingProjectEdits.delete(commandId); throw error; }
     },
     async updateBomLine(projectId, lineId, input, expectedVersion) { return changeRequirement(projectId, lineId, expectedVersion, "update", input); },
     async retireBomLine(projectId, lineId, expectedVersion) { return changeRequirement(projectId, lineId, expectedVersion, "retire"); },
@@ -3520,8 +3575,9 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       const version = requireExpectedVersion(expectedVersion ?? current?.version, "this project");
       const headers: Record<string, string> = { "Idempotency-Key": idempotencyKey("project-archive"), "If-Match": String(version) };
       const payload = await request<{ data?: ServerProject }>(`/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", headers, body: JSON.stringify({ status: "archived" }) }, token);
-      const archived = mapProject(mutationData(payload));
-      projectCache.delete(projectId);
+      const archived = await retainLibraryLifecycleState(mapProject(mutationData(payload)), current);
+      if (librarySupported) projectCache.set(projectId, archived);
+      else projectCache.delete(projectId);
       return archived;
     },
     async restoreProject(projectId, expectedVersion) {
@@ -3531,7 +3587,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       const headers: Record<string, string> = { "Idempotency-Key": idempotencyKey("project-restore") };
       if (version !== undefined) headers["If-Match"] = String(version);
       const payload = await request<{ data?: ServerProject }>(`/projects/${encodeURIComponent(projectId)}/restore`, { method: "POST", headers }, token);
-      const restored = mapProject(mutationData(payload));
+      const restored = await retainLibraryLifecycleState(mapProject(mutationData(payload)), projectCache.get(projectId));
       projectCache.set(restored.id, restored);
       return restored;
     },
@@ -3581,6 +3637,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       try {
         const payload = await request<{ data: ServerRevision }>(`/projects/${encodeURIComponent(projectId)}/revisions`, { method: "POST", headers: { "Idempotency-Key": command.key }, body: JSON.stringify(command.body) }, token);
         const revision = mutationData(payload);
+        if (!revision.id?.trim() || revision.projectId !== projectId || !Number.isSafeInteger(revision.number) || revision.number < 1 || !Number.isSafeInteger(revision.version) || revision.version < 1) throw new ApiError("The service did not confirm the new revision. Retry unchanged.", { kind: "server", status: 502 });
         const project: Project = {
           ...withoutRevisionScopedProjectState(current),
           currentRevision: `r${String(revision.number).padStart(2, "0")}`,
@@ -3602,7 +3659,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         if (pendingRevisionCommands.get(commandId)?.key === command.key) pendingRevisionCommands.delete(commandId);
         return project;
       } catch (error: unknown) {
-        if (!mutationFailureIsAmbiguous(error) && pendingRevisionCommands.get(commandId)?.key === command.key) pendingRevisionCommands.delete(commandId);
+        if (pending === undefined && !mutationFailureIsAmbiguous(error) && pendingRevisionCommands.get(commandId)?.key === command.key) pendingRevisionCommands.delete(commandId);
         throw error;
       }
     },
@@ -3617,12 +3674,18 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         ...(input.fabricationRoute === undefined ? {} : { fabricationRoute: input.fabricationRoute }),
         ...(input.intendedPrinterItemId === undefined ? {} : { intendedPrinterItemId: input.intendedPrinterItemId })
       };
+      const commandId = JSON.stringify({ revisionId, version, body });
+      const pending = pendingRevisionEdits.get(commandId);
+      const command = pending ?? { key: idempotencyKey("revision-approach"), body };
+      if (pending === undefined) pendingRevisionEdits.set(commandId, command);
+      try {
       const payload = await request<{ data?: ServerRevision }>(`/project-revisions/${encodeURIComponent(revisionId)}`, {
         method: "PATCH",
-        headers: { "If-Match": String(version), "Idempotency-Key": idempotencyKey("revision-approach") },
-        body: JSON.stringify(body)
+        headers: { "If-Match": String(version), "Idempotency-Key": command.key },
+        body: JSON.stringify(command.body)
       }, token);
       const revision = mutationData(payload);
+      if (revision.id !== revisionId || !Number.isSafeInteger(revision.version) || revision.version < 1) throw new ApiError("The service did not confirm the updated revision. Retry unchanged.", { kind: "server", status: 502 });
       const { fabricationRoute: _priorRoute, intendedPrinterItemId: _priorPrinter, serverRevisionVersion: _priorVersion, ...withoutApproach } = current;
       const updated: Project = {
         ...withoutApproach,
@@ -3631,7 +3694,12 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         ...(revision.version === undefined ? {} : { serverRevisionVersion: revision.version })
       };
       projectCache.set(updated.id, updated);
+      pendingRevisionEdits.delete(commandId);
       return updated;
+      } catch (error) {
+        if (pending === undefined && !mutationFailureIsAmbiguous(error)) pendingRevisionEdits.delete(commandId);
+        throw error;
+      }
     },
     async readReconciliation(projectId, revisionId) {
       const current = projectCache.get(projectId);
@@ -3807,10 +3875,8 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         && (current.buildConfigSnapshot.revisionId === projectRevisionId || current.buildConfigSnapshot.projectRevisionId === projectRevisionId)
         ? current.buildConfigSnapshot.id
         : undefined;
-      const beginPayload = await request<{ data: ServerUploadSession }>("/artifacts/uploads", {
-        method: "POST",
-        headers: { "Idempotency-Key": idempotencyKey("upload-begin") },
-        body: JSON.stringify({
+      const commandId = JSON.stringify([projectId, selectedTarget, role, file.name, file.type, file.size, sha256]);
+      const pending = pendingUploads.get(commandId) ?? { beginKey: idempotencyKey("upload-begin"), finalizeKey: idempotencyKey("upload-finalize"), bytesUploaded: false, byteWriteAttempted: false, body: JSON.stringify({
           projectId,
           ...(selectedTarget.kind === "project"
             ? { projectRevisionId: selectedTarget.projectRevisionId }
@@ -3822,31 +3888,73 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
           sha256,
           source: "web",
           ...(buildConfigurationSnapshotId === undefined ? {} : { buildConfigurationSnapshotId })
-        })
-      }, token);
-      const session = mutationData(beginPayload);
+        }) };
+      pendingUploads.set(commandId, pending);
+      if (!pending.session) {
+        const beginPayload = await request<{ data: ServerUploadSession }>("/artifacts/uploads", { method: "POST", redirect: "error", signal: AbortSignal.timeout(120_000), headers: { "Idempotency-Key": pending.beginKey }, body: pending.body }, token);
+        const session = mutationData(beginPayload);
+        if (!session || typeof session.id !== "string" || typeof session.artifactId !== "string" || typeof session.uploadUrl !== "string") throw new ApiError("The service did not confirm the upload session. Retry unchanged.", { kind: "server", status: 502 });
+        pending.session = session;
+      }
+      const session = pending.session;
       const uploadUrl = session.uploadUrl.startsWith("http") ? session.uploadUrl : session.uploadUrl.startsWith("/api/v1") ? session.uploadUrl : `${apiRoot()}${session.uploadUrl.startsWith("/") ? session.uploadUrl : `/${session.uploadUrl}`}`;
-      await binaryRequest(uploadUrl, bytes, token, options);
-      const finalizePayload = await request<{ data: ServerArtifact }>(`/artifacts/uploads/${encodeURIComponent(session.id)}/finalize`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey("upload-finalize") } }, token);
-      const artifact = mutationData(finalizePayload);
-      if (!current) throw new ApiError("The project is not available in this workspace snapshot", { kind: "validation", status: 409 });
-      const currentRevision = { id: current.serverRevisionId ?? "", projectId, number: Number.parseInt(current.currentRevision.replace(/\D/gu, ""), 10) || 1, name: current.currentRevision, status: "concept", createdAt: new Date().toISOString(), version: 1 };
-      const mappedArtifact = mapArtifact(artifact, selectedTarget.kind === "project" ? currentRevision : undefined, selectedTarget.kind === "project" ? { projectRevisionId: selectedTarget.projectRevisionId } : { workItemId: selectedTarget.workItemId, workItemRevisionId: selectedTarget.workItemRevisionId });
-      const project = { ...current, artifacts: selectedTarget.kind === "project" ? [mappedArtifact, ...current.artifacts] : current.artifacts, allArtifacts: [mappedArtifact, ...(current.allArtifacts ?? current.artifacts)] };
-      projectCache.set(projectId, project);
-      return project;
+      try {
+        if (!pending.bytesUploaded && session.status !== "finalized") {
+          let offset = 0;
+          if (pending.byteWriteAttempted) {
+            const progress = await request<ServerUploadSession>(`/artifacts/uploads/${encodeURIComponent(session.id)}`, { signal: AbortSignal.timeout(120_000), redirect: "error" });
+            if (progress.id !== session.id || progress.artifactId !== session.artifactId || !Number.isSafeInteger(progress.receivedBytes) || progress.receivedBytes! < 0 || progress.receivedBytes! > bytes.byteLength) throw new ApiError("The uploaded byte count could not be verified. Retry unchanged.", { kind: "server", status: 502 });
+            if (progress.status === "expired") throw new ApiError("The previous upload expired without being finalized. Retry the same file to begin a fresh upload.", { kind: "validation", status: 410, code: "upload_expired" });
+            offset = progress.status === "finalized" ? bytes.byteLength : progress.receivedBytes!;
+          }
+          if (offset < bytes.byteLength) {
+            pending.byteWriteAttempted = true;
+            await binaryRequest(uploadUrl, bytes.slice(offset), token, { ...options, expectedOffset: offset });
+          }
+          pending.bytesUploaded = true;
+        }
+        const finalizePayload = await request<{ data: ServerArtifact }>(`/artifacts/uploads/${encodeURIComponent(session.id)}/finalize`, { method: "POST", redirect: "error", signal: AbortSignal.timeout(120_000), headers: { "Idempotency-Key": pending.finalizeKey } }, token);
+        const artifact = mutationData(finalizePayload);
+        if (!artifact || artifact.id !== session.artifactId || artifact.projectId !== projectId) throw new ApiError("The service did not confirm the uploaded file. Retry unchanged.", { kind: "server", status: 502 });
+        if (!current) throw new ApiError("The project is not available in this workspace snapshot", { kind: "validation", status: 409 });
+        const currentRevision = { id: current.serverRevisionId ?? "", projectId, number: Number.parseInt(current.currentRevision.replace(/\D/gu, ""), 10) || 1, name: current.currentRevision, status: "concept", createdAt: new Date().toISOString(), version: 1 };
+        const mappedArtifact = mapArtifact(artifact, selectedTarget.kind === "project" ? currentRevision : undefined, selectedTarget.kind === "project" ? { projectRevisionId: selectedTarget.projectRevisionId } : { workItemId: selectedTarget.workItemId, workItemRevisionId: selectedTarget.workItemRevisionId });
+        const latest = projectCache.get(projectId) ?? current;
+        const project = { ...latest, artifacts: selectedTarget.kind === "project" ? [mappedArtifact, ...latest.artifacts.filter((entry) => entry.id !== artifact.id)] : latest.artifacts, allArtifacts: [mappedArtifact, ...(latest.allArtifacts ?? latest.artifacts).filter((entry) => entry.id !== artifact.id)] };
+        projectCache.set(projectId, project);
+        pendingUploads.delete(commandId);
+        return project;
+      } catch (error) {
+        // A byte-write state error may mean another attempt finalized this session.
+        // Release the command only after canonical metadata confirms it expired.
+        if (error instanceof ApiError && error.code === "upload_expired") {
+          try {
+            const progress = await request<ServerUploadSession>(`/artifacts/uploads/${encodeURIComponent(session.id)}`, { signal: AbortSignal.timeout(120_000), redirect: "error" });
+            if (progress.id === session.id && progress.artifactId === session.artifactId && progress.status === "expired") pendingUploads.delete(commandId);
+          } catch { /* Keep the original command when the authoritative read fails. */ }
+        }
+        throw error;
+      }
     }
   };
   return adapter;
 }
 
 /** Same-origin typed workflow transport. The caller retains its command key until the acknowledgement is confirmed. */
-export async function workflowRequest<T>(path: string, method: "GET" | "POST" | "PUT" | "PATCH" = "GET", body?: unknown, commandKey?: string): Promise<T> {
+export async function workflowRequest<T>(path: string, method: "GET" | "POST" | "PUT" | "PATCH" = "GET", body?: unknown, commandKey?: string, options?: { signal?: AbortSignal }): Promise<T> {
   if (!path.startsWith("/") || path.startsWith("//")) throw new ApiError("Invalid workflow path", { kind: "validation", status: 400 });
   const csrf = cookieValue("forge_csrf");
   if (method !== "GET" && !csrf && !path.startsWith("/auth/")) throw new ApiError("Sign in again before saving this workflow.", { kind: "csrf", status: 403 });
-  return request<T>(path, { method, redirect: "error", signal: AbortSignal.timeout(120_000), ...(body === undefined ? {} : { body: JSON.stringify(body) }), ...(commandKey ? { headers: { "Idempotency-Key": commandKey } } : {}) }, csrf);
+  return request<T>(path, { method, redirect: "error", signal: options?.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000), ...(body === undefined ? {} : { body: JSON.stringify(body) }), ...(commandKey ? { headers: { "Idempotency-Key": commandKey } } : {}) }, csrf);
 }
 export function workflowCommandKey(prefix: string): string { return idempotencyKey(prefix); }
 
 export function inventoryImageUrl(itemId: string, imageId: string): string { return `${apiRoot()}/inventory/${encodeURIComponent(itemId)}/images/${encodeURIComponent(imageId)}/content`; }
+
+/** Release only the reservation/version reviewed by the caller; preserve its command key on retry. */
+export async function releaseStockReservationRequest(id: string, expectedVersion: number, commandKey: string): Promise<unknown> {
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) throw new ApiError("Refresh stock set aside before releasing it.", { kind: "validation", status: 400 });
+  const csrf = cookieValue("forge_csrf");
+  if (!csrf) throw new ApiError("Sign in again before releasing stock.", { kind: "csrf", status: 403 });
+  return request(`/reservations/${encodeURIComponent(id)}/release`, { method: "POST", redirect: "error", signal: AbortSignal.timeout(120_000), headers: { "If-Match": String(expectedVersion), "Idempotency-Key": commandKey } }, csrf);
+}

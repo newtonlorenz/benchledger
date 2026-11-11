@@ -2,7 +2,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ArtifactPreview, artifactPreviewKind, MarkdownPreview } from "./artifact-preview";
+import { ArtifactPreview, artifactPreviewKind } from "./artifact-preview";
+import MarkdownPreview from "./markdown-preview";
 import { fetchArtifactDownload } from "./api";
 import type { Artifact } from "./domain";
 vi.mock("./api", () => ({ fetchArtifactDownload: vi.fn() }));
@@ -12,6 +13,20 @@ describe("project file previews", () => {
   it("offers previews only for supported file extensions", () => {
     for (const name of ["part.STL", "README.md", "notes.txt", "photo.PNG", "drawing.svg", "part.scad"]) expect(artifactPreviewKind(name)).toBeDefined();
     for (const name of ["part.step", "plate.3mf", "script.html", "file.pdf", "source.FCStd", "constructor", "image.png.exe", "__proto__"]) expect(artifactPreviewKind(name)).toBeUndefined();
+    expect(artifactPreviewKind("drawing.SVG")).toBe("text");
+    expect(artifactPreviewKind("source.zip")).toBeUndefined();
+  });
+  it("shows SVG as escaped bounded source without creating a navigable active image Blob", async () => {
+    const source = '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(2)</script><foreignObject><iframe src="https://example.org/tracker"/></foreignObject></svg>';
+    vi.stubGlobal("URL", { createObjectURL: vi.fn(), revokeObjectURL: vi.fn() });
+    vi.mocked(fetchArtifactDownload).mockResolvedValue({ text: async () => source } as Blob);
+    render(<ArtifactPreview file={{ ...file, name: "drawing.SVG" }} onClose={() => undefined} />);
+    await screen.findByText(source);
+    const dialog = screen.getByRole("dialog", { name: "drawing.SVG" });
+    expect(dialog.querySelector("pre")?.textContent).toBe(source);
+    expect(dialog.querySelector("svg, img, script, iframe, object, embed")).toBeNull();
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(vi.mocked(fetchArtifactDownload).mock.calls[0]![2]!.maxBytes).toBe(1024 * 1024);
   });
   it("renders Markdown formatting without active HTML, unsafe links or embedded network requests", () => {
     const html = renderToStaticMarkup(<MarkdownPreview text={'# Instructions\n\n**Bold**\n\n<script>alert(1)</script>\n\n![secret](https://example.org/tracker)\n\n[bad](javascript:alert%281%29)\n\n[good](https://example.org/docs)\n\n[local](/api/v1/logout)'} />);
@@ -21,7 +36,7 @@ describe("project file previews", () => {
   });
   it("renders GitHub-flavoured tables in a scrollable region and keeps raw HTML inert", () => {
     const html = renderToStaticMarkup(<MarkdownPreview text={"| Part | Qty |\n| --- | ---: |\n| M3 insert | 4 |\n| <b>x</b> | ~~2~~ |\n\n- [x] Printed\n- [ ] Assembled"} />);
-    expect(html).toMatch(/<div class="markdown-table-scroll"[^>]*><table>/u);
+    expect(html).toMatch(/<div class="markdown-table-scroll"[^>]*>[^]*?<table/u);
     expect(html).toContain("<th>Part</th>"); expect(html).toContain("<td>M3 insert</td>");
     expect(html).toContain("<del>2</del>"); expect(html).toContain('type="checkbox"');
     expect(html).not.toContain("<b>");
@@ -31,8 +46,6 @@ describe("project file previews", () => {
     const close = vi.fn(); const view = render(<ArtifactPreview file={file} onClose={close} />);
     expect(screen.getByRole("status").textContent).toContain("Loading");
     await screen.findByRole("heading", { name: "Assembly" });
-    // Portalled to <body> so the overlay is not trapped under the sticky sidebar's stacking order.
-    expect(view.container.querySelector(".artifact-preview-backdrop")).toBeNull(); expect(document.body.querySelector(":scope > .artifact-preview-backdrop")).toBeTruthy();
     const options = vi.mocked(fetchArtifactDownload).mock.calls[0]![2]!;
     expect(options.maxBytes).toBe(1024 * 1024);
     fireEvent.keyDown(document, { key: "Escape" }); expect(close).toHaveBeenCalledOnce();

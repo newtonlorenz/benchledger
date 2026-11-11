@@ -1,3 +1,4 @@
+import { navigateWorkspace } from "./workspace-controls";
 import { expect, test, type Page } from "@playwright/test";
 
 const LAN_WARNING = "Anyone who can reach this BenchLedger address can view inventory, change records, and change workspace security settings. Use LAN-open mode only on a trusted network. Enable a password before using guest Wi-Fi, port forwarding, internet exposure, or a public reverse proxy.";
@@ -156,7 +157,7 @@ async function mockWorkspaceAccess(page: Page) {
 test("completes the LAN-open to password and back access journey without exposing secrets", async ({ page }) => {
   const harness = await mockWorkspaceAccess(page);
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Open workspace settings" }).click();
   await expect(page.getByRole("heading", { name: "Workspace access" })).toBeVisible();
   await expect(page.getByText("LAN open", { exact: true })).toBeVisible();
@@ -193,13 +194,14 @@ test("completes the LAN-open to password and back access journey without exposin
   await expect(page.getByText("LAN open", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await navigateWorkspace(page, "Inventory");
   await page.getByRole("button", { name: "Add item", exact: true }).click();
-  await page.getByRole("radio", { name: "Tool", exact: true }).check();
-  await expect(page.getByRole("combobox", { name: /Category/u })).toHaveCount(0);
+  await page.getByLabel("What are you adding?").selectOption("tool");
+  await expect(page.getByLabel("Category (required)")).toHaveCount(0);
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByLabel("Name", { exact: true }).fill("LAN-open write check");
   await page.getByRole("button", { name: "Add item", exact: true }).last().click();
-  await expect(page.getByText("LAN-open write check")).toBeVisible();
+  await expect(page.getByRole("dialog").getByRole("heading", { name: "LAN-open write check", exact: true })).toBeVisible();
   expect(harness.state()).toMatchObject({ mode: "lan_open", itemCount: 1 });
   await expect(page.locator("body")).not.toContainText("replacement-password");
 });

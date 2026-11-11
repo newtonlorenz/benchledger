@@ -4,7 +4,7 @@ import { idSchema } from "./schemas.js";
 export const assemblyVectorSchema = z.tuple([z.number().finite().min(-1e7).max(1e7), z.number().finite().min(-1e7).max(1e7), z.number().finite().min(-1e7).max(1e7)]);
 export const assemblySourceSchema = z.object({
   artifactId: idSchema, sha256: z.string().regex(/^[a-f0-9]{64}$/u),
-  // STEP declares its own units; this choice applies to GLB and STL coordinates.
+  // KiCad requires millimetres/Z up. STEP declares its own units; this choice applies to GLB and STL coordinates.
   unit: z.enum(["millimetre", "centimetre", "metre", "inch"]), upAxis: z.enum(["y", "z"]).default("z")
 }).strict();
 export const inspectAssemblySchema = z.object({ sources: z.array(assemblySourceSchema).min(1).max(16) }).strict().superRefine((value, ctx) => {
@@ -37,7 +37,8 @@ export interface ProjectAssembly extends Omit<AssemblyInput, "expectedVersion"> 
   id: string; projectId: string; projectRevisionId: string; version: number; contentSha256: string; updatedAt: string; updatedBy: string;
 }
 /** Normalised, static triangles in millimetres. Geometry is derived, never saved over CAD. */
-export interface AssemblyMesh { nodeId: string; name: string; group: string; color: string; positions: number[]; indices: number[] }
+export interface PcbGeometryInfo { kind: "board" | "copper" | "footprint"; side: "top" | "bottom" | "both"; reference?: string; value?: string; footprint?: string; modelStatus?: "missing" | "external_ignored"; thicknessMm?: number; holeCount?: number }
+export interface AssemblyMesh { pcb?: PcbGeometryInfo; nodeId: string; name: string; group: string; color: string; positions: number[]; indices: number[] }
 export interface AssemblyGeometry extends AssemblyMesh { artifactId: string }
 export interface AssemblyInspection { sources: AssemblySource[]; parts: AssemblyPart[]; warnings: string[]; geometry: AssemblyGeometry[] }
 export interface AssemblyRead { assembly: ProjectAssembly | null; warnings: string[] }

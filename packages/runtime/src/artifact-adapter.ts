@@ -130,11 +130,11 @@ export class ProductionArtifactAdapter implements ArtifactPort {
     }));
   }
 
-  async writeUpload(sessionId: string, body: Uint8Array): Promise<{ readonly receivedBytes: number }> {
+  async writeUpload(sessionId: string, body: Uint8Array, expectedOffset?: number): Promise<{ readonly receivedBytes: number }> {
     return this.unitOfWork.exclusive(() => attempt(async () => {
       // ArtifactStore accepts byte iterables, but Buffer/Uint8Array itself
       // iterates as numbers. Wrap one request body as one byte chunk.
-      const result = resultValue(await this.store.writeUpload(sessionId, [body]));
+      const result = resultValue(await this.store.writeUpload(sessionId, [body], expectedOffset));
       return { receivedBytes: result.bytesWritten };
     }));
   }
