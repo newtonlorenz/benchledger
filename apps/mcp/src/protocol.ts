@@ -198,6 +198,9 @@ function headerValue(headers: Readonly<Record<string, string | undefined>> | und
   return undefined;
 }
 
+/** Every non-empty bridge response is a JSON document; label it as such so a host never falls back to a sniffable or HTML type. */
+const JSON_RESPONSE_HEADERS = { "Content-Type": "application/json", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } as const;
+
 /**
  * Framework-neutral HTTP bridge. A Fastify/Express route can pass its parsed
  * request body and an authenticated context here. Only POST JSON-RPC is
@@ -209,37 +212,37 @@ export function createMcpHttpHandler(protocol: McpProtocol, options: McpHttpHand
   return async (request): Promise<McpHttpResponse> => {
     const headers = request.headers ?? {};
     if (request.method.toUpperCase() !== "POST") {
-      return { status: 405, headers: { Allow: "POST", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" }, body: JSON.stringify({ error: "Only POST JSON-RPC requests are supported." }) };
+      return { status: 405, headers: { Allow: "POST", ...JSON_RESPONSE_HEADERS }, body: JSON.stringify({ error: "Only POST JSON-RPC requests are supported." }) };
     }
     const contentType = headerValue(headers, "content-type");
     if (contentType !== undefined && !contentType.toLowerCase().startsWith("application/json")) {
-      return { status: 415, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" }, body: JSON.stringify({ error: "Content-Type must be application/json." }) };
+      return { status: 415, headers: { ...JSON_RESPONSE_HEADERS }, body: JSON.stringify({ error: "Content-Type must be application/json." }) };
     }
     const encoded = typeof request.body === "string" ? request.body : JSON.stringify(request.body);
     if (encoded === undefined) {
-      return { status: 400, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" }, body: JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "A JSON-RPC body is required." } }) };
+      return { status: 400, headers: { ...JSON_RESPONSE_HEADERS }, body: JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "A JSON-RPC body is required." } }) };
     }
     const raw = encoded;
     if (new TextEncoder().encode(raw).length > Math.max(maxBodyBytes, imageBodyLimit)) {
-      return { status: 413, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" }, body: JSON.stringify({ error: "Request body exceeds the MCP limit." }) };
+      return { status: 413, headers: { ...JSON_RESPONSE_HEADERS }, body: JSON.stringify({ error: "Request body exceeds the MCP limit." }) };
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
     } catch {
-      if (new TextEncoder().encode(raw).length > maxBodyBytes) return { status: 413, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" }, body: JSON.stringify({ error: "Request body exceeds the MCP limit." }) };
-      return { status: 400, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" }, body: JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error." } }) };
+      if (new TextEncoder().encode(raw).length > maxBodyBytes) return { status: 413, headers: { ...JSON_RESPONSE_HEADERS }, body: JSON.stringify({ error: "Request body exceeds the MCP limit." }) };
+      return { status: 400, headers: { ...JSON_RESPONSE_HEADERS }, body: JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error." } }) };
     }
     if (new TextEncoder().encode(raw).length > maxBodyBytes && (new TextEncoder().encode(raw).length > imageBodyLimit || !isInventoryImageEnvelope(parsed))) {
-      return { status: 413, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" }, body: JSON.stringify({ error: "Request body exceeds the MCP limit." }) };
+      return { status: 413, headers: { ...JSON_RESPONSE_HEADERS }, body: JSON.stringify({ error: "Request body exceeds the MCP limit." }) };
     }
     const context = options.resolveContext === undefined ? options.context : await options.resolveContext(headers);
     if (context === undefined) {
-      return { status: 401, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" }, body: JSON.stringify({ error: "An authenticated MCP context is required." }) };
+      return { status: 401, headers: { ...JSON_RESPONSE_HEADERS }, body: JSON.stringify({ error: "An authenticated MCP context is required." }) };
     }
     const effectiveProtocol = context === protocol.context ? protocol : new McpProtocol(protocol.adapter, { context, serverInfo: protocol.serverInfo });
     const response = await effectiveProtocol.handle(parsed);
     if (response === null) return { status: 202, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" }, body: "" };
-    return { status: 200, headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" }, body: JSON.stringify(response) };
+    return { status: 200, headers: { ...JSON_RESPONSE_HEADERS }, body: JSON.stringify(response) };
   };
 }

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { InventoryRepository } from "@benchledger/database";
 import { createStockEvent } from "@benchledger/domain";
@@ -240,5 +240,19 @@ describe("private legacy inventory import command", () => {
     expect(output.stderr).not.toContain(privateItemBody);
     const bytes = await readFile(files.inventoryFile);
     expect(createHash("sha256").update(bytes).digest("hex")).toHaveLength(64);
+  });
+
+  it("refuses an oversized inventory source before parsing it", async () => {
+    const files = await fixture();
+    const root = dirname(files.inventoryFile);
+    const oversized = join(root, "oversized.json");
+    await writeFile(oversized, `${JSON.stringify(source)}${" ".repeat(8 * 1024 * 1024)}`, { encoding: "utf8", mode: 0o600 });
+    for (const inventoryFile of [oversized]) {
+      const output = await runImportCommand(["--inventory-file", inventoryFile, "--data-dir", files.dataDir, "--dry-run", "--json"]);
+      expect(output.exitCode, inventoryFile).toBe(1);
+      expect(outputJson(output)).toEqual({ ok: false, error: { code: "invalid_inventory" } });
+    }
+    const accepted = await runImportCommand(["--inventory-file", files.inventoryFile, "--data-dir", files.dataDir, "--dry-run", "--json"]);
+    expect(accepted.exitCode).toBe(0);
   });
 });

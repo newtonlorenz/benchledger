@@ -1,4 +1,4 @@
-import { copyFile, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { copyFile, mkdtemp, open, rm, stat, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -115,19 +115,29 @@ function sourceTimestamp(asOf: string | undefined, modifiedAt: Date): string {
 }
 
 async function readSource(path: string): Promise<SourceSnapshot> {
+  // Open once and check, size and read through the same descriptor so the
+  // validated file is the file that is parsed. Reading at most one byte past
+  // the limit keeps a file that grows after fstat bounded as well.
   let details;
-  try {
-    details = await stat(path);
-  } catch {
-    throw new CommandError("invalid_inventory");
-  }
-  if (!details.isFile() || details.size > MAX_INVENTORY_BYTES) throw new CommandError("invalid_inventory");
-
   let bytes: Buffer;
+  let handle: FileHandle | undefined;
   try {
-    bytes = await readFile(path);
+    handle = await open(path, "r");
+    details = await handle.stat();
+    if (!details.isFile() || details.size > MAX_INVENTORY_BYTES) throw new CommandError("invalid_inventory");
+    const buffer = Buffer.alloc(MAX_INVENTORY_BYTES + 1);
+    let length = 0;
+    for (;;) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+      if (length > MAX_INVENTORY_BYTES) throw new CommandError("invalid_inventory");
+    }
+    bytes = buffer.subarray(0, length);
   } catch {
     throw new CommandError("invalid_inventory");
+  } finally {
+    await handle?.close();
   }
 
   let value: unknown;

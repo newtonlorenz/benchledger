@@ -74,6 +74,17 @@ describe("domain validation and optional metadata", () => {
     expect(createId("edge")).toMatch(/^edge_[0-9a-f-]{36}$/);
   });
 
+  it("slugifies long separator runs in linear time", () => {
+    expect(slugify("--Lamp--//--Rev 2--")).toBe("lamp-rev-2");
+    expect(slugify(" -a- ")).toBe("a");
+    const runs = 200_000;
+    const started = performance.now();
+    expect(slugify(`${"-".repeat(runs)}x${"-".repeat(runs)}y`)).toBe("x-y");
+    expect(slugify(`x${"- ".repeat(runs)}`)).toBe("x");
+    expect(slugify("-".repeat(runs))).toBe("project");
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
   it("validates project, work-item, revision and BOM inputs", () => {
     expect(() => createProject({ name: " " })).toThrow(/project name/i);
     expect(() => createWorkItem({ projectId: " ", name: "Part", kind: "part" })).toThrow(/projectId/i);

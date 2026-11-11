@@ -3,7 +3,7 @@ import { INVENTORY_IMAGE_MAX_BYTES, memberLoginSchema } from "@benchledger/api-c
 import type { TeamMember } from "@benchledger/api-contract";
 import { registerMakerWorkflowRoutes } from "./maker-workflow-routes.js";
 import { createHash, createHmac, randomUUID } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { open, type FileHandle } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import Fastify, { type FastifyHttpOptions, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
@@ -559,12 +559,17 @@ async function serveWebAsset(root: string, requestPath: string): Promise<{ reado
   const candidate = resolve(root, normalized);
   const rel = relative(resolve(root), candidate);
   if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
+  // Open once, then check and read through the same descriptor so the file
+  // that is type-checked is the file that is served.
+  let handle: FileHandle | undefined;
   try {
-    const details = await stat(candidate);
-    if (!details.isFile()) return null;
-    return { path: candidate, body: await readFile(candidate) };
+    handle = await open(candidate, "r");
+    if (!(await handle.stat()).isFile()) return null;
+    return { path: candidate, body: await handle.readFile() };
   } catch {
     return null;
+  } finally {
+    await handle?.close();
   }
 }
 
@@ -1172,8 +1177,12 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const headers = Object.fromEntries(Object.entries(request.headers).map(([key, value]) => [key, Array.isArray(value) ? value[0] : value]));
     const result = await handler({ method: request.method, headers, body: request.body });
     reply.code(result.status);
-    for (const [name, value] of Object.entries(result.headers)) reply.header(name, value);
-    return reply.send(result.body);
+    for (const [name, value] of Object.entries(result.headers)) if (name.toLowerCase() !== "content-type") reply.header(name, value);
+    // The bridge only produces JSON documents (or an empty 202). Fix the media
+    // type here so an echoed JSON-RPC id/tool name can never be served as a
+    // sniffable or HTML response.
+    if (result.body === "") return reply.send();
+    return reply.type("application/json; charset=utf-8").send(result.body);
   } });
 
   app.post(route("/auth/login"), { bodyLimit: AUTH_BODY_LIMIT }, async (request, reply) => {

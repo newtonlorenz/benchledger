@@ -103,6 +103,56 @@ describe("MCP body limit", () => {
       expect((await post(envelope(`${largest}${"A".repeat(512 * 1024)}`))).statusCode).toBe(413);
     } finally { await app.close(); }
   });
+
+  it("labels every MCP response body as JSON so echoed request values are never rendered as HTML", async () => {
+    const app = await createApp({ demo: true, auth: { sessionSecret: secret, secureCookies: false, bearerTokens: [bearerRecord("mcp-reader", ["read"])] }, logger: false });
+    const headers = { authorization: "Bearer mcp-reader" };
+    try {
+      const probe = "<script>alert(1)</script>";
+      const responses = [
+        await app.inject({ method: "GET", url: "/api/v1/mcp", headers }),
+        await app.inject({ method: "POST", url: "/api/v1/mcp", headers: { ...headers, "content-type": "text/plain" }, payload: probe }),
+        await app.inject({ method: "POST", url: "/api/v1/mcp", headers: { ...headers, "content-type": "application/json" }, payload: `{"broken": "${probe}"` }),
+        await app.inject({ method: "POST", url: "/api/v1/mcp", headers: { ...headers, "content-type": "application/json" }, payload: JSON.stringify({ jsonrpc: "2.0", id: probe, method: "tools/call", params: { name: probe, arguments: {} } }) })
+      ];
+      expect(responses.map((response) => response.statusCode)).toEqual([405, 415, 400, 200]);
+      for (const response of responses) {
+        expect(String(response.headers["content-type"])).toMatch(/^application\/json/u);
+        expect(response.headers["x-content-type-options"]).toBe("nosniff");
+      }
+      const accepted = await app.inject({ method: "POST", url: "/api/v1/mcp", headers: { ...headers, "content-type": "application/json" }, payload: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) });
+      expect(accepted.statusCode).toBe(202);
+      expect(accepted.body).toBe("");
+    } finally { await app.close(); }
+  });
+});
+
+describe("static web assets", () => {
+  it("serves regular files under the web root through one handle and refuses directories and traversal", async () => {
+    const { mkdtemp, mkdir, rm, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = await mkdtemp(join(tmpdir(), "benchledger-web-"));
+    try {
+      await writeFile(join(root, "index.html"), "<!doctype html><title>Fixture</title>");
+      await writeFile(join(root, "app.js"), "console.log('fixture');");
+      await mkdir(join(root, "assets.d"));
+      const app = await createApp({ demo: true, webRoot: root, auth: { sessionSecret: secret, secureCookies: false }, logger: false });
+      try {
+        const index = await app.inject({ method: "GET", url: "/" });
+        expect(index.statusCode).toBe(200);
+        expect(index.body).toContain("Fixture");
+        const script = await app.inject({ method: "GET", url: "/app.js" });
+        expect(script.statusCode).toBe(200);
+        expect(script.body).toBe("console.log('fixture');");
+        expect((await app.inject({ method: "GET", url: "/assets.d" })).statusCode).toBe(404);
+        expect((await app.inject({ method: "GET", url: "/missing.js" })).statusCode).toBe(404);
+        expect((await app.inject({ method: "GET", url: "/%2e%2e/secret.js" })).statusCode).toBe(404);
+        // Extensionless client routes fall back to the SPA shell.
+        expect((await app.inject({ method: "GET", url: "/projects" })).body).toContain("Fixture");
+      } finally { await app.close(); }
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
 });
 
 describe("security headers", () => {
