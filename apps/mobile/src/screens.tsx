@@ -1,6 +1,7 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, FlatList, Linking, Platform, Pressable, RefreshControl, Text, View, useWindowDimensions, type ListRenderItem } from "react-native";
-import { usePreventRemove } from "@react-navigation/native";
+import { useNavigation, usePreventRemove } from "@react-navigation/native";
+import type { SearchBarCommands } from "react-native-screens";
 import type { NavigationAction } from "@react-navigation/native";
 import type { NativeStackNavigationOptions, NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Crypto from "expo-crypto";
@@ -9,30 +10,39 @@ import { SEARCH_MAX_LENGTH, canWriteWorkspace } from "./client";
 import { ClientError } from "./connection";
 import { useItemEditor } from "./item-editor";
 import type { InventoryRoutes, ProjectRoutes } from "./navigation";
+import { ItemPhotos, RowThumbnail } from "./photos";
 import { useSession } from "./session";
-import { inventoryAccessibilityLabel, stockSummary } from "./presentation";
-import { usePage, useRemote } from "./use-remote";
+import { inventoryAccessibilityLabel, stockSummary, syncedLabel } from "./presentation";
+import { routeScan } from "./scan";
+import { ScannerModal } from "./scanner";
+import { useQueueEntries, useStockQueue } from "./stock-context";
+import { useLastSynced, usePage, useRemote } from "./use-remote";
 import { Action, AdaptiveScrollView as ScrollView, Copy, Empty, Evidence, Fact, Field, Group, Icon, Loading, Notice, Section, StatusBadge, SymbolTile, humanise, itemIcon, quantity, styles, useColours } from "./ui";
 
 function useSearch(navigation: { setOptions(options: Partial<NativeStackNavigationOptions>): void }, placeholder: string) {
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
+  const bar = useRef<SearchBarCommands>(null);
   useEffect(() => { const timer = setTimeout(() => setQuery(search), 250); return () => clearTimeout(timer); }, [search]);
   useLayoutEffect(() => {
     if (Platform.OS === "ios") navigation.setOptions({ headerSearchBarOptions: {
-      placeholder, hideWhenScrolling: false, obscureBackground: false, placement: "stacked",
+      ref: bar, placeholder, hideWhenScrolling: false, obscureBackground: false, placement: "stacked",
       onChangeText: (event) => setSearch(event.nativeEvent.text.slice(0, SEARCH_MAX_LENGTH)), onCancelButtonPress: () => setSearch("")
     } });
   }, [navigation, placeholder]);
-  return { search, setSearch, query };
+  /** Fill the search (native bar included), e.g. from a scanned barcode. */
+  const fill = useCallback((text: string) => { bar.current?.setText(text); setSearch(text); }, []);
+  return { search, setSearch, query, fill };
 }
 /** Workspace reachability, shown at the top of each screen while it matters. */
 export function WorkspaceStatus() {
-  const { reachability, message, warning, provisional, retry, demo } = useSession(); const c = useColours();
+  const { reachability, message, warning, provisional, retry, demo, cache } = useSession(); const c = useColours();
+  const synced = useLastSynced(cache);
   if (demo) return null;
   return <>
     {reachability === "offline" && <View style={{ gap: 8 }}>
-      <Notice error message={`Can't reach your workspace. ${message} Anything already loaded stays visible; nothing is saved on this device between launches yet.`} />
+      <Text accessibilityRole="header" style={[styles.rowTitle, { color: c.text }]}>{syncedLabel(synced)} · offline</Text>
+      <Notice error message={`Can't reach your workspace. ${message} ${cache.persistent ? "Showing what was saved on this device." : "Anything already loaded stays visible."}`} />
       <Action quiet icon="refresh" label="Retry" onPress={() => { void retry(); }} />
     </View>}
     {reachability === "rejected" && <View style={{ gap: 8 }}>
@@ -41,7 +51,22 @@ export function WorkspaceStatus() {
     </View>}
     {reachability === "checking" && provisional && <Text accessibilityLiveRegion="polite" style={[styles.small, { color: c.muted }]}>Connecting to your workspace…</Text>}
     {warning && <Notice message={warning} />}
+    <PendingBanner />
   </>;
+}
+/** Stock changes recorded on this phone that the server has not confirmed. */
+function PendingBanner() {
+  const queue = useStockQueue(); const entries = useQueueEntries(queue); const navigation = useNavigation(); const c = useColours();
+  const waiting = entries.filter((e) => e.status === "pending" || e.status === "sending").length;
+  const blocked = entries.filter((e) => e.status === "conflict" || e.status === "failed").length;
+  if (!waiting && !blocked) return null;
+  const label = [waiting ? `${waiting} stock ${waiting === 1 ? "change" : "changes"} waiting to send` : "", blocked ? `${blocked} need${blocked === 1 ? "s" : ""} your decision` : ""].filter(Boolean).join(" · ");
+  return <Pressable accessibilityRole="button" accessibilityLabel={`${label}. Review`} onPress={() => (navigation as unknown as { navigate(tab: string, params: object): void }).navigate("Server", { screen: "PendingChanges", initial: false })}
+    style={({ pressed }) => [styles.notice, { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: blocked ? c.errorBg : c.statusBg, opacity: pressed ? 0.72 : 1 }]}>
+    <Icon name={blocked ? "alert-circle-outline" : "cloud-upload-outline"} size={20} color={blocked ? c.error : c.status} />
+    <Text style={[styles.small, styles.flex, { color: blocked ? c.error : c.status }]}>{label}</Text>
+    <Icon name="chevron-forward" size={16} color={blocked ? c.error : c.status} />
+  </Pressable>;
 }
 function Updating({ visible }: { visible: boolean }) {
   const c = useColours();
@@ -70,11 +95,11 @@ function Separator() {
   return <View style={{ marginHorizontal: 20, backgroundColor: c.surface }}><View style={{ height: 0.5, marginLeft: 78, backgroundColor: c.line }} /></View>;
 }
 
-const InventoryRow = memo(function InventoryRow({ item, first, last, onOpen }: { item: InventoryItem; first: boolean; last: boolean; onOpen(id: string): void }) {
+const InventoryRow = memo(function InventoryRow({ item, first, last, onOpen, thumbnail }: { item: InventoryItem; first: boolean; last: boolean; onOpen(id: string): void; thumbnail: ReactNode }) {
   const c = useColours();
   return <Pressable accessibilityRole="button" accessibilityLabel={inventoryAccessibilityLabel(item)} onPress={() => onOpen(item.id)}
     style={({ pressed }) => [styles.row, first && styles.firstRow, last && styles.lastRow, { backgroundColor: pressed ? c.accentSoft : c.surface }]}>
-    <SymbolTile name={itemIcon(item.kind)} />
+    {thumbnail}
     <View style={styles.rowBody}>
       <Text style={[styles.rowTitle, { color: c.text }]}>{item.name}</Text>
       <Text style={[styles.rowMeta, { color: c.muted }]}>{stockSummary(item)}{item.location ? ` · ${item.location}` : ""}</Text>
@@ -86,30 +111,47 @@ const InventoryRow = memo(function InventoryRow({ item, first, last, onOpen }: {
 export function InventoryScreen({ navigation }: NativeStackScreenProps<InventoryRoutes, "Inventory">) {
   const { client, demo, cache } = useSession(); const c = useColours();
   const { fontScale } = useWindowDimensions();
-  const { search, setSearch, query } = useSearch(navigation, "Search inventory");
+  const { search, setSearch, query, fill } = useSearch(navigation, "Search inventory");
+  const [scanning, setScanning] = useState(false);
+  useLayoutEffect(() => {
+    if (Platform.OS === "ios") navigation.setOptions({ unstable_headerRightItems: () => [{ type: "button", label: "Scan", icon: { type: "sfSymbol", name: "qrcode.viewfinder" }, onPress: () => setScanning(true) }] });
+  }, [navigation]);
+  const scanned = useCallback((data: string) => {
+    const result = routeScan(data, { signedIn: true });
+    if (result.kind === "item") navigation.navigate("Item", { id: result.id });
+    else if (result.kind === "project") navigation.getParent()?.navigate("Builds", { screen: "Project", params: { id: result.id }, initial: false });
+    else if (result.kind === "search") fill(result.text);
+    else if (result.kind === "ignored") Alert.alert("Can't use this code", result.reason);
+  }, [navigation, fill]);
   const scope = useMemo(() => ({ cache, key: `inventory?q=${query}` }), [cache, query]);
   const { page, error, busy, updating, more, endReached, hasMore, refresh } = usePage(useCallback((cursor?: string) => client.inventory(query, cursor), [client, query]), scope);
   const pull = usePullRefresh(refresh);
   const open = useCallback((id: string) => navigation.navigate("Item", { id }), [navigation]);
   const count = page?.data.length ?? 0;
   const renderItem = useCallback<ListRenderItem<InventoryItem>>(({ item, index }) =>
-    <InventoryRow item={item} first={index === 0} last={index === count - 1} onOpen={open} />, [count, open]);
-  return <FlatList<InventoryItem> key={fontScale} style={{ backgroundColor: c.background }} contentInsetAdjustmentBehavior="automatic"
+    <InventoryRow item={item} first={index === 0} last={index === count - 1} onOpen={open} thumbnail={<RowThumbnail client={client} cache={cache} itemId={item.id} fallback={<SymbolTile name={itemIcon(item.kind)} />} />} />, [count, open, client, cache]);
+  return <><ScannerModal visible={scanning} title="Scan a label" hint="Point at a BenchLedger item label, or a product barcode to search." onClose={() => setScanning(false)} onScan={scanned} />
+  <FlatList<InventoryItem> key={fontScale} style={{ backgroundColor: c.background }} contentInsetAdjustmentBehavior="automatic"
     data={page?.data ?? []} keyExtractor={keyById} keyboardDismissMode="on-drag" renderItem={renderItem}
     onEndReached={endReached} onEndReachedThreshold={0.5}
     keyboardShouldPersistTaps="handled" refreshControl={<RefreshControl {...pull} tintColor={c.accent} />}
     ListHeaderComponent={<View style={styles.search}><WorkspaceStatus /><Copy secondary>Parts, tools and materials. All in one place.</Copy>
       {demo && <Copy secondary>Sample workspace · Read only</Copy>}
-      {Platform.OS !== "ios" && <Field label="Search inventory" placeholder="Name, material, part or location" value={search} onChangeText={setSearch} autoCorrect={false} maxLength={SEARCH_MAX_LENGTH} clearButtonMode="while-editing" />}
+      {Platform.OS !== "ios" && <><Field label="Search inventory" placeholder="Name, material, part or location" value={search} onChangeText={setSearch} autoCorrect={false} maxLength={SEARCH_MAX_LENGTH} clearButtonMode="while-editing" />
+        <Action quiet icon="qr-code-outline" label="Scan a label" onPress={() => setScanning(true)} /></>}
       <Updating visible={updating} />
     </View>}
     ItemSeparatorComponent={Separator}
-    ListEmptyComponent={busy ? <Loading /> : !error ? <Empty title={query ? "No matching items" : "No inventory yet"} message={query ? "Try a different name or material." : "Add your first items in the BenchLedger web app. They will appear here when you refresh."} /> : null}
-    ListFooterComponent={<Footer {...{ error, busy, more, refresh, hasMore, count }} />} />;
+    ListEmptyComponent={busy || (!page && !error) ? <Loading /> : !error ? <Empty title={query ? "No matching items" : "No inventory yet"} message={query ? "Try a different name or material." : "Add your first items in the BenchLedger web app. They will appear here when you refresh."} /> : null}
+    ListFooterComponent={<Footer {...{ error, busy, more, refresh, hasMore, count }} />} /></>;
 }
 
 export function ItemScreen({ route, navigation }: NativeStackScreenProps<InventoryRoutes, "Item">) {
-  const { client, session, cache } = useSession(); const c = useColours(); const { fontScale } = useWindowDimensions();
+  const { client, session, cache, provisional, demo } = useSession(); const c = useColours(); const { fontScale } = useWindowDimensions();
+  // Counts may be recorded before a cold-start session is confirmed: they stay on
+  // the phone and are only sent once the server confirms the token's access.
+  const canRecordStock = !demo && (canWriteWorkspace(session) || provisional);
+  const unsent = useQueueEntries(useStockQueue()).filter((e) => e.itemId === route.params.id && e.status !== "sent").length;
   const scope = useMemo(() => ({ cache, key: `item/${route.params.id}` }), [cache, route.params.id]);
   const { data: item, busy, updating, error, refresh } = useRemote(useCallback(() => client.item(route.params.id), [client, route.params.id]), scope);
   const pull = usePullRefresh(refresh);
@@ -122,7 +164,13 @@ export function ItemScreen({ route, navigation }: NativeStackScreenProps<Invento
       <Section title="Stock"><View style={[styles.stockRow, fontScale > 1.3 && { flexDirection: "column" }]}>
         <View style={styles.stockColumn}><Text style={[styles.small, { color: c.muted }]}>Recorded quantity</Text><Text style={[styles.stockNumber, { color: c.text }]}>{quantity(item.quantity, item.unit)}</Text></View>
         <View style={styles.stockColumn}><Text style={[styles.small, { color: c.muted }]}>Available quantity</Text><Text style={[styles.stockNumber, { color: c.text }]}>{quantity(item.availableQuantity, item.unit)}</Text></View>
-      </View><Text style={[styles.small, { color: c.muted }]}>Availability follows the server record. Check evidence and compatibility for your build.</Text></Section>
+      </View><Text style={[styles.small, { color: c.muted }]}>Availability follows the server record. Check evidence and compatibility for your build.</Text>
+        {unsent > 0 && <Text style={[styles.small, { color: c.status }]}>{unsent} stock {unsent === 1 ? "change" : "changes"} recorded on this phone, not yet confirmed by the server.</Text>}</Section>
+      {canRecordStock && <View style={{ gap: 12 }}>
+        <Action label="Count stock" icon="calculator-outline" onPress={() => navigation.navigate("AdjustStock", { id: item.id, kind: "count" })} />
+        <Action quiet label="Record received stock" icon="add-circle-outline" onPress={() => navigation.navigate("AdjustStock", { id: item.id, kind: "receipt" })} />
+      </View>}
+      <ItemPhotos client={client} cache={cache} itemId={item.id} canWrite={!demo && canWriteWorkspace(session)} />
       <Section title="Item details"><Fact label="Location" value={item.location || "Not recorded"} /><Fact label="Kind" value={humanise(item.kind)} />
         <Fact label="Condition" value={humanise(item.condition ?? "unknown")} />
         {item.manufacturer && <Fact label="Manufacturer" value={item.manufacturer} />}{item.model && <Fact label="Model" value={item.model} />}
@@ -162,7 +210,7 @@ export function ProjectsScreen({ navigation }: NativeStackScreenProps<ProjectRou
       <Updating visible={updating} />
     </View>}
     ItemSeparatorComponent={Separator}
-    ListEmptyComponent={busy ? <Loading /> : !error ? <Empty title={query ? "No matching projects" : "No projects yet"} message={query ? "Try a different project name." : "Start a project to give your next build a place."} /> : null}
+    ListEmptyComponent={busy || (!page && !error) ? <Loading /> : !error ? <Empty title={query ? "No matching projects" : "No projects yet"} message={query ? "Try a different project name." : "Start a project to give your next build a place."} /> : null}
     ListFooterComponent={<Footer {...{ error, busy, more, refresh, hasMore, count }} />} />;
 }
 const ProjectRow = memo(function ProjectRow({ project, first, last, onOpen }: { project: Project; first: boolean; last: boolean; onOpen(id: string): void }) {
@@ -283,17 +331,27 @@ export function NewProjectScreen({ navigation }: NativeStackScreenProps<ProjectR
   </ScrollView>;
 }
 
-export function ServerScreen() {
-  const { client, session, version, demo, disconnect, provisional } = useSession(); const c = useColours();
+export function ServerScreen({ navigation }: { navigation: { navigate(route: "PendingChanges"): void } }) {
+  const { client, session, version, demo, disconnect, provisional, cache } = useSession(); const c = useColours();
   const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
-  async function leave() {
+  const queue = useStockQueue(); const entries = useQueueEntries(queue);
+  const unsent = entries.filter((e) => e.status !== "sent").length;
+  const synced = useLastSynced(cache);
+  async function signOut() {
     setBusy(true); setError("");
     try { await disconnect(); } catch { setError("Could not remove the saved credential. Try disconnecting again."); setBusy(false); }
+  }
+  function leave() {
+    if (!unsent) { void signOut(); return; }
+    // Never drop recorded stock changes without an explicit choice.
+    Alert.alert("Discard unsent stock changes?", `${unsent} stock ${unsent === 1 ? "change has" : "changes have"} not reached your server. Disconnecting removes ${unsent === 1 ? "it" : "them"} from this phone.`, [
+      { text: "Keep connected", style: "cancel" }, { text: "Disconnect and discard", style: "destructive", onPress: () => { void signOut(); } }
+    ]);
   }
   return <ScrollView style={{ backgroundColor: c.background }} contentContainerStyle={styles.content} contentInsetAdjustmentBehavior="automatic">
     {demo && <><View style={styles.hero}><SymbolTile name="eye-outline" large /><Copy title>Sample workspace</Copy><Copy secondary>Explore synthetic inventory and projects. No server connection or credentials are used.</Copy></View>
       <Notice message="This sample is read only. Connect your own BenchLedger server to edit items and create projects." />
-      <Action quiet icon="log-out-outline" label="Leave sample workspace" onPress={leave} busy={busy} />
+      <Action quiet icon="log-out-outline" label="Leave sample workspace" onPress={() => { void signOut(); }} busy={busy} />
     </>}
     {!demo && <>
     <View style={styles.hero}><SymbolTile name="server-outline" large /><Copy title>Your workspace</Copy><Copy secondary>Connected directly to your BenchLedger server.</Copy></View>
@@ -301,8 +359,10 @@ export function ServerScreen() {
     <Group><Fact label="Server" value={client.connection.server} /><Fact label="Version" value={version || "Not confirmed yet"} />
       <Fact label="Access" value={provisional ? "Not confirmed yet · read only" : session.projectIds !== undefined ? "Selected projects" : canWriteWorkspace(session) ? "Read and write" : "Read only"} /></Group>
     {client.connection.server.startsWith("http:") && <Notice message="Local HTTP is unencrypted. Use it only on a network you trust, or configure HTTPS on your server." />}
-    <Section title="On this device"><Copy secondary>The connection is kept in secure device storage. Inventory and project responses stay in memory for this session only. Disconnect removes the saved connection from this device.</Copy></Section>
-    <Section title="Full workspace"><Copy secondary>Use the web app for stock counts, purchases, file uploads, readiness checks and build reconciliation.</Copy></Section>
+    <Section title="On this device"><Copy secondary>The connection is kept in secure device storage. {cache.persistent ? "The last inventory and project responses are saved on this phone for offline use." : "Inventory and project responses stay in memory for this session."} Disconnect removes the saved connection, saved responses, photos and unsent changes from this device.</Copy>
+      <Fact label="Last synced" value={syncedLabel(synced).replace(/^Last synced /u, "")} />
+      <Pressable accessibilityRole="button" onPress={() => navigation.navigate("PendingChanges")}><Fact last label="Stock changes waiting" value={unsent ? `${unsent} · Review` : "None · Review"} /></Pressable></Section>
+    <Section title="Full workspace"><Copy secondary>Use the web app for purchases, file uploads, readiness checks and build reconciliation.</Copy></Section>
     {error && <Notice error message={error} />}
     <Action quiet icon="open-outline" label="Open web workspace" onPress={() => { void Linking.openURL(client.connection.server).catch(() => setError("Could not open the web workspace.")); }} />
     <Action quiet destructive icon="log-out-outline" label="Disconnect" onPress={leave} busy={busy} />

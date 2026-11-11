@@ -1,8 +1,8 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { useFocusEffect } from "@react-navigation/native";
 import type { Page } from "./client";
 import { errorMessage } from "./connection";
-import type { CacheScope } from "./query-cache";
+import type { CacheScope, QueryCache } from "./query-cache";
 
 /**
  * Stale-while-revalidate details. Focus, foreground and cache revalidation keep
@@ -120,4 +120,10 @@ export function usePage<T extends { id: string }>(load: (cursor?: string) => Pro
     void more();
   }, [error, more]);
   return { page, busy, updating: busy && page !== undefined, error, refresh, more, endReached, hasMore };
+}
+
+/** The newest cached response time, re-rendering whenever the cache changes. */
+export function useLastSynced(cache: QueryCache): Date | undefined {
+  const time = useSyncExternalStore(cache.onChange, () => cache.lastSyncedAt()?.getTime());
+  return time === undefined ? undefined : new Date(time);
 }

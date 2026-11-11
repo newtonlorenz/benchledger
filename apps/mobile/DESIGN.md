@@ -14,7 +14,10 @@ The installed React Navigation native-tabs entry point is still marked
 `unstable`; preserve the lockfile and review that API on dependency upgrades.
 
 Large titles establish the top-level sections. Search stays visible below
-the title. The project creation action lives in the native trailing toolbar.
+the title. The project creation action and the inventory **Scan** action live
+in the native trailing toolbar. The space above a large title is UIKit's
+navigation bar row; on the iOS 27 simulator it matches the system Settings app,
+so the app adds no inset of its own there.
 Detail screens use compact native headers and an item or project identity
 above grouped information. All three tabs remain available and labelled.
 
@@ -50,6 +53,16 @@ revalidation keeps content in place and shows a quiet "Updating…" line; it
 never blanks a loaded screen. Form labels are visual only; the input carries
 the spoken label. No visual element may
 turn recorded stock into proof of readiness or an idea into a completed build.
+
+The launch screen uses the background token (`#f5f4f1` light, `#111210`
+dark) with the app icon, and stays until the first screen is chosen. Stock
+steppers are at least 64 points, in a decrease row and an increase row, with a
+selection haptic per step and a success haptic when a change is saved. A stock
+change is always confirmed with explicit before → after figures. Queued
+changes use status colours with text: waiting (status), needs a decision or
+not accepted (error) and sent (success). The camera scanner is a full-screen
+modal; its instruction panel is the only translucent surface, over the live
+camera image.
 
 When the preferred text size changes, remeasure scroll content while keeping
 form values, searches and fetched data in the owning screen. Fact rows and

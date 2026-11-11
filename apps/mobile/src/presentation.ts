@@ -38,3 +38,11 @@ export function stockSummary(item: StockFigures): string {
 export function inventoryAccessibilityLabel(item: EvidenceSummary & StockFigures & Pick<InventoryItem, "name" | "location">): string {
   return [item.name, stockSummary(item), item.location, evidenceLabel(item)].filter(Boolean).join(", ");
 }
+
+/** "Last synced 09:05" today, otherwise with the date, for the offline banner. */
+export function syncedLabel(at: Date | undefined, now = new Date(), locale?: string): string {
+  if (!at) return "Nothing saved on this device yet";
+  const time = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(at);
+  if (at.toDateString() === now.toDateString()) return `Last synced ${time}`;
+  return `Last synced ${new Intl.DateTimeFormat(locale, { day: "numeric", month: "short" }).format(at)}, ${time}`;
+}

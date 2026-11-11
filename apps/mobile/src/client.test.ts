@@ -179,3 +179,57 @@ describe("mobile client against the real HTTP application", () => {
     await expect(client.createProject("Scoped attempt", "", randomUUID())).rejects.toMatchObject({ status: 403 });
   });
 });
+
+describe("quick stock changes and photos", () => {
+  // A 1x1 PNG: synthetic, metadata-free test image.
+  const pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  async function countable(client: BenchLedgerClient) {
+    const items = (await client.inventory()).data;
+    return items.find((item) => item.unit === "each" && (item.evidence.state === "physically_counted" || item.evidence.state === "commissioned")) ?? items[0]!;
+  }
+  it("records a physical count with an idempotency key, and a retry is not applied twice", async () => {
+    const { client, fetcher } = await server();
+    const item = await countable(client);
+    const key = randomUUID();
+    const counted = await client.recordCount(item.id, 7, key);
+    expect(counted).toMatchObject({ id: item.id, quantity: 7 });
+    expect(counted.version).toBeGreaterThan(item.version);
+    const replay = await client.recordCount(item.id, 7, key);
+    expect(replay.version).toBe(counted.version);
+    expect((await client.item(item.id)).version).toBe(counted.version);
+    const init = fetcher.mock.calls.at(-2)![1];
+    expect(new Headers(init.headers).get("Idempotency-Key")).toBe(key);
+    expect(JSON.parse(init.body as string)).toEqual({ quantity: 7 });
+  });
+  it("records a receipt as an append-only stock event", async () => {
+    const { client, fetcher } = await server();
+    const item = await countable(client);
+    const received = await client.recordReceipt(item.id, 3, item.unit, randomUUID());
+    expect(received.quantity).toBe(item.quantity + 3);
+    const [url, init] = fetcher.mock.calls.at(-1)!;
+    expect(url).toMatch(/\/inventory\/[^/]+\/stock-events$/u);
+    expect(JSON.parse(init.body as string)).toEqual({ type: "receipt", quantity: 3, unit: item.unit });
+  });
+  it("refuses stock changes for read-only tokens", async () => {
+    const { client } = await server(["read"]);
+    const item = await countable(client);
+    await expect(client.recordCount(item.id, 1, randomUUID())).rejects.toMatchObject({ status: 403 });
+  });
+  it("reads the photo gallery and adds a photo against its version", async () => {
+    const { client } = await server();
+    const item = await countable(client);
+    const gallery = await client.gallery(item.id);
+    expect(gallery).toMatchObject({ itemId: item.id, images: expect.any(Array) });
+    const key = randomUUID();
+    const updated = await client.addImage(item.id, { expectedVersion: gallery.version, imageBase64: pixel, filename: "item-photo.png", mediaType: "image/png" }, key);
+    expect(updated.images).toHaveLength(gallery.images.length + 1);
+    expect(updated.version).toBeGreaterThan(gallery.version);
+    const image = updated.images.at(-1)!;
+    const source = client.imageSource(item.id, image.id, image.sha256);
+    expect(source.uri).toBe(`${connection.server}/api/v1/inventory/${item.id}/images/${image.id}/content`);
+    expect(source.headers.Authorization).toBe(`Bearer ${connection.token}`);
+    expect(source.cacheKey).toBe(`${image.id}:${image.sha256}`);
+    await expect(client.addImage(item.id, { expectedVersion: gallery.version, imageBase64: pixel, filename: "item-photo.png", mediaType: "image/png" }, randomUUID()))
+      .rejects.toMatchObject({ status: 409 });
+  });
+});

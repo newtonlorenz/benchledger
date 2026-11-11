@@ -1,6 +1,6 @@
 import { z } from "zod/v3";
 import {
-  bomLineSchema, createProjectWithInitialRevisionSchema, healthSchema, idSchema,
+  addInventoryImageSchema, bomLineSchema, createProjectWithInitialRevisionSchema, healthSchema, idSchema,
   inventoryItemSchema, projectRevisionSchema, projectSchema, projectWithInitialRevisionSchema,
   updateInventoryItemSchema, workItemSchema
 } from "@benchledger/api-contract";
@@ -20,6 +20,13 @@ const page = <T extends z.ZodTypeAny>(item: T) => z.object({
   total: z.number().int().nonnegative().optional(), limit: z.number().int().positive()
 });
 const detailSchema = z.object({ project: projectSchema, workItems: z.array(workItemSchema) });
+const imageSchema = z.object({
+  id: idSchema, itemId: idSchema, filename: z.string(), caption: z.string(), width: z.number().int().positive(),
+  height: z.number().int().positive(), byteLength: z.number().int().nonnegative(), sha256: z.string().regex(/^[a-f0-9]{64}$/u), createdAt: z.string()
+});
+const gallerySchema = z.object({ itemId: idSchema, version: z.number().int().nonnegative(), images: z.array(imageSchema).max(100) });
+export type Gallery = z.infer<typeof gallerySchema>;
+export type GalleryImage = z.infer<typeof imageSchema>;
 // Reads strip unknown keys at every depth so a newer server can add fields
 // (list enrichments, new metadata) without breaking this installed app. The
 // canonical refinements, such as quantity invariants, still apply.
@@ -28,6 +35,8 @@ const read = {
   project: tolerant(projectSchema), detail: tolerant(detailSchema), revision: tolerant(projectRevisionSchema),
   bom: tolerant(z.array(bomLineSchema)), updated: tolerant(z.object({ data: inventoryItemSchema })),
   created: tolerant(z.object({ data: projectWithInitialRevisionSchema })),
+  stock: tolerant(z.object({ data: z.object({ item: inventoryItemSchema }) })),
+  gallery: tolerant(gallerySchema), galleryAdded: tolerant(z.object({ data: gallerySchema })),
   capabilities: z.object({ protocol: z.string().max(80).optional() })
 };
 /** Server limit for the `q` search parameter on /inventory and /projects. */
@@ -167,6 +176,33 @@ export class BenchLedgerClient {
       method: "POST", body, key
     });
     return result.data.project;
+  }
+  /** Physical count: replaces the recorded quantity. The key makes retries safe. */
+  async recordCount(itemId: string, quantity: number, key: string): Promise<InventoryItem> {
+    const result = await this.request(`/inventory/${recordId(itemId)}/count`, read.stock, { method: "POST", body: { quantity }, key });
+    return result.data.item;
+  }
+  /** Receipt: an append-only stock event that adds to the recorded quantity. */
+  async recordReceipt(itemId: string, quantity: number, unit: string, key: string): Promise<InventoryItem> {
+    const result = await this.request(`/inventory/${recordId(itemId)}/stock-events`, read.stock, { method: "POST", body: { type: "receipt", quantity, unit }, key });
+    return result.data.item;
+  }
+  gallery(itemId: string): Promise<Gallery> { return this.request(`/inventory/${recordId(itemId)}/images`, read.gallery); }
+  async addImage(itemId: string, input: { expectedVersion: number; imageBase64: string; filename: string; mediaType: "image/jpeg" | "image/png" }, key: string): Promise<Gallery> {
+    const body = addInventoryImageSchema.parse({ ...input, caption: "", sourceKind: "item_photo" });
+    return (await this.request(`/inventory/${recordId(itemId)}/images`, read.galleryAdded, { method: "POST", body, key })).data;
+  }
+  /**
+   * An authenticated image request for expo-image. Image bytes are immutable
+   * per ID and digest, so that pair is the disk cache key; the image cache is
+   * cleared on disconnect with the rest of the workspace data.
+   */
+  imageSource(itemId: string, imageId: string, sha256?: string) {
+    return {
+      uri: `${this.connection.server}/api/v1/inventory/${recordId(itemId)}/images/${recordId(imageId)}/content`,
+      headers: { Authorization: `Bearer ${this.connection.token}` },
+      cacheKey: sha256 ? `${imageId}:${sha256}` : imageId
+    };
   }
   private query(q: string, cursor?: string) {
     const params = new URLSearchParams({ limit: "50" });

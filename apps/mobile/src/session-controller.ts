@@ -1,5 +1,6 @@
 import type { Session } from "./client";
 import { ClientError, errorMessage, restoreConnection, validateConnection, type Connection, type CredentialStore } from "./connection";
+import type { WorkspacePersistence } from "./offline-store";
 import { QueryCache } from "./query-cache";
 
 /** The subset of BenchLedgerClient the session lifecycle depends on. */
@@ -15,6 +16,8 @@ export type WorkspaceState = {
   phase: "workspace"; client: SessionClient; session: Session; version: string; cache: QueryCache;
   /** True until the server has confirmed the stored token; writes stay disabled. */
   provisional: boolean; reachability: Reachability; message: string; warning?: string; demo?: boolean;
+  /** Persistent server+account scope for cached responses and queued writes; absent while in memory only. */
+  scope?: string;
 };
 export type SignedOutState = { phase: "signed_out"; draft: Connection; error: string; busy: boolean; notice?: string };
 export type SessionState = { phase: "restoring" } | SignedOutState | WorkspaceState;
@@ -40,6 +43,8 @@ export class SessionController {
     store: CredentialStore;
     createClient(connection: Connection): SessionClient;
     createDemo(): SessionClient;
+    /** Persistent last-good responses; omitted in tests and for in-memory use. */
+    persistence?: WorkspacePersistence;
   }) {}
 
   get state(): SessionState { return this.current; }
@@ -68,10 +73,15 @@ export class SessionController {
     }
     if (id !== this.attempt) return;
     if (!value) { this.set({ phase: "signed_out", draft: emptyConnection, busy: false, error: "" }); return; }
+    // Show the last synced data for the account this server was last confirmed with.
+    let remembered: string | undefined;
+    try { remembered = await this.deps.persistence?.remembered(value.server); } catch { remembered = undefined; }
+    const opened = remembered ? await this.openScope(value.server, remembered) : undefined;
+    if (id !== this.attempt) return;
     const client = this.deps.createClient(value);
     this.replaceClient(client); this.watch(client, value);
-    this.set({ phase: "workspace", client, session: provisionalSession, version: "", cache: new QueryCache(),
-      provisional: true, reachability: "checking", message: "" });
+    this.set({ phase: "workspace", client, session: provisionalSession, version: "", cache: opened?.cache ?? new QueryCache(),
+      provisional: true, reachability: "checking", message: "", ...(opened ? { scope: opened.scope } : {}) });
     await this.verify(id, client, value);
   }
 
@@ -87,7 +97,15 @@ export class SessionController {
     try {
       const { health, session, warning } = await client.connect();
       if (id !== this.attempt || this.active !== client) return;
-      this.patchWorkspace(id, { session, version: health.version, provisional: false, reachability: "online", message: "", warning });
+      // A different account than the cached one must never see that account's data.
+      const current = this.current.phase === "workspace" ? this.current : undefined;
+      const confirmed = await this.scopeFor(connection.server, session.actor);
+      const switching = !!confirmed && current?.scope !== confirmed;
+      const opened = switching ? await this.openScope(connection.server, confirmed) : undefined;
+      if (id !== this.attempt || this.active !== client) return;
+      const scope: Partial<WorkspaceState> = opened ? { cache: opened.cache, scope: opened.scope }
+        : switching && current?.scope ? { cache: new QueryCache(), scope: undefined } : {};
+      this.patchWorkspace(id, { session, version: health.version, provisional: false, reachability: "online", message: "", warning, ...scope });
       if (this.current.phase === "workspace") this.current.cache.revalidate();
     } catch (error) {
       if (id !== this.attempt || this.active !== client) return;
@@ -99,11 +117,15 @@ export class SessionController {
   }
 
   private async expire(connection: Connection) {
+    const scope = this.current.phase === "workspace" ? this.current.scope : undefined;
     const id = ++this.attempt;
     this.replaceClient(undefined);
     let error = expiredMessage;
     try { await this.deps.store.remove(); }
     catch { error = `${expiredMessage} Secure storage could not be cleared; reconnect and disconnect to retry.`; }
+    // Cached responses go with the token. Unsent stock changes stay for this
+    // account until it reconnects; connecting another account discards them.
+    if (scope) await this.deps.persistence?.clearCache(scope).catch(() => undefined);
     if (id !== this.attempt) return;
     this.set({ phase: "signed_out", draft: { ...connection, token: "" }, busy: false, error });
   }
@@ -123,9 +145,12 @@ export class SessionController {
       try { await this.deps.store.set(JSON.stringify(value)); }
       catch { throw new Error(storageMessage); }
       if (id !== this.attempt) return;
+      const confirmed = await this.scopeFor(value.server, session.actor);
+      const opened = confirmed ? await this.openScope(value.server, confirmed) : undefined;
+      if (id !== this.attempt) return;
       this.watch(client, value);
-      this.set({ phase: "workspace", client, session, version: health.version, cache: new QueryCache(),
-        provisional: false, reachability: "online", message: "", warning });
+      this.set({ phase: "workspace", client, session, version: health.version, cache: opened?.cache ?? new QueryCache(),
+        provisional: false, reachability: "online", message: "", warning, ...(opened ? { scope: opened.scope } : {}) });
     } catch (error) {
       if (id !== this.attempt) return;
       if (client && this.active === client) this.replaceClient(undefined);
@@ -158,7 +183,22 @@ export class SessionController {
     if (!demo) await this.deps.store.remove();
     this.attempt++;
     this.replaceClient(undefined);
-    this.set({ phase: "signed_out", draft: emptyConnection, busy: false, error: "" });
+    let error = "";
+    if (!demo && this.deps.persistence) {
+      try { await this.deps.persistence.wipe(); }
+      catch { error = "Signed out, but cached workspace data could not be removed from this device. It is removed the next time you connect."; }
+    }
+    this.set({ phase: "signed_out", draft: emptyConnection, busy: false, error });
+  }
+
+  private async scopeFor(server: string, actor: string) {
+    try { return await this.deps.persistence?.scopeOf(server, actor); } catch { return undefined; }
+  }
+  private async openScope(server: string, scope: string) {
+    try {
+      const cache = await this.deps.persistence?.open(server, scope);
+      return cache ? { scope, cache } : undefined;
+    } catch { return undefined; }
   }
 
   setDraft(draft: Connection) {

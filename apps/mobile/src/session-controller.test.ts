@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ClientError, type Connection, type CredentialStore } from "./connection";
 import { SessionController, type SessionClient } from "./session-controller";
+import { QueryCache } from "./query-cache";
 
 const saved: Connection = { server: "https://workspace.example.com", token: "synthetic-token", allowLocalHttp: false };
 const session = { authenticated: true as const, actor: "synthetic", scopes: ["read" as const, "write" as const] };
@@ -179,5 +180,92 @@ describe("controller edge cases", () => {
     await controller.restore();
     expect(listener).toHaveBeenCalled(); expect(controller.getSnapshot().phase).toBe("signed_out");
     stop(); controller.dispose();
+  });
+});
+
+describe("persistent workspace data", () => {
+  function persistence(actor?: string) {
+    const opened: QueryCache[] = [];
+    const p = {
+      remembered: vi.fn(async () => (actor ? `scope:${actor}` : undefined)),
+      scopeOf: vi.fn(async (_server: string, who: string) => `scope:${who}`),
+      open: vi.fn(async (_server: string, _scope: string) => { const cache = new QueryCache({ write: vi.fn() }); opened.push(cache); return cache; }),
+      clearCache: vi.fn(async () => undefined),
+      wipe: vi.fn(async () => undefined),
+      opened
+    };
+    return p;
+  }
+  it("shows the last synced data on a cold offline start for the remembered account", async () => {
+    const p = persistence("synthetic");
+    const controller = new SessionController({ store: store(), createClient: fakeClient(offline), createDemo: demo, persistence: p });
+    await controller.restore();
+    expect(p.remembered).toHaveBeenCalledWith(saved.server);
+    expect(controller.state).toMatchObject({ phase: "workspace", reachability: "offline", scope: "scope:synthetic" });
+    if (controller.state.phase === "workspace") expect(controller.state.cache).toBe(p.opened[0]);
+  });
+  it("starts in memory when no account has been remembered, then persists once verified", async () => {
+    const p = persistence(undefined);
+    const controller = new SessionController({ store: store(), createClient: fakeClient(ok), createDemo: demo, persistence: p });
+    await controller.restore();
+    expect(p.open).toHaveBeenCalledWith(saved.server, "scope:synthetic");
+    expect(controller.state).toMatchObject({ phase: "workspace", scope: "scope:synthetic", reachability: "online" });
+    if (controller.state.phase === "workspace") expect(controller.state.cache.persistent).toBe(true);
+  });
+  it("switches scope when the server confirms a different account than the cached one", async () => {
+    const p = persistence("someone-else");
+    const controller = new SessionController({ store: store(), createClient: fakeClient(ok), createDemo: demo, persistence: p });
+    await controller.restore();
+    expect(p.open.mock.calls.map((call) => call[1])).toEqual(["scope:someone-else", "scope:synthetic"]);
+    expect(controller.state).toMatchObject({ scope: "scope:synthetic" });
+    if (controller.state.phase === "workspace") expect(controller.state.cache).toBe(p.opened[1]);
+  });
+  it("does not reopen the scope when the remembered account is confirmed", async () => {
+    const p = persistence("synthetic");
+    const controller = new SessionController({ store: store(), createClient: fakeClient(ok), createDemo: demo, persistence: p });
+    await controller.restore();
+    expect(p.open).toHaveBeenCalledOnce();
+  });
+  it("opens a persistent scope on connect", async () => {
+    const p = persistence();
+    const controller = new SessionController({ store: store(null), createClient: fakeClient(ok), createDemo: demo, persistence: p });
+    await controller.restore();
+    await controller.connect(saved);
+    expect(p.open).toHaveBeenCalledWith(saved.server, "scope:synthetic");
+    expect(controller.state).toMatchObject({ phase: "workspace", scope: "scope:synthetic" });
+  });
+  it("falls back to an in-memory cache when local storage fails", async () => {
+    const p = persistence("synthetic"); p.open.mockRejectedValue(new Error("disk"));
+    const controller = new SessionController({ store: store(), createClient: fakeClient(ok), createDemo: demo, persistence: p });
+    await controller.restore();
+    expect(controller.state).toMatchObject({ phase: "workspace", reachability: "online" });
+    if (controller.state.phase === "workspace") { expect(controller.state.scope).toBeUndefined(); expect(controller.state.cache.persistent).toBe(false); }
+  });
+  it("wipes local data on disconnect, but only cached responses on token expiry", async () => {
+    const p = persistence("synthetic");
+    const controller = new SessionController({ store: store(), createClient: fakeClient(expired), createDemo: demo, persistence: p });
+    await controller.restore();
+    expect(controller.state.phase).toBe("signed_out");
+    expect(p.clearCache).toHaveBeenCalledWith("scope:synthetic");
+    expect(p.wipe).not.toHaveBeenCalled();
+    const second = new SessionController({ store: store(), createClient: fakeClient(ok), createDemo: demo, persistence: p });
+    await second.restore();
+    await second.disconnect();
+    expect(p.wipe).toHaveBeenCalledOnce();
+  });
+  it("never persists the sample workspace", async () => {
+    const p = persistence();
+    const controller = new SessionController({ store: store(null), createClient: fakeClient(ok), createDemo: demo, persistence: p });
+    await controller.restore();
+    await controller.openDemo();
+    await controller.disconnect();
+    expect(p.open).not.toHaveBeenCalled(); expect(p.wipe).not.toHaveBeenCalled();
+  });
+  it("still signs out when wiping local data fails", async () => {
+    const p = persistence("synthetic"); p.wipe.mockRejectedValue(new Error("disk"));
+    const controller = new SessionController({ store: store(), createClient: fakeClient(ok), createDemo: demo, persistence: p });
+    await controller.restore();
+    await controller.disconnect();
+    expect(controller.state).toMatchObject({ phase: "signed_out", error: expect.stringMatching(/could not be removed/u) });
   });
 });

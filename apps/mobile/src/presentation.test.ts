@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evidenceLabel, formatQuantity, inventoryAccessibilityLabel, stockSummary } from "./presentation";
+import { evidenceLabel, formatQuantity, inventoryAccessibilityLabel, stockSummary, syncedLabel } from "./presentation";
 
 const row = { name: "Wire kit", quantity: 1, availableQuantity: 1, unit: "set" as const, location: "Drawer A", evidence: { state: "delivered_uncounted" as const } };
 
@@ -26,5 +26,16 @@ describe("quantity presentation", () => {
     expect(stockSummary({ quantity: 5, availableQuantity: 3, unit: "each" })).toBe("Available 3 of 5 pieces");
     expect(stockSummary({ quantity: 5, availableQuantity: 5, unit: "each" })).toBe("5 pieces");
     expect(stockSummary({ quantity: 1000, availableQuantity: 0, unit: "gram" })).toBe("None available of 1,000 g");
+  });
+});
+
+describe("last synced label", () => {
+  const now = new Date(2026, 10, 11, 15, 30);
+  it("shows only the time for today and the date otherwise", () => {
+    expect(syncedLabel(new Date(2026, 10, 11, 9, 5), now, "en-GB")).toBe("Last synced 09:05");
+    expect(syncedLabel(new Date(2026, 10, 3, 14, 5), now, "en-GB")).toBe("Last synced 3 Nov, 14:05");
+  });
+  it("says when nothing has been synced on this device", () => {
+    expect(syncedLabel(undefined, now)).toBe("Nothing saved on this device yet");
   });
 });

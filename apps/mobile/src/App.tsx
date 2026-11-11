@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Alert, AppState, KeyboardAvoidingView, Linking, Platform, Switch, Text, View, useColorScheme } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { DarkTheme, DefaultTheme, NavigationContainer, type LinkingOptions } from "@react-navigation/native";
@@ -8,6 +8,8 @@ import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeBottomTabNavigator } from "@react-navigation/bottom-tabs/unstable";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { StatusBar } from "expo-status-bar";
+import * as SplashScreen from "expo-splash-screen";
+import * as Crypto from "expo-crypto";
 import { fetch } from "expo/fetch";
 import { BenchLedgerClient, type Fetcher } from "./client";
 import { credentialStore, pairLinkMemory } from "./credentials";
@@ -15,18 +17,27 @@ import { createDemoClient } from "./demo";
 import { ErrorBoundary } from "./error-boundary";
 import { foregroundThrottle } from "./foreground";
 import { linking, parsePairLink } from "./links";
-import type { InventoryRoutes, ProjectRoutes } from "./navigation";
+import type { InventoryRoutes, ProjectRoutes, ServerRoutes } from "./navigation";
+import { deviceQueueStorage, devicePersistence, memoryQueueStorage } from "./offline-db";
+import { routeScan } from "./scan";
+import { ScannerModal } from "./scanner";
 import { SessionContext } from "./session";
-import { SessionController } from "./session-controller";
+import { SessionController, type WorkspaceState } from "./session-controller";
 import { EditItemScreen, InventoryScreen, ItemScreen, NewProjectScreen, ProjectScreen, ProjectsScreen, ServerScreen } from "./screens";
+import { StockQueueContext } from "./stock-context";
+import { StockQueue } from "./stock-queue";
+import { PendingChangesScreen, QuickStockScreen } from "./stock-screens";
 import { Action, AdaptiveScrollView as ScrollView, BrandMark, Colours, Copy, Field, Icon, Loading, Notice, styles, useColours } from "./ui";
 
 // Foreground revalidation is throttled so quick app switches do not hammer a home server.
 const FOREGROUND_REVALIDATE_MS = 30_000;
+// Keep the launch screen until session restore has chosen the first screen.
+void SplashScreen.preventAutoHideAsync().catch(() => undefined);
+const hideSplash = () => { void SplashScreen.hideAsync().catch(() => undefined); };
 
 const InventoryStack = createNativeStackNavigator<InventoryRoutes>();
 const ProjectsStack = createNativeStackNavigator<ProjectRoutes>();
-const ServerStack = createNativeStackNavigator();
+const ServerStack = createNativeStackNavigator<ServerRoutes>();
 const Tabs = createBottomTabNavigator();
 const NativeTabs = createNativeBottomTabNavigator();
 function useStackOptions() {
@@ -40,7 +51,8 @@ const largeHeader = { headerLargeTitleEnabled: true, headerLargeTitleShadowVisib
 function InventoryNavigator() {
   return <InventoryStack.Navigator screenOptions={useStackOptions()}><InventoryStack.Screen name="Inventory" component={InventoryScreen} options={largeHeader} />
     <InventoryStack.Screen name="Item" component={ItemScreen} options={{ title: "Item details" }} />
-    <InventoryStack.Screen name="EditItem" component={EditItemScreen} options={{ title: "Edit details" }} /></InventoryStack.Navigator>;
+    <InventoryStack.Screen name="EditItem" component={EditItemScreen} options={{ title: "Edit details" }} />
+    <InventoryStack.Screen name="AdjustStock" component={QuickStockScreen} options={{ title: "Update stock", presentation: "modal" }} /></InventoryStack.Navigator>;
 }
 function ProjectsNavigator() {
   return <ProjectsStack.Navigator screenOptions={useStackOptions()}><ProjectsStack.Screen name="Projects" component={ProjectsScreen} options={largeHeader} />
@@ -48,7 +60,8 @@ function ProjectsNavigator() {
     <ProjectsStack.Screen name="NewProject" component={NewProjectScreen} options={{ title: "New project" }} /></ProjectsStack.Navigator>;
 }
 function ServerNavigator() {
-  return <ServerStack.Navigator screenOptions={useStackOptions()}><ServerStack.Screen name="Workspace" component={ServerScreen} options={{ ...largeHeader, title: "Server" }} /></ServerStack.Navigator>;
+  return <ServerStack.Navigator screenOptions={useStackOptions()}><ServerStack.Screen name="Workspace" component={ServerScreen} options={{ ...largeHeader, title: "Server" }} />
+    <ServerStack.Screen name="PendingChanges" component={PendingChangesScreen} options={{ title: "Stock changes" }} /></ServerStack.Navigator>;
 }
 function Workspace() {
   const c = useColours();
@@ -75,15 +88,51 @@ function createController() {
   return new SessionController({
     store: credentialStore,
     createClient: (connection) => new BenchLedgerClient(connection, fetch as Fetcher),
-    createDemo: createDemoClient
+    createDemo: createDemoClient,
+    persistence: devicePersistence
   });
 }
+
+/**
+ * The stock queue for the open workspace scope. It replays whenever the
+ * server is confirmed reachable, and refreshes affected records afterwards.
+ */
+function useWorkspaceQueue(state: WorkspaceState | undefined) {
+  const scope = state?.scope; const open = !!state && !state.demo;
+  const queue = useMemo(() => open ? new StockQueue(scope ? deviceQueueStorage(scope) : memoryQueueStorage(), { newKey: Crypto.randomUUID }) : null, [open, scope]);
+  const [loaded, setLoaded] = useState<StockQueue | null>(null);
+  useEffect(() => {
+    if (!queue) return;
+    let live = true;
+    void queue.load().then(() => { if (live) setLoaded(queue); }).catch(() => undefined);
+    return () => { live = false; };
+  }, [queue]);
+  const ready = !!state && state.reachability === "online" && !state.provisional;
+  const client = state?.client as BenchLedgerClient | undefined; const cache = state?.cache;
+  const entries = useSyncExternalStore(queue?.subscribe ?? noop, queue ? queue.getSnapshot : none);
+  const pending = entries.some((e) => e.status === "pending");
+  useEffect(() => {
+    if (!ready || !client || !cache || !queue || loaded !== queue || !pending) return;
+    void queue.replay(client).then(({ sent }) => {
+      for (const item of sent) cache.delete(`item/${item.id}`);
+      if (sent.length) cache.revalidate();
+    }).catch(() => undefined);
+  }, [ready, client, cache, queue, loaded, pending]);
+  return queue;
+}
+const noop = () => () => undefined;
+const nothing: never[] = [];
+const none = () => nothing;
 
 function MobileApp() {
   const c = useColours(); const dark = useColorScheme() === "dark";
   const controller = useMemo(createController, []);
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const pendingPair = useRef<string | undefined>(undefined);
+  const queue = useWorkspaceQueue(state.phase === "workspace" ? state : undefined);
+  const [scanning, setScanning] = useState(false);
+  // The connect form can be shown at once; a workspace waits for its first navigation frame.
+  useEffect(() => { if (state.phase === "signed_out") hideSplash(); }, [state.phase]);
 
   useEffect(() => {
     void controller.restore();
@@ -138,16 +187,24 @@ function MobileApp() {
   if (state.phase === "workspace") {
     const { phase: _phase, client, ...rest } = state;
     const value = { ...rest, client: client as BenchLedgerClient, disconnect: () => controller.disconnect(), retry: () => controller.retry() };
-    return <SessionContext.Provider value={value}>
-      <NavigationContainer theme={theme} linking={linking as unknown as LinkingOptions<ReactNavigation.RootParamList>}><StatusBar style={dark ? "light" : "dark"} /><Workspace /></NavigationContainer>
-    </SessionContext.Provider>;
+    return <SessionContext.Provider value={value}><StockQueueContext.Provider value={queue}>
+      <NavigationContainer theme={theme} onReady={hideSplash} linking={linking as unknown as LinkingOptions<ReactNavigation.RootParamList>}><StatusBar style={dark ? "light" : "dark"} /><Workspace /></NavigationContainer>
+    </StockQueueContext.Provider></SessionContext.Provider>;
   }
   const signedOut = state.phase === "signed_out" ? state : undefined;
   const draft = signedOut?.draft ?? { server: "", token: "", allowLocalHttp: false };
   const busy = signedOut?.busy ?? false;
   const setDraft = (next: typeof draft) => controller.setDraft(next);
+  // A scanned pairing QR follows exactly the same path as an opened pairing link.
+  const scanned = (data: string) => {
+    const result = routeScan(data, { signedIn: false });
+    if (result.kind !== "pair") { Alert.alert("Can't use this code", result.kind === "ignored" ? result.reason : "Connect first."); return; }
+    void pairLinkMemory.remember(result.url);
+    pendingPair.current = result.url; applyPair();
+  };
   return <SafeAreaView style={[styles.screen, { backgroundColor: c.background }]}>
     <StatusBar style={dark ? "light" : "dark"} />
+    <ScannerModal visible={scanning} title="Scan pairing code" hint="Show the pairing QR from your BenchLedger web workspace. It only fills in this form." onClose={() => setScanning(false)} onScan={scanned} />
     {!signedOut ? <Loading /> : <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       <ScrollView keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive" contentContainerStyle={styles.connection}>
         <View style={styles.hero}><BrandMark />
@@ -168,6 +225,7 @@ function MobileApp() {
         {draft.allowLocalHttp && <Notice message="HTTP sends your token and workspace data without encryption. Public server addresses still require HTTPS." />}
         {signedOut.error ? <Notice error message={signedOut.error} /> : null}
         <Action label={busy ? "Connecting…" : "Connect to server"} icon="arrow-forward" busy={busy} disabled={!draft.server.trim() || !draft.token.trim()} onPress={() => { void controller.connect(draft); }} />
+        <Action quiet label="Scan pairing code" icon="qr-code-outline" disabled={busy} onPress={() => setScanning(true)} />
         <Action quiet label="Explore a sample workspace" icon="eye-outline" disabled={busy} onPress={() => { void controller.openDemo(); }} />
         <View style={styles.secureNote}><Icon name="lock-closed-outline" size={16} color={c.muted} /><Text style={[styles.small, styles.flex, { color: c.muted }]}>Your token stays in secure device storage. No BenchLedger cloud account needed.</Text></View>
       </ScrollView>
@@ -177,6 +235,7 @@ function MobileApp() {
 
 function Recovery({ reset }: { reset(): void }) {
   const c = useColours();
+  useEffect(hideSplash, []);
   return <SafeAreaView style={[styles.screen, { backgroundColor: c.background }]}>
     <View style={styles.connection}>
       <Copy title>Something went wrong</Copy>
@@ -187,6 +246,8 @@ function Recovery({ reset }: { reset(): void }) {
 }
 
 export default function App() {
+  // Never leave the launch screen up indefinitely, even if restore stalls.
+  useEffect(() => { const timer = setTimeout(hideSplash, 6000); return () => clearTimeout(timer); }, []);
   return <SafeAreaProvider><Colours>
     <ErrorBoundary fallback={(reset) => <Recovery reset={reset} />}><MobileApp /></ErrorBoundary>
   </Colours></SafeAreaProvider>;

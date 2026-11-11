@@ -1,6 +1,6 @@
 # BenchLedger mobile privacy policy
 
-Effective date: 14 September 2026
+Effective date: 11 November 2026 (previous version: 14 September 2026)
 
 BenchLedger for iPhone and Android connects to a BenchLedger server that you
 choose. The app's developer does not operate a required cloud account service,
@@ -16,10 +16,14 @@ controls that server's storage, access, logs, retention and deletion. If someone
 else operates your server, ask them for their privacy policy.
 
 Your server address and API token are saved in protected device storage: iOS
-Keychain or Android encrypted storage. Workspace responses are kept in an
-in-memory cache for the running session so screens reopen instantly; the app
-does not keep a persistent offline copy, and the cache is dropped when you
-disconnect or the app is closed. A `benchledger://pair` link can carry an API
+Keychain or Android encrypted storage. So that the app works with poor or no
+Wi-Fi, the most recent inventory and project responses, item photos you have
+viewed, and stock counts or receipts you recorded but have not yet sent are
+stored on the device in the app's private storage. They are kept separately
+for each server and account (identified by a one-way digest, not your token or
+account name) and are not shared with other apps. This local copy can be
+included in your device's encrypted backups. Unsent stock changes are sent
+only to your connected server. A `benchledger://pair` link can carry an API
 token; the app only uses it to fill in the connect form for your review, never
 connects automatically and never logs it. Treat such links like the token. Public server connections
 require HTTPS. Local HTTP is available only after explicit opt-in and does not
@@ -30,16 +34,25 @@ does not contact a server, save credentials or transmit your activity.
 
 ## Deletion and control
 
-Choose **Disconnect** in the Server tab to remove the saved connection and clear
-workspace data from app memory. Disconnecting does not delete data from your
+Choose **Disconnect** in the Server tab to remove the saved connection, the
+saved workspace responses, cached photos and any unsent stock changes from the
+device; the app asks first if unsent changes would be lost. If the server stops
+accepting your token, saved responses are removed and unsent stock changes are
+kept until you reconnect with the same account or connect a different one. Disconnecting does not delete data from your
 server or revoke the server token; contact its administrator for those actions.
 iOS Keychain entries can survive uninstall, so disconnect before uninstalling
 if you want to remove the saved token. Copies that you separately save in a
 password manager are controlled through that password manager.
 
-The app requests local-network access when connecting to a local server. You
-can change that permission in device settings. It does not request access to
-contacts, location, photos, microphone or camera.
+The app requests local-network access when connecting to a local server. It
+asks for camera access only when you open the scanner or take an item photo;
+the camera is used to read codes on the device and to capture the photo you
+choose to upload. Choosing an existing photo uses the system photo picker,
+which shares only the photo you select. Photos are resized and re-encoded
+before upload, which removes location and other embedded metadata; they are
+sent only to your server. The app does not request access to contacts,
+location or the microphone. You can change these permissions in device
+settings.
 
 ## Apple, Google and support
 

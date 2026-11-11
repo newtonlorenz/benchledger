@@ -126,3 +126,16 @@ describe("first page merge", () => {
     expect(mergeFirstPage({ data: items("a", "b", "c"), limit: 2, nextCursor: "p3" }, page(["a"]), 2)).toEqual(page(["a"]));
   });
 });
+
+describe("last synced label source", () => {
+  it("re-renders when the cache records a newer response", async () => {
+    const { useLastSynced } = await import("./use-remote");
+    const cache = new QueryCache();
+    const { result } = renderHook(() => useLastSynced(cache));
+    expect(result.current).toBeUndefined();
+    act(() => cache.set("item/a", { id: "a" }, new Date("2026-11-11T10:00:00Z")));
+    expect(result.current).toEqual(new Date("2026-11-11T10:00:00Z"));
+    act(() => cache.clear());
+    expect(result.current).toBeUndefined();
+  });
+});

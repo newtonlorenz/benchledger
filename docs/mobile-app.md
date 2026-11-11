@@ -10,6 +10,13 @@ release. No BenchLedger cloud account or Expo account is required for local use.
 credentials or network traffic. It is read only and visibly labelled; leave it
 from the Server tab before connecting to your own workspace.
 
+| Connect | Sample inventory | Item | Count | Dark |
+| --- | --- | --- | --- | --- |
+| ![Connect form with Explore a sample workspace](assets/mobile/connect.jpg) | ![Sample inventory](assets/mobile/inventory.jpg) | ![Item with stock actions](assets/mobile/item.jpg) | ![Count confirmation before and after](assets/mobile/stock-count.jpg) | ![Sample inventory in dark mode](assets/mobile/inventory-dark.jpg) |
+
+Screenshots: iPhone 17 simulator, iOS 27.0, synthetic sample or demo-server
+data. The count screenshot uses the disposable demo server.
+
 ## Supported workflows
 
 The iPhone interface targets iOS 27 with native Liquid Glass tabs, large
@@ -30,7 +37,19 @@ See the [mobile design system](../apps/mobile/DESIGN.md) and
 - Returning to a screen shows what was already loaded and refreshes it in the
   background ("Updating…"), keeping loaded pages and scroll position. Visible
   screens also refresh when the app returns to the foreground (at most every
-  30 seconds). This cache lives in memory for the current session only.
+  30 seconds). The last good list and detail responses are also saved on the
+  device (see [Offline use](#offline-use)), so a cold start without a network
+  shows the last synced data.
+- Record a physical **count** or **received** stock from an item: large −/+
+  steppers, haptic feedback, and an explicit before → after confirmation. The
+  change is saved on the phone first and sent in order when the workspace is
+  reachable (see [Quick count and receipts](#quick-count-and-receipts)).
+- Add a photo to an item's image gallery from the camera or photo library.
+  Thumbnails appear in item details and, once a gallery has been opened on
+  this phone, in inventory rows.
+- Scan an item label (`benchledger://item/<id>`), or a product barcode to search
+  inventory; scan the web workspace's pairing QR code to fill in the connect
+  form (see [Scanning and labels](#scanning-and-labels)).
 - Edit item name, description and location. The form loads the current item
   and sends its version with a stable retry key. If someone else changed the
   item meanwhile (HTTP 409), the app shows the latest server values and offers
@@ -45,18 +64,100 @@ See the [mobile design system](../apps/mobile/DESIGN.md) and
   readable as permitted by the existing API; workspace writes need an unscoped
   write/admin token. Project lists preserve the server's scope filtering.
 
-Use the web workspace for stock counts, procurement, reconciliation, file
-uploads, CAD viewing and detailed build planning. The mobile requirements list
-does not claim stock readiness. There is no persistent offline cache, offline
-write queue, camera scanner, automatic server discovery or printer-control
-feature.
+Use the web workspace for commissioning, project usage and reservations,
+procurement, reconciliation, file uploads, CAD viewing and detailed build
+planning. The mobile requirements list does not claim stock readiness. There is
+no automatic server discovery or printer-control feature.
+
+### Offline use
+
+Responses are cached in a local SQLite database in the app sandbox, scoped to
+a SHA-256 digest of the server address and the authenticated account. Another
+account on the same server, or another server, never sees that data; connecting
+to a different scope deletes the previous one. The API token is never written
+there; it stays in iOS Keychain or Android encrypted storage. The account
+identifier itself is not stored either, only the digest. At most 300 responses
+are kept per scope, oldest first evicted. **Disconnect** deletes the cache, any
+unsent stock changes and the authenticated photo cache. An expired token (HTTP
+401) deletes the cached responses but keeps unsent stock changes for that
+account, so they are sent if the same account reconnects; connecting a
+different account discards them.
+
+When the server cannot be reached, screens show the saved data under
+**Last synced <time> · offline**. Because the cache is on disk, it may be
+included in encrypted device backups.
+
+### Quick count and receipts
+
+From an item, **Count stock** records what you can physically see; it replaces
+the recorded quantity and marks the evidence as physically counted (`POST
+/inventory/{id}/count`, the same call the web app makes). **Record received
+stock** appends a `receipt` stock event (`POST /inventory/{id}/stock-events`),
+which adds to the recorded quantity; availability follows the server's
+evidence rules. Project usage needs a reservation and stays in the web app.
+
+Each change is written to the phone before any request and keeps one
+`Idempotency-Key` for its whole life, so a retry after a timeout is replayed by
+the server rather than applied twice (the server scopes the key to the request
+fingerprint, which includes the item). Changes replay strictly in the order
+recorded when the server is confirmed reachable. Before a change is sent the
+first time, the app re-reads the item and compares its `version` with the one
+the change was based on; if it moved, the change is held as **needs your
+decision** with the latest server quantity, and later changes to that item wait.
+You can apply it on top of the latest quantity or discard it. A refusal (for
+example a read-only token) is shown as **not accepted** with **Try again** and
+**Discard**. Nothing is dropped silently. A change already attempted is resent
+with the same key without a version check, because the version may have moved
+because of that very change.
+
+The count and stock-event routes do not honour `If-Match`; the version check
+is client-side. See [server follow-ups](#known-gaps-and-follow-ups).
+
+### Photos
+
+**Add photo** offers the camera or the system photo picker (no photo-library
+permission is needed for the picker). The app downscales to at most 1600 px on
+the long edge and recompresses as JPEG, stepping down to 800 px if needed, to
+stay under the server's 2 MiB upload limit; re-encoding drops EXIF and GPS
+data. Uploads use the existing gallery API with its `expectedVersion` and a
+stable `Idempotency-Key`; if the gallery changed meanwhile, the app reloads it
+and asks you to try again. Temporary copies are deleted after reading. Images
+are fetched with the bearer token and disk-cached by content digest; the cache
+is cleared on disconnect. Photo uploads are not queued offline.
+
+### Scanning and labels
+
+The inventory toolbar's **Scan** button opens the camera scanner (QR, Data
+Matrix, EAN/UPC, Code 128 and Code 39):
+
+- `benchledger://item/<id>` opens that item; `benchledger://project/<id>` opens
+  the project. IDs are validated on the raw text, before any request.
+- A pairing code is refused while a workspace is open.
+- Any other text, such as a product barcode, fills the inventory search.
+- Web addresses are never opened from a scan.
+
+On the connect screen, **Scan pairing code** accepts only a
+`benchledger://pair?...` code. It follows the same path as an opened pairing
+link: it fills in the form, never connects, never enables local HTTP and is
+never logged; the consumed-link hash dedupe applies.
+
+**Printable label format.** Encode the item's ID as the QR payload
+`benchledger://item/<id>`, where `<id>` matches `^[A-Za-z0-9][A-Za-z0-9._:-]*$`
+(at most 160 characters). Use error correction level M or higher and a quiet
+zone of four modules; print the item name under the code for people. The label
+carries no server address or token, so it is safe to leave on a drawer, and it
+works with whichever workspace the phone is connected to. The web app does not
+yet print labels; see the follow-ups.
+
+Camera scanning needs a real device: the iOS Simulator has no camera. The scan
+routing is covered by unit tests.
 
 ### Offline launch and server health
 
 If the saved server cannot be reached at launch, the app still opens the
-workspace and shows **Can't reach your workspace** with **Retry**. Nothing is
-cached on disk between launches yet, so a cold offline launch has no records
-to show. Only a definitive HTTP 401 clears the saved session; timeouts, network
+workspace with the last synced data and shows **Can't reach your workspace**
+with **Retry**. The launch screen stays up until the session restore has chosen
+the first screen (at most six seconds). Only a definitive HTTP 401 clears the saved session; timeouts, network
 errors and 5xx responses never do. A server reporting `degraded` health is
 connected with a visible warning rather than refused.
 
@@ -186,8 +287,26 @@ npm run mobile:demo
 ```
 
 Use `http://127.0.0.1:8796`, enable local HTTP, and enter the printed synthetic
-token. The data lives only in memory and disappears when that process stops.
-An Android emulator normally reaches host loopback through `10.0.2.2`.
+token. Set `BENCHLEDGER_MOBILE_DEMO_PORT` to use another loopback port. The
+data lives only in memory and disappears when that process stops. An Android
+emulator normally reaches host loopback through `10.0.2.2`.
+
+iOS 27 requires the UIScene life cycle. The `plugins/with-scene-lifecycle.cjs`
+config plugin adopts Expo's `ExpoAppSceneDelegate` during native generation
+until the Expo prebuild template does so itself. If CocoaPods fails with a
+Unicode normalisation error, run native generation with `LANG=en_US.UTF-8`.
+
+Android debug builds need JDK 17 and the Android SDK (platform 36, build tools
+36, NDK 27.1). CI runs `expo prebuild --platform android` and
+`./gradlew assembleDebug` in the `mobile` workflow on mobile changes. Locally:
+
+```bash
+cd apps/mobile && npx expo prebuild --platform android
+cd android && JAVA_HOME=<jdk17> ANDROID_HOME=<sdk> ./gradlew assembleDebug
+```
+
+`scripts/adaptive-icon.py` derives the Android adaptive-icon foreground from
+`assets/icon.png` (no new artwork); rerun it if the icon changes.
 
 ```bash
 npx vitest run apps/mobile/src
@@ -198,11 +317,14 @@ npm run check
 ```
 
 The mobile tests run in Vitest without a simulator. They cover the API client
-against the real Fastify application with synthetic records, forward-compatible
-reads, the local-address policy, quantity presentation, the connect/restore/
-offline/401 session controller, pairing and record links, stale-while-revalidate
-loading and paging, the edit-conflict flow, foreground throttling and the error
-boundary. Screen components themselves (`screens.tsx`, `App.tsx`) are not
+against the real Fastify application with synthetic records (including counts,
+receipts, idempotent retries and gallery uploads), forward-compatible reads,
+the local-address policy, quantity presentation, the connect/restore/
+offline/401 session controller with persistent scopes, the SQLite cache (via
+Node's built-in SQLite) and its scoping and wipe, the stock queue's ordering,
+idempotency, conflicts and restart recovery, scan routing, photo downscale
+decisions, pairing and record links, stale-while-revalidate loading and paging,
+the edit-conflict flow, foreground throttling and the error boundary. Screen components themselves (`screens.tsx`, `App.tsx`) are not
 rendered in tests; their logic is extracted into the tested modules. Native
 builds and screenshots are distinct from these tests and from physical-device
 or store verification.
@@ -215,25 +337,27 @@ for the tested platforms, screenshots and remaining release checks.
 
 ## Known gaps and follow-ups
 
-- Persistent offline cache and offline write queue. Needs a storage dependency
-  such as `expo-sqlite` or MMKV; the current cache is in memory only.
-- Launch splash screen with light/dark backgrounds. Needs `expo-splash-screen`,
-  which is not installed; the root background colour and runtime system UI
-  colour are set meanwhile.
-- A dedicated Android adaptive-icon foreground asset. The existing icon is used;
-  its bars sit inside the adaptive safe zone, but check it on device.
-- The extra top spacing above iOS large titles on Inventory needs simulator
-  investigation; it was not reproduced or changed here.
-- Camera capture into the inventory image gallery.
-- Barcode/QR scanning and printable location labels.
-- A quick count/adjust stock flow with haptics.
-- Android build in CI.
-- Refreshed store screenshots: the current ones predate the **Explore a sample
-  workspace** button.
+- Server: `POST /inventory/{id}/count` and `/stock-events` ignore `If-Match`, so
+  the stale-version check for queued stock changes is client-side and cannot be
+  atomic. Honouring an optional `If-Match` there would close that window.
+- Server: inventory list rows carry no primary image reference, so row
+  thumbnails appear only for items whose gallery was opened on this phone.
+- Web: printing item labels (QR `benchledger://item/<id>`) is not implemented.
+- Barcode scanning has not been exercised on a physical device.
+- Photo uploads are not queued offline; stock changes are.
+- The space above iOS large titles is UIKit's navigation bar row: on the iOS 27
+  simulator the title sits at the same position as the system Settings app, so
+  it was left native. On Inventory that row now holds the **Scan** button.
+- The Android adaptive icon and splash have only been checked as generated
+  resources, not on a device or emulator.
 
 ## Architecture and dependency decisions
 
-Expo provides native controls and one mobile codebase. Capacitor would reuse
+Expo provides native controls and one mobile codebase. Native modules added
+for offline use and the bench workflows are all Expo SDK 57 packages:
+`expo-sqlite`, `expo-haptics`, `expo-camera` (barcode scanning),
+`expo-image`, `expo-image-picker`, `expo-image-manipulator`,
+`expo-file-system` (temporary file clean-up) and `expo-splash-screen`. Capacitor would reuse
 the DOM UI but render screens in a WebView; Swift and Kotlin would create two
 separate clients. Server business rules remain in the shared application layer.
 There is no new server route, migration or authentication mode.
