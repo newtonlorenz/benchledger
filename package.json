@@ -33,6 +33,9 @@
     "check:mobile": "npm run mobile:export"
   },
   "overrides": {
+    "@expo/fingerprint": {
+      "glob": "^14.0.4"
+    },
     "query-string": "9.5.1",
     "react": "19.2.8",
     "react-dom": "19.2.8"

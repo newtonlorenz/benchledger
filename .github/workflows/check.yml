@@ -30,6 +30,8 @@ jobs:
       # Workspace typechecks resolve sibling packages through their built
       # declarations. Includes the mobile app's tsc --noEmit (no Expo export).
       - run: npm run build:packages
+      # The server imports the MCP adapter's declarations.
+      - run: npm run build --workspace=@benchledger/mcp
       - run: npm run typecheck
       # Strict: every production dependency that can reach the server image.
       - name: audit server runtime dependencies (strict)
