@@ -334,12 +334,54 @@ describe("McpAdapter", () => {
       quantity: { value: 2, unit: "piece" },
       evidence: { state: "commissioned", source: "bench-check", recordedAt: "2026-08-31T10:00:00Z" }
     }, { ...context, projectIds: ["project-1"] })).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "FORBIDDEN" } } });
-    await expect(adapter.callTool("commission_inventory_item", {
+    // Header-less hosts (stdio, most model clients) get a deterministic key.
+    const commissioned = await adapter.callTool("commission_inventory_item", {
       itemId: "item-esp32",
       expectedVersion: 1,
       quantity: { value: 2, unit: "piece" },
       evidence: { state: "commissioned", source: "bench-check", recordedAt: "2026-08-31T10:00:00Z" }
-    }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
+    }, context);
+    expect(commissioned).toMatchObject({ isError: false });
+  });
+
+  it("accepts an idempotencyKey argument and derives a deterministic key when none is supplied", async () => {
+    const seen: Array<string | undefined> = [];
+    const keyed = backend();
+    keyed.inventory.commission = vi.fn(async (input, ctx) => { seen.push(ctx.idempotencyKey); return { id: input.itemId, version: 2 }; });
+    const adapter = new McpAdapter(keyed);
+    const args = { itemId: "item-esp32", expectedVersion: 1, quantity: { value: 2, unit: "each" }, evidence: { state: "commissioned", source: "bench-check", recordedAt: "2026-08-31T10:00:00Z" } };
+    await expect(adapter.callTool("commission_inventory_item", { ...args, idempotencyKey: "agent-key-0001" }, context)).resolves.toMatchObject({ isError: false });
+    await expect(adapter.callTool("commission_inventory_item", args, context)).resolves.toMatchObject({ isError: false });
+    await expect(adapter.callTool("commission_inventory_item", { evidence: args.evidence, quantity: args.quantity, expectedVersion: 1, itemId: "item-esp32" }, context)).resolves.toMatchObject({ isError: false });
+    await expect(adapter.callTool("commission_inventory_item", { ...args, expectedVersion: 2 }, context)).resolves.toMatchObject({ isError: false });
+    expect(seen[0]).toBe("agent-key-0001");
+    expect(seen[1]).toMatch(/^mcp:commission_inventory_item:[0-9a-f]{64}$/u);
+    expect(seen[2]).toBe(seen[1]);
+    expect(seen[3]).not.toBe(seen[1]);
+    const otherActor = await new McpAdapter(keyed).callTool("commission_inventory_item", args, { ...context, actorId: "other-agent" });
+    expect(otherActor.isError).toBe(false);
+    expect(seen[4]).not.toBe(seen[1]);
+    await expect(adapter.callTool("commission_inventory_item", { ...args, idempotencyKey: "short" }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT", reason: "validation" } } });
+    await expect(adapter.callTool("commission_inventory_item", { ...args, idempotencyKey: "agent-key-0001" }, { ...context, idempotencyKey: "header-key-0001" })).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT", message: expect.stringMatching(/header/i) } } });
+    await expect(adapter.callTool("commission_inventory_item", { ...args, idempotencyKey: "header-key-0001" }, { ...context, idempotencyKey: "header-key-0001" })).resolves.toMatchObject({ isError: false });
+    expect(seen).toHaveLength(6);
+    // Reads never accept the write-only idempotencyKey argument.
+    await expect(adapter.callTool("read_inventory_item", { itemId: "item-esp32", idempotencyKey: "agent-key-0001" }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
+  });
+
+  it("returns reason, recovery details and a correlation id for application conflicts", async () => {
+    const { ApplicationError } = await import("@benchledger/application");
+    const failing = backend();
+    failing.bom.reserve = vi.fn(async () => { throw new ApplicationError("conflict", "Only physically confirmed stock can be reserved"); });
+    failing.inventory.update = vi.fn(async () => { throw new ApplicationError("conflict", "inventory_item 'item-esp32' changed since it was read", { expectedVersion: 1, actualVersion: 4 }); });
+    const adapter = new McpAdapter(failing);
+    const rule = await adapter.callTool("create_reservation", { projectRevisionId: "project-revision-1", bomLineId: "bom-1", itemId: "item-esp32", quantity: { value: 1, unit: "each" } }, { ...context, correlationId: "corr-synthetic-1" });
+    expect(rule).toMatchObject({ isError: true, structuredContent: { error: { code: "CONFLICT", reason: "rule_conflict", message: "Only physically confirmed stock can be reserved", correlationId: "corr-synthetic-1" } } });
+    const stale = await adapter.callTool("update_inventory_item", { itemId: "item-esp32", expectedVersion: 1, name: "ESP32" }, context);
+    expect(stale).toMatchObject({ isError: true, structuredContent: { error: { code: "CONFLICT", reason: "version_conflict", details: { expectedVersion: 1, actualVersion: 4 }, correlationId: expect.any(String) } } });
+    const missingVersion = await adapter.callTool("update_inventory_item", { itemId: "item-esp32", name: "ESP32" }, context);
+    expect(missingVersion).toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT", message: expect.stringMatching(/expectedVersion is required/) } } });
+    expect(failing.inventory.update).toHaveBeenCalledTimes(1);
   });
 
   it("rejects credential-bearing transfer payloads", async () => {
@@ -375,30 +417,28 @@ describe("McpAdapter", () => {
     const categoryArchive = adapter.listTools().find((tool) => tool.name === "archive_inventory_category");
     expect(categoryArchive?.inputSchema).toMatchObject({ required: expect.arrayContaining(["categoryId", "expectedVersion"]) });
     const categoryList = adapter.listTools().find((tool) => tool.name === "list_inventory_categories");
-    expect(categoryList?.inputSchema.properties.cursor).toMatchObject({ description: expect.stringContaining("512") });
+    expect(categoryList?.inputSchema.properties.cursor).toMatchObject({ maxLength: 512 });
     const inventoryList = adapter.listTools().find((tool) => tool.name === "list_inventory");
-    expect(inventoryList?.inputSchema.properties.cursor).toMatchObject({ description: expect.stringContaining("512") });
+    expect(inventoryList?.inputSchema.properties.cursor).toMatchObject({ maxLength: 512 });
     expect(inventoryList?.inputSchema.properties.categoryNodeId).toMatchObject({ type: "string", maxLength: 160 });
     expect(inventoryList?.inputSchema.properties.unassigned).toMatchObject({ type: "boolean" });
     const artifactList = adapter.listTools().find((tool) => tool.name === "list_artifacts");
-    expect(artifactList?.inputSchema).toMatchObject({ oneOf: expect.arrayContaining([
-      expect.objectContaining({ required: ["projectId"] }),
-      expect.objectContaining({ required: expect.arrayContaining(["projectId", "projectRevisionId"]) }),
-      expect.objectContaining({ required: expect.arrayContaining(["projectId", "workItemId", "workItemRevisionId"]) }),
-    ]) });
+    expect(artifactList?.inputSchema).toMatchObject({ type: "object", required: ["projectId"], properties: { projectRevisionId: { type: "string" }, workItemId: { type: "string" }, workItemRevisionId: { type: "string" } } });
+    expect(artifactList?.inputSchema).not.toHaveProperty("oneOf");
     expect(artifactList?.inputSchema).not.toHaveProperty("properties.revisionId");
     for (const name of ["begin_artifact_upload", "finalize_artifact_upload", "read_artifact_download_metadata", "download_artifact"]) {
       expect(adapter.listTools().some((tool) => tool.name === name)).toBe(false);
       expect(adapter.capabilityDocument().tools).not.toEqual(expect.arrayContaining([expect.objectContaining({ name })]));
     }
     const offerList = adapter.listTools().find((tool) => tool.name === "list_offers");
-    expect(offerList?.inputSchema.properties.cursor).toMatchObject({ description: expect.stringContaining("512") });
+    expect(offerList?.inputSchema.properties.cursor).toMatchObject({ maxLength: 512 });
     const categoryRead = adapter.listTools().find((tool) => tool.name === "read_inventory_category");
     expect(categoryRead?.inputSchema.properties.categoryId).toMatchObject({ type: "string", maxLength: 160 });
     expect(adapter.listTools().find((tool) => tool.name === "create_inventory_category")?.inputSchema.properties.id).toMatchObject({ type: "string", maxLength: 160 });
     const inventoryUpdate = adapter.listTools().find((tool) => tool.name === "update_inventory_item");
     expect(inventoryUpdate?.inputSchema.properties.categoryNodeId).toMatchObject({ oneOf: expect.arrayContaining([expect.objectContaining({ type: "string", maxLength: 160 }), expect.objectContaining({ type: "null" })]) });
-    expect(names).not.toContain("retire_inventory_item");
+    expect(names).toContain("retire_inventory_item");
+    expect(names).not.toContain("retire_project");
     expect(names).not.toContain("freeze_artifact_revision");
     expect(names).toContain("bulk_update_inventory_items");
     expect(names).not.toEqual(expect.arrayContaining(["run_shell", "execute_sql", "fetch_url", "purchase", "start_print"]));
@@ -426,7 +466,7 @@ describe("McpAdapter", () => {
     expect(alternative.properties.quantityConversion).toMatchObject({
       required: ["inventory", "requirement", "evidence"],
       properties: {
-        requirement: { required: ["quantity", "unit"], properties: { unit: { enum: ["piece"] } } },
+        requirement: { required: ["quantity", "unit"], properties: { unit: { enum: ["each", "piece"] } } },
       },
     });
     expect((alternative.properties.quantityConversion as Record<string, any>).properties.inventory.properties.unit.enum).toEqual(["set"]);
@@ -446,7 +486,7 @@ describe("McpAdapter", () => {
     expect(JSON.stringify(adapter.capabilityDocument())).toContain("piece");
     expect(JSON.stringify(adapter.capabilityDocument())).toMatch(/only consumed.*reserve|consumed.*reusable/i);
     expect(JSON.stringify(adapter.capabilityDocument())).toMatch(/printers.*build configuration|build configuration.*printers/i);
-    expect(JSON.stringify(adapter.capabilityDocument())).toContain("zero-reservation lines may be omitted");
+    expect(JSON.stringify(adapter.capabilityDocument())).toMatch(/zero-reservation (?:BOM )?lines may be omitted/i);
     expect(JSON.stringify(adapter.capabilityDocument())).toContain("every active reservation must be fully and exactly accounted");
 
     const reconciliation = adapter.listTools().find((tool) => tool.name === "save_reconciliation_draft");
@@ -545,7 +585,8 @@ describe("McpAdapter", () => {
 
   it("does not advertise unsupported mutation names as callable tools", async () => {
     const adapter = new McpAdapter(backend());
-    await expect(adapter.callTool("retire_inventory_item", { itemId: "item-esp32" }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_TOOL" } } });
+    await expect(adapter.callTool("retire_project", { projectId: "project-1", expectedVersion: 1 }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_TOOL" } } });
+    await expect(adapter.callTool("retire_inventory_item", { itemId: "item-esp32" }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
     await expect(adapter.callTool("freeze_artifact_revision", { artifactId: "artifact-1" }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_TOOL" } } });
   });
 
@@ -591,7 +632,7 @@ describe("McpAdapter", () => {
     const second = backend();
     second.projectScope = projectScope;
 
-    await expect(new McpAdapter(first).callTool("release_reservation", { reservationId: "reservation-1" }, scoped)).resolves.toMatchObject({ isError: false });
+    await expect(new McpAdapter(first).callTool("release_reservation", { reservationId: "reservation-1", expectedVersion: 1 }, scoped)).resolves.toMatchObject({ isError: false });
     await expect(new McpAdapter(second).callTool("finalize_artifact_upload", { uploadId: "upload-1" }, scoped)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "HOST_TRANSFER_UNAVAILABLE" } } });
     expect(resolverCalls).toEqual(["reservation:reservation-1"]);
   });
@@ -717,8 +758,11 @@ describe("McpAdapter", () => {
     const removalBackend = backend();
     removalBackend.projects.remove = removal;
     const adapter = new McpAdapter(removalBackend);
-    await expect(adapter.callTool("remove_project", { projectId: "project-1", expectedVersion: 1, projectName: "Reference project" }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
-    expect(removal).not.toHaveBeenCalled();
+    // Without a header or argument the key is derived from the exact command.
+    await expect(adapter.callTool("remove_project", { projectId: "project-1", expectedVersion: 1, projectName: "Reference project" }, context)).resolves.toMatchObject({ isError: false });
+    expect(removal).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ idempotencyKey: expect.stringMatching(/^mcp:remove_project:/u) }));
+    await expect(adapter.callTool("remove_project", { projectId: "project-1", projectName: "Reference project" }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
+    expect(removal).toHaveBeenCalledTimes(1);
     await expect(adapter.callTool("remove_project", { projectId: "project-1", expectedVersion: 1, projectName: "Reference project" }, { ...context, idempotencyKey: "stable-remove-1" })).resolves.toMatchObject({ isError: false });
     expect(removal).toHaveBeenCalledWith(expect.objectContaining({ projectId: "project-1" }), expect.objectContaining({ idempotencyKey: "stable-remove-1" }));
   });
@@ -792,22 +836,21 @@ describe("McpAdapter", () => {
       ["read_inventory_item", { itemId: "item-esp32" }],
       ["create_inventory_item", { name: "Wire", category: "wire", quantity: { value: 1, unit: "metre" }, evidence: { state: "physical_count", source: "count", recordedAt: "2026-08-30" } }],
       ["create_inventory_with_product_profile", { item: { name: "PETG HF", category: "filament", quantity: { value: 1000, unit: "gram" }, evidence: { state: "delivery", source: "order-1", recordedAt: "2026-08-30" } }, profile: { catalogProductId: "catalog-filament-1", profileType: "filament_spool", linkState: "reported", details: { openedState: "sealed" } } }],
-      ["update_inventory_item", { itemId: "item-esp32", name: "ESP32" }],
+      ["update_inventory_item", { itemId: "item-esp32", expectedVersion: 1, name: "ESP32" }],
       ["bulk_update_inventory_items", { targets: [{ itemId: "item-esp32", expectedVersion: 1 }], changes: { condition: "good" } }],
       ["record_stock_event", { itemId: "item-esp32", kind: "receipt", quantity: { value: 1, unit: "piece" } }],
       ["list_stock_events", { itemId: "item-esp32", limit: 5 }],
       ["search_catalog_products", { query: "petg", kind: "filament", limit: 5 }],
       ["read_catalog_product", { productId: "catalog-filament-1" }],
       ["create_catalog_product", { kind: "filament", manufacturer: "Bambu Lab", productName: "PETG HF", materialFamily: "PETG", colourName: "Black", diameterMm: 1.75, nominalNetMassG: 1000, lengthBasis: "unknown" }],
-      ["update_catalog_product", { productId: "catalog-filament-1", colourName: "Graphite" }],
+      ["update_catalog_product", { productId: "catalog-filament-1", expectedVersion: 1, colourName: "Graphite" }],
       ["read_inventory_product_profile", { itemId: "item-esp32" }],
       ["link_inventory_product_profile", { itemId: "item-esp32", catalogProductId: "catalog-filament-1", profileType: "filament_spool", linkState: "reported", details: { openedState: "sealed" } }],
       ["list_projects", { query: "reference", status: "building", limit: 5 }],
       ["read_project", { projectId: "project-1" }],
       ["create_project", { name: "New project" }],
       ["create_project_with_initial_revision", { name: "New project", revisionSummary: "plan" }],
-      ["update_project", { projectId: "project-1", status: "ready" }],
-      ["retire_project", { projectId: "project-1" }],
+      ["update_project", { projectId: "project-1", expectedVersion: 1, status: "ready" }],
       ["create_work_item", { projectId: "project-1", name: "Part", kind: "part" }],
       ["read_work_item", { workItemId: "work-1" }],
       ["create_project_revision", { projectId: "project-1", summary: "r2" }],
@@ -816,14 +859,14 @@ describe("McpAdapter", () => {
       ["read_work_item_revision", { revisionId: "work-revision-1" }],
       ["list_bom_lines", { projectRevisionId: "project-revision-1", includeRetired: true, limit: 5 }],
       ["create_bom_line", { projectRevisionId: "project-revision-1", description: "ESP32", quantity: 1, unit: "piece" }],
-      ["update_bom_line", { bomLineId: "bom-1", description: "ESP32 v2" }],
+      ["update_bom_line", { bomLineId: "bom-1", expectedVersion: 1, description: "ESP32 v2" }],
       ["retire_bom_line", { bomLineId: "bom-1", expectedVersion: 2 }],
       ["restore_bom_line", { bomLineId: "bom-1", expectedVersion: 3 }],
       ["calculate_bom_gaps", { projectRevisionId: "project-revision-1" }],
       ["list_reservations", { projectRevisionId: "project-revision-1", limit: 5 }],
       ["read_reservation", { reservationId: "reservation-1" }],
       ["create_reservation", { projectRevisionId: "project-revision-1", bomLineId: "bom-1", itemId: "item-esp32", quantity: { value: 1, unit: "piece" } }],
-      ["release_reservation", { reservationId: "reservation-1" }],
+      ["release_reservation", { reservationId: "reservation-1", expectedVersion: 1 }],
       ["record_usage", { projectRevisionId: "project-revision-1", reservationId: "reservation-1", itemId: "item-esp32", quantity: { value: 1, unit: "piece" } }],
       ["create_build_configuration", { projectRevisionId: "project-revision-1", printerItemSnapshot: { itemId: "printer-1", catalogProductId: "catalog-printer-1" }, filamentSelections: [{ itemId: "item-esp32", catalogProductId: "catalog-filament-1" }], activeHotend: { side: "left" }, nozzle: { diameterMm: 0.4 }, plate: "Cool Plate", accessories: [], firmware: { version: "01.08.00.00" }, slicer: { name: "Bambu Studio", version: "1.10.0" }, profile: { name: "0.20mm Standard" }, calibration: { state: "current" }, explicitUnknowns: [] }],
       ["list_build_configurations", { projectRevisionId: "project-revision-1", limit: 5 }],
@@ -834,7 +877,7 @@ describe("McpAdapter", () => {
       ["finalize_artifact_upload", { uploadId: "upload-1" }],
       ["read_artifact_download_metadata", { artifactId: "artifact-1" }],
       ["download_artifact", { artifactId: "artifact-1" }],
-      ["retire_artifact", { artifactId: "artifact-1" }],
+      ["retire_artifact", { artifactId: "artifact-1", expectedVersion: 1 }],
       ["list_offers", { itemId: "item-esp32", supplier: "Example", query: "Example" }],
       ["record_offer_snapshot", { itemId: "item-esp32", supplier: "Example", url: "https://shop.example/esp32", price: { minor: 500, currency: "EUR" } }],
       ["refresh_context", { projectId: "project-1", includeInventory: true, maxAgeSeconds: 120 }],
@@ -1182,5 +1225,36 @@ describe("McpAdapter", () => {
     const nestedUnsafe = backend();
     nestedUnsafe.artifacts.finalizeUpload = async () => ({ artifact: { downloadUrl: "https://maker.example/api/v1/transfers/artifacts/artifact-1/download?token=x" } });
     await expect(new McpAdapter(nestedUnsafe).callTool("finalize_artifact_upload", { uploadId: "upload-1" }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "HOST_TRANSFER_UNAVAILABLE" } } });
+  });
+});
+
+describe("McpAdapter pagination contracts", () => {
+  it("keeps the continuation cursor for project-scoped list_projects", async () => {
+    const scopedBackend = backend();
+    scopedBackend.projects.list = async () => ({ items: [{ id: "project-1", name: "One", status: "idea", visibility: "private" }, { id: "foreign", name: "Other", status: "idea", visibility: "private" }] as never, nextCursor: "1", hasMore: true });
+    const result = await new McpAdapter(scopedBackend).callTool("list_projects", { limit: 1 }, { ...context, projectIds: ["project-1", "project-2"] });
+    expect(result).toMatchObject({ isError: false, structuredContent: { items: [{ id: "project-1" }], nextCursor: "1", hasMore: true } });
+  });
+
+  it("pages calculate_bom_gaps lines while keeping whole-revision totals", async () => {
+    const bomBackend = backend();
+    const lines = Array.from({ length: 5 }, (_, index) => ({ bomLineId: `bom-${index}` }));
+    bomBackend.bom.evaluate = async () => ({ projectRevisionId: "project-revision-1", lines, totals: { required: 5 }, generatedAt: "2026-08-30T10:00:00.000Z" }) as never;
+    const adapter = new McpAdapter(bomBackend);
+    const first = await adapter.callTool("calculate_bom_gaps", { projectRevisionId: "project-revision-1", limit: 2 }, context);
+    expect(first).toMatchObject({ isError: false, structuredContent: { lines: [{ bomLineId: "bom-0" }, { bomLineId: "bom-1" }], totalLines: 5, nextCursor: "2", hasMore: true, totals: { required: 5 } } });
+    const last = await adapter.callTool("calculate_bom_gaps", { projectRevisionId: "project-revision-1", limit: 2, cursor: "4" }, context);
+    expect(last).toMatchObject({ structuredContent: { lines: [{ bomLineId: "bom-4" }], nextCursor: null, hasMore: false } });
+    await expect(adapter.callTool("calculate_bom_gaps", { projectRevisionId: "project-revision-1", cursor: "abc" }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
+  });
+
+  it("read_inventory_summary rejects the removed paging arguments", async () => {
+    const summaryBackend = backend();
+    const summary = vi.fn(summaryBackend.inventory.summary);
+    summaryBackend.inventory.summary = summary;
+    const adapter = new McpAdapter(summaryBackend);
+    await expect(adapter.callTool("read_inventory_summary", {}, context)).resolves.toMatchObject({ isError: false });
+    expect(summary).toHaveBeenCalledWith({}, expect.anything());
+    await expect(adapter.callTool("read_inventory_summary", { limit: 5 }, context)).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: "INVALID_ARGUMENT" } } });
   });
 });

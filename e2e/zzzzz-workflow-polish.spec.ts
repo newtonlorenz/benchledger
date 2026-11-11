@@ -25,7 +25,7 @@ test("home attention opens the selected stock check and leaves archive view", as
   const picker = page.getByLabel("Choose matching inventory", { exact: true });
   const item = await picker.locator("option").filter({ hasText: "Polish uncertain connector" }).getAttribute("value"); await picker.selectOption(item!);
   await page.getByRole("button", { name: "Add requirement", exact: true }).click();
-  await page.getByRole("button", { name: /^Archived \(/u }).click(); await nav(page, "Workbench");
+  /* Leave the Projects index on the Archived view; home attention must still open the active project. */ await nav(page, "Projects"); await page.getByRole("button", { name: /^Archived \(/u }).click(); await nav(page, "Workbench");
   const queue = page.getByRole("region", { name: "Workspace attention queue" }); await queue.getByRole("button", { name: "Stock checks", exact: true }).click();
   await queue.getByRole("button", { name: "Check stock: Polish check pointer", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Polish check pointer", exact: true })).toBeVisible();
@@ -46,7 +46,7 @@ test("supplier quote entry is visible before legacy offers", async ({ page }) =>
   await login(page); await create(page, "Polish supplier entry");
   await page.getByRole("button", { name: "Add first requirement", exact: true }).click(); await page.getByLabel("What do you need?", { exact: true }).fill("Polish bracket"); await page.getByRole("button", { name: "Add requirement", exact: true }).click();
   await page.getByRole("tab", { name: /^Shopping list/u }).click();
-  await expect(page.getByRole("heading", { name: "Supplier quotes for this project", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Compare supplier quotes", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Record quote for Polish bracket", exact: true }).click();
   await expect(page.getByLabel("Supplier", { exact: true })).toBeVisible();
   await expect(page.getByRole("group", { name: "Sourcing view" }).getByRole("button", { name: "All requirements", exact: true })).toBeDisabled();

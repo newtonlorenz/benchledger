@@ -1,4 +1,4 @@
-import { DomainError, createStockEvent, deriveStockBalance } from "@benchledger/domain";
+import { DomainError, assertStockCommandReplay, deriveStockBalance } from "@benchledger/domain";
 import type { InventoryItem, StockBalance, StockEvent } from "@benchledger/domain";
 import { eventFromRow, itemFromRow, jsonValue } from "./serializers.js";
 import type { BenchDatabase, SqliteRow } from "./sqlite.js";
@@ -81,17 +81,41 @@ export class InventoryRepository {
     return updated;
   }
 
+  /** Every item's ledger in one query, each in the same order as listStockEvents(). */
+  listStockEventsByItem(): ReadonlyMap<string, readonly StockEvent[]> {
+    const events = new Map<string, StockEvent[]>();
+    for (const row of this.database.all<SqliteRow>("SELECT * FROM stock_events ORDER BY item_id, occurred_at, created_at, rowid", [])) {
+      const event = eventFromRow(row);
+      const ledger = events.get(event.itemId);
+      if (ledger === undefined) events.set(event.itemId, [event]);
+      else ledger.push(event);
+    }
+    return events;
+  }
+
+  /** Balance of an already-loaded item from an already-loaded ledger (no re-read). */
+  balanceOf(item: InventoryItem, events: readonly StockEvent[]): StockBalance {
+    return deriveStockBalance(item, events);
+  }
+
   listStockEvents(itemId: string): readonly StockEvent[] {
     return this.database.all<SqliteRow>("SELECT * FROM stock_events WHERE item_id = ? ORDER BY occurred_at, created_at, rowid", [itemId]).map(eventFromRow);
+  }
+
+  findStockEventByIdempotencyKey(idempotencyKey: string): StockEvent | undefined {
+    const row = this.database.get<SqliteRow>("SELECT * FROM stock_events WHERE idempotency_key = ?", [idempotencyKey]);
+    return row === undefined ? undefined : eventFromRow(row);
   }
 
   appendStockEvent(event: StockEvent): AppendStockEventResult {
     const item = this.get(event.itemId);
     if (item === undefined) throw new DomainError("inventory_not_found", `inventory item ${event.itemId} does not exist`);
     if (event.idempotencyKey !== undefined) {
-      const existingRow = this.database.get<SqliteRow>("SELECT * FROM stock_events WHERE idempotency_key = ?", [event.idempotencyKey]);
-      if (existingRow !== undefined) {
-        const existing = eventFromRow(existingRow);
+      const existing = this.findStockEventByIdempotencyKey(event.idempotencyKey);
+      if (existing !== undefined) {
+        // A replay must be the same command; anything else is a key reuse
+        // that would otherwise silently drop this stock movement.
+        assertStockCommandReplay(existing, event);
         return { event: existing, inserted: false, balance: this.balance(item.id) };
       }
     }

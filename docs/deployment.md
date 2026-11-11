@@ -46,7 +46,9 @@ explicit approval for that action.
 
 1. Build and test from a clean checkout.
 2. Create a private data directory with restricted ownership.
-3. Generate a high-entropy session secret. For a fresh trusted-LAN install,
+3. Generate a high-entropy session secret, for example
+   `openssl rand -base64 48`. Startup refuses the `.env.example` placeholder
+   and obviously low-entropy values (fewer than 12 distinct characters). For a fresh trusted-LAN install,
    leave `BENCHLEDGER_ADMIN_PASSWORD_HASH` unset to initialize the browser in
    `lan_open` mode. To initialize password protection, provide a built-in
    scrypt admin password hash generated with `hashAdminPassword` from
@@ -68,10 +70,40 @@ explicit approval for that action.
    `http://benchledger.local:8792`). It must not contain a path, credentials,
    query, or fragment; the server never trusts a request Host header when
    constructing transfer links. Generic MCP does not receive this origin or
-   any transfer credential.
-8. Keep `BENCHLEDGER_SECURE_COOKIES=false` for the documented plain-HTTP LAN
-   deployment. Set it to `true` only after TLS is configured and verified.
-9. Configure MCP tokens with lowercase SHA-256 digests in the read/write hash
+   any transfer credential. This host is also the Host allow-list: requests
+   whose `Host` header is not this host, a loopback name (`localhost`,
+   `127.0.0.1`, `[::1]`) or an entry in `BENCHLEDGER_ALLOWED_HOSTS` receive
+   `421 host_not_allowed`. This blocks DNS-rebinding attacks against
+   `lan_open` mode. If people reach the instance by more than one name (for
+   example both `benchledger.local` and a LAN IP address), list the extra
+   names, without scheme or port, in `BENCHLEDGER_ALLOWED_HOSTS`.
+   Behind a reverse proxy the Host check sees whatever `Host` the proxy sends
+   upstream. Forward the original Host (nginx: `proxy_set_header Host $host;`;
+   Caddy's `reverse_proxy` does this by default), or list the upstream name the
+   proxy uses (for example a Docker service name such as `benchledger`) in
+   `BENCHLEDGER_ALLOWED_HOSTS`. External health probes that call the container
+   by its service name need the same entry; the bundled container healthcheck
+   calls `127.0.0.1` and is always allowed. A `421` from a working proxy almost
+   always means the Host is not being forwarded.
+8. Leave `BENCHLEDGER_SECURE_COOKIES` unset to derive it from the public base
+   URL: an `https://` origin issues `Secure` cookies, plain-HTTP LAN origins do
+   not. Set it explicitly to `true` or `false` only to override that default.
+   With an `https://` public base URL, a browser reaching the server over plain
+   HTTP (for example a LAN IP listed in `BENCHLEDGER_ALLOWED_HOSTS`) cannot keep
+   a session, because it will not store or send `Secure` cookies over HTTP. Use
+   HTTPS for that address too, or set `BENCHLEDGER_SECURE_COOKIES=false`
+   accepting that session cookies then travel unencrypted on the network.
+9. Leave `BENCHLEDGER_TRUST_PROXY` unset (or `false`) unless a reverse proxy
+   sits in front of BenchLedger. Set it to the number of proxy hops (usually
+   `1`) or to a comma-separated list of proxy IPv4/IPv6 addresses/CIDRs
+   (`loopback`, `linklocal` and `uniquelocal` are also accepted); any other
+   entry stops startup with an error naming it. Only then are
+   `X-Forwarded-For` addresses used for login rate limiting; trusting every
+   forwarder would let a client spoof its address. The legacy value `true` now
+   means one hop (the nearest proxy), not every forwarder. Login limits are
+   per address; a workspace-wide failure ceiling only slows logins (see
+   [SECURITY.md](../SECURITY.md)). Counters are in memory and reset on restart.
+10. Configure MCP tokens with lowercase SHA-256 digests in the read/write hash
    environment variables. A write token intentionally includes read access but
    not admin access. Never put plaintext bearer tokens in `.env` or logs.
 
@@ -88,6 +120,27 @@ If rolling back to code from before durable browser settings existed, restore
 the older code. Older code cannot read a Settings-managed password or mode. Do
 not use a rollback to silently change the access mode; verify the browser
 session behavior after the rollback.
+
+### HTTP hardening defaults
+
+- Request bodies are capped at 2 MiB by default and 16 KiB on authentication
+  routes. Only artifact upload routes accept larger bodies, bounded by
+  `BENCHLEDGER_MAX_UPLOAD_BYTES` (default 100 MiB). A reverse proxy should
+  enforce a matching or smaller limit.
+- State-changing browser requests (cookie sessions and the `lan_open`
+  session bootstrap) must carry a same-origin `Origin`; cross-site requests
+  receive `403`. Bearer-token clients without `Origin` are unaffected.
+- Failed logins are limited per client address and by a workspace-wide
+  ceiling (50 failures per 15 minutes) so rotating source addresses cannot
+  multiply the guessing budget. While that ceiling is reached, legitimate
+  sign-ins also wait for the window to expire.
+- Every response carries `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` and a
+  Content-Security-Policy. Artifact downloads are always attachments and use
+  their recorded media type only for an allow-list of safe types; anything
+  else is served as `application/octet-stream`.
+- `/api/v1/ready` omits internal dependency `checks` unless the caller is
+  authenticated; `/api/v1/health` never returns them.
 
 ## Start
 
@@ -166,12 +219,110 @@ container after the command completes.
   HTTP routes, verifies length and SHA-256, rejects redirects and refuses
   download overwrites. It is not installed in the application container and
   does not grant host filesystem access through MCP.
-- Create an online SQLite backup and artifact manifest.
-- Restore into a separate temporary directory and verify counts and hashes.
+- Create a verified backup and restore it into a separate directory (see
+  [Backup and restore](#backup-and-restore)); compare counts in the restored
+  instance before relying on it.
 - Confirm neighbouring containers and services remain healthy.
 
 Do not use broad Docker pruning, daemon restart, host reboot, or unrelated
 Compose shutdown as part of deployment.
+
+## Backup and restore
+
+`scripts/benchledger-backup.mjs` (also `npm run backup --` in a source checkout
+after `npm run build:server`) is the operator entry point. It is shipped in the
+container image. A backup is a **directory** containing a `VACUUM INTO` SQLite
+snapshot, a copy of the content-addressed artifact store, and a
+`benchledger-backup.json` manifest with the database SHA-256 and every artifact
+digest. Every command verifies before it reports success.
+
+```text
+benchledger-backup backup  <destination-dir> [--data-dir <dir>] [--online]
+benchledger-backup verify  <backup-dir>
+benchledger-backup restore <backup-dir> <new-data-dir> [--force]
+```
+
+- Paths must be absolute. `--data-dir` defaults to `BENCHLEDGER_DATA_DIR`.
+- `backup` refuses a destination that exists or lies inside the data directory,
+  and refuses a directory with no `benchledger.sqlite` rather than creating an
+  empty workspace. It refuses while the data directory looks in use (a server
+  answering on `127.0.0.1:$BENCHLEDGER_PORT`, or `benchledger.sqlite-wal`/`-shm`
+  present) unless `--online` is given.
+- `restore` never overwrites: it writes a **new** data directory, verifies
+  SQLite and every artifact hash, opens it once and checks runtime health. It
+  refuses a destination inside the live data directory, and refuses while a
+  server is running unless `--force` is given. You then point
+  `BENCHLEDGER_DATA_DIR` (Compose: `BENCHLEDGER_HOST_DATA_DIR`) at the restored
+  directory. The copied manifest in a restored data directory records its source
+  backup; its database digest stops matching once the server has opened it.
+- Exit status: 0 success, 1 refused or failed, 2 usage error.
+
+The container runs as UID/GID 10001 with a read-only root filesystem, so create
+private host directories it can write, outside the data directory and the
+checkout:
+
+```bash
+export BENCHLEDGER_HOST_BACKUP_DIR=/absolute/private/path/benchledger-backups
+sudo install -d -m 700 -o 10001 -g 10001 "$BENCHLEDGER_HOST_BACKUP_DIR"
+```
+
+**Recommended: consistent offline backup.** Stop the service so no writes race
+the snapshot, run a one-shot container with the backup directory mounted, then
+start the service again:
+
+```bash
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+docker compose stop benchledger
+docker compose run --rm --no-deps \
+  -v "$BENCHLEDGER_HOST_BACKUP_DIR:/backups" \
+  benchledger node scripts/benchledger-backup.mjs backup "/backups/benchledger-$stamp"
+docker compose start benchledger
+```
+
+**Online backup with `docker exec`.** For small instances you can back up the
+running service. The CLI runs in a separate process from the server, so the
+server's in-process write barrier does not cover it: the SQLite snapshot is
+transactionally consistent, and an artifact written while the copy runs makes
+verification fail (nothing is kept; rerun). Run it inside the same container so
+the CLI and server are the same image version. `/tmp` is a 256 MB tmpfs in the
+example Compose file; use the offline procedure when artifacts are larger.
+
+```bash
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+docker compose exec benchledger \
+  node scripts/benchledger-backup.mjs backup "/tmp/benchledger-$stamp" --online
+docker compose cp "benchledger:/tmp/benchledger-$stamp" "$BENCHLEDGER_HOST_BACKUP_DIR/"
+docker compose exec benchledger rm -rf "/tmp/benchledger-$stamp"
+```
+
+**Verify a stored backup** (safe while the service runs):
+
+```bash
+docker compose run --rm --no-deps \
+  -v "$BENCHLEDGER_HOST_BACKUP_DIR:/backups" \
+  benchledger node scripts/benchledger-backup.mjs verify "/backups/benchledger-$stamp"
+```
+
+**Restore** into a new directory with the service stopped, keep the previous
+data directory untouched until the restored instance is checked:
+
+```bash
+export BENCHLEDGER_HOST_RESTORE_PARENT=/absolute/private/path/benchledger-restore
+sudo install -d -m 700 -o 10001 -g 10001 "$BENCHLEDGER_HOST_RESTORE_PARENT"
+docker compose stop benchledger
+docker compose run --rm --no-deps \
+  -v "$BENCHLEDGER_HOST_BACKUP_DIR:/backups" \
+  -v "$BENCHLEDGER_HOST_RESTORE_PARENT:/restore" \
+  benchledger node scripts/benchledger-backup.mjs restore \
+  "/backups/benchledger-$stamp" /restore/data
+export BENCHLEDGER_HOST_DATA_DIR="$BENCHLEDGER_HOST_RESTORE_PARENT/data"
+docker compose up -d benchledger
+```
+
+Then check `/api/v1/health`, `/api/v1/ready` and synthetic or known counts.
+Backups contain the full private database and files: store them with the same
+access controls as the data directory, never in the checkout, and test a
+restore periodically.
 
 ## Maker workflow rollout
 

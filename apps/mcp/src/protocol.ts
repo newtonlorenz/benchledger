@@ -167,7 +167,7 @@ export class McpProtocol {
         protocolVersion,
         capabilities: { tools: {}, resources: {} },
         serverInfo: { name: this.serverInfo.name, version: this.serverInfo.version },
-        instructions: "Read benchledger://capabilities before making recommendations or writes. Refresh context first; uncertain stock is inspect-first.",
+        instructions: "tools/list is authoritative for inputs. benchledger://capabilities explains stock evidence, error and approval semantics; read it once per session. Only physically_counted or commissioned stock is usable; everything else is inspect-first. Ask the human before destructiveHint tools.",
       },
     };
   }

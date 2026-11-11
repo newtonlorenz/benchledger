@@ -230,8 +230,8 @@ describe("createApplicationBackend translation coverage", () => {
       { category: "filament", itemCount: 27 },
       { category: "electronic", itemCount: 26 },
     ]);
-    expect(service.listInventory).toHaveBeenNthCalledWith(1, { limit: 50, includeRetired: true });
-    expect(service.listInventory).toHaveBeenNthCalledWith(2, { limit: 50, includeRetired: true, cursor: "50" });
+    expect(service.listInventory).toHaveBeenNthCalledWith(1, { limit: 100, includeRetired: true });
+    expect(service.listInventory).toHaveBeenNthCalledWith(2, { limit: 100, includeRetired: true, cursor: "50" });
   });
 
   it("fails closed when an inventory summary cursor repeats", async () => {
@@ -344,11 +344,11 @@ describe("createApplicationBackend translation coverage", () => {
     const matches = evaluation.lines[0]!.matches;
 
     expect(matches).toEqual([
-      { itemId: "board-confirmed", availableQuantity: { value: 2, unit: "piece" }, suppliedQuantity: { value: 2, unit: "piece" }, inspectQuantity: { value: 0, unit: "piece" }, quantity: { value: 2, unit: "piece" }, availability: "confirmed", compatible: "confirmed", reason: "same pinout" },
-      { itemId: "board-conditional", availableQuantity: { value: 1, unit: "piece" }, suppliedQuantity: { value: 0, unit: "piece" }, inspectQuantity: { value: 0, unit: "piece" }, availability: "inspect_first", compatible: "conditional", reason: "check voltage" },
-      { itemId: "board-unknown", availableQuantity: { value: 0, unit: "piece" }, suppliedQuantity: { value: 0, unit: "piece" }, inspectQuantity: { value: 0, unit: "piece" }, availability: "depleted", compatible: "unknown", reason: "needs review" },
+      { itemId: "board-confirmed", availableQuantity: { value: 2, unit: "each" }, suppliedQuantity: { value: 2, unit: "each" }, inspectQuantity: { value: 0, unit: "each" }, quantity: { value: 2, unit: "each" }, availability: "confirmed", compatible: "confirmed", reason: "same pinout" },
+      { itemId: "board-conditional", availableQuantity: { value: 1, unit: "each" }, suppliedQuantity: { value: 0, unit: "each" }, inspectQuantity: { value: 0, unit: "each" }, availability: "inspect_first", compatible: "conditional", reason: "check voltage" },
+      { itemId: "board-unknown", availableQuantity: { value: 0, unit: "each" }, suppliedQuantity: { value: 0, unit: "each" }, inspectQuantity: { value: 0, unit: "each" }, availability: "depleted", compatible: "unknown", reason: "needs review" },
     ]);
-    expect(matches[0]?.quantity).toEqual({ value: 2, unit: "piece" });
+    expect(matches[0]?.quantity).toEqual({ value: 2, unit: "each" });
     expect(matches[1]?.quantity).toBeUndefined();
     expect(matches[2]?.quantity).toBeUndefined();
   });
@@ -381,8 +381,8 @@ describe("createApplicationBackend translation coverage", () => {
     const matches = (await backend.bom.evaluate({ projectRevisionId: "revision-1" }, context)).lines[0]!.matches;
 
     expect(matches).toEqual([
-      { itemId: "board-a", availableQuantity: { value: 0, unit: "piece" }, suppliedQuantity: { value: 0, unit: "piece" }, inspectQuantity: { value: 0, unit: "piece" }, availability: "depleted", compatible: "unknown", reason: "No explicit compatibility decision." },
-      { itemId: "board-b", availableQuantity: { value: 0, unit: "piece" }, suppliedQuantity: { value: 0, unit: "piece" }, inspectQuantity: { value: 0, unit: "piece" }, availability: "depleted", compatible: "unknown", reason: "No explicit compatibility decision." },
+      { itemId: "board-a", availableQuantity: { value: 0, unit: "each" }, suppliedQuantity: { value: 0, unit: "each" }, inspectQuantity: { value: 0, unit: "each" }, availability: "depleted", compatible: "unknown", reason: "No explicit compatibility decision." },
+      { itemId: "board-b", availableQuantity: { value: 0, unit: "each" }, suppliedQuantity: { value: 0, unit: "each" }, inspectQuantity: { value: 0, unit: "each" }, availability: "depleted", compatible: "unknown", reason: "No explicit compatibility decision." },
     ]);
   });
 
@@ -561,7 +561,7 @@ describe("createApplicationBackend translation coverage", () => {
     expect(service.createBomLine).toHaveBeenCalledWith("revision-1", expect.objectContaining({
       alternatives: [{ itemId: "fastener-set", compatible: "confirmed", reason: "ten per set", quantityConversion: { ...conversion, requirement: { quantity: 10, unit: "each" } } }],
     }), expect.anything());
-    expect(created.line).toMatchObject({ alternatives: [{ itemId: "fastener-set", reason: "ten per set", quantityConversion: conversion }] });
+    expect(created.line).toMatchObject({ alternatives: [{ itemId: "fastener-set", reason: "ten per set", quantityConversion: { ...conversion, requirement: { quantity: 10, unit: "each" } } }] });
 
     service.evaluateBomGaps.mockResolvedValueOnce({
       revisionId: "revision-1",
@@ -576,11 +576,11 @@ describe("createApplicationBackend translation coverage", () => {
     });
     const evaluation = await backend.bom.evaluate({ projectRevisionId: "revision-1" }, context);
     expect(evaluation.lines[0]?.matches[0]).toMatchObject({
-      availableQuantity: { value: 20, unit: "piece" },
-      suppliedQuantity: { value: 10, unit: "piece" },
-      inspectQuantity: { value: 0, unit: "piece" },
+      availableQuantity: { value: 20, unit: "each" },
+      suppliedQuantity: { value: 10, unit: "each" },
+      inspectQuantity: { value: 0, unit: "each" },
       reason: "ten per set. Capacity: 2 set(s) = 20 each. Allocation: 1 set = 10 each, 0 each overage.",
-      quantityConversion: { inventory: { quantity: 1, unit: "set" }, requirement: { quantity: 10, unit: "piece" } },
+      quantityConversion: { inventory: { quantity: 1, unit: "set" }, requirement: { quantity: 10, unit: "each" } },
     });
   });
 
@@ -651,21 +651,21 @@ describe("createApplicationBackend translation coverage", () => {
     const backend = createApplicationBackend(service);
     const inputConversion = { ...conversion, requirement: { quantity: 10, unit: "piece" as const } };
     const mappedPreview = await backend.inspections!.preview({ projectRevisionId: "revision-1", inspectionId: action.id, observation: { result: "inconclusive", source: "package label", observedAt: date, conversion: inputConversion } }, context);
-    expect(mappedPreview.observation.conversion?.requirement).toEqual({ quantity: 10, unit: "piece" });
+    expect(mappedPreview.observation.conversion?.requirement).toEqual({ quantity: 10, unit: "each" });
     expect(mappedPreview.before.item.quantity).toEqual({ value: 2, unit: "set" });
-    expect(mappedPreview.before.lines[0]?.unit).toBe("piece");
-    expect(mappedPreview.after.lines[0]?.alternatives[0]?.quantityConversion?.requirement.unit).toBe("piece");
-    expect(mappedPreview.before.gaps[0]?.unit).toBe("piece");
-    expect(mappedPreview.before.gaps[0]?.candidates[0]?.availableQuantity).toEqual({ value: 10, unit: "piece" });
-    expect(mappedPreview.before.gaps[0]?.alternatives[0]?.quantityConversion?.requirement.unit).toBe("piece");
-    expect(mappedPreview.reevaluatedGaps.lines[0]?.alternatives[0]?.quantityConversion?.requirement.unit).toBe("piece");
+    expect(mappedPreview.before.lines[0]?.unit).toBe("each");
+    expect(mappedPreview.after.lines[0]?.alternatives[0]?.quantityConversion?.requirement.unit).toBe("each");
+    expect(mappedPreview.before.gaps[0]?.unit).toBe("each");
+    expect(mappedPreview.before.gaps[0]?.candidates[0]?.availableQuantity).toEqual({ value: 10, unit: "each" });
+    expect(mappedPreview.before.gaps[0]?.alternatives[0]?.quantityConversion?.requirement.unit).toBe("each");
+    expect(mappedPreview.reevaluatedGaps.lines[0]?.alternatives[0]?.quantityConversion?.requirement.unit).toBe("each");
 
     const mappedCommit = await backend.inspections!.commit({ projectRevisionId: "revision-1", inspectionId: action.id, previewId: preview.id, expectedPreviewVersion: 1, contentSha256: preview.contentSha256, confirmed: true }, context);
     expect(mappedCommit.commit.evidence.unit).toBeUndefined();
-    expect(mappedCommit.commit.evidence.conversion?.requirement.unit).toBe("piece");
+    expect(mappedCommit.commit.evidence.conversion?.requirement.unit).toBe("each");
     expect(mappedCommit.commit.item?.quantity).toEqual({ value: 2, unit: "set" });
-    expect(mappedCommit.commit.gaps.lines[0]?.unit).toBe("piece");
-    expect(mappedCommit.commit.inspections.data[0]?.expected.unit).toBe("piece");
+    expect(mappedCommit.commit.gaps.lines[0]?.unit).toBe("each");
+    expect(mappedCommit.commit.inspections.data[0]?.expected.unit).toBe("each");
     expect(mappedCommit.commit.inspections.data[0]?.candidate.unit).toBe("set");
   });
 
@@ -699,7 +699,7 @@ describe("createApplicationBackend translation coverage", () => {
     expect(await backend.artifacts.retire({ artifactId: "artifact-1", expectedVersion: 1 }, context)).toMatchObject({ artifact: { status: "retired" } });
     const offers = await backend.offers.list({ itemId: "screw-m3", query: "amazon", supplier: "amazon", limit: 1 }, context);
     expect(offers.items).toHaveLength(1);
-    expect(offers.items[0]).toMatchObject({ description: "M3 screw pack", packageQuantity: { unit: "piece" }, evidence: { state: "user_reported" } });
+    expect(offers.items[0]).toMatchObject({ description: "M3 screw pack", packageQuantity: { unit: "each" }, evidence: { state: "unknown", source: "offer_snapshot" } });
     service.listOffers.mockResolvedValueOnce({ data: [apiOffer({ itemId: undefined, notes: undefined, packageQuantity: undefined, shippingMinor: undefined })], limit: 1 });
     const minimalOffer = (await backend.offers.list({ limit: 1 }, context)).items[0]!;
     expect(minimalOffer).not.toHaveProperty("itemId");
@@ -709,7 +709,11 @@ describe("createApplicationBackend translation coverage", () => {
     expect(await backend.offers.recordSnapshot({ itemId: "screw-m3", description: "M3", supplier: "Amazon", url: "https://shop.example/m3", packageQuantity: { value: 100, unit: "piece" }, price: { minor: 499, currency: "EUR" }, shippingMinor: 0, observedAt: date }, context)).toMatchObject({ offer: { price: { minor: 499, currency: "EUR" } } });
     await backend.offers.recordSnapshot({ supplier: "Local shop", url: "https://shop.example/part", price: { minor: 250, currency: "EUR" } }, context);
     expect(service.createOffer).toHaveBeenLastCalledWith(expect.objectContaining({ name: "Supplier offer" }), expect.anything());
-    expect(await backend.context.refresh({ projectId: "project 1", includeInventory: false, maxAgeSeconds: 0 }, context)).toMatchObject({ projectUris: ["benchledger://projects/project%201/context", "benchledger://projects/project%201/bom", "benchledger://projects/project%201/artifacts"], note: "Inventory summary was not refreshed by request." });
+    const refreshed = await backend.context.refresh({ projectId: "project 1", includeInventory: false }, context);
+    expect(refreshed).toMatchObject({ projectUris: ["benchledger://projects/project%201/context", "benchledger://projects/project%201/bom", "benchledger://projects/project%201/artifacts"], project: { id: expect.any(String), status: expect.any(String), version: expect.any(Number), blocked: expect.any(Boolean) } });
+    expect(refreshed).not.toHaveProperty("expiresAt");
+    expect(refreshed).not.toHaveProperty("inventory");
+    expect(service.getProject).toHaveBeenCalledWith("project 1");
     service.getProject.mockResolvedValueOnce(apiProject({ currentRevisionId: undefined }));
     expect(await backend.bom.listProjectLines({ projectId: "project-1", limit: 5 }, context)).toEqual({ items: [], nextCursor: null, hasMore: false });
   });
@@ -766,5 +770,57 @@ describe("createApplicationBackend translation coverage", () => {
     await expect(noTransfer.artifacts.downloadMetadata({ artifactId: "artifact-1" }, context)).rejects.toMatchObject({ code: "HOST_TRANSFER_UNAVAILABLE" });
     service.getArtifact.mockResolvedValueOnce(apiArtifact({ revisionId: "other-revision" }));
     await expect(backend.artifacts.getMetadata({ artifactId: "artifact-1", revisionId: "revision-1" }, context)).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+describe("live MCP context and vocabulary", () => {
+  it("refresh_context returns live inventory counts without an invented expiry", async () => {
+    const service = serviceFixture();
+    service.listInventory.mockResolvedValueOnce({ data: [
+      apiItem({ id: "counted", evidence: { state: "physically_counted", source: "count", observedAt: date } }),
+      apiItem({ id: "delivered", evidence: { state: "delivered_uncounted", source: "email", observedAt: date } }),
+      apiItem({ id: "legacy", evidence: { state: "unknown", source: "legacy", observedAt: date } }),
+    ], limit: 100, total: 3 });
+    const backend = createApplicationBackend(service);
+    const refreshed = await backend.context.refresh({}, context);
+    expect(refreshed).toMatchObject({ inventory: { totalItems: 3, scannedItems: 3, truncated: false, inspectFirstItems: 1, unverifiedItems: 1 } });
+    expect(refreshed).not.toHaveProperty("expiresAt");
+    expect(refreshed).not.toHaveProperty("project");
+  });
+
+  it("refresh_context only includes snapshots the token may read", async () => {
+    const service = serviceFixture();
+    const backend = createApplicationBackend(service);
+    const refreshed = await backend.context.refresh({ projectId: "project-1" }, { ...context, scopes: ["context:read"] });
+    expect(refreshed).not.toHaveProperty("inventory");
+    expect(refreshed).not.toHaveProperty("project");
+    expect(service.listInventory).not.toHaveBeenCalled();
+    expect(service.getProject).not.toHaveBeenCalled();
+  });
+
+  it("reports canonical evidence, condition and units, and true stock-event evidence", async () => {
+    const service = serviceFixture();
+    service.listInventory.mockResolvedValueOnce({ data: [
+      apiItem({ id: "good", condition: "good", evidence: { state: "allocated", source: "reservation", observedAt: date } }),
+      apiItem({ id: "repair", condition: "needs_repair", evidence: { state: "consumed", source: "usage", observedAt: date } }),
+      apiItem({ id: "each", unit: "each", kind: "electronic", condition: "worn" }),
+    ], limit: 25 });
+    const backend = createApplicationBackend(service);
+    const items = (await backend.inventory.list({ limit: 25 }, context)).items;
+    expect(items.map((item) => [item.condition, item.evidence.state])).toEqual([["good", "allocated"], ["needs_repair", "consumed"], ["worn", expect.any(String)]]);
+    expect(items[2]?.quantity.unit).toBe("each");
+    const events = (await backend.inventory.listStockEvents({ itemId: "filament-petg", limit: 20 }, context)).items;
+    for (const event of events) expect(event.evidence?.state).not.toBe("user_reported");
+    expect(events[0]).toHaveProperty("type");
+  });
+
+  it("creates inventory with tags and retires through the application service", async () => {
+    const service = serviceFixture();
+    const backend = createApplicationBackend(service);
+    await backend.inventory.create({ name: "Tagged", category: "filament", quantity: { value: 1, unit: "gram" }, evidence: { state: "unknown", source: "s", recordedAt: date }, tags: ["PETG"] }, context);
+    expect(service.createInventoryItem).toHaveBeenCalledWith(expect.objectContaining({ tags: ["PETG"] }), expect.anything());
+    service.deleteInventoryItem = vi.fn(async () => mutation(apiItem({ retiredAt: date }), "inventory-item", 3));
+    await expect(backend.inventory.retire!({ itemId: "filament-petg", expectedVersion: 2 }, context)).resolves.toMatchObject({ item: { availability: "retired" } });
+    expect(service.deleteInventoryItem).toHaveBeenCalledWith("filament-petg", 2, expect.anything());
   });
 });

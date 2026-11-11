@@ -155,12 +155,12 @@ describe("createApplicationBackend", () => {
     const service = serviceStub();
     const backend = createApplicationBackend(service);
     const list = await backend.bom.listReservations?.({ projectRevisionId: "revision-1", limit: 1 }, context);
-    expect(list).toMatchObject({ items: [{ id: "reservation-1", projectRevisionId: "revision-1", bomLineId: "bom-1", itemId: "item-1", quantity: { value: 1, unit: "piece" }, status: "active" }], nextCursor: null, hasMore: false });
+    expect(list).toMatchObject({ items: [{ id: "reservation-1", projectRevisionId: "revision-1", bomLineId: "bom-1", itemId: "item-1", quantity: { value: 1, unit: "each" }, status: "active" }], nextCursor: null, hasMore: false });
     expect(service.listReservations).toHaveBeenCalledWith("revision-1");
     expect(service.getReservationDetails).toHaveBeenCalledWith("reservation-1");
 
     const read = await backend.bom.getReservation?.({ reservationId: "reservation-1" }, context);
-    expect(read).toMatchObject({ id: "reservation-1", projectRevisionId: "revision-1", bomLineId: "bom-1", itemId: "item-1", quantity: { value: 1, unit: "piece" }, status: "active" });
+    expect(read).toMatchObject({ id: "reservation-1", projectRevisionId: "revision-1", bomLineId: "bom-1", itemId: "item-1", quantity: { value: 1, unit: "each" }, status: "active" });
     expect(service.getReservationDetails).toHaveBeenCalledWith("reservation-1");
   });
 

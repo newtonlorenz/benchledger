@@ -32,7 +32,10 @@ export function createForwarder(config, request = fetch) {
     const error = (code, text) => id === null ? null : { jsonrpc: "2.0", id, error: { code, message: text } };
     if (!message || Array.isArray(message) || message.jsonrpc !== "2.0" || typeof message.method !== "string" || Buffer.byteLength(JSON.stringify(message)) > (message.method === "tools/call" && message.params?.name === "add_inventory_image" ? MAX_IMAGE_REQUEST : MAX_REQUEST)) return error(-32600, "Invalid or oversized MCP request.");
     const operation = message.method === "tools/call" ? createHash("sha256").update(canonical({ name: message.params?.name, arguments: message.params?.arguments ?? {} })).digest("hex") : undefined;
-    const key = operation ? unconfirmed.get(operation) ?? `host-${randomUUID()}` : undefined;
+    // A model-supplied idempotencyKey argument must also be the header: the
+    // adapter rejects a header that differs from the argument.
+    const argumentKey = operation && typeof message.params?.arguments?.idempotencyKey === "string" ? message.params.arguments.idempotencyKey : undefined;
+    const key = operation ? argumentKey ?? unconfirmed.get(operation) ?? `host-${randomUUID()}` : undefined;
     if (operation && !unconfirmed.has(operation) && unconfirmed.size >= 64) return error(-32098, "Too many unconfirmed commands. Resolve unchanged requests before sending new commands.");
     if (operation) unconfirmed.set(operation, key);
     try {

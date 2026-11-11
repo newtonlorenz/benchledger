@@ -17,9 +17,26 @@ must not be presented as zero or as a successful check.
 Use tokens for colours. Do not add fixed light backgrounds to individual panels.
 
 The visual language uses graphite navigation, neutral work surfaces, thin
-borders and small corner radii. Orange identifies primary interface actions.
-Green, amber, blue and red identify existing status meanings. Always show status
-text as well as colour. Do not use colour to imply a check that did not occur.
+borders and small corner radii. Rust orange (`--accent`) identifies primary
+interface actions, selection and focus, everywhere including the assembly
+explorer and file previews. Green, amber, blue and red identify existing status
+meanings only. Always show status text as well as colour. Do not use colour to
+imply a check that did not occur. `docs/brand.md` uses the same palette.
+
+Use the tokens, not literals:
+
+- Type scale: `--text-xs` 12px (floor for any readable label), `--text-sm` 13px,
+  `--text-base` 14px (body and helper text), `--text-md` 16px, `--text-lg` 18px,
+  `--text-xl` 22px, `--text-2xl` 28px.
+- Radius: `--radius-sm` 3px, `--radius-md` 4px, `--radius-lg` 6px (`--radius`).
+  Only `50%` (dots, avatars) and `0` may be literal.
+- Spacing: `--space-1` to `--space-8` on a 4px grid.
+- Avoid `!important`; it is reserved for `.sr-only` and the reduced-motion reset.
+
+Both 3D viewers (STL file preview and assembly explorer) share the
+`--viewer-*` stage, grid and model tokens, show a millimetre bounds readout and
+a build-plane grid, and use **Z up**, as CAD tools and slicers do. STL files are
+shown in their recorded coordinates, resting on the build plane.
 
 IBM Plex Sans is the interface font. IBM Plex Mono is used for quantities,
 identifiers, versions and keyboard keys. Font files are served by the application,

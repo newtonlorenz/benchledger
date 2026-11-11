@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Icon } from "./icons";
+import type { IconName } from "./icons";
 
 /** Web-facing projection of the additive managed taxonomy contract. */
 export interface ManagedInventoryCategory {
@@ -58,6 +59,17 @@ function categoryOrder(left: ManagedInventoryCategory, right: ManagedInventoryCa
   return left.sortOrder - right.sortOrder || left.name.localeCompare(right.name) || left.id.localeCompare(right.id);
 }
 
+const categoryIconBySlug: Record<string, IconName> = {
+  printers: "printer", "printer-accessories": "sliders", "printer-parts": "settings", filament: "spool", tools: "wrench", workshop: "bench",
+  fasteners: "nut", adhesives: "droplet", finishes: "brush", lighting: "bulb", electronics: "circuit", electrical: "bolt", consumables: "package", other: "box"
+};
+const slugOf = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-|-$/gu, "");
+/** Distinct icon for each starter category; custom categories inherit their parent's icon or use a neutral tag. */
+export function categoryIcon(category: ManagedInventoryCategory, parent?: ManagedInventoryCategory): IconName {
+  const byId = category.id.startsWith("category-") ? categoryIconBySlug[category.id.slice(9)] : undefined;
+  return byId ?? categoryIconBySlug[slugOf(category.name)] ?? (parent ? categoryIcon(parent) : "tag");
+}
+
 export function categoryDisplayLabel(category: ManagedInventoryCategory, parent?: ManagedInventoryCategory): string {
   return parent ? `${parent.name} / ${category.name}` : category.name;
 }
@@ -108,7 +120,7 @@ function CategoryForm({ title, initialName = "", initialSortOrder = 0, submitLab
     if (saving || !name.trim()) return;
     const parsedOrder = Number(sortOrder);
     if (!Number.isSafeInteger(parsedOrder) || parsedOrder < 0) {
-      setError("Order must be a whole number of zero or greater.");
+      setError("Sort order must be a whole number of zero or greater. Lower numbers appear first.");
       return;
     }
     setSaving(true);
@@ -125,7 +137,7 @@ function CategoryForm({ title, initialName = "", initialSortOrder = 0, submitLab
 
   return <form className="category-inline-form" onSubmit={(event) => { void submit(event); }} aria-label={title}>
     <label className="form-field"><span>Name</span><input ref={inputRef} id={inputId} required value={name} onChange={(event) => setName(event.target.value)} disabled={saving} /></label>
-    <label className="form-field category-order-field"><span>Order</span><input type="number" min="0" step="1" required value={sortOrder} onChange={(event) => setSortOrder(event.target.value)} disabled={saving} /></label>
+    <label className="form-field category-order-field"><span>Sort order</span><input type="number" min="0" step="1" required value={sortOrder} onChange={(event) => setSortOrder(event.target.value)} disabled={saving} /></label>
     {error && <p className="form-error category-form-error" role="alert">{error}</p>}
     <div className="category-form-actions"><button type="button" className="button button-quiet" onClick={onCancel} disabled={saving}>Cancel</button><button type="submit" className="button button-primary" disabled={!name.trim() || saving}>{saving ? "Saving…" : submitLabel}<Icon name="check" size={15} /></button></div>
   </form>;
@@ -175,18 +187,19 @@ function ArchiveConfirmation({ category, onCancel, onConfirm, busy = false }: { 
   </>;
 }
 
-function CategoryRow({ category, parent, onEdit, onAddChild, onArchive, disabled = false }: {
+function CategoryRow({ category, parent, childCount = 0, onEdit, onAddChild, onArchive, disabled = false }: {
   readonly category: ManagedInventoryCategory;
   readonly parent?: ManagedInventoryCategory;
+  readonly childCount?: number;
   readonly onEdit: () => void;
   readonly onAddChild?: () => void;
   readonly onArchive: (target: HTMLButtonElement) => void;
   readonly disabled?: boolean;
 }) {
   return <div className={`category-row ${parent ? "category-row-child" : ""}`}>
-    <div className="category-row-name"><span className="category-row-icon" aria-hidden="true"><Icon name={parent ? "arrow-right" : "layers"} size={15} /></span><div><strong>{parent ? categoryDisplayLabel(category, parent) : category.name}</strong><small>{parent ? "Subcategory" : "Top-level category"} · Order {category.sortOrder}</small></div></div>
+    <div className="category-row-name"><span className="category-row-icon" aria-hidden="true"><Icon name={categoryIcon(category, parent)} size={16} /></span><div><strong>{parent ? categoryDisplayLabel(category, parent) : category.name}</strong><small>{parent ? `Subcategory of ${parent.name}` : childCount ? `Main category · ${childCount} ${childCount === 1 ? "subcategory" : "subcategories"}` : "Main category"}</small></div></div>
     <div className="category-row-actions">
-      <button type="button" className="text-button category-edit-button" aria-label={`Rename ${category.name}`} onClick={onEdit} disabled={disabled}>Rename / edit order</button>
+      <button type="button" className="text-button category-edit-button" aria-label={`Rename ${category.name}`} onClick={onEdit} disabled={disabled}>Rename or reorder</button>
       {onAddChild && <button type="button" className="text-button category-add-child-button" onClick={onAddChild} disabled={disabled}>Add subcategory</button>}
       <CategoryAction label={`Archive ${category.name}`} icon="archive" onClick={onArchive} disabled={disabled} />
     </div>
@@ -279,10 +292,10 @@ export function CategoryManager({ categories, onCreate, onUpdate, onArchive, emb
     {message && <p className="category-manager-message" role="status">{message}</p>}
     {error && <p className="category-manager-error" role="alert">{error}</p>}
     {createParentId === null && <CategoryForm title="Create top-level category" submitLabel="Add category" onSubmit={create} onCancel={() => setCreateParentId(undefined)} />}
-    {tree.length === 0 && createParentId === undefined ? <div className="category-manager-empty"><Icon name="layers" size={20} /><span>No active categories yet. Add a top-level category to get started.</span></div> : <div className="category-tree">{tree.map(({ category, children }) => {
+    {tree.length === 0 && createParentId === undefined ? <div className="category-manager-empty"><Icon name="layers" size={20} /><span>No active categories yet. Add a main category to get started.</span></div> : <div className="category-tree">{tree.map(({ category, children }) => {
       const editing = editingId === category.id;
       return <div className="category-tree-group" key={category.id}>
-        {editing ? <CategoryForm title={`Edit ${categoryDisplayLabel(category)}`} initialName={category.name} initialSortOrder={category.sortOrder} submitLabel="Save changes" onSubmit={(name, sortOrder) => update(category, name, sortOrder)} onCancel={() => setEditingId(undefined)} /> : <CategoryRow category={category} disabled={archivingId !== undefined} onEdit={() => { setCreateParentId(undefined); setEditingId(category.id); }} onAddChild={() => { setEditingId(undefined); setCreateParentId(category.id); }} onArchive={(target) => beginArchive(target, category.id)} />}
+        {editing ? <CategoryForm title={`Edit ${categoryDisplayLabel(category)}`} initialName={category.name} initialSortOrder={category.sortOrder} submitLabel="Save changes" onSubmit={(name, sortOrder) => update(category, name, sortOrder)} onCancel={() => setEditingId(undefined)} /> : <CategoryRow category={category} childCount={children.length} disabled={archivingId !== undefined} onEdit={() => { setCreateParentId(undefined); setEditingId(category.id); }} onAddChild={() => { setEditingId(undefined); setCreateParentId(category.id); }} onArchive={(target) => beginArchive(target, category.id)} />}
         {archiveId === category.id && <ArchiveConfirmation category={category} busy={archivingId === category.id} onCancel={() => { setArchiveId(undefined); restoreArchiveFocus(); }} onConfirm={() => { void archive(category); }} />}
         {createParentId === category.id && <CategoryForm title={`Create subcategory under ${category.name}`} submitLabel="Add subcategory" onSubmit={create} onCancel={() => setCreateParentId(undefined)} />}
         {children.length > 0 && <div className="category-children">{children.map((child) => {

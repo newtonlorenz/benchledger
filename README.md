@@ -31,6 +31,7 @@
 - **Leave a useful build guide.** Save part names, placements, fixing notes, linked requirements and a step-by-step assembly order.
 - **Keep the project history.** Tie CAD, slicer files, firmware and drawings to exact revisions; reconcile used stock, returns and leftovers after a build.
 - **Let an agent help.** Scoped MCP tools use the same validation, permissions and audit history as the web interface.
+- **Use a native phone client.** The initial [iPhone and Android app](docs/mobile-app.md) connects to your server for inventory lookup, item details and project planning. Local builds are available; store distribution is not set up.
 
 ## See it in action
 
@@ -87,8 +88,19 @@ Requirements: **Node.js 24** and **npm 11+**.
 git clone https://github.com/newtonlorenz/benchledger.git
 cd benchledger
 npm ci
-npm run build
+npm run build:server
 npm run dev
+```
+
+`npm run dev` starts the server in demo mode with file watching
+(`build:server` builds the packages, web UI, MCP adapter and server; `npm run
+build` additionally runs the slower Expo mobile export). To run the built server
+instead: `node apps/server/dist/main.js --demo`. To try the container image in
+demo mode:
+
+```bash
+docker build -f deploy/Dockerfile -t benchledger:local .
+docker run --rm -p 127.0.0.1:8792:8792 -e BENCHLEDGER_HOST=0.0.0.0 -e BENCHLEDGER_DEMO=true benchledger:local
 ```
 
 Open **[http://127.0.0.1:8792](http://127.0.0.1:8792)** and sign in with the demo password:
@@ -101,7 +113,9 @@ This starts a **synthetic, in-memory demo**. Its data resets when the server res
 
 To try the showcase model, download [synthetic-enclosure.glb](docs/assets/showcase/synthetic-enclosure.glb), upload it to the demo project's **Files**, then open **Assembly**. In the file's **Coordinates**, use **metre** units and **Z up**. Choose **Open assembly**, then **Exploded**.
 
-For persistent storage, authentication and backups, follow the [self-hosting and deployment guide](docs/deployment.md). MCP connections use scoped bearer tokens even when the browser is configured for trusted-LAN access.
+For persistent storage, authentication and backups (`npm run backup -- backup|verify|restore`), follow the [self-hosting and deployment guide](docs/deployment.md). MCP connections use scoped bearer tokens even when the browser is configured for trusted-LAN access.
+
+Upgrading an existing install? The server now answers only the host in `BENCHLEDGER_PUBLIC_BASE_URL` and loopback names, so add any LAN IP address or `.local` name you use to `BENCHLEDGER_ALLOWED_HOSTS`. It also refuses placeholder session secrets, narrows `BENCHLEDGER_TRUST_PROXY` to explicit hops or addresses, and derives `Secure` cookies from an `https://` public URL. See the [changelog upgrade notes](CHANGELOG.md#upgrade-notes-read-before-deploying-this-release).
 
 ## How it works
 
@@ -130,7 +144,7 @@ Try it on a maker workflow and tell us where it breaks down. Useful contribution
 
 If BenchLedger would help your workshop, **star the repository** to keep it handy and share it with another maker. Feedback from an actual build is especially useful at this stage.
 
-Before contributing, read the [Code of Conduct](CODE_OF_CONDUCT.md), [development workflow](docs/development-workflow.md) and [support guide](SUPPORT.md). Run focused checks while iterating and `npm run check` before review.
+Before contributing, read the [Code of Conduct](CODE_OF_CONDUCT.md), [development workflow](docs/development-workflow.md) and [support guide](SUPPORT.md). Run focused checks while iterating and `npm run check` before review (it builds the server apps, typechecks, runs unit and browser tests; `npm run check:mobile` adds the Expo export). CI runs the same gates as parallel jobs plus a container smoke test and CodeQL.
 
 ## Privacy and licence
 

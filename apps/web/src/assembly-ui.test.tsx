@@ -79,3 +79,13 @@ it("opens large imports in viewing mode and searches without hiding the selected
   expect(screen.getByText("No matching parts.")).toBeTruthy(); expect(screen.getByRole("button", { name: "Isolate part" })).toBeTruthy();
   click("Edit assembly"); expect(screen.getByLabelText("Fixing notes")).toBeTruthy(); click("Done editing"); expect(screen.queryByLabelText("Fixing notes")).toBeNull();
 });
+it("does not report unsaved work just for opening a new model, only after an edit", async () => {
+  vi.mocked(workflowRequest).mockImplementation(async path => path.endsWith("/inspect") ? inspection : { assembly: null, warnings: [] });
+  render(<AssemblyWorkspace project={project} onFiles={() => {}} />);
+  await screen.findByRole("button", { name: "Open assembly" }); fireEvent.click(screen.getByLabelText("enclosure.glb")); click("Open assembly");
+  await screen.findByRole("button", { name: "Cover" });
+  expect(screen.getByText(/1 part · Not saved yet/u)).toBeTruthy(); expect(screen.queryByText(/Unsaved changes/u)).toBeNull();
+  expect(screen.getByRole("button", { name: "Save assembly" })).toBeTruthy();
+  click("Edit assembly"); fireEvent.change(screen.getByLabelText("Assembly name"), { target: { value: "Edited" } });
+  expect(screen.getByText(/Unsaved changes/u)).toBeTruthy();
+});

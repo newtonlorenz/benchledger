@@ -1074,7 +1074,7 @@ describe("sample bulk inventory adapter", () => {
     await expect(adapter.bulkUpdateInventory({
       targets: [{ itemId: first.id, expectedVersion: first.version! }, { itemId: second.id, expectedVersion: second.version! + 1 }],
       changes: change
-    })).rejects.toMatchObject({ kind: "validation", status: 409, code: "version_conflict" });
+    })).rejects.toMatchObject({ kind: "conflict", status: 409, code: "version_conflict" });
     const afterConflict = await adapter.listInventory({ limit: 2 });
     expect(afterConflict.items.map((item) => item.location)).toEqual([first.location, second.location]);
     expect(afterConflict.items.map((item) => item.version)).toEqual([first.version, second.version]);
@@ -1646,7 +1646,7 @@ describe("API boundaries and mutation guards", () => {
       { status: 403, code: "csrf", kind: "csrf" },
       { status: 403, kind: "forbidden" },
       { status: 400, kind: "validation" },
-      { status: 409, kind: "validation" },
+      { status: 409, kind: "conflict" },
       { status: 413, kind: "validation" },
       { status: 415, kind: "validation" },
       { status: 422, kind: "server" },

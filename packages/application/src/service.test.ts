@@ -362,6 +362,22 @@ describe("ApplicationService", () => {
     const directCount = await service.recordStockEvent({ itemId: "item-1", type: "count", quantity: 500, unit: "gram", note: "direct adapter" }, context);
     expect(directCount.data.item.quantity).toBe(500);
     expect(directNote).toBe("direct adapter");
+    // The generic stock-event path (MCP count_correction) corrects counted stock only;
+    // it never promotes ordered/delivered/unknown evidence to counted stock.
+    const confirmedGetItem = ports.inventory.getItem;
+    const counted = { physicalCount: 0, stockEvent: 0 };
+    const confirmedCount = ports.inventory.recordPhysicalCount;
+    const confirmedStock = ports.inventory.recordStockEvent;
+    ports.inventory.recordPhysicalCount = async (...args) => { counted.physicalCount += 1; return confirmedCount!(...args); };
+    ports.inventory.recordStockEvent = async (...args) => { counted.stockEvent += 1; return confirmedStock(...args); };
+    for (const state of ["ordered_unverified", "delivered_uncounted", "unknown"] as const) {
+      ports.inventory.getItem = async (id) => id === "item-1" ? item({ quantity: 0, availableQuantity: 0, evidence: { state } }) : null;
+      await expect(service.recordStockEvent({ itemId: "item-1", type: "count", quantity: 2, unit: "gram" }, context)).rejects.toMatchObject({ code: "conflict", details: { reason: "evidence_not_counted", recoveryAction: "commission_inventory_item" } });
+    }
+    expect(counted).toEqual({ physicalCount: 0, stockEvent: 0 });
+    ports.inventory.getItem = confirmedGetItem;
+    ports.inventory.recordPhysicalCount = confirmedCount;
+    ports.inventory.recordStockEvent = confirmedStock;
     await expect(service.recordPhysicalCount("item-1", -1, context)).rejects.toMatchObject({ code: "validation" });
     await expect(service.recordPhysicalCount("item-1", 1, context, "each")).rejects.toMatchObject({ code: "validation" });
     ports.inventory.getItem = async () => null;

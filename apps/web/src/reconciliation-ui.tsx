@@ -354,6 +354,8 @@ export interface ReconciliationUIProps {
   onChange: (next: ReconciliationViewModel) => void;
   onRequestPreview: (model: ReconciliationViewModel) => void | Promise<void>;
   onConfirmCommit: (model: ReconciliationViewModel) => void | Promise<void>;
+  /** Open on this BOM line (from a plan row's Record use), when it is present. */
+  focusBomLineId?: string | undefined;
 }
 
 /**
@@ -361,13 +363,31 @@ export interface ReconciliationUIProps {
  * preview and commit remain explicit adapter callbacks so REST and MCP can
  * share the same review model.
  */
-export function ReconciliationUI({ model, expert = false, embedded = false, readOnly = false, onExpertChange, confirmationOpen: confirmationOpenProp, onConfirmationChange, onChange, onRequestPreview, onConfirmCommit }: ReconciliationUIProps) {
+/** Where a plan row's Record use lands: its queue position, or among the other requirements. */
+export function reconciliationFocusPosition(model: Pick<ReconciliationViewModel, "lines" | "availableLines">, bomLineId: string | undefined): { index: number; showAll: boolean } | undefined {
+  if (!bomLineId) return undefined;
+  const queued = model.lines.findIndex((line) => line.bomLineId === bomLineId);
+  if (queued >= 0) return { index: queued, showAll: false };
+  const other = (model.availableLines ?? []).findIndex((line) => line.bomLineId === bomLineId);
+  return other >= 0 ? { index: model.lines.length + other, showAll: true } : undefined;
+}
+
+export function ReconciliationUI({ model, expert = false, embedded = false, readOnly = false, onExpertChange, confirmationOpen: confirmationOpenProp, onConfirmationChange, onChange, onRequestPreview, onConfirmCommit, focusBomLineId }: ReconciliationUIProps) {
   const headingId = useId();
   const lineHeadingId = useId();
   const outcomeIdPrefix = useId();
   const outcomeCounter = useRef(0);
-  const [activeIndex, setActiveIndex] = useState(0);
-  const [showAllRequirements, setShowAllRequirements] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(() => reconciliationFocusPosition(model, focusBomLineId)?.index ?? 0);
+  const [showAllRequirements, setShowAllRequirements] = useState(() => reconciliationFocusPosition(model, focusBomLineId)?.showAll ?? false);
+  const focusedLineRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const position = reconciliationFocusPosition(model, focusBomLineId);
+    if (!position || focusedLineRef.current === focusBomLineId) return;
+    focusedLineRef.current = focusBomLineId;
+    setShowAllRequirements(position.showAll); setActiveIndex(position.index);
+    const frame = window.requestAnimationFrame(() => document.getElementById(lineHeadingId)?.focus({ preventScroll: false }));
+    return () => window.cancelAnimationFrame(frame);
+  }, [focusBomLineId, model, lineHeadingId]);
   const [previewPending, setPreviewPending] = useState(false);
   const [localConfirmationOpen, setLocalConfirmationOpen] = useState(false);
   const [commitPending, setCommitPending] = useState(false);
@@ -542,7 +562,7 @@ export function ReconciliationUI({ model, expert = false, embedded = false, read
 
       <article className="reconciliation-line" aria-labelledby={lineHeadingId}>
         <div className="reconciliation-line-heading">
-          <div><span className="eyebrow">{activeLineInQueue ? "Selected stock" : "Other requirement"}</span><h2 id={lineHeadingId}>{activeLine.name}</h2><p>{activeLine.itemLabel}{activeLine.itemKind ? ` · ${activeLine.itemKind}` : ""}</p></div>
+          <div><span className="eyebrow">{activeLineInQueue ? "Selected stock" : "Other requirement"}</span><h2 id={lineHeadingId} tabIndex={-1}>{activeLine.name}</h2><p>{activeLine.itemLabel}{activeLine.itemKind ? ` · ${activeLine.itemKind}` : ""}</p></div>
           <span className={`reconciliation-line-state ${outcomeTone(activeSummary)}`}>{outcomeSummary(activeSummary, activeLine.unit)}</span>
         </div>
 

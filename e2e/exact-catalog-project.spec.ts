@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Response } from "@playwright/test";
+import { openCurrentProject, openProjectIndex } from "./project-nav";
 
 const demoPassword = "demo-password-please-change";
 const projectName = "E2E exact catalog build";
@@ -37,8 +38,7 @@ async function addExactInventory(
 ): Promise<Response> {
   await page.getByRole("button", { name: "Add item", exact: true }).click();
   const addDialog = page.getByRole("dialog", { name: "Add to inventory" });
-  await addDialog.getByRole("combobox", { name: "What are you adding?", exact: true }).selectOption(kind); await expect( addDialog.getByRole("combobox", { name: /Category/u }) ).toHaveCount(0);
-  await addDialog.getByRole("button", { name: "Continue", exact: true }).click();
+  await addDialog.getByRole("radiogroup", { name: "What are you adding?" }).getByRole("radio", { name: kind === "printer" ? "Printer" : "Filament", exact: true }).check(); await expect( addDialog.getByRole("combobox", { name: /Category/u }) ).toHaveCount(0);
 
   const productSearch = page.getByRole("combobox", {
     name: category === "Filament" ? "Exact filament product" : "Exact printer model",
@@ -104,7 +104,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   expect(filamentResponse.request().postDataJSON().item).toMatchObject({ kind: "filament", categoryNodeId: "category-filament" });
   expect(filamentResponse.request().postDataJSON().profile).not.toHaveProperty("itemId");
 
-  await page.getByRole("button", { name: /^Projects/u }).click();
+  await openProjectIndex(page);
   await page.getByRole("button", { name: "New project", exact: true }).click();
   await page.getByLabel("Project name").fill(projectName);
   await page.getByLabel("Project goal").fill("A small exact-catalog test enclosure for the maker workflow.");
@@ -117,7 +117,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   expect(createdProjectId).toEqual(expect.any(String));
   await expect(page.getByRole("heading", { name: projectName, exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "Settings", exact: true }).click(); await page .getByRole("button", { name: "Show technical details", exact: true }) .click(); await expect( page.getByRole("button", { name: "Hide technical details", exact: true }) ).toBeVisible(); await page.getByRole("button", { name: /^Projects/u }).click(); await page.getByRole("button", { name: "New revision", exact: true }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click(); await page .getByRole("button", { name: "Show technical details", exact: true }) .click(); await expect( page.getByRole("button", { name: "Hide technical details", exact: true }) ).toBeVisible(); await openCurrentProject(page); await page.getByRole("button", { name: "More project actions", exact: true }).click(); await page.getByRole("menuitem", { name: "New revision", exact: true }).click();
   const revisionDialog = page.getByRole("dialog", { name: `New revision for ${projectName}` });
   await expect(revisionDialog).toBeVisible();
   await revisionDialog.getByLabel("Revision name").fill("Exact setup capture");
@@ -197,7 +197,7 @@ test("guides an exact catalog build from owned stock to an auditable setup snaps
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect( page.getByRole("button", { name: "Hide technical details", exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: /^Projects/u }).click(); await projectPicker.selectOption({ label: projectName }); const expertSummary = page.getByRole("region", { name: "Build setup summary" }); await expect(expertSummary).toContainText( "Use Bambu Lab · H2D with Bambu Lab · PETG · PETG HF." );
+  await openCurrentProject(page); await projectPicker.selectOption({ label: projectName }); const expertSummary = page.getByRole("region", { name: "Build setup summary" }); await expect(expertSummary).toContainText( "Use Bambu Lab · H2D with Bambu Lab · PETG · PETG HF." );
   await expect(expertSummary).toContainText( "Print setup: 0.4 mm nozzle · hardened steel · Textured PEI." ); await expect(expertSummary).toContainText( "Software: Bambu Studio 1.10.0 0.20 mm Standard." ); await expect(expertSummary).toContainText("Calibration: flow checked."); await expect( expertSummary.getByText("Show IDs, versions, evidence & unknowns", { exact: true })).toBeVisible();
   await expertSummary .getByText("Show IDs, versions, evidence & unknowns", { exact: true }).click();
   await expect(expertSummary).toContainText("Revision ID");
@@ -287,11 +287,10 @@ test("keeps the starter catalog facet path accessible and honest at 390px", asyn
       && url.searchParams.get("limit") === "100"
       && !url.searchParams.has("q") );
   });
-  await selectionDialog.getByRole("combobox", { name: "What are you adding?", exact: true }).selectOption("filament");
+  await selectionDialog.getByRole("radio", { name: "Filament", exact: true }).check();
   await expect( selectionDialog.getByRole("combobox", { name: /Category/u }) ).toHaveCount(0);
-  await selectionDialog.getByRole("button", { name: "Continue", exact: true }).click();
   await completeCatalog;
-  const addDialog = page.getByRole("dialog", { name: "Add filament" });
+  const addDialog = selectionDialog;
 
   await addDialog.getByLabel("Manufacturer / brand").selectOption({ label: "Bambu Lab" });
   await addDialog.getByLabel("Product line / material family").selectOption({ label: "PETG" });

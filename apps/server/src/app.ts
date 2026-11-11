@@ -1,12 +1,13 @@
 import { registerInventoryImageRoutes, inventoryImageOpenApi } from "./inventory-image-routes.js";
-import { memberLoginSchema } from "@benchledger/api-contract";
+import { INVENTORY_IMAGE_MAX_BYTES, memberLoginSchema } from "@benchledger/api-contract";
 import type { TeamMember } from "@benchledger/api-contract";
 import { registerMakerWorkflowRoutes, makerWorkflowOpenApi } from "./maker-workflow-routes.js";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import Fastify, { type FastifyHttpOptions, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import type { Server as HttpServer } from "node:http";
 import cookie from "@fastify/cookie";
 import swagger from "@fastify/swagger";
 import {
@@ -36,10 +37,10 @@ import type {
   WorkspaceSecurityStatus as ApiWorkspaceSecurityStatus,
   WorkspaceSecurityMutation
 } from "@benchledger/api-contract";
-import { AuthManager, type AuthConfig, type AuthScope, type Principal, hashBearerToken } from "./auth.js";
+import { AuthManager, assertStrongSessionSecret, type AuthConfig, type AuthScope, type Principal, hashBearerToken } from "./auth.js";
 import { createMemoryRuntime, createSyntheticRuntime, type MemoryRuntime } from "./memory-store.js";
 import { ArtifactTransferManager, TRANSFER_RESPONSE_HEADERS, TRANSFER_TOKEN_HEADER, type FinalizeCapabilityBody, type TransferCapability } from "./artifact-transfer.js";
-import { publicBaseUrlFromEnvironment } from "./config.js";
+import { positiveIntegerFromEnvironment, publicBaseUrlFromEnvironment } from "./config.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -63,7 +64,21 @@ export interface ServerOptions {
   readonly webRoot?: string;
   readonly version?: string;
   readonly logger?: boolean;
-  readonly trustProxy?: boolean;
+  /**
+   * Fastify trust-proxy setting. Default off: X-Forwarded-For is ignored.
+   * Prefer a hop count or explicit proxy addresses over `true`.
+   */
+  readonly trustProxy?: boolean | number | string | readonly string[];
+  /**
+   * Extra Host names accepted besides the public base URL host and loopback
+   * names. Requests with any other Host are rejected (DNS-rebinding defence).
+   */
+  readonly allowedHosts?: readonly string[];
+  /**
+   * Fixed delay added to every login attempt (correct or not) while the
+   * workspace-wide failed-login ceiling is exceeded. Defaults to one second.
+   */
+  readonly loginSlowdownMs?: number;
   /** Exact configured origin used for MCP transfer capability links. */
   readonly publicBaseUrl?: string;
   /** Host-owned transfer manager; injectable for route-level integration tests. */
@@ -77,6 +92,128 @@ export interface RuntimeHandle {
 
 const PUBLIC_PATHS = new Set(["/api/v1/health", "/api/v1/ready", "/api/v1/auth/login", "/api/v1/auth/member-login", "/api/v1/auth/access", "/api/v1/auth/lan-session", "/api/v1/openapi.json", "/api/v1/capabilities"]);
 const UUID_OR_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
+/** Default request body ceiling for JSON and other non-upload routes. */
+const DEFAULT_BODY_LIMIT = 2 * 1024 * 1024;
+/**
+ * The largest MCP payload is add_inventory_image: INVENTORY_IMAGE_MAX_BYTES
+ * raw bytes, base64-encoded (4/3 expansion) inside a JSON-RPC envelope with
+ * item/image metadata. Other MCP tools stay under the 1 MB general limit.
+ */
+const MCP_ENVELOPE_ALLOWANCE = 64 * 1024;
+const MCP_BODY_LIMIT = Math.ceil(INVENTORY_IMAGE_MAX_BYTES / 3) * 4 + MCP_ENVELOPE_ALLOWANCE;
+/** Unauthenticated credential endpoints never need more than a few KiB. */
+const AUTH_BODY_LIMIT = 16 * 1024;
+const DEFAULT_UPLOAD_BODY_LIMIT = 100 * 1024 * 1024;
+const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]"] as const;
+const API_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; sandbox";
+/**
+ * The built SPA loads only same-origin module scripts and stylesheets. Inline
+ * style attributes remain allowed for React/three.js layout; blob:/data: cover
+ * local previews and embedded GLB/texture resources decoded in the browser.
+ */
+const SPA_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "connect-src 'self' blob: data:",
+  "worker-src 'self' blob:",
+  "media-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'"
+].join("; ");
+
+/**
+ * Media types an artifact may be served as. Anything else (HTML, SVG, XML,
+ * scripts) is forced to application/octet-stream so a stored file can never
+ * execute in the application origin, even if a browser ignores the
+ * attachment disposition.
+ */
+const SAFE_ARTIFACT_MEDIA_TYPES = new Set([
+  "application/octet-stream", "application/pdf", "application/zip", "application/json",
+  "image/jpeg", "image/png", "image/webp", "image/gif",
+  "model/step", "model/stl", "model/gltf-binary", "model/3mf", "application/vnd.ms-package.3dmanufacturing-3mf",
+  "text/plain", "text/markdown", "text/csv"
+]);
+
+export function artifactResponseType(mediaType: string): string {
+  if (typeof mediaType !== "string" || /[\u0000-\u001f\u007f]/u.test(mediaType)) return "application/octet-stream";
+  const essence = mediaType.split(";", 1)[0]!.trim().toLowerCase();
+  if (!SAFE_ARTIFACT_MEDIA_TYPES.has(essence)) return "application/octet-stream";
+  return essence.startsWith("text/") ? `${essence}; charset=utf-8` : essence;
+}
+
+function hostName(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const host = value.trim().toLowerCase();
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    return end < 0 ? undefined : host.slice(0, end + 1);
+  }
+  const colon = host.indexOf(":");
+  return colon < 0 ? host : host.slice(0, colon);
+}
+
+class PreconditionRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PreconditionRequiredError";
+  }
+}
+
+/** Require If-Match on routes where first-party clients always send it. */
+function parseMandatoryIfMatch(request: FastifyRequest): number {
+  const version = parseExpectedVersion(request);
+  if (version === undefined) throw new PreconditionRequiredError("If-Match with the current version is required; reload the record and retry with its version");
+  return version;
+}
+
+const PAGE_LIMIT_PATTERN = /^[1-9][0-9]{0,2}$/u;
+
+/** Strictly parse limit/cursor query parameters shared by paged REST routes. */
+function parsePageQuery(query: unknown, defaultLimit = 50): { readonly limit: number; readonly cursor?: string } {
+  const record = query !== null && typeof query === "object" ? query as Record<string, unknown> : {};
+  const issues: { path: string[]; message: string }[] = [];
+  let limit = defaultLimit;
+  if (record.limit !== undefined) {
+    const raw = record.limit;
+    if (typeof raw !== "string" || !PAGE_LIMIT_PATTERN.test(raw) || Number(raw) > 200) issues.push({ path: ["limit"], message: "limit must be an integer between 1 and 200" });
+    else limit = Number(raw);
+  }
+  let cursor: string | undefined;
+  if (record.cursor !== undefined) {
+    const raw = record.cursor;
+    if (typeof raw !== "string" || raw.length === 0 || raw.length > 512 || /[\u0000-\u001f\u007f]/u.test(raw)) issues.push({ path: ["cursor"], message: "cursor must be a non-empty opaque string of at most 512 characters" });
+    else cursor = raw;
+  }
+  if (issues.length > 0) throw new ApplicationError("validation", "Query parameters are invalid", { issues });
+  return { limit, ...(cursor === undefined ? {} : { cursor }) };
+}
+
+function zodIssues(error: unknown): readonly ValidationIssue[] | null {
+  if (!(error instanceof Error) || error.name !== "ZodError") return null;
+  const issues = (error as Error & { readonly issues?: unknown }).issues;
+  if (!Array.isArray(issues)) return null;
+  return issues.map((issue: { path?: unknown; message?: unknown; code?: unknown }) => ({
+    path: Array.isArray(issue.path) ? issue.path.filter((part): part is string | number => typeof part === "string" || typeof part === "number") : [],
+    message: typeof issue.message === "string" ? issue.message : "Invalid value",
+    ...(typeof issue.code === "string" ? { code: issue.code } : {})
+  }));
+}
+
+type ValidationIssue = { readonly path: readonly (string | number)[]; readonly message: string; readonly code?: string };
+
+/** Validate a server-built response; a mismatch is a logged 500, never a client 400. */
+function shapeResponse<T>(schema: { safeParse(value: unknown): { success: true; data: T } | { success: false; error: unknown } }, value: unknown): T {
+  const result = schema.safeParse(value);
+  if (result.success) return result.data;
+  const error = new Error(`Server response failed its schema: ${JSON.stringify(zodIssues(result.error) ?? [])}`);
+  error.name = "ResponseShapeError";
+  throw error;
+}
 
 function randomSecret(): string {
   return `${randomUUID()}${randomUUID()}`;
@@ -174,6 +311,8 @@ type AttemptWindow = { readonly count: number; readonly resetAt: number };
 const AUTH_ATTEMPT_LIMIT = 5;
 const AUTH_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
 const PASSWORD_HASH_CONCURRENCY_LIMIT = 2;
+const GLOBAL_LOGIN_FAILURE_LIMIT = 50;
+const DEFAULT_LOGIN_SLOWDOWN_MS = 1000;
 
 function securityFingerprint(operation: WorkspaceSecurityRequest, secret: string): string {
   // Do not JSON-serialize a security request: password text and encoded hashes
@@ -1116,7 +1255,7 @@ function jsonOpenApi(version: string): Record<string, unknown> {
       "/catalog/products": { get: { responses: { "200": { description: "Bounded exact catalog product page" } } }, post: { responses: { "201": { description: "Catalog product mutation" } } } },
       "/catalog/products/{id}": { get: { responses: { "200": { description: "Exact catalog product" } } }, patch: { responses: { "200": { description: "Updated exact catalog product" } } } },
       "/project-revisions/{id}/bom": { get: { parameters: [{ name: "includeRetired", in: "query", required: false, schema: { type: "boolean", default: false } }], responses: { "200": { description: "Active BOM lines by default; retired history when explicitly requested" } } }, post: { requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CreateBomLine" } } } }, responses: { "201": { description: "BOM line" } } } },
-      "/bom-lines/{id}": { patch: { summary: "Update a BOM requirement, including legacy role repair", parameters: [{ name: "id", in: "path", required: true, schema: artifactIdSchema }, { name: "If-Match", in: "header", required: false, description: "Optional expected BOM line version for optimistic concurrency.", schema: { type: "string", pattern: "^[1-9][0-9]*$" } }], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateBomLine" } } } }, responses: { "200": { description: "Updated BOM line" }, "400": { description: "Invalid BOM line or version precondition" }, "409": { description: "Version, active-reservation, or compatibility conflict" } } }, delete: { parameters: [{ name: "If-Match", in: "header", required: true, schema: { type: "integer", minimum: 1 } }], responses: { "200": { description: "Retired BOM line" }, "400": { description: "Missing or invalid version precondition" }, "409": { description: "Version or active-reservation conflict" } } } },
+      "/bom-lines/{id}": { patch: { summary: "Update a BOM requirement, including legacy role repair", parameters: [{ name: "id", in: "path", required: true, schema: artifactIdSchema }, { name: "If-Match", in: "header", required: true, description: "Required expected BOM line version for optimistic concurrency.", schema: { type: "string", pattern: "^[1-9][0-9]*$" } }], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateBomLine" } } } }, responses: { "200": { description: "Updated BOM line" }, "400": { description: "Invalid BOM line or malformed version precondition" }, "428": { description: "If-Match is missing; reload the BOM line and retry with its version" }, "409": { description: "Version, active-reservation, or compatibility conflict" } } }, delete: { parameters: [{ name: "If-Match", in: "header", required: true, schema: { type: "integer", minimum: 1 } }], responses: { "200": { description: "Retired BOM line" }, "400": { description: "Missing or invalid version precondition" }, "409": { description: "Version or active-reservation conflict" } } } },
       "/bom-lines/{id}/restore": { post: { parameters: [{ name: "If-Match", in: "header", required: true, schema: { type: "integer", minimum: 1 } }], responses: { "200": { description: "Restored BOM line" }, "400": { description: "Missing or invalid version precondition" }, "409": { description: "Version conflict" } } } },
       "/project-revisions/{id}/build-configurations": { get: { responses: { "200": { description: "Immutable build configuration snapshot page" } } }, post: { responses: { "201": { description: "Immutable build configuration snapshot" } } } },
       "/build-configurations/{id}": { get: { responses: { "200": { description: "Immutable build configuration snapshot" } } } },
@@ -1357,6 +1496,9 @@ async function scopedProjectPage(service: ApplicationService, query: ProjectList
 }
 
 function errorStatus(error: ApplicationError): number {
+  // `internal` may be introduced by the application layer for unknown
+  // failures; compare as a string so this host compiles either way.
+  if ((error.code as string) === "internal") return 500;
   switch (error.code) {
     case "not_found": return 404;
     case "project_removed": return 410;
@@ -1394,8 +1536,15 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   // it out of createApp's environment reads allows durable state to become the
   // source of truth after the first startup.
   const adminPasswordHash = options.auth?.adminPasswordHash;
-  const sessionSecret = options.auth?.sessionSecret ?? process.env.BENCHLEDGER_SESSION_SECRET ?? (demo ? randomSecret() : "");
+  const environmentSessionSecret = options.auth?.sessionSecret === undefined ? process.env.BENCHLEDGER_SESSION_SECRET : undefined;
+  // Operator-supplied secrets are checked strictly at startup so the
+  // documented placeholder or a trivially guessable value never signs sessions.
+  if (environmentSessionSecret !== undefined) assertStrongSessionSecret(environmentSessionSecret, "BENCHLEDGER_SESSION_SECRET");
+  const sessionSecret = options.auth?.sessionSecret ?? environmentSessionSecret ?? (demo ? randomSecret() : "");
   const publicBaseUrl = publicBaseUrlFromEnvironment(options.publicBaseUrl ?? process.env.BENCHLEDGER_PUBLIC_BASE_URL, demo);
+  const publicOrigin = new URL(publicBaseUrl);
+  const allowedHosts = new Set<string>([publicOrigin.hostname.toLowerCase(), ...LOOPBACK_HOSTS, ...(options.allowedHosts ?? []).map((host) => host.toLowerCase())]);
+  const uploadBodyLimit = options.maxUploadBytes ?? positiveIntegerFromEnvironment(process.env, "BENCHLEDGER_MAX_UPLOAD_BYTES") ?? DEFAULT_UPLOAD_BODY_LIMIT;
   const artifactTransfer = options.artifactTransferManager ?? new ArtifactTransferManager(publicBaseUrl);
   let activePasswordHashes = 0;
   const runtime: RuntimeHandle | undefined = options.runtime ?? (options.ports ? undefined : demo ? createSyntheticRuntime() : await createProductionRuntime({
@@ -1438,11 +1587,20 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     },
     ...(demo ? { demo: true, demoPassword: options.auth?.demoPassword ?? process.env.BENCHLEDGER_DEMO_PASSWORD ?? "demo-password-please-change" } : {}),
     ...(suppliedBearerTokens.length > 0 ? { bearerTokens: suppliedBearerTokens } : {}),
-    secureCookies: options.auth?.secureCookies ?? false,
+    // Secure cookies by default whenever the public origin is HTTPS.
+    secureCookies: options.auth?.secureCookies ?? publicOrigin.protocol === "https:",
     sessionTtlSeconds: options.auth?.sessionTtlSeconds ?? 8 * 60 * 60
   };
   const auth = new AuthManager(authConfig);
-  const app = Fastify({ logger: options.logger ?? false, trustProxy: options.trustProxy ?? false, bodyLimit: 100 * 1024 * 1024 });
+  // A hop count trusts only the nearest N proxies (the right-most forwarded
+  // addresses), so a client-supplied X-Forwarded-For prefix is never used.
+  const configuredTrustProxy = options.trustProxy;
+  const trustProxy: FastifyHttpOptions<HttpServer>["trustProxy"] = configuredTrustProxy === undefined ? false
+    : typeof configuredTrustProxy === "number" ? (_address: string, hop: number) => hop < configuredTrustProxy
+    : typeof configuredTrustProxy === "boolean" || typeof configuredTrustProxy === "string" ? configuredTrustProxy
+    : [...configuredTrustProxy];
+  const serverOptions: FastifyHttpOptions<HttpServer> = { logger: options.logger ?? false, trustProxy, bodyLimit: DEFAULT_BODY_LIMIT };
+  const app = Fastify(serverOptions);
   if (runtime?.close !== undefined) app.addHook("onClose", async () => runtime.close?.());
   await app.register(cookie);
   await app.register(swagger, { openapi: jsonOpenApi(service.getVersion()) });
@@ -1455,12 +1613,20 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   // an attacker cannot bypass the limit by alternating the two endpoints.
   const passwordAttempts = new Map<string, AttemptWindow>();
   const passwordHashAttempts = new Map<string, AttemptWindow>();
+  // Workspace-wide ceiling on failed logins, independent of client address.
+  // Exceeding it never blocks a login (that would let anyone lock out every
+  // user with a burst of wrong guesses); instead every attempt is delayed and
+  // still verified, which bounds guessing throughput from rotating addresses.
+  // Counters live in memory and are cleared by a restart.
+  const globalLoginFailures = new Map<string, AttemptWindow>();
+  const GLOBAL_LOGIN_KEY = "*";
+  const loginSlowdownMs = Math.max(0, options.loginSlowdownMs ?? DEFAULT_LOGIN_SLOWDOWN_MS);
   let activePasswordVerifications = 0;
 
-  const rateLimitWindow = (attempts: Map<string, AttemptWindow>, key: string, label: string): void => {
+  const rateLimitWindow = (attempts: Map<string, AttemptWindow>, key: string, label: string, limit = AUTH_ATTEMPT_LIMIT): void => {
     const current = attempts.get(key);
     const now = Date.now();
-    if (current?.resetAt !== undefined && current.resetAt > now && current.count >= AUTH_ATTEMPT_LIMIT) {
+    if (current?.resetAt !== undefined && current.resetAt > now && current.count >= limit) {
       throw new WorkspaceSecurityRateLimitError(`Too many ${label} attempts; try again later`, Math.max(1, Math.ceil((current.resetAt - now) / 1000)));
     }
     if (current !== undefined && current.resetAt <= now) attempts.delete(key);
@@ -1470,6 +1636,20 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const current = attempts.get(key);
     const now = Date.now();
     attempts.set(key, { count: (current?.resetAt !== undefined && current.resetAt > now ? current.count : 0) + 1, resetAt: current?.resetAt !== undefined && current.resetAt > now ? current.resetAt : now + AUTH_ATTEMPT_WINDOW_MS });
+  };
+
+  const checkLoginBudget = async (clientKey: string): Promise<void> => {
+    rateLimitWindow(passwordAttempts, clientKey, "login");
+    const global = globalLoginFailures.get(GLOBAL_LOGIN_KEY);
+    const now = Date.now();
+    if (global !== undefined && global.resetAt <= now) globalLoginFailures.delete(GLOBAL_LOGIN_KEY);
+    else if (global !== undefined && global.count >= GLOBAL_LOGIN_FAILURE_LIMIT && loginSlowdownMs > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, loginSlowdownMs));
+    }
+  };
+  const recordLoginFailure = (clientKey: string): void => {
+    recordFailedAttempt(passwordAttempts, clientKey);
+    recordFailedAttempt(globalLoginFailures, GLOBAL_LOGIN_KEY);
   };
 
   const verifyPasswordWithThrottle = async (operation: () => Promise<boolean>, label: string): Promise<boolean> => {
@@ -1511,13 +1691,46 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     }
   };
 
+  /**
+   * Browser requests carry Origin (and Sec-Fetch-Site). Accept a missing
+   * Origin for non-browser clients, but reject any browser request whose
+   * Origin is neither the configured public origin nor this request's Host.
+   */
+  const sameOriginRequest = (request: FastifyRequest): boolean => {
+    const fetchSite = request.headers["sec-fetch-site"];
+    if (fetchSite === "cross-site") return false;
+    const origin = request.headers.origin;
+    if (origin === undefined) return true;
+    if (origin === publicOrigin.origin) return true;
+    let parsed: URL;
+    try { parsed = new URL(origin); } catch { return false; }
+    if (parsed.origin === "null" || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) return false;
+    return parsed.host.toLowerCase() === (request.headers.host ?? "").trim().toLowerCase();
+  };
+
   app.addHook("onRequest", async (request, reply) => {
     const correlationId = validCorrelation(Array.isArray(request.headers["x-correlation-id"]) ? request.headers["x-correlation-id"][0] : request.headers["x-correlation-id"]);
     request.correlationId = correlationId;
     reply.header("x-correlation-id", correlationId);
-    const contentType = request.headers["content-type"] ?? "";
+    // DNS-rebinding defence: a browser tricked into resolving another name to
+    // this server still sends that name in Host. Only the configured public
+    // host, explicit extra hosts and loopback names are served.
+    const host = hostName(request.headers.host);
+    if (host === undefined || !allowedHosts.has(host)) {
+      await reply.code(421).send({ error: { code: "host_not_allowed", message: "This Host is not configured for BenchLedger. Use the configured public address or add it to BENCHLEDGER_ALLOWED_HOSTS.", correlationId } });
+      return reply;
+    }
     const contentLength = Number(request.headers["content-length"] ?? 0);
     const path = request.url.split("?")[0] ?? request.url;
+    const bodyLimit = request.routeOptions.bodyLimit ?? DEFAULT_BODY_LIMIT;
+    if (Number.isFinite(contentLength) && contentLength > bodyLimit) {
+      await reply.code(413).send({ error: { code: "quota_exceeded", message: "Request body is too large", correlationId } });
+      return reply;
+    }
+    if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && request.headers.authorization === undefined && !sameOriginRequest(request)) {
+      await reply.code(403).send({ error: { code: "forbidden", message: "Cross-origin requests are not allowed", correlationId } });
+      return reply;
+    }
     // Capability endpoints authenticate with their single-purpose transfer
     // header, so they intentionally bypass the session/bearer + CSRF hook.
     if (path.startsWith("/api/v1/transfers/")) {
@@ -1529,10 +1742,6 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
         artifactTransfer.preflight(transfer.action, request.headers[TRANSFER_TOKEN_HEADER], transfer.resourceId);
       }
       return;
-    }
-    if (contentType.toLowerCase().startsWith("application/json") && Number.isFinite(contentLength) && contentLength > 2 * 1024 * 1024) {
-      await reply.code(413).send({ error: { code: "quota_exceeded", message: "JSON request body is too large", correlationId } });
-      return reply;
     }
     if (!request.url.startsWith("/api/v1")) return;
     teamState = await service.team.sessionState();
@@ -1557,20 +1766,64 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   });
 
   app.setErrorHandler((error, request, reply) => {
+    const correlationId = request.correlationId;
     if (error instanceof ApplicationError) {
       const applicationError = error as ApplicationError;
-      return reply.code(errorStatus(applicationError)).send({ error: { code: applicationError.code, message: applicationError.message, ...(applicationError.details ? { details: applicationError.details } : {}), correlationId: request.correlationId } });
+      const status = errorStatus(applicationError);
+      if (status >= 500) {
+        request.log.error({ err: error, code: applicationError.code, correlationId }, "request failed");
+        return reply.code(status).send({ error: { code: "internal", message: "An unexpected server error occurred", correlationId } });
+      }
+      request.log.info({ code: applicationError.code, status, correlationId }, "request rejected");
+      return reply.code(status).send({ error: { code: applicationError.code, message: applicationError.message, ...(applicationError.details ? { details: applicationError.details } : {}), correlationId } });
+    }
+    if (error instanceof PreconditionRequiredError) {
+      request.log.info({ code: "precondition_required", status: 428, correlationId }, "request rejected");
+      return reply.code(428).send({ error: { code: "precondition_required", message: error.message, correlationId } });
     }
     const securityError = workspaceSecurityError(error);
     if (securityError !== null) {
+      request.log.info({ code: securityError.code, status: securityError.status, correlationId }, "request rejected");
       if (securityError.retryAfterSeconds !== undefined) reply.header("retry-after", String(securityError.retryAfterSeconds));
-      return reply.code(securityError.status).send({ error: { code: securityError.code, message: securityError.message, ...(securityError.details ? { details: securityError.details } : {}), correlationId: request.correlationId } });
+      return reply.code(securityError.status).send({ error: { code: securityError.code, message: securityError.message, ...(securityError.details ? { details: securityError.details } : {}), correlationId } });
+    }
+    // HTTP-layer request parsing (parseBody, query/If-Match parsers) raises
+    // ApplicationError "validation". The application layer still parses its
+    // command input with Zod, so a raw ZodError reaching here is reported as
+    // client validation; values the HTTP layer builds itself are checked with
+    // shapeResponse, whose failure is a logged 500 instead.
+    const issues = zodIssues(error);
+    if (issues !== null) {
+      request.log.info({ code: "validation", status: 400, correlationId }, "request rejected");
+      return reply.code(400).send({ error: { code: "validation", message: "Request is invalid", details: { issues }, correlationId } });
     }
     if (error && typeof error === "object" && "validation" in error) {
-      return reply.code(400).send({ error: { code: "validation", message: "Request is invalid", correlationId: request.correlationId } });
+      return reply.code(400).send({ error: { code: "validation", message: "Request is invalid", correlationId } });
+    }
+    // Fastify framework errors (body too large, bad JSON, unsupported media)
+    // carry a 4xx status; report them as such rather than as server faults.
+    const frameworkStatus = error instanceof Error && typeof (error as Error & { statusCode?: unknown }).statusCode === "number" && typeof (error as Error & { code?: unknown }).code === "string" && String((error as Error & { code?: unknown }).code).startsWith("FST_")
+      ? (error as Error & { statusCode: number }).statusCode : undefined;
+    if (frameworkStatus !== undefined && frameworkStatus >= 400 && frameworkStatus < 500) {
+      const code = frameworkStatus === 413 ? "quota_exceeded" : frameworkStatus === 415 ? "unsupported_media" : "validation";
+      const message = frameworkStatus === 413 ? "Request body is too large" : frameworkStatus === 415 ? "Unsupported request media type" : "Request is invalid";
+      request.log.info({ code, status: frameworkStatus, correlationId }, "request rejected");
+      return reply.code(frameworkStatus).send({ error: { code, message, correlationId } });
     }
     request.log.error({ err: error, correlationId: request.correlationId }, "request failed");
     return reply.code(500).send({ error: { code: "internal", message: "An unexpected server error occurred", correlationId: request.correlationId } });
+  });
+
+  app.addHook("onSend", async (request, reply, payload) => {
+    reply.header("x-content-type-options", "nosniff");
+    reply.header("referrer-policy", "no-referrer");
+    reply.header("x-frame-options", "DENY");
+    if (!reply.hasHeader("content-security-policy")) {
+      const path = request.url.split("?", 1)[0] ?? request.url;
+      const contentType = String(reply.getHeader("content-type") ?? "");
+      reply.header("content-security-policy", !path.startsWith("/api/") && contentType.startsWith("text/html") ? SPA_CSP : API_CSP);
+    }
+    return payload;
   });
 
   const route = (path: string) => `/api/v1${path}`;
@@ -1585,13 +1838,16 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   app.get(route("/health"), async () => {
     const result = await service.health();
     const { checks: _checks, ...health } = result;
-    return healthSchema.parse({ ...health, demo });
+    return shapeResponse(healthSchema, { ...health, demo });
   });
-  app.get(route("/ready"), async (_request, reply) => {
+  app.get(route("/ready"), async (request, reply) => {
     const result = await service.health();
     const ready = result.status === "ok";
-    if (!ready) return reply.code(503).send({ ...result, demo });
-    return { ...result, demo };
+    // Internal dependency checks are diagnostic detail for operators only.
+    const { checks: _checks, ...summary } = result;
+    const body = auth.authenticate(request) === null ? { ...summary, demo } : { ...result, demo };
+    if (!ready) return reply.code(503).send(body);
+    return body;
   });
   app.get(route("/capabilities"), async () => ({
     name: "BenchLedger", version: service.getVersion(), protocol: "rest-v1", demo,
@@ -1604,7 +1860,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
   app.get(route("/docs"), async (_request, reply) => reply.type("text/html; charset=utf-8").send(`<!doctype html><title>BenchLedger API</title><p>OpenAPI: <a href="/api/v1/openapi.json">/api/v1/openapi.json</a></p>`));
 
   app.get(route("/auth/access"), async () => { const access = await readWorkspaceSecurity(); return teamState.enabled ? { ...access, mode: "password", passwordConfigured: true, teamEnabled: true } : access; });
-  app.post(route("/auth/lan-session"), async (_request, reply) => {
+  app.post(route("/auth/lan-session"), { bodyLimit: AUTH_BODY_LIMIT }, async (_request, reply) => {
     const access = await readWorkspaceSecurity();
     if (teamState.enabled) throw new ApplicationError("forbidden", "Sign in with a named account. Shared LAN sessions are disabled.");
     if (access.mode !== "lan_open") return reply.code(403).send({ error: { code: "password_required", message: "Workspace password protection is enabled", correlationId: _request.correlationId } });
@@ -1612,7 +1868,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     return { ...access, authenticated: true, actor: "workspace-admin", csrfToken: session.csrf, expiresAt: new Date(session.expiresAt).toISOString(), credentialRevision: session.credentialRevision, correlationId: _request.correlationId };
   });
 
-  app.route({ method: ["POST", "GET", "DELETE"], url: route("/mcp"), handler: async (request, reply) => {
+  app.route({ method: ["POST", "GET", "DELETE"], url: route("/mcp"), bodyLimit: MCP_BODY_LIMIT, handler: async (request, reply) => {
     const principal = requireScope(request, "read", auth);
     if (principal.via !== "bearer") {
       return reply.code(401).send({ error: { code: "unauthenticated", message: "A scoped bearer token is required for MCP", correlationId: request.correlationId } });
@@ -1626,7 +1882,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     // private; MCP artifact transfer remains fail-closed until a transactional
     // trusted-host bridge is implemented.
     const protocol = createApplicationMcpProtocol(service, { context, serverInfo: { name: "benchledger", version: service.getVersion() } });
-    const handler = createMcpHttpHandler(protocol, { context, maxBodyBytes: 1_000_000, maxInventoryImageBodyBytes: 3 * 1024 * 1024 });
+    const handler = createMcpHttpHandler(protocol, { context, maxBodyBytes: 1_000_000, maxInventoryImageBodyBytes: MCP_BODY_LIMIT });
     const headers = Object.fromEntries(Object.entries(request.headers).map(([key, value]) => [key, Array.isArray(value) ? value[0] : value]));
     const result = await handler({ method: request.method, headers, body: request.body });
     reply.code(result.status);
@@ -1634,9 +1890,9 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     return reply.send(result.body);
   } });
 
-  app.post(route("/auth/login"), async (request, reply) => {
+  app.post(route("/auth/login"), { bodyLimit: AUTH_BODY_LIMIT }, async (request, reply) => {
     const clientKey = request.ip;
-    rateLimitWindow(passwordAttempts, clientKey, "login");
+    await checkLoginBudget(clientKey);
     const body = request.body as { password?: unknown };
     const valid = await verifyPasswordWithThrottle(async () => {
       const access = await readWorkspaceSecurity();
@@ -1644,18 +1900,18 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
         && await auth.verifyPassword(body.password as string);
     }, "login verification");
     if (!valid) {
-      recordFailedAttempt(passwordAttempts, clientKey);
+      recordLoginFailure(clientKey);
       return reply.code(401).send({ error: { code: "invalid_credentials", message: "Email or password is invalid", correlationId: request.correlationId } });
     }
     passwordAttempts.delete(clientKey);
     const session = auth.issueSession(reply);
     return { authenticated: true, actor: "workspace-admin", csrfToken: session.csrf, expiresAt: new Date(session.expiresAt).toISOString(), credentialRevision: session.credentialRevision, correlationId: request.correlationId };
   });
-  app.post(route("/auth/member-login"), async (request, reply) => {
-    const key = request.ip; rateLimitWindow(passwordAttempts, key, "login");
+  app.post(route("/auth/member-login"), { bodyLimit: AUTH_BODY_LIMIT }, async (request, reply) => {
+    const key = request.ip; await checkLoginBudget(key);
     const body = memberLoginSchema.safeParse(request.body); let member: TeamMember | null = null;
     const valid = await verifyPasswordWithThrottle(async () => { member = await service.team.verifyMember(body.success ? body.data.username : "invalid-member", body.success ? body.data.password : "invalid-password"); return member !== null; }, "login verification");
-    if (!valid || !member) { recordFailedAttempt(passwordAttempts, key); return reply.code(401).send({ error: { code: "invalid_credentials", message: "Username or password is invalid", correlationId: request.correlationId } }); }
+    if (!valid || !member) { recordLoginFailure(key); return reply.code(401).send({ error: { code: "invalid_credentials", message: "Username or password is invalid", correlationId: request.correlationId } }); }
     passwordAttempts.delete(key); const verified = member as TeamMember; const session = auth.issueSession(reply, `member:${verified.id}`, verified);
     return { authenticated: true, actor: `member:${verified.id}`, csrfToken: session.csrf, expiresAt: new Date(session.expiresAt).toISOString() };
   });
@@ -1740,9 +1996,9 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
       throw error;
     }
   };
-  app.patch(route("/auth/access"), securityMutation);
-  app.post(route("/auth/security"), securityMutation);
-  app.post(route("/auth/logout"), async (request, reply) => { requirePrincipal(request); auth.clearSession(reply); return { authenticated: false, correlationId: request.correlationId }; });
+  app.patch(route("/auth/access"), { bodyLimit: AUTH_BODY_LIMIT }, securityMutation);
+  app.post(route("/auth/security"), { bodyLimit: AUTH_BODY_LIMIT }, securityMutation);
+  app.post(route("/auth/logout"), { bodyLimit: AUTH_BODY_LIMIT }, async (request, reply) => { requirePrincipal(request); auth.clearSession(reply); return { authenticated: false, correlationId: request.correlationId }; });
   app.get(route("/auth/session"), async (request) => { const principal = requirePrincipal(request); return { authenticated: true, actor: principal.actor, source: principal.source, scopes: [...principal.scopes], projectIds: principal.projectIds ? [...principal.projectIds] : undefined, ...(principal.memberId ? { memberId: principal.memberId, memberVersion: principal.memberVersion } : {}), teamEnabled: teamState.enabled }; });
 
   app.get(route("/workspace"), async (request) => { const principal = requireScope(request, "read", auth); if (principal.via === "bearer") rejectScopedGlobalAccess(request); return workspaceSnapshot(service, principal.projectIds); });
@@ -1845,7 +2101,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const mutation = await service.putInventoryProductProfile(params.id, parseInventoryProductProfileBody(request.body), parseExpectedVersion(request), requestContext(request));
     return mutation;
   });
-  app.get(route("/inventory/:id/stock-events"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; const query = request.query as { limit?: string; cursor?: string }; return service.listStockEvents(params.id, Number(query.limit ?? 50), query.cursor); });
+  app.get(route("/inventory/:id/stock-events"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; const page = parsePageQuery(request.query); return service.listStockEvents(params.id, page.limit, page.cursor); });
   app.post(route("/inventory/:id/stock-events"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; const input = parseBody(stockEventInputSchema, { ...(request.body as Record<string, unknown>), itemId: params.id }); const mutation = await service.recordStockEvent(input, requestContext(request)); return reply.code(201).send(mutation); });
 
   app.get(route("/projects"), async (request) => {
@@ -1853,20 +2109,22 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const query = request.query as { q?: string; status?: ProjectListOptions["status"]; limit?: string; cursor?: string };
     const parsedStatus = query.status === undefined ? undefined : projectStatusSchema.safeParse(query.status);
     if (parsedStatus !== undefined && !parsedStatus.success) throw new ApplicationError("validation", "Project status must be one of the canonical lifecycle values");
-    const parsed = { ...(query.q === undefined ? {} : { q: query.q }), ...(parsedStatus === undefined ? {} : { status: parsedStatus.data }), limit: Math.min(Math.max(Number(query.limit ?? 50), 1), 200), ...(query.cursor === undefined ? {} : { cursor: query.cursor }) } satisfies ProjectListOptions;
+    if (query.q !== undefined && (typeof query.q !== "string" || query.q.length > 200)) throw new ApplicationError("validation", "Query parameters are invalid", { issues: [{ path: ["q"], message: "q must be at most 200 characters" }] });
+    const page = parsePageQuery(request.query);
+    const parsed = { ...(query.q === undefined ? {} : { q: query.q }), ...(parsedStatus === undefined ? {} : { status: parsedStatus.data }), limit: page.limit, ...(page.cursor === undefined ? {} : { cursor: page.cursor }) } satisfies ProjectListOptions;
     return request.principal?.projectIds === undefined ? service.listProjects(parsed) : scopedProjectPage(service, parsed, request.principal.projectIds);
   });
   app.get(route("/projects/removed"), async (request) => {
     requireScope(request, "read", auth);
     rejectScopedGlobalAccess(request);
-    const query = request.query as { limit?: string; cursor?: string };
-    return service.listRemovedProjectPage(Number(query.limit ?? 50), query.cursor);
+    const page = parsePageQuery(request.query);
+    return service.listRemovedProjectPage(page.limit, page.cursor);
   });
   app.post(route("/projects"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const mutation = await service.createProject(parseBody(createProjectSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });
   app.post(route("/projects/with-initial-revision"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const mutation = await service.createProjectWithInitialRevision(parseBody(createProjectWithInitialRevisionSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });
   app.post(route("/project-setup/previews"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const preview = await service.previewProjectSetup(parseBody(projectSetupProposalSchema, request.body), requestContext(request)); return reply.code(201).send(preview); });
   app.post(route("/project-setup/previews/:id/commit"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); if (requestIdempotencyKey(request) === undefined) throw new ApplicationError("validation", "Idempotency-Key is required for project setup commit"); const params = request.params as { id: string }; const body = parseBody(commitProjectSetupBodySchema, request.body); const command = { ...body, previewId: params.id }; return service.commitProjectSetup(command, requestContext(request, command)); });
-  app.get(route("/projects/:id/removed-history"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); const query = request.query as { limit?: string; cursor?: string }; return service.readRemovedProjectHistory(params.id, Number(query.limit ?? 50), query.cursor); });
+  app.get(route("/projects/:id/removed-history"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); const page = parsePageQuery(request.query); return service.readRemovedProjectHistory(params.id, page.limit, page.cursor); });
   app.get(route("/projects/:id"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); const project = await service.getProject(params.id); return { project, workItems: await service.listWorkItems(params.id) }; });
   app.patch(route("/projects/:id"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); return service.updateProject(params.id, parseBody(updateProjectSchema, request.body) as never, parseExpectedVersion(request), requestContext(request)); });
   app.post(route("/projects/:id/restore"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; requireProjectScope(request, params.id); return service.restoreProject(params.id, parseExpectedVersion(request), requestContext(request)); });
@@ -1952,7 +2210,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const body = parseBody(commitInspectionCompletionBodySchema, request.body);
     return service.commitInspectionCompletion(params.revisionId, { ...body, actionId: params.inspectionId }, requestContext(request));
   });
-  app.patch(route("/bom-lines/:id"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireBomReferenceScope(request, service, params.id); return service.updateBomLine(params.id, parseBody(updateBomLineSchema, request.body) as never, parseExpectedVersion(request), requestContext(request)); });
+  app.patch(route("/bom-lines/:id"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireBomReferenceScope(request, service, params.id); const expectedVersion = parseMandatoryIfMatch(request); return service.updateBomLine(params.id, parseBody(updateBomLineSchema, request.body) as never, expectedVersion, requestContext(request)); });
   app.delete(route("/bom-lines/:id"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireBomReferenceScope(request, service, params.id); return service.retireBomLine(params.id, parseRequiredExpectedVersion(request), requestContext(request)); });
   app.post(route("/bom-lines/:id/restore"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireBomReferenceScope(request, service, params.id); return service.restoreBomLine(params.id, parseRequiredExpectedVersion(request), requestContext(request)); });
   app.get(route("/project-revisions/:id/gaps"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireRevisionScope(request, service, params.id); return service.evaluateBomGaps(params.id); });
@@ -2005,7 +2263,9 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     requireScope(request, "read", auth);
     const query = request.query as { itemId?: string; limit?: string; cursor?: string };
     if (request.principal?.projectIds !== undefined && query.itemId === undefined) throw new ApplicationError("forbidden", "A project-scoped token must provide an inventory item when reading global offers");
-    return service.listOffers(query.itemId, Number(query.limit ?? 50), query.cursor);
+    if (query.itemId !== undefined && (typeof query.itemId !== "string" || !UUID_OR_ID.test(query.itemId) || query.itemId.length > 200)) throw new ApplicationError("validation", "Query parameters are invalid", { issues: [{ path: ["itemId"], message: "itemId must be an inventory identifier" }] });
+    const page = parsePageQuery(request.query);
+    return service.listOffers(query.itemId, page.limit, page.cursor);
   });
   app.post(route("/offers"), async (request, reply) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const mutation = await service.createOffer(parseBody(createOfferSchema, request.body), requestContext(request)); return reply.code(201).send(mutation); });
 
@@ -2026,9 +2286,9 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     const mutation = await service.beginArtifactUpload(input, requestContext(request));
     return reply.code(201).send(mutation);
   });
-  app.put(route("/artifacts/uploads/:id"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id, true); const body = request.body; if (!(body instanceof Uint8Array)) throw new ApplicationError("validation", "Upload body must be binary"); return service.writeArtifactUpload(params.id, body); });
+  app.put(route("/artifacts/uploads/:id"), { bodyLimit: uploadBodyLimit }, async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id, true); const body = request.body; if (!(body instanceof Uint8Array)) throw new ApplicationError("validation", "Upload body must be binary"); return service.writeArtifactUpload(params.id, body); });
   app.post(route("/artifacts/uploads/:id/finalize"), async (request) => { requireScope(request, "write", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id, true); return service.finalizeArtifactUpload(params.id, requestContext(request)); });
-  app.put(route("/transfers/uploads/:id"), async (request, reply) => {
+  app.put(route("/transfers/uploads/:id"), { bodyLimit: uploadBodyLimit }, async (request, reply) => {
     const params = request.params as { id: string };
     const body = request.body;
     if (!(body instanceof Uint8Array)) throw new ApplicationError("validation", "Upload body must be binary");
@@ -2062,7 +2322,7 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
     return mutation;
   });
   app.get(route("/artifacts/:id"), async (request) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id); return service.getArtifact(params.id); });
-  app.get(route("/artifacts/:id/download"), async (request, reply) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id); const downloaded = await service.readArtifact(params.id); return reply.type(downloaded.artifact.mediaType).header("content-disposition", artifactContentDisposition(downloaded.artifact.filename)).send(Buffer.from(downloaded.body)); });
+  app.get(route("/artifacts/:id/download"), async (request, reply) => { requireScope(request, "read", auth); const params = request.params as { id: string }; await requireArtifactReferenceScope(request, service, params.id); const downloaded = await service.readArtifact(params.id); return reply.type(artifactResponseType(downloaded.artifact.mediaType)).header("content-disposition", artifactContentDisposition(downloaded.artifact.filename)).send(Buffer.from(downloaded.body)); });
   app.get(route("/transfers/artifacts/:id/download"), async (request, reply) => {
     const params = request.params as { id: string };
     const token = request.headers[TRANSFER_TOKEN_HEADER];
@@ -2077,16 +2337,16 @@ export async function createApp(options: ServerOptions = {}): Promise<FastifyIns
       throw error;
     }
     for (const [name, value] of Object.entries(TRANSFER_RESPONSE_HEADERS)) reply.header(name, value);
-    return reply.type(downloaded.artifact.mediaType).header("content-disposition", artifactContentDisposition(downloaded.artifact.filename)).send(Buffer.from(downloaded.body));
+    return reply.type(artifactResponseType(downloaded.artifact.mediaType)).header("content-disposition", artifactContentDisposition(downloaded.artifact.filename)).send(Buffer.from(downloaded.body));
   });
   app.delete(route("/artifacts/:id"), async (request) => { requireScope(request, "write", auth); rejectScopedGlobalAccess(request); const params = request.params as { id: string }; return service.retireArtifact(params.id, parseExpectedVersion(request), requestContext(request)); });
 
-  app.get(route("/audit"), async (request) => { requireScope(request, "admin", auth); rejectScopedGlobalAccess(request); const query = request.query as { limit?: string; cursor?: string }; return ports.audit.list(Math.min(Math.max(Number(query.limit ?? 50), 1), 200), query.cursor); });
+  app.get(route("/audit"), async (request) => { requireScope(request, "admin", auth); rejectScopedGlobalAccess(request); const page = parsePageQuery(request.query); return ports.audit.list(page.limit, page.cursor); });
   app.get(route("/events"), async (request, reply) => {
     requireScope(request, "read", auth);
     rejectScopedGlobalAccess(request);
     reply.hijack();
-    reply.raw.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
+    reply.raw.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no", "x-content-type-options": "nosniff" });
     reply.raw.write(`event: ready\ndata: ${JSON.stringify({ correlationId: request.correlationId })}\n\n`);
     const unsubscribe = service.subscribe((event) => { if (!reply.raw.destroyed) reply.raw.write(`id: ${event.id}\nevent: state\ndata: ${JSON.stringify(event)}\n\n`); });
     const heartbeat = setInterval(() => { if (reply.raw.destroyed) clearInterval(heartbeat); else reply.raw.write(": heartbeat\n\n"); }, 25_000);

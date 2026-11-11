@@ -1,5 +1,7 @@
 import { Component, lazy, Suspense, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { createPortal } from "react-dom";
 import { fetchArtifactDownload } from "./api";
 import type { Artifact } from "./domain";
 import { useModalBoundary } from "./modal-boundary";
@@ -23,7 +25,9 @@ export function artifactPreviewKind(name: string): "image" | "markdown" | "text"
 
 export function MarkdownPreview({ text }: { text: string }) {
   // No raw HTML, embedded remote images, or automatically loaded resources.
-  return <Markdown skipHtml components={{
+  return <Markdown skipHtml remarkPlugins={[remarkGfm]} components={{
+    // Wide build tables scroll inside the preview instead of the page.
+    table: ({ children }) => <div className="markdown-table-scroll" role="region" aria-label="Table" tabIndex={0}><table>{children}</table></div>,
     img: ({ alt }) => <span>{alt ? `[Image: ${alt}]` : "[Image]"}</span>,
     a: ({ href, children }) => href && /^https?:\/\//iu.test(href)
       ? <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
@@ -66,7 +70,8 @@ export function ArtifactPreview({ file, onClose }: { file: Artifact; onClose: ()
     })();
     return () => { controller.abort(); if (url) URL.revokeObjectURL(url); };
   }, [file.id, file.hash, file.name, kind, attempt]);
-  return <div className="artifact-preview-backdrop">
+  // Portal to <body> so the overlay sits above the sticky sidebar instead of inside the file panel's stacking context.
+  return createPortal(<div className="artifact-preview-backdrop">
     <div ref={modal} className="artifact-preview-dialog" role="dialog" aria-modal="true" aria-labelledby={title} tabIndex={-1}>
       <header><h2 id={title}>{file.name}</h2><button type="button" className="button button-quiet" onClick={onClose}>Close preview</button></header>
       <div className="artifact-preview-content">
@@ -78,5 +83,5 @@ export function ArtifactPreview({ file, onClose }: { file: Artifact; onClose: ()
         </PreviewBoundary>
       </div>
     </div>
-  </div>;
+  </div>, document.body);
 }

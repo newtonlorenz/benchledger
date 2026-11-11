@@ -1,0 +1,12 @@
+{
+  "name": "BenchLedger",
+  "subtitle": "Inventory for makers",
+  "promotionalText": "Keep your parts, tools, materials and projects close at hand. Connect to your own BenchLedger server, or explore the sample workspace.",
+  "description": "Your workshop, in your pocket.\n\nBenchLedger brings your maker inventory and projects to your iPhone. Connect directly to the BenchLedger server you choose and find the details you need while you are at the bench.\n\nFIND YOUR PARTS\nSearch parts, tools and materials. Check recorded quantities, storage locations and evidence about what is available or still needs inspection.\n\nKEEP PROJECTS CLOSE\nBrowse projects, inspect their current revision and requirements, and start a new project when inspiration arrives. Update item names, descriptions and locations with a token that permits editing.\n\nYOUR SERVER, YOUR WORKSPACE\nUse your own BenchLedger server over HTTPS, on your local network or through a VPN you already use. Your API token stays in protected device storage. There is no required BenchLedger cloud account, advertising or tracking.\n\nEXPLORE BEFORE CONNECTING\nA clearly labelled, read-only sample workspace lets you try the browsing experience without a server or sign-in.\n\nA BenchLedger server and an API token from its administrator are required to use your own inventory and projects. The browser password is not an API token. Use the web workspace for stock counts, procurement, file uploads, CAD viewing and detailed build planning. The app does not provide offline synchronisation or automatic server discovery.",
+  "keywords": "inventory,maker,workshop,parts,tools,3d printing,electronics,projects,self hosted,materials",
+  "supportUrl": "https://github.com/newtonlorenz/benchledger/issues",
+  "marketingUrl": "https://github.com/newtonlorenz/benchledger",
+  "category": "PRODUCTIVITY",
+  "releaseType": "MANUAL",
+  "reviewNotes": "BenchLedger is a native companion for a user-operated BenchLedger server. To inspect its browsing features without credentials, tap Explore a sample workspace on the connection screen. This sample is available to all users, contains synthetic records and makes no network requests. Browse Inventory and Projects, open item and project details, and use Server > Leave sample workspace to return. Connecting to a real workspace requires that server's address and API bearer token. Write controls are shown only for tokens with the required permissions; sample mode is read only. No purchase or cloud account is required."
+}

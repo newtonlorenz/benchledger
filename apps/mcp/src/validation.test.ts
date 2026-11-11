@@ -87,7 +87,7 @@ describe("MCP validation boundary", () => {
         category,
         quantity: { value: 1, unit },
         evidence: { state: "unknown", source: "test", recordedAt: "2026-09-03T00:00:00.000Z" },
-      }).quantity.unit).toBe(unit);
+      }).quantity.unit).toBe(unit === "piece" ? "each" : unit);
     }
     expectInvalid(() => inventoryCreate({
       name: "Measured tool",
@@ -153,7 +153,7 @@ describe("MCP validation boundary", () => {
     expectInvalid(() => singleId({ itemId: "item-1", extra: true }, "itemId"), /unknown field/);
     expectInvalid(() => singleId({ itemId: "../item" }, "itemId"));
     expect(() => singleId(null, "itemId")).toThrowError(/arguments must be an object/);
-    expect(retireProject({ projectId: "project-1" })).toEqual({ projectId: "project-1" });
+    expectInvalid(() => retireProject({ projectId: "project-1" }), /expectedVersion is required/);
     expect(retireProject({ projectId: "project-1", expectedVersion: 4 })).toEqual({ projectId: "project-1", expectedVersion: 4 });
     expect(retireBomLine({ bomLineId: "bom-1", expectedVersion: 2 })).toEqual({ bomLineId: "bom-1", expectedVersion: 2 });
     expectInvalid(() => retireBomLine({ bomLineId: "bom-1" }));
@@ -180,7 +180,9 @@ describe("MCP validation boundary", () => {
   });
 
   it("validates quantities, dimensions, and evidence with explicit units and numeric bounds", () => {
-    expect(quantity({ value: 1, unit: "piece" }, "q")).toEqual({ value: 1, unit: "piece" });
+    expect(quantity({ value: 1, unit: "piece" }, "q")).toEqual({ value: 1, unit: "each" });
+    expect(quantity({ value: 1, unit: "each" }, "q")).toEqual({ value: 1, unit: "each" });
+    expect(quantity({ value: 1, unit: "roll" }, "q")).toEqual({ value: 1, unit: "set" });
     expect(quantity({ value: 0.25, unit: "gram" }, "q")).toEqual({ value: 0.25, unit: "gram" });
     expectInvalid(() => quantity({ value: 0, unit: "piece" }, "q"));
     expectInvalid(() => quantity({ value: Number.NaN, unit: "piece" }, "q"));
@@ -193,7 +195,10 @@ describe("MCP validation boundary", () => {
     expectInvalid(() => dimensions({ unit: "millimetre", length: 0 }, "d"));
     expectInvalid(() => dimensions({ unit: "millimetre", uncertainty: -1 }, "d"));
 
-    expect(evidence({ state: "physical_count", source: "bench-count", recordedAt: "2026-08-30T10:00:00Z", note: "drawer 2" }, "e")).toMatchObject({ state: "physical_count", source: "bench-count", note: "drawer 2" });
+    expect(evidence({ state: "physical_count", source: "bench-count", recordedAt: "2026-08-30T10:00:00Z", note: "drawer 2" }, "e")).toMatchObject({ state: "physically_counted", source: "bench-count", note: "drawer 2" });
+    for (const [legacy, canonical] of [["delivery", "delivered_uncounted"], ["order", "ordered_unverified"], ["user_reported", "unknown"], ["physically_counted", "physically_counted"], ["allocated", "allocated"], ["consumed", "consumed"]] as const) {
+      expect(evidence({ state: legacy, source: "s", recordedAt: "2026-08-30T10:00:00Z" }, "e").state).toBe(canonical);
+    }
     expect(evidence({ state: "unknown", source: "legacy-import", recordedAt: "unknown" }, "e")).toEqual({ state: "unknown", source: "legacy-import", recordedAt: "unknown", note: undefined });
     expectInvalid(() => evidence({ state: "confirmed", source: "x", recordedAt: "now" }, "e"));
     expectInvalid(() => evidence({ state: "unknown", source: "", recordedAt: "now" }, "e"));
@@ -225,7 +230,13 @@ describe("MCP validation boundary", () => {
       location: "filament cabinet",
       links: [{ label: "Manufacturer", url: "https://maker.example/petg" }],
     });
-    expect(created).toMatchObject({ name: "PETG HF", categoryNodeId: longCategoryId, quantity: { value: 1000, unit: "gram" }, condition: "opened", links: [{ label: "Manufacturer" }] });
+    expect(created).toMatchObject({ name: "PETG HF", categoryNodeId: longCategoryId, quantity: { value: 1000, unit: "gram" }, condition: "worn", links: [{ label: "Manufacturer" }] });
+    expect(inventoryCreate({ name: "Spool", category: "filament", quantity: { value: 1, unit: "gram" }, evidence: { state: "unknown", source: "s", recordedAt: "2026-08-30" }, tags: [" PETG ", "petg", "black"], condition: "good" })).toMatchObject({ tags: ["PETG", "black"], condition: "good" });
+    expectInvalid(() => inventoryCreate({ name: "Typo", category: "filamnet", quantity: { value: 1, unit: "gram" }, evidence: { state: "unknown", source: "s", recordedAt: "2026-08-30" } }), /printer, tool, accessory/);
+    expectInvalid(() => inventoryList({ category: "widgets" }), /use one of/);
+    expect(inventoryList({ category: "electronics" }).category).toBe("electronic");
+    expectInvalid(() => inventoryUpdate({ itemId: "filament-1", model: "x" }), /expectedVersion is required/);
+    expect(inventoryUpdate({ itemId: "filament-1", expectedVersion: 3, name: "Renamed", category: "printer_part" })).toMatchObject({ name: "Renamed", category: "accessory" });
     expect(inventoryUpdate({ itemId: "filament-1", expectedVersion: 3, categoryNodeId: longCategoryId, model: "PETG HF v2", tags: [" PETG ", "petg", "black"], links: [] })).toMatchObject({ itemId: "filament-1", expectedVersion: 3, categoryNodeId: longCategoryId, model: "PETG HF v2", tags: ["PETG", "black"], links: [] });
     expect(inventoryBulkUpdate({
       targets: [{ itemId: "item-2", expectedVersion: 3 }, { itemId: "item-1", expectedVersion: 4 }],
@@ -300,7 +311,7 @@ describe("MCP validation boundary", () => {
 
   it("accepts every stock event kind and protects event history inputs", () => {
     for (const kind of ["receipt", "count_correction", "allocation", "return", "use", "loss", "disposal"] as const) {
-      expect(stockEvent({ itemId: "item-1", kind, quantity: { value: 1, unit: "piece" }, note: `event ${kind}` })).toMatchObject({ itemId: "item-1", kind, quantity: { value: 1, unit: "piece" } });
+      expect(stockEvent({ itemId: "item-1", kind, quantity: { value: 1, unit: "piece" }, note: `event ${kind}` })).toMatchObject({ itemId: "item-1", kind, quantity: { value: 1, unit: "each" } });
     }
     expect(stockEvents({ itemId: "item-1", limit: 5, cursor: "10" })).toEqual({ itemId: "item-1", limit: 5, cursor: "10" });
     expectInvalid(() => stockEvent({ itemId: "item-1", kind: "consume", quantity: { value: 1, unit: "piece" } }));
@@ -336,15 +347,16 @@ describe("MCP validation boundary", () => {
     const conversion = { inventory: { quantity: 1, unit: "set" as const }, requirement: { quantity: 10, unit: "piece" as const }, evidence: { basis: "package_label" as const, observedAt: "2026-08-30T10:00:00Z", source: "label", sourceId: "pack-1", note: "Ten pieces per set" } };
     const line = bomLineCreate({ projectRevisionId: "lamp-r1", description: "M3 screw", quantity: 4, unit: "piece", requirement: "required", role: "consumed", itemId: "m3-screw", alternatives: [{ itemId: "m3-screw-2", compatible: "confirmed", reason: "same thread", quantityConversion: conversion }], constraints: { kind: "fastener", manufacturer: "Acme", model: "M3", sku: "M3-12", tag: "stainless", nameIncludes: "screw" }, notes: "Use button head" });
     expect(line).toMatchObject({ description: "M3 screw", role: "consumed", alternatives: [{ itemId: "m3-screw-2", compatible: "confirmed", reason: "same thread" }], constraints: { kind: "fastener", nameIncludes: "screw" } });
-    expect(line.alternatives?.[0]?.quantityConversion).toEqual(conversion);
+    expect(line.alternatives?.[0]?.quantityConversion).toEqual({ ...conversion, requirement: { quantity: 10, unit: "each" } });
     expect(bomLineCreate({ projectRevisionId: "lamp-r1", description: "12 V power supply", quantity: 1, unit: "piece", constraints: { specification: { status: "insufficient", missingDecisions: ["current_or_load", "connector"] } } })).toMatchObject({ constraints: { specification: { status: "insufficient", missingDecisions: ["current_or_load", "connector"] } } });
     expect(bomLineCreate({ projectRevisionId: "lamp-r1", description: "LED resistor", quantity: 1, unit: "piece", constraints: { specification: { status: "insufficient", missingDecisions: ["resistance", "power_rating"] } } })).toMatchObject({ constraints: { specification: { status: "insufficient", missingDecisions: ["resistance", "power_rating"] } } });
     const legacyLine = bomLineCreate({ projectRevisionId: "lamp-r1", description: "Legacy screw", quantity: 1, unit: "piece", role: null, compatibleItemIds: ["m3-screw-3"] });
     expect(legacyLine).toMatchObject({ role: null, compatibleItemIds: ["m3-screw-3"] });
     expect(bomLineUpdate({ bomLineId: "bom-1", expectedVersion: 1, quantity: 2, unit: "set", requirement: "optional", role: "reusable", constraints: {} })).toMatchObject({ bomLineId: "bom-1", quantity: 2, unit: "set", requirement: "optional", role: "reusable" });
-    expect(bomLineUpdate({ bomLineId: "bom-1", role: null })).toEqual({ bomLineId: "bom-1", role: null });
+    expectInvalid(() => bomLineUpdate({ bomLineId: "bom-1", role: null }), /expectedVersion is required/);
+    expect(bomLineUpdate({ bomLineId: "bom-1", expectedVersion: 2, role: null })).toEqual({ bomLineId: "bom-1", expectedVersion: 2, role: null });
     expect(bomEvaluation({ projectRevisionId: "lamp-r1" })).toEqual({ projectRevisionId: "lamp-r1" });
-    expect(reservation({ projectRevisionId: "lamp-r1", bomLineId: "bom-1", itemId: "m3-screw", quantity: { value: 4, unit: "piece" } })).toMatchObject({ bomLineId: "bom-1", quantity: { value: 4, unit: "piece" } });
+    expect(reservation({ projectRevisionId: "lamp-r1", bomLineId: "bom-1", itemId: "m3-screw", quantity: { value: 4, unit: "piece" } })).toMatchObject({ bomLineId: "bom-1", quantity: { value: 4, unit: "each" } });
     expect(releaseReservation({ reservationId: "reservation-1", expectedVersion: 1 })).toEqual({ reservationId: "reservation-1", expectedVersion: 1 });
     expect(usage({ projectRevisionId: "lamp-r1", reservationId: "reservation-1", itemId: "m3-screw", quantity: { value: 4, unit: "piece" }, note: "installed" })).toMatchObject({ reservationId: "reservation-1", note: "installed" });
     expectInvalid(() => bomLineCreate({ projectRevisionId: "lamp-r1", description: "x", quantity: 1, unit: "piece", compatibleItemIds: ["bad/id"] }));
@@ -352,14 +364,15 @@ describe("MCP validation boundary", () => {
     expectInvalid(() => bomLineUpdate({ bomLineId: "bom-1", role: "shared" }));
     expectInvalid(() => bomLineCreate({ projectRevisionId: "lamp-r1", description: "x", quantity: 1, unit: "piece", alternatives: [{ itemId: "alt", compatible: "confirmed" }], compatibleItemIds: ["alt"] }), /not both/);
     expectInvalid(() => bomLineCreate({ projectRevisionId: "lamp-r1", description: "x", quantity: 1, unit: "piece", alternatives: [{ itemId: "alt", compatible: "maybe" }] }));
-    expectInvalid(() => bomLineCreate({ projectRevisionId: "lamp-r1", description: "x", quantity: 1, unit: "piece", alternatives: [{ itemId: "alt", compatible: "confirmed", quantityConversion: { ...conversion, requirement: { quantity: 10, unit: "each" } } }] }));
+    expectInvalid(() => bomLineCreate({ projectRevisionId: "lamp-r1", description: "x", quantity: 1, unit: "piece", alternatives: [{ itemId: "alt", compatible: "confirmed", quantityConversion: { ...conversion, requirement: { quantity: 10, unit: "gram" } } }] }));
     expectInvalid(() => bomLineCreate({ projectRevisionId: "lamp-r1", description: "x", quantity: 1, unit: "piece", alternatives: [{ itemId: "alt", compatible: "confirmed", quantityConversion: { ...conversion, extra: true } }] }));
     expectInvalid(() => bomLineCreate({ projectRevisionId: "lamp-r1", description: "x", quantity: 1, unit: "piece", constraints: { invalid: "value" } }), /unsupported/);
     expectInvalid(() => bomLineCreate({ projectRevisionId: "lamp-r1", description: "x", quantity: 1, unit: "piece", constraints: { kind: ["electronic"] } }), /string/);
     expectInvalid(() => bomLineCreate({ projectRevisionId: "lamp-r1", description: "x", quantity: 1, unit: "piece", constraints: { specification: { status: "sufficient" } } }), /invalid|specification/i);
     expectInvalid(() => bomLineCreate({ projectRevisionId: "lamp-r1", description: "x", quantity: 1, unit: "piece", constraints: { specification: { status: "insufficient", missingDecisions: ["resistance", "resistance"] } } }), /invalid|specification/i);
     expectInvalid(() => bomLineUpdate({ bomLineId: "bom-1", quantity: 0 }));
-    expectInvalid(() => reservation({ projectRevisionId: "lamp-r1", bomLineId: "bom-1", itemId: "m3", quantity: { value: 1, unit: "each" } }));
+    expectInvalid(() => reservation({ projectRevisionId: "lamp-r1", bomLineId: "bom-1", itemId: "m3", quantity: { value: 1, unit: "pieces" } }));
+    expectInvalid(() => releaseReservation({ reservationId: "reservation-1" }), /expectedVersion is required/);
     expectInvalid(() => usage({ projectRevisionId: "lamp-r1", itemId: "m3", quantity: { value: 1, unit: "piece" }, extra: true }));
   });
 
@@ -386,7 +399,7 @@ describe("MCP validation boundary", () => {
       }],
     });
     expect(parsed.bomLines[0]).toMatchObject({ role: "reusable" });
-    expect(parsed.bomLines[0]?.alternatives[0]).toMatchObject({ compatible: "confirmed", reason: "correct package", quantityConversion: { requirement: { quantity: 10, unit: "piece" } } });
+    expect(parsed.bomLines[0]?.alternatives[0]).toMatchObject({ compatible: "confirmed", reason: "correct package", quantityConversion: { requirement: { quantity: 10, unit: "each" } } });
     const legacySetup = projectSetupProposal({
       project: { name: "Legacy lamp", status: "planned" },
       revision: { name: "Initial", status: "concept" },
@@ -424,8 +437,8 @@ describe("MCP validation boundary", () => {
     expect(offerList({ itemId: "m3-screw", query: "amazon", supplier: "Amazon", limit: 10 })).toMatchObject({ itemId: "m3-screw", query: "amazon", supplier: "Amazon" });
     expect(offerList({ query: "amazon", cursor: filteredCursor }).cursor).toBe(filteredCursor);
     expect(recordOffer({ itemId: "m3-screw", description: "M3 screw pack", supplier: "Amazon", url: "https://amazon.example/m3", packageQuantity: { value: 100, unit: "piece" }, price: { minor: 499, currency: "eur" }, shippingMinor: 0, observedAt: "2026-08-30T10:00:00Z" })).toMatchObject({ itemId: "m3-screw", price: { minor: 499, currency: "EUR" }, shippingMinor: 0 });
-    expect(contextRefresh({ projectId: "lamp", includeInventory: false, maxAgeSeconds: 60 })).toEqual({ projectId: "lamp", includeInventory: false, maxAgeSeconds: 60 });
-    expect(contextRefresh(undefined)).toEqual({ projectId: undefined, includeInventory: undefined, maxAgeSeconds: undefined });
+    expect(contextRefresh({ projectId: "lamp", includeInventory: false, maxAgeSeconds: 60 })).toEqual({ projectId: "lamp", includeInventory: false });
+    expect(contextRefresh(undefined)).toEqual({ projectId: undefined, includeInventory: undefined });
     expectInvalid(() => recordOffer({ supplier: "Amazon", url: "ftp://amazon.example/m3", price: { minor: 499, currency: "EUR" } }));
     expectInvalid(() => recordOffer({ supplier: "Amazon", url: "https://amazon.example/m3", price: { minor: 499, currency: "EU" } }));
     expectInvalid(() => recordOffer({ supplier: "Amazon", url: "https://amazon.example/m3", price: { minor: -1, currency: "EUR" } }));

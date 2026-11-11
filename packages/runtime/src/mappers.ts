@@ -378,6 +378,23 @@ export function nativeStockEventFromApi(input: StockEventInput, ctx: RequestCont
   });
 }
 
+/**
+ * Stored keys are scoped by item (and actor for usage) so a caller key cannot
+ * collide across items; show callers the key they supplied.
+ */
+function callerIdempotencyKey(event: StockEvent): string | undefined {
+  const key = event.idempotencyKey;
+  if (key === undefined) return undefined;
+  const item = encodeURIComponent(event.itemId);
+  const stockPrefix = `stock-event:${item}:`;
+  if (key.startsWith(stockPrefix)) return key.slice(stockPrefix.length);
+  if (event.actor !== undefined) {
+    const usagePrefix = `usage:${encodeURIComponent(event.actor.id)}:${item}:`;
+    if (key.startsWith(usagePrefix)) return key.slice(usagePrefix.length);
+  }
+  return key;
+}
+
 export function apiStockEventFromNative(event: StockEvent, fallbackVersion: number): ApiStockEvent {
   const version = typeof event.evidence?.apiItemVersion === "number" && Number.isInteger(event.evidence.apiItemVersion) ? event.evidence.apiItemVersion : fallbackVersion;
   const visibleEvidence = event.evidence === undefined ? undefined : Object.fromEntries(Object.entries(event.evidence).filter(([key]) => key !== "apiItemVersion" && key !== "bootstrap"));
@@ -391,7 +408,7 @@ export function apiStockEventFromNative(event: StockEvent, fallbackVersion: numb
     ...(stringValue(event.evidence?.projectId) === undefined ? {} : { projectId: stringValue(event.evidence?.projectId) }),
     ...(stringValue(event.evidence?.note) === undefined ? {} : { note: stringValue(event.evidence?.note) }),
     ...(event.correlationId === undefined ? {} : { correlationId: event.correlationId }),
-    ...(event.idempotencyKey === undefined ? {} : { idempotencyKey: event.idempotencyKey }),
+    ...(event.idempotencyKey === undefined ? {} : { idempotencyKey: callerIdempotencyKey(event) }),
     actor: event.actor?.id ?? "system",
     source,
     ...(visibleEvidence !== undefined && Object.keys(visibleEvidence).length > 0 ? { evidence: visibleEvidence } : {}),

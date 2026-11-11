@@ -5,6 +5,14 @@ by the web UI. It does not contain a model, and it does not make multi-step
 judgments on an agent's behalf. An agent composes small, typed operations into
 an end-to-end project decision.
 
+## Native phone client
+
+The [mobile companion](mobile-app.md) uses the existing scoped HTTP API for
+inventory/project reads, item metadata updates and atomic project creation.
+It shares the canonical contracts and server business rules; it adds no MCP
+tool, server permission or stock-evidence shortcut. Mobile requirements are
+plan records, not readiness or physical-build evidence.
+
 ## Inventory images
 
 All inventory kinds, including printers, have a browser image gallery and the
@@ -151,7 +159,7 @@ and invalid hashes. Mutating tools use optimistic versions where applicable.
 | Family | Tools | Scope | Mutates? |
 | --- | --- | --- | --- |
 | Inventory | `read_inventory_summary`, `list_inventory`, `read_inventory_item`, `list_stock_events` | `inventory:read` | No |
-| Inventory | `create_inventory_item`, `update_inventory_item`, `commission_inventory_item`, `record_stock_event` | `inventory:write` | Yes |
+| Inventory | `create_inventory_item`, `update_inventory_item`, `commission_inventory_item`, `record_stock_event`, `retire_inventory_item` | `inventory:write` | Yes; updates and retirement require `expectedVersion` |
 | Inventory | `bulk_update_inventory_items` | `inventory:write` | Yes; explicit 1–100 optimistic-version targets |
 | Inventory taxonomy | `list_inventory_categories`, `read_inventory_category` | `inventory:read` | No |
 | Inventory taxonomy | `create_inventory_category`, `update_inventory_category`, `archive_inventory_category` | `inventory:write` | Yes; update/archive require an expected version |
@@ -159,7 +167,7 @@ and invalid hashes. Mutating tools use optimistic versions where applicable.
 | Catalog | `search_catalog_products`, `read_catalog_product`, `read_inventory_product_profile` | `catalog:read` | No |
 | Catalog | `create_catalog_product`, `update_catalog_product`, `link_inventory_product_profile` | `catalog:write` | Yes |
 | Projects | `list_projects`, `list_removed_projects`, `read_removed_project_history`, `read_project`, `read_work_item`, `read_project_revision`, `read_work_item_revision` | `projects:read` | No |
-| Projects | `create_project`, `create_project_with_initial_revision`, `update_project`, `archive_project`, `restore_project`, `remove_project`, `retire_project` (compatibility alias), `create_work_item`, `create_project_revision`, `update_project_revision`, `create_work_item_revision` | `projects:write` | Yes; revision route/printer planning is narrow and versioned; atomic initial setup accepts stable caller IDs |
+| Projects | `create_project`, `create_project_with_initial_revision`, `update_project`, `archive_project`, `restore_project`, `remove_project`, `create_work_item`, `create_project_revision`, `update_project_revision`, `create_work_item_revision` | `projects:write` | Yes; revision route/printer planning is narrow and versioned; atomic initial setup accepts stable caller IDs |
 | Project setup | `preview_project_setup` | `projects:write` + `bom:write` | Preview metadata only; actor-owned 30-minute row, no graph/stock/audit/event mutation |
 | Project setup | `commit_project_setup` | `projects:write` + `bom:write` | Yes; exact preview, reservations, one aggregate audit, and idempotent replay |
 | BOM | `list_bom_lines`, `list_reservations`, `read_reservation`, `calculate_bom_gaps` (Ready/Check/Decide/Source plus exact missing specification decisions) | `bom:read` | No |
@@ -177,8 +185,8 @@ and invalid hashes. Mutating tools use optimistic versions where applicable.
 
 Project reads, filters and writes use one lifecycle value everywhere:
 `idea`, `planned`, `ready`, `building`, `validating`, `complete`, or `archived`.
-`archive_project` is the canonical reversible project-retirement command;
-`retire_project` remains a compatibility alias. Default project lists and the
+`archive_project` is the reversible project-retirement command (the former
+`retire_project` alias was removed). Default project lists and the
 workspace omit archived projects, while `status=archived` is the explicit
 Archived view. Archiving releases every active reservation across all project
 revisions and appends stock-release evidence; revisions, BOM, artifacts, stock
@@ -187,8 +195,8 @@ events, and audits are retained. `restore_project` returns the project to
 readiness condition and is never accepted as a project status.
 `remove_project` is a separate irreversible, approval-required command. It
 requires `expectedVersion`, exact case-sensitive `projectName` confirmation,
-and a stable 8–200 character idempotency key in the MCP request context so an
-ambiguous response can be replayed safely. It releases active reservations,
+and an optional `idempotencyKey` argument (derived from the arguments when
+omitted) so an ambiguous response can be replayed safely. It releases active reservations,
 hides the project and descendants from ordinary reads, and retains only
 explicit tombstone/history access. Use bounded `list_removed_projects` and
 `read_removed_project_history` pages with their opaque continuation cursors;
@@ -215,17 +223,17 @@ is limited to 256 KiB. The preview returns stable normalized IDs, semantic
 field errors, unresolved specifications, gap candidates/totals, planned
 reservation and before/after inventory basis, expiry, and a SHA-256 content
 hash. It persists only bounded actor-owned preview metadata for 30 minutes.
-`commit_project_setup` requires the exact preview ID/version/hash and an
-8–200-character idempotency key; planned reservations additionally require
+`commit_project_setup` requires the exact preview ID/version/hash and accepts an
+optional `idempotencyKey` (derived when omitted); planned reservations additionally require
 `confirmReservations: true`. It rechecks every basis row and creates the
 complete graph and allocation events in one transaction. Stale basis is a
-non-retryable 409 with `commitState: "not_committed"` and a fresh-preview
-recovery action. Identical same-actor/key/canonical commits replay; changed
+non-retryable `rule_conflict` with `commitState: "not_committed"` and a
+fresh-preview recovery action. Identical same-actor/key/canonical commits replay; changed
 payloads conflict.
 
 Structured BOM alternatives preserve their compatibility state and reason,
-and may carry evidence-backed `quantityConversion`. MCP names the requirement
-side `piece` and maps it losslessly to the REST/application unit `each`; gap
+and may carry evidence-backed `quantityConversion`. MCP uses the canonical
+requirement unit `each` (legacy input alias `piece`); gap
 candidate quantities remain in requirement units while reasons retain
 capacity, allocation, and overage diagnostics. Missing or invalid conversions,
 and conditional or unknown compatibility, remain Check and are never buyable or
@@ -253,24 +261,27 @@ unchanged, and a physical-only filament cannot be attached to a
 production-approved revision.
 
 `create_project_with_initial_revision` accepts optional caller-provided stable
-project and revision IDs. Those IDs identify records and never act as replay
-keys. An identical retry requires the same idempotency key and complete
-canonical payload and replays exactly once; a changed payload with that key is
-an idempotency conflict. Project-ID, revision-ID, generated project-name/slug,
-and reused-key conflicts return sanitized, machine-readable details with
-`reason`, `field`, `id`, `retryable: false`, and `commitState: "not_committed"`.
-The agent should read the existing project, choose a different project or
-revision ID, or choose a different project name according to the reason. No
-project, revision, audit, or idempotency record is committed on conflict, and
-removed identities are not reclaimed. Use the bounded
+project and revision IDs; they never act as replay keys. Its conflict reasons
+and recovery are described once in the
+[MCP quickstart](../apps/mcp/QUICKSTART.md#5-build-the-project-record-minute-68). Use the bounded
 `preview_project_setup` and `commit_project_setup` tools for complete graph
 setup; this capability remains available for the incremental project-plus-first
 revision path. Web UI composition, templates, and a full Describe→Review→Create
 flow are separate work.
 
-The server's `tools/list` response contains only MCP's public fields (`name`,
-`description`, and `inputSchema`). Scope and mutation metadata are intentionally
-kept in the checked-in capability contract and enforced server-side.
+The server's `tools/list` response contains MCP's public fields (`name`,
+`description`, `inputSchema`) plus `annotations` (`readOnlyHint`,
+`destructiveHint`, `idempotentHint`, `openWorldHint: false`). Annotations are
+host hints, not authorization: scopes, project ancestry and versions are
+enforced server-side. Every input schema is a flat object, every mutating
+schema accepts an optional `idempotencyKey`, and every update of an existing
+record requires `expectedVersion`. Outputs use canonical units, evidence and
+condition values; legacy aliases are accepted on input only. `category` is a
+closed enum; unknown values are rejected. `calculate_bom_gaps` pages its
+`lines` (default 50, maximum 100) while `totals` cover the whole revision.
+Errors carry `error.reason` (`version_conflict`, `rule_conflict`,
+`idempotency_conflict`, `validation`, `not_found`, `forbidden`), bounded
+`details` and a `correlationId`.
 
 The BOM specification decision vocabulary is closed and shared across the
 application, HTTP, MCP, and web surfaces: `identity`, `purpose`, `voltage`,
@@ -316,7 +327,7 @@ profiles when present.
 | Start a project | Guided project setup | `create_project_with_initial_revision` → `create_work_item`; optional stable `projectId`/`revisionId` identify records; use `create_project_revision` for later planning baselines |
 | Archive or restore a project | Project Archive action and explicit Archived view | `archive_project` / `restore_project`; archive hides default lists, releases active reservations with evidence, retains history, and restore never recreates reservations |
 | Understand a build gap | BOM editor and gap panel | `list_bom_lines` → `calculate_bom_gaps`; Decide before supplier lookup, inspect candidate diagnostics and conversion capacity/overage reasons in Check results, and shop only Source lines |
-| Resolve a physical project check | Project Plan Checks panel above the BOM; beginner shows three concrete questions and View all, expert reveals canonical traceability; confirmed compatibility and conversion collect explicit values/evidence, and completion is preview-first with exact before/after line alternatives/conversions plus explicit confirmation | HTTP: `GET /api/v1/project-revisions/{revisionId}/inspections` → `GET .../{inspectionId}` → `POST .../{inspectionId}/completion-preview` → explicit `POST .../{inspectionId}/completion-commit`; MCP: `list_inspections` → `read_inspection` → `preview_inspection_completion` → `commit_inspection_completion`, with nested REST `each` ↔ MCP `piece` unit/conversion mapping, affected line/item plus relevant reservation staleness basis, before/after items/gaps/lines, affected and reevaluated gaps, refreshed inspections/evidence, and project-scoped fail-closed authorization |
+| Resolve a physical project check | Project Plan Checks panel above the BOM; beginner shows three concrete questions and View all, expert reveals canonical traceability; confirmed compatibility and conversion collect explicit values/evidence, and completion is preview-first with exact before/after line alternatives/conversions plus explicit confirmation | HTTP: `GET /api/v1/project-revisions/{revisionId}/inspections` → `GET .../{inspectionId}` → `POST .../{inspectionId}/completion-preview` → explicit `POST .../{inspectionId}/completion-commit`; MCP: `list_inspections` → `read_inspection` → `preview_inspection_completion` → `commit_inspection_completion`, with canonical `each` unit/conversion values (legacy `piece` accepted on input), affected line/item plus relevant reservation staleness basis, before/after items/gaps/lines, affected and reevaluated gaps, refreshed inspections/evidence, and project-scoped fail-closed authorization |
 | Hold confirmed parts | Reservation panel | `create_reservation` → `list_reservations` / `read_reservation` → read BOM/gaps again |
 | Preview a project file | Files: images, formatted Markdown, plain text and interactive STL; unsupported formats stay download-only | Existing authenticated artifact download with SHA-256 verification; browser-only rendering, no MCP/API schema change; see preview limits in [agent quickstart](agent-quickstart.md) |
 | Add a CAD revision | Files scope selector defaults to the exact project revision and offers named work-item revisions; All files is read-only; upload status shows the file role | Authenticated browser/HTTP upload through the existing begin → write → finalize flow; raw MCP transfer commands remain fail-closed |

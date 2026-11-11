@@ -50,37 +50,60 @@ export interface ImportResult {
   auditRecords: number;
 }
 
+/**
+ * A rejected source document. `path` names only the schema location (for
+ * example `items[3].purchased_qty`) and `itemIndex` the zero-based item, so a
+ * caller can report where the document is wrong without echoing private
+ * source values such as item ids, orders or notes.
+ */
+export class InventoryDocumentError extends Error {
+  constructor(message: string, readonly path: string, readonly itemIndex?: number) {
+    super(message);
+    this.name = "InventoryDocumentError";
+  }
+}
+
+function atItem<T>(index: number, operation: () => T): T {
+  try {
+    return operation();
+  } catch (error: unknown) {
+    if (error instanceof InventoryDocumentError) throw new InventoryDocumentError(error.message, error.path === "" ? `items[${index}]` : `items[${index}].${error.path}`, index);
+    const message = error instanceof Error && typeof (error as Error & { code?: unknown }).code === "string" ? `inventory item is invalid (${String((error as Error & { code: string }).code)})` : "inventory item is invalid";
+    throw new InventoryDocumentError(message, `items[${index}]`, index);
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function requiredText(record: Record<string, unknown>, key: string): string {
   const value = record[key];
-  if (typeof value !== "string" || value.trim() === "") throw new Error(`inventory item ${key} must be a non-empty string`);
+  if (typeof value !== "string" || value.trim() === "") throw new InventoryDocumentError(`inventory item ${key} must be a non-empty string`, key);
   return value.trim();
 }
 
 function optionalText(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   if (value === undefined || value === null) return undefined;
-  if (typeof value !== "string") throw new Error(`inventory item ${key} must be a string when present`);
+  if (typeof value !== "string") throw new InventoryDocumentError(`inventory item ${key} must be a string when present`, key);
   return value;
 }
 
 function requiredNumber(record: Record<string, unknown>, key: string): number {
   const value = record[key];
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error(`inventory item ${key} must be a finite non-negative number`);
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new InventoryDocumentError(`inventory item ${key} must be a finite non-negative number`, key);
   return value;
 }
 
 function parseSource(value: unknown): Record<string, unknown> | undefined {
   if (value === undefined || value === null) return undefined;
-  if (!isRecord(value)) throw new Error("inventory item source must be an object when present");
+  if (!isRecord(value)) throw new InventoryDocumentError("inventory item source must be an object when present", "source");
   return { ...value };
 }
 
 function normalizeRawItem(value: unknown): SourceInventoryItem {
-  if (!isRecord(value)) throw new Error("inventory item must be an object");
+  if (!isRecord(value)) throw new InventoryDocumentError("inventory item must be an object", "");
   const reusePolicy = value["reuse_policy"];
   const allowedReuse: readonly InventoryItem["reusePolicy"][] = ["available", "inspect_first", "machine_specific"];
   const normalizedReuse = typeof reusePolicy === "string" && allowedReuse.includes(reusePolicy as InventoryItem["reusePolicy"]) ? reusePolicy as InventoryItem["reusePolicy"] : "inspect_first";
@@ -101,18 +124,18 @@ function normalizeRawItem(value: unknown): SourceInventoryItem {
 }
 
 export function parseInventoryDocument(value: unknown): SourceInventoryDocument {
-  if (!isRecord(value)) throw new Error("inventory document must be an object");
+  if (!isRecord(value)) throw new InventoryDocumentError("inventory document must be an object", "$");
   const rawItems = value["items"];
-  if (!Array.isArray(rawItems)) throw new Error("inventory document items must be an array");
+  if (!Array.isArray(rawItems)) throw new InventoryDocumentError("inventory document items must be an array", "items");
   const schemaVersion = value["schema_version"];
-  if (typeof schemaVersion !== "number" || !Number.isInteger(schemaVersion) || schemaVersion < 1) throw new Error("inventory document schema_version must be a positive integer");
+  if (typeof schemaVersion !== "number" || !Number.isInteger(schemaVersion) || schemaVersion < 1) throw new InventoryDocumentError("inventory document schema_version must be a positive integer", "schema_version");
   const currency = value["currency"];
-  if (typeof currency !== "string" || !/^[A-Z]{3}$/.test(currency)) throw new Error("inventory document currency must be an ISO 4217 code");
+  if (typeof currency !== "string" || !/^[A-Z]{3}$/.test(currency)) throw new InventoryDocumentError("inventory document currency must be an ISO 4217 code", "currency");
   const asOf = optionalText(value, "as_of");
-  const items = rawItems.map(normalizeRawItem);
+  const items = rawItems.map((raw, index) => atItem(index, () => normalizeRawItem(raw)));
   const ids = new Set<string>();
-  for (const item of items) {
-    if (ids.has(item.id)) throw new Error(`duplicate inventory item id ${item.id}`);
+  for (const [index, item] of items.entries()) {
+    if (ids.has(item.id)) throw new InventoryDocumentError("duplicate inventory item id", `items[${index}].id`, index);
     ids.add(item.id);
   }
   return { schemaVersion, ...(asOf === undefined ? {} : { asOf }), currency, items };
@@ -146,7 +169,7 @@ export function buildImportPlan(value: unknown, options: ImportOptions = {}): Im
   const items: InventoryItem[] = [];
   const events: StockEvent[] = [];
   const auditRecords: AuditRecord[] = [];
-  for (const raw of document.items) {
+  for (const [index, raw] of document.items.entries()) atItem(index, () => {
     const confidence = confidenceFromSourceStatus(raw.status);
     const source = provenance(raw.source, document.currency);
     const item: InventoryItem = {
@@ -172,7 +195,7 @@ export function buildImportPlan(value: unknown, options: ImportOptions = {}): Im
       : createStockEvent({ id: eventId, itemId: raw.id, kind: "evidence", quantity: 0, unit: raw.unit as QuantityUnit, reason: `Imported ${raw.status} evidence; physical count required`, source: sourceKey, evidence: { sourceStatus: raw.status, reportedQuantity: raw.purchasedQuantity }, actor: { type: "import", id: actorId }, idempotencyKey: `inventory-import:${sourceKey}:${raw.id}`, occurredAt: importedAt, createdAt: importedAt });
     events.push(event);
     auditRecords.push(createAuditRecord({ id: `audit-${safePart(sourceKey)}-${safePart(raw.id)}`, action: "inventory.imported", entityType: "inventory_item", entityId: raw.id, actor: { type: "import", id: actorId }, sourceSurface: "import", occurredAt: importedAt, correlationId: sourceKey, metadata: { sourceStatus: raw.status, confidence } }));
-  }
+  });
   return { sourceKey, items, events, auditRecords };
 }
 

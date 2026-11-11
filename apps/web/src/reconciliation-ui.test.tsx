@@ -163,6 +163,19 @@ describe("finish build flow", () => {
     expect(markup).not.toContain("Optional context component");
   });
 
+  it("opens on the requirement chosen from the plan, including an unreserved one", () => {
+    const line = (id: string, name: string, reserved: number) => ({ id: `line-${id}`, bomLineId: `bom-${id}`, name, itemLabel: name, plannedQuantity: 1, plannedUnit: "each" as const, reservedQuantity: reserved, unit: "each" as const, outcomes: [] });
+    const model: ReconciliationViewModel = { projectId: "p", projectName: "Focus", projectRevisionId: "r", status: "draft", lines: [line("a", "First reserved", 1), line("b", "Second reserved", 1)], availableLines: [line("c", "Unreserved part", 0)] };
+    const heading = (markup: string) => /<article class="reconciliation-line"[^>]*>[^]*?<h2 id="[^"]+"[^>]*>([^<]+)<\/h2>/u.exec(markup)?.[1];
+    const view = (focusBomLineId?: string) => renderToStaticMarkup(<ReconciliationUI model={model} focusBomLineId={focusBomLineId} confirmationOpen={false} onChange={() => undefined} onRequestPreview={() => undefined} onConfirmCommit={() => undefined} />);
+    expect(heading(view())).toBe("First reserved");
+    expect(heading(view("bom-b"))).toBe("Second reserved");
+    const unreserved = view("bom-c");
+    expect(heading(unreserved)).toBe("Unreserved part");
+    expect(unreserved).toContain("Show selected stock only");
+    expect(heading(view("bom-missing"))).toBe("First reserved");
+  });
+
   it("uses uncertainty-safe beginner wording when applying stock changes is not confirmed", () => {
     const message = reconciliationCommitErrorMessage(false, new TypeError("response lost after commit"));
     expect(message).toBe("The stock update was not confirmed. Try again. BenchLedger will check the saved result before it applies anything twice.");

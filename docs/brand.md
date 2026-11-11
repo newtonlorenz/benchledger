@@ -40,13 +40,27 @@ gradients, or add shadows.
 
 ## Color
 
-| Role | Color | Use |
+BenchLedger has one visual system: **graphite + rust orange**. The product
+tokens in `apps/web/src/workspace-design.css` are the source of truth; this
+table names the light-theme roles (dark theme values live beside them).
+
+| Role | Light | Use |
 | --- | --- | --- |
-| Workbench ink | `#173A35` | Primary dark background and text |
-| Ledger moss | `#3F795C` | Actions and positive evidence |
-| Signal mint | `#9CD3A9` | Mark detail and selected state |
-| Paper | `#F7F9F6` | Product and documentation surface |
-| Safety amber | `#C58A25` | Inspect-first and uncertainty only |
+| Graphite ink | `#20262E` | Text; navigation background is `#151B23` |
+| Rust orange | `#AA3E0D` | Primary actions, selection, focus and the mark |
+| Mark bars | `#F59C6D` on `#352820` | Mark and favicon only |
+| Paper | `#F2F4F6` / `#FFFFFF` | Page and panel surfaces |
+| Moss | `#16825E` | Positive evidence ("Ready to use") only, never actions |
+| Safety amber | `#A5630B` | Inspect-first and uncertainty only |
+| Signal red | `#AD353C` | Errors and genuine gaps only |
+
+Moss green was the original action colour; it is now reserved for positive
+status so that "go" and "confirmed" are never confused. The older green
+artwork in `docs/assets/` is historical and should be redrawn in the palette
+above when the identity slice is revisited.
+
+Type is IBM Plex Sans for interface text and IBM Plex Mono for quantities,
+identifiers and eyebrows, served from the application.
 
 Color never carries inventory or risk meaning by itself. Pair it with text and
 an icon, and preserve WCAG 2.2 AA contrast for functional content.

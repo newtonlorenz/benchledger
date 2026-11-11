@@ -5,7 +5,61 @@ first public release; all current work is under **Unreleased**.
 
 ## Unreleased
 
+### Upgrade notes (read before deploying this release)
+
+- **Host allow-list.** Requests are accepted only when `Host` is the
+  `BENCHLEDGER_PUBLIC_BASE_URL` host, `localhost`, `127.0.0.1` or `[::1]`.
+  Any other name gets `421 host_not_allowed`. If people open BenchLedger by a
+  LAN IP address or mDNS name that differs from the public URL, list those in
+  the new `BENCHLEDGER_ALLOWED_HOSTS` (comma-separated, no scheme or port).
+- **Session secret.** Startup now refuses the `.env.example` placeholder and
+  other low-entropy `BENCHLEDGER_SESSION_SECRET` values; generate one with
+  `openssl rand -base64 48`.
+- **Trusted proxies.** `BENCHLEDGER_TRUST_PROXY` accepts `false` (default), a
+  hop count or proxy IPs/CIDRs. The legacy `true` now means exactly one hop.
+- **Secure cookies.** With `BENCHLEDGER_SECURE_COOKIES` unset, cookies are
+  `Secure` when the public base URL is `https://`. Remove an explicit `false`
+  if TLS now terminates in front of BenchLedger.
+- **Body limits.** Request bodies are capped per route (2 MiB default, 16 KiB
+  on authentication routes); only uploads accept up to
+  `BENCHLEDGER_MAX_UPLOAD_BYTES`.
+- **CI branch protection.** The single `test` job became the `check` jobs
+  listed in `docs/development-workflow.md`; update required checks.
+
+### Review fix pass (correctness, security and operations)
+
+- Summary: a multi-agent review fix pass covering security hardening (Host
+  allow-list, proxy trust, session-secret and cookie defaults, body limits),
+  data-integrity fixes, MCP ergonomics, web UX, mobile client resilience, and
+  CI/Docker/backup operations. Details are in the pull request.
+- Security: production dependencies updated so the server image audits clean
+  (Fastify 5.12.8, fast-uri, Zod 4.6.7, sharp 0.35.5, Vite 8.3.7; Expo tooling
+  patches for shell-quote, node-forge and decode-uri-component); MCP SDK test
+  dependency 1.32.2.
+- Operations: `benchledger-backup` CLI (`npm run backup -- backup|verify|restore`)
+  with in-use detection, non-overwriting restore and documented Docker
+  procedures in the deployment guide.
+- Container: runtime image ships only manifests, compiled output and production
+  dependencies (no sources, tests, mobile app or Vite), adds a `HEALTHCHECK`,
+  and pins the Node base image by digest.
+- CI: parallel static/unit/e2e/container-smoke jobs, strict server-image
+  audit, CodeQL, SHA-pinned actions, uploaded test results and Playwright
+  traces, a path-filtered Expo export workflow, and a mobile-viewport smoke
+  project with one CI retry.
+- Tooling: the privacy scan checks the files Git would publish (tracked plus
+  untracked-not-ignored) instead of every file on disk; `npm run check` no
+  longer runs the Expo export (`npm run check:mobile`).
+- Correctness and hardening fixes from the same review across the application,
+  runtime, server, MCP and web surfaces (see the pull request for details).
+
 ### Added
+
+- iOS 27 design direction for the phone client, with native Liquid Glass tabs,
+  large titles, native search, inset lists, dark appearance and Dynamic Type.
+
+- Initial Expo native client for iPhone and Android: secure server connections,
+  inventory/project search, evidence and requirement views, versioned item
+  metadata edits and atomic project creation. See [mobile setup](docs/mobile-app.md).
 
 - Inline draft protection, explicit unavailable-project recovery and rendered accessibility smoke checks
 

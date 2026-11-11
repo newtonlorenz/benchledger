@@ -65,7 +65,7 @@ for (const dark of [false, true]) test(`rendered pages and dialogs pass accessib
   for (const hash of ["", "inventory", `projects/${id}/plan`, `projects/${id}/files`, `projects/${id}/offers`, `projects/${id}/build`, "settings", "capabilities"]) { await page.goto(`/#/${hash}`); await expect(page.locator("main")).toBeVisible(); await audit(); }
   await page.goto("/#/inventory"); await page.locator(".table-item").first().click(); await audit(); await page.keyboard.press("Escape");
   await page.getByLabel("Open workspace commands").click(); await audit(); await page.keyboard.press("Escape");
-  await page.goto(`/#/projects/${id}/plan`); await page.getByRole("button", { name: "Edit project", exact: true }).click(); await audit(); await page.keyboard.press("Escape");
+  await page.goto(`/#/projects/${id}/plan`); await page.getByRole("button", { name: "More project actions", exact: true }).click(); await audit(); await page.getByRole("menuitem", { name: "Edit project", exact: true }).click(); await audit(); await page.keyboard.press("Escape");
   await page.setViewportSize({ width: 320, height: 800 }); await audit();
 });
 test("an unconfirmed plan save stays protected until an unchanged retry resolves it", async ({ page }) => {

@@ -73,6 +73,15 @@ export class RuntimeState {
     return typeof row?.version === "number" && Number.isInteger(row.version) && row.version > 0 ? row.version : 1;
   }
 
+  /** All stored versions of one entity type, for batch reads; missing ids default to 1 like getVersion. */
+  getVersions(entityType: string): ReadonlyMap<string, number> {
+    const versions = new Map<string, number>();
+    for (const row of this.database.all<SqliteRow>("SELECT entity_id, version FROM forge_runtime_versions WHERE entity_type = ?", [entityType])) {
+      if (typeof row.entity_id === "string" && typeof row.version === "number" && Number.isInteger(row.version) && row.version > 0) versions.set(row.entity_id, row.version);
+    }
+    return versions;
+  }
+
   ensureVersion(entityType: string, entityId: string, expected: number | undefined): void {
     if (expected !== undefined && this.getVersion(entityType, entityId) !== expected) {
       throw new RuntimeConflict(`${entityType} '${entityId}' changed since it was read`, { expectedVersion: expected, actualVersion: this.getVersion(entityType, entityId) });

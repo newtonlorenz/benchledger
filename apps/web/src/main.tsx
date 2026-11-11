@@ -7,6 +7,8 @@ import "@fontsource/ibm-plex-mono/latin-500.css";
 import "./styles.css";
 import "./workspace-design.css";
 import "./workflow-polish.css";
+// App-level flows load last so they can refine shared layout without editing it.
+import "./app-flows.css";
 import { applyAppearance, readAppearance } from "./appearance";
 
 applyAppearance(readAppearance());

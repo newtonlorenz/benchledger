@@ -24,6 +24,23 @@ describe("MemoryInventory", () => {
     await expect(runtime.inventory.retireItem(released.id, released.version)).resolves.toMatchObject({ retiredAt: expect.any(String) });
   });
 
+  it("reserves decimal quantities up to the requirement despite binary rounding", async () => {
+    const runtime = createMemoryRuntime([{
+      id: "decimal-filament", name: "Decimal filament", kind: "filament", quantity: 1, availableQuantity: 1, unit: "gram", tags: [], links: [], evidence: { state: "physically_counted" }, createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1
+    }]);
+    const service = new ApplicationService(runtime.ports);
+    const context = { actor: "memory-decimal-test", source: "api" as const, correlationId: "memory-decimal", scopes: new Set(["read", "write"]) };
+    await runtime.projects.createProject({ id: "decimal-project", name: "Decimal reservations", status: "planned" });
+    const revision = await runtime.projects.createProjectRevision("decimal-project", { name: "Initial", status: "concept" });
+    const line = await runtime.projects.createBomLine(revision.id, { name: "Decimal filament", role: "consumed", itemId: "decimal-filament", requiredQuantity: 0.3, unit: "gram", optional: false, alternatives: [], constraints: {} });
+    await service.createReservation(revision.id, { lineId: line.id, itemId: "decimal-filament", quantity: 0.1 }, context);
+    await expect(service.createReservation(revision.id, { lineId: line.id, itemId: "decimal-filament", quantity: 0.2 }, context)).resolves.toMatchObject({ data: { quantity: 0.2 } });
+    await expect(service.createReservation(revision.id, { lineId: line.id, itemId: "decimal-filament", quantity: 0.01 }, context)).rejects.toMatchObject({ code: "conflict" });
+    // The port enforces the same rule as the service, not a looser whole-unit ceiling.
+    const fresh = await runtime.projects.createBomLine(revision.id, { name: "Decimal filament", role: "consumed", itemId: "decimal-filament", requiredQuantity: 0.25, unit: "gram", optional: false, alternatives: [], constraints: {} });
+    await expect(Promise.resolve().then(() => runtime.projects.createReservation(revision.id, { lineId: fresh.id, itemId: "decimal-filament", quantity: 0.5 }))).rejects.toMatchObject({ code: "conflict" });
+  });
+
   it("does not change a directly reserved BOM line to reusable", async () => {
     const runtime = createMemoryRuntime([{
       id: "reserved-role-item", name: "Reserved board", kind: "electronic", quantity: 1, availableQuantity: 1, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" }, createdAt: "2026-08-30T00:00:00.000Z", updatedAt: "2026-08-30T00:00:00.000Z", version: 1

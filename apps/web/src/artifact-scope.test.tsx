@@ -161,7 +161,8 @@ describe("artifact scope selection", () => {
       renderToStaticMarkup(<EditBuildApproachDialog project={project} items={inventory} expert={false} onClose={() => undefined} onSave={async () => true} />),
     ];
     for (const markup of markups) {
-      expect(markup).toContain("build anything");
+      expect(markup).toMatch(/change (it|this) later/u);
+      expect(markup).not.toContain("does not buy");
       expect(markup).not.toContain("fabricate");
     }
   });

@@ -21,6 +21,15 @@ backups
 .DS_Store
 playwright-report
 test-results
+# The server image never builds or ships the Expo mobile app.
+apps/mobile
+# Not build inputs: documentation, browser tests, agent skills, local tooling.
+docs
+e2e
+skills
+.impeccable
+.claude
+.vscode
 
 # Local design-tool cache; never source or container input.
 .impeccable/hook.cache.json

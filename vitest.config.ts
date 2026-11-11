@@ -6,7 +6,7 @@ export default defineConfig({
   // its last compiled workspace copy. Build/typecheck retain package boundaries.
   resolve: { alias: [{ find: /^@benchledger\/application$/u, replacement: fileURLToPath(new URL("./packages/application/src/index.ts", import.meta.url)) }, { find: /^@benchledger\/mcp$/u, replacement: fileURLToPath(new URL("./apps/mcp/src/index.ts", import.meta.url)) }] },
   test: {
-    include: ["apps/**/*.test.ts", "apps/**/*.test.tsx", "packages/**/*.test.ts"],
+    include: ["apps/**/*.test.ts", "apps/**/*.test.tsx", "packages/**/*.test.ts", "scripts/**/*.test.mjs"],
     coverage: {
       provider: "v8",
       reporter: ["text", "json-summary"],
@@ -21,6 +21,18 @@ export default defineConfig({
         "apps/server/src/**/*.ts",
         "apps/web/src/**/*.ts",
         "apps/web/src/**/*.tsx",
+        "apps/mobile/src/client.ts",
+        "apps/mobile/src/connection.ts",
+        "apps/mobile/src/demo.ts",
+        "apps/mobile/src/presentation.ts",
+        "apps/mobile/src/query-cache.ts",
+        "apps/mobile/src/use-remote.ts",
+        "apps/mobile/src/session-controller.ts",
+        "apps/mobile/src/tolerant.ts",
+        "apps/mobile/src/links.ts",
+        "apps/mobile/src/item-editor.ts",
+        "apps/mobile/src/foreground.ts",
+        "apps/mobile/src/error-boundary.tsx",
         "packages/api-contract/src/**/*.ts",
         "packages/application/src/**/*.ts",
         "packages/artifacts/src/**/*.ts",

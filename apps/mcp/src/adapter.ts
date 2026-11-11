@@ -2,7 +2,9 @@ import { INVENTORY_IMAGE_TOOLS, parseInventoryImageTool } from "./inventory-imag
 import type { InventoryImageToolName } from "./inventory-images.js";
 import { MAKER_TOOL_DEFINITIONS, parseMakerTool } from "./maker-workflows.js";
 import type { MakerToolName } from "./maker-workflows.js";
-import { CAPABILITY_DOCUMENT, LEGACY_TRANSFER_DEFINITIONS, RESOURCE_TEMPLATES, RESOURCES, TOOL_DEFINITIONS } from "./capabilities.js";
+import { CAPABILITY_DOCUMENT, LEGACY_TRANSFER_DEFINITIONS, RESOURCE_TEMPLATES, RESOURCES, TOOL_DEFINITIONS, publicToolDefinitions } from "./capabilities.js";
+import { randomUUID } from "node:crypto";
+import { DERIVED_IDEMPOTENCY_TOOL_NAMES as DERIVED_IDEMPOTENCY_TOOLS, IDEMPOTENCY_KEY_PATTERN, derivedIdempotencyKey } from "./idempotency.js";
 import { McpAdapterError, mapBackendError } from "./errors.js";
 import {
   artifactList,
@@ -38,6 +40,8 @@ import {
   inventoryCategoryUpdate,
   inventoryCategoryArchive,
   inventoryCommission,
+  inventoryRetire,
+  inventorySummaryInput,
   inventoryWithProductProfileCreate,
   inventoryProductProfileLink,
   inventoryProductProfileRead,
@@ -46,7 +50,6 @@ import {
   inventoryUpdate,
   id,
   offerList,
-  parsePageInput,
   projectCreate,
   projectWithInitialRevisionCreate,
   projectSetupProposal,
@@ -63,7 +66,6 @@ import {
   restoreProject,
   recordOffer,
   retireBomLine,
-  retireProject,
   reservation,
   releaseReservation,
   retireArtifact,
@@ -113,10 +115,16 @@ function emptyObject(value: unknown): JsonObject {
   return boundedJsonObject(value, DEFAULT_TOOL_RESULT_BYTES);
 }
 
-function errorPayload(error: McpAdapterError): JsonObject {
-  const result: JsonObject = { error: { code: error.code, message: error.message } };
-  if (error.details !== undefined) result.error = { code: error.code, message: error.message, details: error.details };
-  return result;
+function errorPayload(error: McpAdapterError, correlationId?: string): JsonObject {
+  return {
+    error: {
+      code: error.code,
+      message: error.message,
+      ...(error.reason === undefined ? {} : { reason: error.reason }),
+      ...(error.details === undefined ? {} : { details: error.details }),
+      ...(correlationId === undefined ? {} : { correlationId }),
+    },
+  };
 }
 
 function okResult(value: unknown, maxBytes: number, maxDepth = 12): McpToolResult {
@@ -128,9 +136,9 @@ function okResult(value: unknown, maxBytes: number, maxDepth = 12): McpToolResul
   };
 }
 
-function failedResult(error: unknown): McpToolResult {
+function failedResult(error: unknown, correlationId?: string): McpToolResult {
   const mapped = mapBackendError(error);
-  const structuredContent = errorPayload(mapped);
+  const structuredContent = errorPayload(mapped, correlationId);
   return {
     content: [{ type: "text", text: JSON.stringify(structuredContent) }],
     structuredContent,
@@ -149,11 +157,35 @@ const TRANSFER_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   BACKEND_ERROR: "The artifact transfer could not be completed.",
 };
 
-function failedTransferResult(error: unknown): McpToolResult {
+function failedTransferResult(error: unknown, correlationId?: string): McpToolResult {
   const mapped = mapBackendError(error);
   const message = TRANSFER_ERROR_MESSAGES[mapped.code];
-  if (message === undefined) return failedResult(new McpAdapterError("BACKEND_ERROR", TRANSFER_ERROR_MESSAGES.BACKEND_ERROR ?? "The artifact transfer could not be completed."));
-  return failedResult(new McpAdapterError(mapped.code, message));
+  if (message === undefined) return failedResult(new McpAdapterError("BACKEND_ERROR", TRANSFER_ERROR_MESSAGES.BACKEND_ERROR ?? "The artifact transfer could not be completed."), correlationId);
+  return failedResult(new McpAdapterError(mapped.code, message), correlationId);
+}
+
+/**
+ * Split the transport-level idempotencyKey argument from the command payload
+ * so strict validators never see it, and reconcile it with any host header.
+ */
+function resolveIdempotency(name: string, definition: McpToolDefinition, rawInput: unknown, context: McpRequestContext): { input: unknown; context: McpRequestContext } {
+  if (!definition.mutating || typeof rawInput !== "object" || rawInput === null || Array.isArray(rawInput)) {
+    return { input: rawInput, context: definition.mutating && DERIVED_IDEMPOTENCY_TOOLS.has(name) && context.idempotencyKey === undefined ? { ...context, idempotencyKey: derivedIdempotencyKey(name, context.actorId, rawInput) } : context };
+  }
+  const { idempotencyKey: argumentKey, ...input } = rawInput as Record<string, unknown>;
+  if (argumentKey !== undefined) {
+    if (typeof argumentKey !== "string" || !IDEMPOTENCY_KEY_PATTERN.test(argumentKey)) {
+      throw new McpAdapterError("INVALID_ARGUMENT", "arguments.idempotencyKey must be 8-200 printable ASCII characters without spaces.", undefined, "validation");
+    }
+    if (context.idempotencyKey !== undefined && context.idempotencyKey !== argumentKey) {
+      throw new McpAdapterError("INVALID_ARGUMENT", "arguments.idempotencyKey differs from the host Idempotency-Key header; send one key or make them identical.", undefined, "validation");
+    }
+    return { input, context: { ...context, idempotencyKey: argumentKey } };
+  }
+  if (context.idempotencyKey === undefined && DERIVED_IDEMPOTENCY_TOOLS.has(name)) {
+    return { input, context: { ...context, idempotencyKey: derivedIdempotencyKey(name, context.actorId, input) } };
+  }
+  return { input, context };
 }
 
 function objectValue(value: unknown, label: string): Record<string, unknown> {
@@ -227,17 +259,10 @@ function requireCommissioningBackend(adapter: McpAdapter): NonNullable<BenchLedg
   return commission;
 }
 
-function requireCommissioningIdempotency(context: McpRequestContext): void {
+function requireIdempotency(context: McpRequestContext, command: string): void {
   const key = context.idempotencyKey;
   if (key === undefined || key.length < 8 || key.length > 200) {
-    throw new McpAdapterError("INVALID_ARGUMENT", "Inventory commissioning requires an idempotency key in the request context.");
-  }
-}
-
-function requireProjectRemovalIdempotency(context: McpRequestContext): void {
-  const key = context.idempotencyKey;
-  if (key === undefined || key.length < 8 || key.length > 200) {
-    throw new McpAdapterError("INVALID_ARGUMENT", "Project removal requires an idempotency key in the request context.");
+    throw new McpAdapterError("INVALID_ARGUMENT", `${command} requires an 8-200 character idempotencyKey argument or Idempotency-Key header.`, undefined, "validation");
   }
 }
 
@@ -254,6 +279,27 @@ function requireReconciliationBackend(adapter: McpAdapter): NonNullable<BenchLed
 function requireInspectionsBackend(adapter: McpAdapter): NonNullable<BenchLedgerBackend["inspections"]> {
   if (adapter.backend.inspections === undefined) throw new McpAdapterError("BACKEND_ERROR", "The inspection backend is not configured for this MCP host.");
   return adapter.backend.inspections;
+}
+
+const BOM_GAP_DEFAULT_LIMIT = 50;
+
+/**
+ * calculate_bom_gaps evaluates the whole revision (totals stay whole-revision)
+ * but returns lines in bounded pages so large BOMs stay under the result cap.
+ */
+function pageBomEvaluation(value: unknown, input: unknown): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return value;
+  const evaluation = value as Record<string, unknown>;
+  if (!Array.isArray(evaluation.lines)) return value;
+  const args = (typeof input === "object" && input !== null ? input : {}) as { limit?: number; cursor?: string };
+  const limit = args.limit ?? BOM_GAP_DEFAULT_LIMIT;
+  const offset = args.cursor === undefined ? 0 : Number.parseInt(args.cursor, 10);
+  if (!Number.isSafeInteger(offset) || offset < 0 || String(offset) !== args.cursor && args.cursor !== undefined) {
+    throw new McpAdapterError("INVALID_ARGUMENT", "arguments.cursor must be a cursor returned by calculate_bom_gaps.", undefined, "validation");
+  }
+  const lines = evaluation.lines.slice(offset, offset + limit);
+  const next = offset + lines.length < evaluation.lines.length ? String(offset + lines.length) : null;
+  return { ...evaluation, lines, totalLines: evaluation.lines.length, nextCursor: next, hasMore: next !== null };
 }
 
 /** Remove serial-like fields at the MCP boundary without mutating backend data. */
@@ -399,7 +445,7 @@ async function authorizeProjectScope(adapter: McpAdapter, name: string, input: u
   if (name === "create_project" || name === "create_project_with_initial_revision") {
     rejectScopedGlobalWrite(context, "A project-scoped token cannot create a new workspace outside its allow-list.");
   }
-  if (name === "create_inventory_item" || name === "create_inventory_with_product_profile" || name === "update_inventory_item" || name === "bulk_update_inventory_items" || name === "commission_inventory_item" || name === "record_stock_event" || name === "create_inventory_category" || name === "update_inventory_category" || name === "archive_inventory_category") {
+  if (name === "create_inventory_item" || name === "create_inventory_with_product_profile" || name === "update_inventory_item" || name === "retire_inventory_item" || name === "bulk_update_inventory_items" || name === "commission_inventory_item" || name === "record_stock_event" || name === "create_inventory_category" || name === "update_inventory_category" || name === "archive_inventory_category") {
     rejectScopedGlobalWrite(context, "Inventory is workspace-global; project-scoped tokens may read it but cannot mutate it.");
   }
   if (name === "create_catalog_product" || name === "update_catalog_product") {
@@ -436,7 +482,7 @@ export class McpAdapter {
     this.handlers = new Map<string, ToolHandler>([
       ...INVENTORY_IMAGE_TOOLS.map((definition): [string, ToolHandler] => [definition.name, (input, context) => { if (!this.backend.inventoryImages) throw new McpAdapterError("BACKEND_ERROR", "This runtime does not support inventory images."); const name = definition.name as InventoryImageToolName; return this.backend.inventoryImages(name, parseInventoryImageTool(name, input), context); }]),
       ...MAKER_TOOL_DEFINITIONS.map((definition): [string, ToolHandler] => [definition.name, (input, context) => { if (!this.backend.makerWorkflows) throw new McpAdapterError("BACKEND_ERROR", "This runtime does not support maker workflows."); const name = definition.name as MakerToolName; return this.backend.makerWorkflows(name, parseMakerTool(name, input), context); }]),
-      ["read_inventory_summary", (input, context) => this.backend.inventory.summary(parsePageInput(input), context)],
+      ["read_inventory_summary", (input, context) => { inventorySummaryInput(input); return this.backend.inventory.summary({}, context); }],
       ["list_inventory", (input, context) => this.backend.inventory.list(inventoryList(input), context)],
       ["read_inventory_item", (input, context) => this.backend.inventory.get({ itemId: singleId(input, "itemId") }, context)],
       ["create_inventory_item", (input, context) => this.backend.inventory.create(inventoryCreate(input), context)],
@@ -444,10 +490,15 @@ export class McpAdapter {
       ["update_inventory_item", (input, context) => this.backend.inventory.update(inventoryUpdate(input), context)],
       ["bulk_update_inventory_items", (input, context) => this.backend.inventory.bulkUpdate(inventoryBulkUpdate(input), context)],
       ["commission_inventory_item", (input, context) => {
-        requireCommissioningIdempotency(context);
+        requireIdempotency(context, "Inventory commissioning");
         return requireCommissioningBackend(this)(inventoryCommission(input), context);
       }],
       ["record_stock_event", (input, context) => this.backend.inventory.recordStockEvent(stockEvent(input), context)],
+      ["retire_inventory_item", (input, context) => {
+        const parsed = inventoryRetire(input);
+        if (this.backend.inventory.retire === undefined) throw new McpAdapterError("BACKEND_ERROR", "This inventory backend does not support retiring items.");
+        return this.backend.inventory.retire(parsed, context);
+      }],
       ["list_stock_events", (input, context) => this.backend.inventory.listStockEvents(stockEvents(input), context)],
       ["list_inventory_categories", (input, context) => requireInventoryCategoriesBackend(this).list(inventoryCategoryList(input), context)],
       ["read_inventory_category", (input, context) => requireInventoryCategoriesBackend(this).get({ categoryId: categorySingleId(input, "categoryId") }, context)],
@@ -475,7 +526,7 @@ export class McpAdapter {
       ["commit_inspection_completion", (input, context) => {
         assertScope(context.scopes, "inventory:write");
         const parsed = inspectionCommit(input);
-        if (context.idempotencyKey === undefined || context.idempotencyKey.length < 8 || context.idempotencyKey.length > 200) throw new McpAdapterError("INVALID_ARGUMENT", "An 8-200 character idempotency key is required for inspection completion.");
+        requireIdempotency(context, "Inspection completion");
         return requireInspectionsBackend(this).commit(parsed, context);
       }],
 
@@ -497,7 +548,7 @@ export class McpAdapter {
         if (context.projectIds !== undefined) throw new McpAdapterError("FORBIDDEN", "Project setup commits require an unscoped token.");
         assertScope(context.scopes, "projects:write");
         if (this.backend.projects.commitSetup === undefined) throw new McpAdapterError("BACKEND_ERROR", "This project backend does not support project setup commits.");
-        if (context.idempotencyKey === undefined || context.idempotencyKey.length < 8 || context.idempotencyKey.length > 200) throw new McpAdapterError("INVALID_ARGUMENT", "An 8-200 character idempotency key is required for project setup commit.");
+        requireIdempotency(context, "Project setup commit");
         return this.backend.projects.commitSetup(projectSetupCommit(input), context);
       }],
       ["update_project", (input, context) => this.backend.projects.update(projectUpdate(input), context)],
@@ -512,18 +563,13 @@ export class McpAdapter {
         return this.backend.projects.restore(parsed, context);
       }],
       ["remove_project", (input, context) => {
-        requireProjectRemovalIdempotency(context);
+        requireIdempotency(context, "Project removal");
         if (this.backend.projects.remove === undefined) throw new McpAdapterError("BACKEND_ERROR", "This project backend does not support irreversible project removal.");
         return this.backend.projects.remove(removeProject(input), context);
       }],
       ["read_removed_project_history", (input, context) => {
         if (this.backend.projects.readRemovedHistory === undefined) throw new McpAdapterError("BACKEND_ERROR", "This project backend does not support removed-project history.");
         return this.backend.projects.readRemovedHistory(removedProjectHistory(input), context);
-      }],
-      ["retire_project", (input, context) => {
-        const parsed = retireProject(input);
-        if (this.backend.projects.archive === undefined) throw new McpAdapterError("BACKEND_ERROR", "This project backend does not support atomic project archiving.");
-        return this.backend.projects.archive(parsed, context);
       }],
       ["create_work_item", (input, context) => this.backend.projects.createWorkItem(workItemCreate(input), context)],
       ["read_work_item", (input, context) => this.backend.projects.getWorkItem({ workItemId: singleId(input, "workItemId") }, context)],
@@ -583,6 +629,11 @@ export class McpAdapter {
     return TOOL_DEFINITIONS;
   }
 
+  /** Discovery payload (schemas plus MCP annotations) used by tools/list. */
+  publicTools(): readonly JsonObject[] {
+    return publicToolDefinitions();
+  }
+
   listResources(): readonly McpResource[] {
     return RESOURCES;
   }
@@ -595,15 +646,20 @@ export class McpAdapter {
     return CAPABILITY_DOCUMENT;
   }
 
-  async callTool(name: string, rawInput: unknown, context: McpRequestContext): Promise<McpToolResult> {
+  async callTool(name: string, rawInput: unknown, requestContext: McpRequestContext): Promise<McpToolResult> {
     const definition = this.definitions.get(name);
     const handler = this.handlers.get(name);
-    if (definition === undefined || handler === undefined) return failedResult(new McpAdapterError("INVALID_TOOL", `Unknown BenchLedger tool '${name}'.`));
+    // One correlation id per call, echoed in errors so a user can match an
+    // agent-visible failure to the audit trail.
+    const correlationId = requestContext.correlationId ?? randomUUID();
+    if (definition === undefined || handler === undefined) return failedResult(new McpAdapterError("INVALID_TOOL", `Unknown BenchLedger tool '${name}'.`), correlationId);
 
     try {
-      assertScope(context.scopes, definition.requiredScope);
-      if (name === "create_inventory_with_product_profile") assertScope(context.scopes, "catalog:write");
-      const input = rawInput ?? {};
+      assertScope(requestContext.scopes, definition.requiredScope);
+      if (name === "create_inventory_with_product_profile") assertScope(requestContext.scopes, "catalog:write");
+      const resolved = resolveIdempotency(name, definition, rawInput ?? {}, { ...requestContext, correlationId });
+      const input = resolved.input;
+      const context = resolved.context;
       // Validate the closed artifact scope before project ancestry lookups.
       // This keeps malformed/mixed scopes side-effect free and makes the same
       // parser the source of truth for both authorization and dispatch.
@@ -614,6 +670,8 @@ export class McpAdapter {
       // Filter generic project pages as a second line of defence for custom
       // backends. Production backends also filter before querying where
       // possible; this prevents accidental cross-project result leakage.
+      // Pagination metadata is preserved: the application backend paginates
+      // the allow-list itself, so the continuation cursor stays valid.
       if (name === "list_projects" && isProjectScoped(context)) {
         const page = objectValue(value, "project page");
         const items = page.items;
@@ -622,12 +680,13 @@ export class McpAdapter {
           const project = entry as Record<string, unknown>;
           return typeof project.id === "string" && context.projectIds!.includes(project.id);
         }) : [];
-        value = { ...page, items: filteredItems, nextCursor: null, hasMore: false };
+        value = { ...page, items: filteredItems, nextCursor: typeof page.nextCursor === "string" ? page.nextCursor : null, hasMore: typeof page.nextCursor === "string" };
       }
+      if (name === "calculate_bom_gaps") value = pageBomEvaluation(value, input);
       const safeValue = redactSerials(value);
       return okResult(safeValue, this.maxToolResultBytes, name === "get_capabilities" ? CAPABILITY_DOCUMENT_MAX_DEPTH : undefined);
     } catch (error) {
-      return TRANSFER_TOOL_NAMES.has(name) ? failedTransferResult(error) : failedResult(error);
+      return TRANSFER_TOOL_NAMES.has(name) ? failedTransferResult(error, correlationId) : failedResult(error, correlationId);
     }
   }
 

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ACESFilmicToneMapping, SRGBColorSpace, AmbientLight, Box3, Box3Helper, BufferGeometry, Color, DirectionalLight, Euler, Float32BufferAttribute, Mesh, MeshStandardMaterial, PerspectiveCamera, Raycaster, Scene, Vector2, Vector3, WebGLRenderer } from "three";
+import type { GridHelper } from "three";
+import { buildPlaneGrid, disposeGrid, formatModelSize, viewerColours } from "./stl-preview";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { AssemblyGeometry, AssemblyPart } from "@benchledger/api-contract";
 export interface AssemblyCanvasProps { geometry: AssemblyGeometry[]; parts: AssemblyPart[]; hidden: Set<string>; selected: string | undefined; explosion: number; view: "front" | "rear" | "iso"; fit: number; onSelect(id: string): void }
@@ -12,11 +14,12 @@ export default function AssemblyCanvas(props: AssemblyCanvasProps) {
     let renderer: WebGLRenderer | undefined, controls: OrbitControls | undefined, observer: ResizeObserver | undefined, themeObserver: MutationObserver | undefined;
     const objects = new Map<string, { mesh: Mesh<BufferGeometry, MeshStandardMaterial>; origin: Vector3 }>();
     const geometries: BufferGeometry[] = [], materials: MeshStandardMaterial[] = [];
-    const scene = new Scene(), selection = new Box3Helper(new Box3(), 0x35664e); selection.visible = false; scene.add(selection);
+    const scene = new Scene(), selection = new Box3Helper(new Box3(), new Color(viewerColours(container).accent)); selection.visible = false; scene.add(selection);
+    let grid: GridHelper | undefined;
     let disposed = false;
-    const dispose = () => { if (disposed) return; disposed = true; observer?.disconnect(); themeObserver?.disconnect(); controls?.dispose(); geometries.forEach(g => g.dispose()); materials.forEach(m => m.dispose()); selection.geometry.dispose(); (selection.material as MeshStandardMaterial).dispose(); renderer?.dispose(); renderer?.forceContextLoss(); renderer?.domElement.remove(); };
+    const dispose = () => { if (disposed) return; disposed = true; observer?.disconnect(); themeObserver?.disconnect(); controls?.dispose(); disposeGrid(grid); geometries.forEach(g => g.dispose()); materials.forEach(m => m.dispose()); selection.geometry.dispose(); (selection.material as MeshStandardMaterial).dispose(); renderer?.dispose(); renderer?.forceContextLoss(); renderer?.domElement.remove(); };
     try {
-      renderer = new WebGLRenderer({ antialias: true }); renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.setClearColor(new Color(getComputedStyle(container).getPropertyValue("--assembly-stage").trim() || "#eae9e2")); renderer.outputColorSpace = SRGBColorSpace; renderer.toneMapping = ACESFilmicToneMapping; renderer.toneMappingExposure = 1.1;
+      renderer = new WebGLRenderer({ antialias: true }); renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.setClearColor(new Color(viewerColours(container).stage)); renderer.outputColorSpace = SRGBColorSpace; renderer.toneMapping = ACESFilmicToneMapping; renderer.toneMappingExposure = 1.1;
       renderer.domElement.setAttribute("aria-label", "Assembly model. Select parts using the parts list or click the model."); renderer.domElement.setAttribute("role", "img"); container.append(renderer.domElement);
       const camera = new PerspectiveCamera(35, 1, 0.1, 1e8); camera.up.set(0, 0, 1); camera.position.set(400, -650, 350);
       controls = new OrbitControls(camera, renderer.domElement); controls.maxDistance = 5e7; controls.minDistance = 0.1;
@@ -33,8 +36,14 @@ export default function AssemblyCanvas(props: AssemblyCanvasProps) {
       }
       const render = () => { if (!disposed) renderer!.render(scene, camera); };
       controls.addEventListener("change", render);
-      themeObserver = new MutationObserver(() => { renderer!.setClearColor(new Color(getComputedStyle(container).getPropertyValue("--assembly-stage").trim() || "#eae9e2")); render(); });
+      themeObserver = new MutationObserver(() => { const colours = viewerColours(container); renderer!.setClearColor(new Color(colours.stage)); (selection.material as MeshStandardMaterial).color.set(colours.accent); if (grid) { const { extent, z } = grid.userData as { extent: number; z: number }; placeGrid(extent, z, true); } render(); });
       themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+      // The same Z-up build-plane grid as the STL preview, under the assembled model.
+      const placeGrid = (extent: number, z: number, force = false) => {
+        const current = grid?.userData as { extent: number } | undefined;
+        if (force || !grid || !current || Math.abs(current.extent - extent) > extent * 0.01) { if (grid) { scene.remove(grid); disposeGrid(grid); } grid = buildPlaneGrid(extent, container); scene.add(grid); }
+        grid.userData.extent = extent; grid.userData.z = z; grid.position.z = z;
+      };
       const bounds = () => { const box = new Box3(); for (const { mesh } of objects.values()) if (mesh.visible) box.expandByObject(mesh); return box; };
       fitView.current = () => {
         const box = bounds(); if (box.isEmpty()) return;
@@ -46,16 +55,16 @@ export default function AssemblyCanvas(props: AssemblyCanvasProps) {
       };
       update.current = () => {
         selection.visible = false;
-        const assembled = new Box3();
+        const assembled = new Box3(), accent = viewerColours(container).accent;
         for (const part of latest.current.parts) {
           const entry = objects.get(part.id); if (!entry) continue;
           const { mesh, origin } = entry;
           mesh.position.copy(origin).add(new Vector3(...part.position)); mesh.rotation.copy(new Euler(...part.rotation.map(v => v * Math.PI / 180) as [number, number, number])); mesh.updateMatrixWorld(true); assembled.expandByObject(mesh);
-          mesh.position.addScaledVector(new Vector3(...part.explode), latest.current.explosion / 100); mesh.visible = !latest.current.hidden.has(part.id); mesh.material.color.set(part.color); mesh.material.emissive.set(part.id === latest.current.selected ? 0x183024 : 0);
+          mesh.position.addScaledVector(new Vector3(...part.explode), latest.current.explosion / 100); mesh.visible = !latest.current.hidden.has(part.id); mesh.material.color.set(part.color); mesh.material.emissive.set(part.id === latest.current.selected ? accent : 0); mesh.material.emissiveIntensity = 0.18;
           mesh.updateMatrixWorld(true);
           if (mesh.visible && part.id === latest.current.selected) { selection.box.setFromObject(mesh); selection.visible = true; }
         }
-        const size = assembled.getSize(new Vector3()); setDimensions(`${size.x.toFixed(1)} × ${size.y.toFixed(1)} × ${size.z.toFixed(1)} mm`); render();
+        const size = assembled.getSize(new Vector3()); if (!assembled.isEmpty()) { const centre = assembled.getCenter(new Vector3()); placeGrid(Math.max(size.x, size.y, 1), assembled.min.z); grid!.position.x = centre.x; grid!.position.y = centre.y; } setDimensions(formatModelSize(size)); render();
       };
       const resize = () => { renderer!.setSize(Math.max(1, container.clientWidth), Math.max(1, container.clientHeight)); camera.aspect = Math.max(1, container.clientWidth) / Math.max(1, container.clientHeight); camera.updateProjectionMatrix(); fitView.current(); };
       observer = new ResizeObserver(resize); observer.observe(container);
@@ -73,5 +82,5 @@ export default function AssemblyCanvas(props: AssemblyCanvasProps) {
   }, [props.geometry, props.parts.map(p => `${p.id}:${p.artifactId}:${p.nodeId}`).join("|")]);
   useEffect(() => update.current(), [props.parts, props.hidden, props.selected, props.explosion]);
   useEffect(() => fitView.current(), [props.fit, props.view]);
-  return <><div className="assembly-dimensions">{dimensions}<small>assembled model bounds</small></div>{error && <p role="alert" className="assembly-render-error">{error} The parts list and assembly notes remain available.</p>}<div className="assembly-canvas" ref={host} /></>;
+  return <><div className="assembly-dimensions">{dimensions}<small>Assembled bounds · Z up</small></div>{error && <p role="alert" className="assembly-render-error">{error} The parts list and assembly notes remain available.</p>}<div className="assembly-canvas" ref={host} /></>;
 }

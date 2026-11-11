@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createAuditRecord, createBomLine, createOfferSnapshot, createProject, createProjectRevision, createStockEvent, createSupplier, createWorkItem, createWorkItemRevision } from "@benchledger/domain";
-import { AuditRepository, BomRepository, BenchDatabase, InventoryRepository, ProcurementRepository, ProjectRepository, ReservationRepository, migrateProjectSchema } from "./index.js";
+import { AuditRepository, BomRepository, BenchDatabase, InventoryRepository, ProcurementRepository, ProjectRepository, ReservationRepository, STATEMENT_CACHE_LIMIT, migrateProjectSchema } from "./index.js";
 import type { InventoryItem } from "@benchledger/domain";
 
 const item: InventoryItem = {
@@ -38,6 +38,25 @@ describe("SQLite repositories", () => {
     expect(inventory.appendStockEvent(event).inserted).toBe(true);
     expect(inventory.appendStockEvent({ ...event, id: "event-idempotent-retry" }).inserted).toBe(false);
     expect(inventory.balance(item.id).onHand).toBe(3);
+    database.close();
+  });
+
+  it("rejects an idempotency key reused for a different item, command shape or actor", () => {
+    const database = new BenchDatabase(":memory:");
+    const inventory = new InventoryRepository(database);
+    inventory.create(item);
+    inventory.create({ ...item, id: "item-2" });
+    const actor = { type: "human" as const, id: "actor-a" };
+    const event = createStockEvent({ id: "event-key-owner", itemId: item.id, kind: "receipt", quantity: 3, unit: "board", reason: "received", actor, idempotencyKey: "shared-key-1" });
+    expect(inventory.appendStockEvent(event).inserted).toBe(true);
+    const reuse = (overrides: Partial<typeof event>) => () => inventory.appendStockEvent({ ...event, id: `event-reuse-${Math.random()}`, ...overrides });
+    expect(reuse({ itemId: "item-2" })).toThrow(expect.objectContaining({ code: "idempotency_conflict" }));
+    expect(reuse({ quantity: 4 })).toThrow(expect.objectContaining({ code: "idempotency_conflict" }));
+    expect(reuse({ kind: "loss", semantics: "delta" })).toThrow(expect.objectContaining({ code: "idempotency_conflict" }));
+    expect(reuse({ actor: { type: "human", id: "actor-b" } })).toThrow(expect.objectContaining({ code: "idempotency_conflict" }));
+    expect(inventory.balance(item.id).onHand).toBe(3);
+    expect(inventory.balance("item-2").onHand).toBe(0);
+    expect(inventory.appendStockEvent({ ...event, id: "event-exact-retry" })).toMatchObject({ inserted: false, event: { id: "event-key-owner" } });
     database.close();
   });
 
@@ -180,10 +199,21 @@ describe("SQLite repositories", () => {
     const reservation = reservations.create({ id: "reservation-1", projectRevisionId: "project-rev-1", bomLineId: "bom-1", itemId: item.id, quantity: 2 });
     expect(reservation.status).toBe("active");
     expect(inventory.balance(item.id).available).toBe(1);
+    expect(reservations.listForRevision("project-rev-1").map((entry) => entry.id)).toEqual(["reservation-1"]);
+    expect(reservations.listForRevision("other-rev")).toEqual([]);
+    expect(reservations.listActiveForLine("project-rev-1", "bom-1").map((entry) => entry.id)).toEqual(["reservation-1"]);
+    expect(reservations.listActiveForRevisions(["project-rev-1", "other-rev"]).map((entry) => entry.id)).toEqual(["reservation-1"]);
+    expect(reservations.listActiveForRevisions([])).toEqual([]);
+    expect(reservations.hasActiveForLine("bom-1")).toBe(true);
+    const plan = database.all<{ readonly detail: string }>("EXPLAIN QUERY PLAN SELECT * FROM reservations WHERE project_revision_id = ? AND bom_line_id = ? AND status = 'active'", ["project-rev-1", "bom-1"]);
+    expect(plan.map((row) => row.detail).join(" ")).toMatch(/reservations_revision_idx/);
     expect(() => reservations.create({ id: "reservation-2", projectRevisionId: "project-rev-1", bomLineId: "bom-2", itemId: item.id, quantity: 2 })).toThrow(/reserve|stock/i);
     const released = reservations.release(reservation.id);
     expect(released.status).toBe("released");
     expect(inventory.balance(item.id).available).toBe(3);
+    expect(reservations.hasActiveForLine("bom-1")).toBe(false);
+    expect(reservations.listActiveForLine("project-rev-1", "bom-1")).toEqual([]);
+    expect(reservations.listForRevision("project-rev-1").map((entry) => entry.status)).toEqual(["released"]);
     database.close();
   });
 
@@ -237,5 +267,24 @@ describe("SQLite repositories", () => {
     expect(database.get("SELECT value FROM forge_meta WHERE key = ?", ["async-before"])).toBeUndefined();
     expect(database.get("SELECT value FROM forge_meta WHERE key = ?", ["async-inner"])).toBeUndefined();
     database.close();
+  });
+});
+
+describe("prepared statement cache", () => {
+  it("reuses statements by SQL text and stays bounded", () => {
+    const database = new BenchDatabase(":memory:");
+    const baseline = database.cachedStatementCount;
+    for (let index = 0; index < 5; index += 1) expect(database.get<{ readonly value: number }>("SELECT ? AS value", [index])?.value).toBe(index);
+    expect(database.cachedStatementCount).toBe(baseline + 1);
+    for (let index = 0; index < STATEMENT_CACHE_LIMIT + 20; index += 1) database.get(`SELECT ${index} AS value`);
+    expect(database.cachedStatementCount).toBe(STATEMENT_CACHE_LIMIT);
+    // A cached statement sees later schema changes.
+    database.exec("CREATE TABLE cache_probe (id TEXT)");
+    database.run("INSERT INTO cache_probe (id) VALUES (?)", ["a"]);
+    expect(database.all("SELECT * FROM cache_probe")).toEqual([{ id: "a" }]);
+    database.exec("ALTER TABLE cache_probe ADD COLUMN note TEXT");
+    expect(database.all("SELECT * FROM cache_probe")).toEqual([{ id: "a", note: null }]);
+    database.close();
+    expect(() => database.all("SELECT 1")).toThrow(/closed/);
   });
 });

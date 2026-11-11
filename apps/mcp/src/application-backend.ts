@@ -324,11 +324,13 @@ export function createApplicationBackend(service: ApplicationService, options: P
       },
     } satisfies InspectionsBackend,
     inventory: {
-      summary: async (input, context) => {
-        const limit = Math.min(input.limit ?? 50, 100);
-        let cursor = input.cursor;
+      summary: async () => {
+        // Always summarize the whole inventory: paging arguments are not part
+        // of this contract because a partial scan would give partial counts.
+        const limit = 100;
+        let cursor: string | undefined;
         let items: readonly InventoryItem[] = [];
-        const visitedCursors = new Set<string>(cursor === undefined ? [] : [cursor]);
+        const visitedCursors = new Set<string>();
 
         for (let pageNumber = 0; pageNumber < MAX_INVENTORY_SUMMARY_PAGES; pageNumber += 1) {
           const page = await service.listInventory({ limit, includeRetired: true, ...(cursor === undefined ? {} : { cursor }) });
@@ -439,6 +441,7 @@ export function createApplicationBackend(service: ApplicationService, options: P
           auditId: event.audit.id,
         };
       },
+      retire: async (input, context) => mutationResult(await service.deleteInventoryItem(input.itemId, input.expectedVersion, appContext(context)), "item", toMcpInventoryItem),
       listStockEvents: async (input) => {
         const page = await service.listStockEvents(input.itemId, input.limit ?? 25, input.cursor);
         return appPage(page.data.map(toMcpStockEvent), page);
@@ -700,8 +703,37 @@ export function createApplicationBackend(service: ApplicationService, options: P
     },
     context: {
       refresh: async (input, context) => {
+        // A small live snapshot read now: one bounded inventory page plus the
+        // selected project's identity, version and blocked state. It carries
+        // no expiry; call it again whenever freshness matters.
         const projectUris = input.projectId === undefined ? [] : [`benchledger://projects/${encodeURIComponent(input.projectId)}/context`, `benchledger://projects/${encodeURIComponent(input.projectId)}/bom`, `benchledger://projects/${encodeURIComponent(input.projectId)}/artifacts`];
-        return { generatedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + Math.max(input.maxAgeSeconds ?? 300, 30) * 1000).toISOString(), inventorySummaryUri: "benchledger://inventory/summary", projectUris, note: input.includeInventory === false ? "Inventory summary was not refreshed by request." : "Read the inventory summary after this refresh." } satisfies RefreshedContext;
+        let inventory: RefreshedContext["inventory"];
+        if (input.includeInventory !== false && context.scopes.includes("inventory:read")) {
+          const page = await service.listInventory({ limit: 100 });
+          const items = page.data.map(toMcpInventoryItem);
+          inventory = {
+            totalItems: typeof (page as { total?: unknown }).total === "number" ? (page as { total: number }).total : items.length,
+            scannedItems: items.length,
+            truncated: page.nextCursor !== undefined,
+            inspectFirstItems: items.filter((item) => item.availability === "inspect_first").length,
+            unverifiedItems: items.filter((item) => item.availability === "ordered_unverified" || item.availability === "delivered_uncounted").length,
+            allocatedItems: items.filter((item) => (item.allocatedQuantity?.value ?? 0) > 0).length,
+          };
+        }
+        let project: RefreshedContext["project"];
+        if (input.projectId !== undefined && context.scopes.includes("projects:read")) {
+          const current = await service.getProject(input.projectId);
+          const blocked = current.currentRevisionId === undefined ? { blocked: false, reasons: [] } : projectBlockedFromBom(current.currentRevisionId, await service.evaluateBomGaps(current.currentRevisionId));
+          project = { id: current.id, name: current.name, status: toMcpProject(current).status, version: current.version, ...(current.currentRevisionId === undefined ? {} : { currentRevisionId: current.currentRevisionId }), blocked: blocked.blocked, blockedReasons: blocked.reasons.length };
+        }
+        return {
+          generatedAt: new Date().toISOString(),
+          ...(inventory === undefined ? {} : { inventory }),
+          ...(project === undefined ? {} : { project }),
+          inventorySummaryUri: "benchledger://inventory/summary",
+          projectUris,
+          note: inventory?.truncated === true ? "Inventory counts cover the first 100 items; call read_inventory_summary for whole-inventory counts." : "Snapshot read live; it does not expire on a timer.",
+        } satisfies RefreshedContext;
       },
     },
     projectScope: {
@@ -998,7 +1030,7 @@ function inventorySummary(items: readonly InventoryItem[]) {
   for (const item of items) categories.set(item.category, (categories.get(item.category) ?? 0) + 1);
   const hasAllocation = (item: InventoryItem): boolean => item.availability !== "retired"
     && (item.availability === "allocated" || (item.allocatedQuantity?.value ?? 0) > 0);
-  const confirmedEvidence = (item: InventoryItem): boolean => item.evidence.state === "physical_count" || item.evidence.state === "commissioned";
+  const confirmedEvidence = (item: InventoryItem): boolean => item.evidence.state === "physically_counted" || item.evidence.state === "physical_count" || item.evidence.state === "commissioned";
   const allocatedQuantities = new Map<Quantity["unit"], number>();
   for (const item of items) {
     if (item.availability === "retired") continue;
@@ -1184,19 +1216,14 @@ function copyJsonRecord(value: unknown): Record<string, unknown> {
   return copyJson(value) as Record<string, unknown>;
 }
 
+/** MCP outputs use the canonical application unit vocabulary. */
 function fromApiUnit(unit: ApiInventoryItem["unit"]): Quantity["unit"] {
-  switch (unit) {
-    case "gram": return "gram";
-    case "millimetre": return "millimetre";
-    case "millilitre": return "millilitre";
-    case "metre": return "metre";
-    case "set": return "set";
-    default: return "piece";
-  }
+  return unit;
 }
 
+/** Legacy piece/roll input aliases map to canonical each/set. */
 function toApiUnit(unit: Quantity["unit"]): ApiInventoryItem["unit"] {
-  return unit === "piece" ? "each" : unit === "roll" || unit === "set" ? "set" : unit === "metre" ? "metre" : unit;
+  return unit === "piece" ? "each" : unit === "roll" ? "set" : unit;
 }
 
 function toMcpAvailability(item: ApiInventoryItem): Availability {
@@ -1212,8 +1239,9 @@ function toMcpAvailability(item: ApiInventoryItem): Availability {
   }
 }
 
+/** Report the stored canonical evidence state exactly; no collapsing. */
 function toMcpEvidence(item: ApiInventoryItem): EvidenceSummary {
-  const state: EvidenceSummary["state"] = item.evidence.state === "physically_counted" ? "physical_count" : item.evidence.state === "commissioned" ? "commissioned" : item.evidence.state === "delivered_uncounted" ? "delivery" : item.evidence.state === "ordered_unverified" ? "order" : item.evidence.state === "allocated" ? "user_reported" : "unknown";
+  const state: EvidenceSummary["state"] = item.evidence.state;
   return { state, source: item.evidence.source ?? "unknown", ...(item.evidence.sourceId === undefined ? {} : { sourceId: item.evidence.sourceId }), recordedAt: item.evidence.observedAt ?? item.updatedAt, ...(item.evidence.note === undefined ? {} : { note: item.evidence.note }) };
 }
 
@@ -1246,7 +1274,7 @@ function toMcpInventoryItem(item: ApiInventoryItem): InventoryItem {
     ...(item.model === undefined ? {} : { model: item.model }),
     ...(item.sku === undefined ? {} : { sku: item.sku }),
     ...(item.dimensions === undefined ? {} : { dimensions: toMcpDimensions(item.dimensions) }),
-    ...(item.condition === undefined ? {} : { condition: item.condition === "good" ? "used" : item.condition === "worn" || item.condition === "needs_repair" ? "opened" : item.condition }),
+    ...(item.condition === undefined ? {} : { condition: item.condition }),
     ...(item.location === undefined ? {} : { location: item.location }),
     ...(item.tags.length === 0 ? {} : { tags: [...item.tags] }),
     links: item.links.map((link) => ({ label: link.label ?? link.supplier, url: link.url, kind: "supplier" as const })),
@@ -1272,8 +1300,12 @@ function toApiEvidence(value: Availability): ApiInventoryItem["evidence"]["state
   }
 }
 
+const LEGACY_EVIDENCE_INPUT: Readonly<Record<string, CreateInventoryItem["evidence"]["state"]>> = { physical_count: "physically_counted", delivery: "delivered_uncounted", order: "ordered_unverified" };
+const CANONICAL_EVIDENCE: ReadonlySet<string> = new Set(["physically_counted", "commissioned", "delivered_uncounted", "ordered_unverified", "allocated", "consumed", "unknown"]);
+
 function toApiEvidenceInput(value: EvidenceSummary): CreateInventoryItem["evidence"] {
-  const state: CreateInventoryItem["evidence"]["state"] = value.state === "physical_count" ? "physically_counted" : value.state === "commissioned" ? "commissioned" : value.state === "delivery" ? "delivered_uncounted" : value.state === "order" ? "ordered_unverified" : value.state === "user_reported" ? "unknown" : "unknown";
+  // Validation already canonicalizes; keep legacy aliases safe for custom callers.
+  const state: CreateInventoryItem["evidence"]["state"] = CANONICAL_EVIDENCE.has(value.state) ? value.state as CreateInventoryItem["evidence"]["state"] : LEGACY_EVIDENCE_INPUT[value.state] ?? "unknown";
   return { state, source: value.source, ...(value.sourceId === undefined ? {} : { sourceId: value.sourceId }), observedAt: value.recordedAt, ...(value.note === undefined ? {} : { note: value.note }) };
 }
 
@@ -1297,17 +1329,32 @@ function toApiDimensions(value: Dimensions | undefined): CreateInventoryItem["di
   return { ...(value.length === undefined ? {} : { lengthMm: value.length * factor }), ...(value.width === undefined ? {} : { widthMm: value.width * factor }), ...(value.height === undefined ? {} : { heightMm: value.height * factor }), ...(value.diameter === undefined ? {} : { diameterMm: value.diameter * factor }), measured: value.source === "measured", ...(value.uncertainty === undefined ? {} : { uncertaintyMm: value.uncertainty * factor }) };
 }
 
+function toApiCondition(value: NonNullable<InventoryItem["condition"]>): NonNullable<ApiInventoryItem["condition"]> {
+  return value === "used" ? "good" : value === "opened" ? "worn" : value;
+}
+
 function toApiInventoryCreate(input: InventoryCreateInput): CreateInventoryItem {
-  return { name: input.name, kind: toApiKind(input.category), quantity: input.quantity.value, unit: toApiUnit(input.quantity.unit), evidence: toApiEvidenceInput(input.evidence), tags: [], links: (input.links ?? []).map((link) => ({ supplier: link.label, url: link.url, ...(link.label === undefined ? {} : { label: link.label }) })), ...(input.categoryNodeId === undefined ? {} : { categoryNodeId: input.categoryNodeId }), ...(input.description === undefined ? {} : { description: input.description }), ...(input.manufacturer === undefined ? {} : { manufacturer: input.manufacturer }), ...(input.model === undefined ? {} : { model: input.model }), ...(input.sku === undefined ? {} : { sku: input.sku }), ...(input.location === undefined ? {} : { location: input.location }), ...(input.condition === undefined ? {} : { condition: input.condition === "used" ? "good" : input.condition === "opened" ? "worn" : input.condition }), ...(input.dimensions === undefined ? {} : { dimensions: toApiDimensions(input.dimensions) }) };
+  return { name: input.name, kind: toApiKind(input.category), quantity: input.quantity.value, unit: toApiUnit(input.quantity.unit), evidence: toApiEvidenceInput(input.evidence), tags: [...(input.tags ?? [])], links: (input.links ?? []).map((link) => ({ supplier: link.label, url: link.url, ...(link.label === undefined ? {} : { label: link.label }) })), ...(input.categoryNodeId === undefined ? {} : { categoryNodeId: input.categoryNodeId }), ...(input.description === undefined ? {} : { description: input.description }), ...(input.manufacturer === undefined ? {} : { manufacturer: input.manufacturer }), ...(input.model === undefined ? {} : { model: input.model }), ...(input.sku === undefined ? {} : { sku: input.sku }), ...(input.location === undefined ? {} : { location: input.location }), ...(input.condition === undefined ? {} : { condition: toApiCondition(input.condition) }), ...(input.dimensions === undefined ? {} : { dimensions: toApiDimensions(input.dimensions) }) };
 }
 
 function toApiInventoryUpdate(input: Omit<InventoryUpdateInput, "itemId" | "expectedVersion">): Record<string, unknown> {
-  return { ...(input.name === undefined ? {} : { name: input.name }), ...(input.category === undefined ? {} : { kind: toApiKind(input.category) }), ...(input.categoryNodeId === undefined ? {} : { categoryNodeId: input.categoryNodeId }), ...(input.description === undefined ? {} : { description: input.description }), ...(input.manufacturer === undefined ? {} : { manufacturer: input.manufacturer }), ...(input.model === undefined ? {} : { model: input.model }), ...(input.sku === undefined ? {} : { sku: input.sku }), ...(input.location === undefined ? {} : { location: input.location }), ...(input.condition === undefined ? {} : { condition: input.condition === "used" ? "good" : input.condition === "opened" ? "worn" : input.condition }), ...(input.tags === undefined ? {} : { tags: [...input.tags] }), ...(input.dimensions === undefined ? {} : { dimensions: toApiDimensions(input.dimensions) }), ...(input.links === undefined ? {} : { links: input.links.map((link) => ({ supplier: link.label, url: link.url, ...(link.label === undefined ? {} : { label: link.label }) })) }) };
+  return { ...(input.name === undefined ? {} : { name: input.name }), ...(input.category === undefined ? {} : { kind: toApiKind(input.category) }), ...(input.categoryNodeId === undefined ? {} : { categoryNodeId: input.categoryNodeId }), ...(input.description === undefined ? {} : { description: input.description }), ...(input.manufacturer === undefined ? {} : { manufacturer: input.manufacturer }), ...(input.model === undefined ? {} : { model: input.model }), ...(input.sku === undefined ? {} : { sku: input.sku }), ...(input.location === undefined ? {} : { location: input.location }), ...(input.condition === undefined ? {} : { condition: toApiCondition(input.condition) }), ...(input.tags === undefined ? {} : { tags: [...input.tags] }), ...(input.dimensions === undefined ? {} : { dimensions: toApiDimensions(input.dimensions) }), ...(input.links === undefined ? {} : { links: input.links.map((link) => ({ supplier: link.label, url: link.url, ...(link.label === undefined ? {} : { label: link.label }) })) }) };
 }
 
 function toMcpStockEvent(event: ApiStockEvent): StockEvent {
   const kind: StockEvent["kind"] = event.type === "receipt" ? "receipt" : event.type === "count" || event.type === "correction" ? "count_correction" : event.type === "allocate" ? "allocation" : event.type === "consume" ? "use" : event.type === "dispose" ? "disposal" : event.type === "loss" ? "loss" : "return";
-  return { id: event.id, itemId: event.itemId, kind, quantity: toQuantity(event.quantity, event.unit), recordedAt: event.createdAt, actorId: event.actor, ...(event.note === undefined ? {} : { note: event.note }), evidence: { state: "user_reported", source: event.source, recordedAt: event.createdAt } };
+  // Report the exact stored event type and only evidence the event actually
+  // carries; the previous fixed user_reported evidence was fabricated.
+  const recorded = event.evidence;
+  const evidenceState = typeof recorded?.state === "string" ? recorded.state : undefined;
+  const evidence = evidenceState === undefined ? undefined : {
+    state: evidenceState as EvidenceSummary["state"],
+    source: typeof recorded?.source === "string" ? recorded.source : event.source,
+    ...(typeof recorded?.sourceId === "string" ? { sourceId: recorded.sourceId } : {}),
+    recordedAt: typeof recorded?.observedAt === "string" ? recorded.observedAt : event.createdAt,
+    ...(typeof recorded?.note === "string" ? { note: recorded.note } : {}),
+  };
+  return { id: event.id, itemId: event.itemId, kind, type: event.type, quantity: toQuantity(event.quantity, event.unit), recordedAt: event.createdAt, actorId: event.actor, source: event.source, ...(event.note === undefined ? {} : { note: event.note }), ...(evidence === undefined ? {} : { evidence }) };
 }
 
 function toApiStockEvent(input: RecordStockEventInput): StockEventInput {
@@ -1718,7 +1765,7 @@ function toMcpArtifactRole(role: ApiArtifact["role"]): Artifact["role"] {
 }
 
 function toMcpOffer(value: ApiOffer): Offer {
-  return { id: value.id, ...(value.itemId === undefined ? {} : { itemId: value.itemId }), description: value.name, supplier: value.supplier, url: value.url, ...(value.packageQuantity === undefined ? {} : { packageQuantity: { value: value.packageQuantity, unit: "piece" } }), price: { minor: value.priceMinor, currency: value.currency }, ...(value.shippingMinor === undefined ? {} : { shippingMinor: value.shippingMinor }), observedAt: value.observedAt, ...(value.notes === undefined ? {} : { evidence: { state: "user_reported", source: "offer_snapshot", recordedAt: value.observedAt, note: value.notes } }) };
+  return { id: value.id, ...(value.itemId === undefined ? {} : { itemId: value.itemId }), description: value.name, supplier: value.supplier, url: value.url, ...(value.packageQuantity === undefined ? {} : { packageQuantity: { value: value.packageQuantity, unit: "each" } }), price: { minor: value.priceMinor, currency: value.currency }, ...(value.shippingMinor === undefined ? {} : { shippingMinor: value.shippingMinor }), observedAt: value.observedAt, ...(value.notes === undefined ? {} : { evidence: { state: "unknown", source: "offer_snapshot", recordedAt: value.observedAt, note: value.notes } }) };
 }
 
 function toApiOfferCreate(input: RecordOfferSnapshotInput): CreateOffer {

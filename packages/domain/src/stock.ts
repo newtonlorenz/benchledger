@@ -1,5 +1,6 @@
 import { createId, nowIso } from "./ids.js";
 import { DomainError, assertNonNegativeQuantity, assertPositiveQuantity } from "./errors.js";
+import { quantitiesEqual, quantityExceeds, roundQuantity } from "./quantity-compare.js";
 import type {
   AvailabilityClass,
   AvailabilityInput,
@@ -73,6 +74,26 @@ export function createStockEvent(input: NewStockEvent): StockEvent {
   return event;
 }
 
+/**
+ * An idempotency key may only replay the command that first used it. A stored
+ * event with the same key but a different item, movement shape or actor is a
+ * different command, and returning it as a replay would silently drop the new
+ * stock movement.
+ */
+export function isSameStockCommand(existing: StockEvent, candidate: StockEvent): boolean {
+  if (existing.itemId !== candidate.itemId) return false;
+  if (existing.kind !== candidate.kind || existing.semantics !== candidate.semantics) return false;
+  if (existing.unit !== candidate.unit || !quantitiesEqual(existing.quantity, candidate.quantity)) return false;
+  if (existing.actor !== undefined && candidate.actor !== undefined && existing.actor.id !== candidate.actor.id) return false;
+  return true;
+}
+
+export function assertStockCommandReplay(existing: StockEvent, candidate: StockEvent): void {
+  if (!isSameStockCommand(existing, candidate)) {
+    throw new DomainError("idempotency_conflict", "The idempotency key was already used for a different stock movement");
+  }
+}
+
 function initialBalance(item: InventoryItem): StockBalance {
   return {
     itemId: item.id,
@@ -103,23 +124,40 @@ function applyEvent(balance: StockBalance, event: StockEvent): StockBalance {
     allocated -= event.quantity;
   }
 
-  if (onHand < 0) throw new DomainError("negative_stock", `event ${event.id} would make on-hand stock negative`);
-  if (allocated < 0) throw new DomainError("negative_allocation", `event ${event.id} would make allocation negative`);
-  if (allocated > onHand) throw new DomainError("over_allocation", `event ${event.id} would allocate more stock than is on hand`);
+  // Decimal quantities accumulate binary rounding error; compare and store
+  // them within the shared quantity tolerance.
+  onHand = roundQuantity(onHand);
+  allocated = roundQuantity(allocated);
+  if (quantityExceeds(0, onHand)) throw new DomainError("negative_stock", `event ${event.id} would make on-hand stock negative`);
+  if (quantityExceeds(0, allocated)) throw new DomainError("negative_allocation", `event ${event.id} would make allocation negative`);
+  if (quantityExceeds(allocated, onHand)) throw new DomainError("over_allocation", `event ${event.id} would allocate more stock than is on hand`);
   return {
     ...balance,
     onHand,
     allocated,
-    available: onHand - allocated,
+    available: Math.max(0, roundQuantity(onHand - allocated)),
     ...(lastCountAt === undefined ? {} : { lastCountAt })
   };
+}
+
+/**
+ * Chronological, locale-independent timestamp order. Equal instants (or
+ * unparseable values that compare equal) fall through to the caller's stable
+ * tiebreak: createdAt, then input order, which repositories supply as
+ * insertion (rowid) order.
+ */
+function compareTimestamps(left: string, right: string): number {
+  const leftTime = Date.parse(left);
+  const rightTime = Date.parse(right);
+  if (Number.isFinite(leftTime) && Number.isFinite(rightTime)) return leftTime - rightTime;
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 export function deriveStockBalance(item: InventoryItem, events: readonly StockEvent[]): StockBalance {
   const ordered = events
     .map((event, index) => ({ event, index }))
     .filter(({ event }) => event.itemId === item.id)
-    .sort((a, b) => a.event.occurredAt.localeCompare(b.event.occurredAt) || a.event.createdAt.localeCompare(b.event.createdAt) || a.index - b.index)
+    .sort((a, b) => compareTimestamps(a.event.occurredAt, b.event.occurredAt) || compareTimestamps(a.event.createdAt, b.event.createdAt) || a.index - b.index)
     .map(({ event }) => event);
   return ordered.reduce(applyEvent, initialBalance(item));
 }

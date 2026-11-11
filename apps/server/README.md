@@ -28,9 +28,24 @@ only that scope. `BENCHLEDGER_BEARER_TOKENS_JSON` is available when project
 allow-lists or expiry metadata are needed. Invalid formats stop startup, and
 plaintext token values are never accepted.
 
-The browser cookie default is suitable for the documented LAN HTTP deployment:
-`BENCHLEDGER_SECURE_COOKIES=false`. Set it to `true` only when TLS terminates
-in front of the server; otherwise browsers will withhold the session cookie.
+Leave `BENCHLEDGER_SECURE_COOKIES` unset: the server then derives the cookie
+`Secure` flag from `BENCHLEDGER_PUBLIC_BASE_URL` (Secure for an `https://`
+origin, not Secure for a plain-HTTP LAN origin). Set it to exactly `true` or
+`false` only to override that; `true` over plain HTTP makes browsers withhold
+the session cookie. Startup rejects the `.env.example` placeholder and other
+low-entropy values for `BENCHLEDGER_SESSION_SECRET`.
+
+Requests are accepted only for the public base URL host, `localhost`,
+`127.0.0.1`, `[::1]` and any names listed in `BENCHLEDGER_ALLOWED_HOSTS`
+(comma-separated host names or IP addresses, no scheme or port); any other
+`Host` receives `421 host_not_allowed`, which blocks DNS rebinding. List LAN IP
+addresses or mDNS names there if people use them. `BENCHLEDGER_TRUST_PROXY` is
+off by default; set it to the proxy hop count or to comma-separated proxy
+addresses/CIDRs only behind a reverse proxy (the legacy value `true` means one
+hop). Request bodies are limited per route (2 MiB by default, 16 KiB for
+authentication); only upload routes accept up to
+`BENCHLEDGER_MAX_UPLOAD_BYTES` (default 100 MiB).
+
 The MCP JSON-RPC endpoint is `/api/v1/mcp` (the root `/mcp` path is not an API
 alias).
 

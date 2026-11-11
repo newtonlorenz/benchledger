@@ -48,6 +48,17 @@ describe("shopping proposal surface", () => {
     expect(shoppingDraftText([])).not.toContain("Nothing is ready to source");
   });
 
+  it("leads with the number of things to buy, the estimated total and Copy list", () => {
+    const markup = renderToStaticMarkup(
+      <ShoppingList project={projects[0]!} summary={sourceSummary()} offers={[offer]} expert={false} onToast={() => undefined} onBackToPlan={() => undefined} />,
+    );
+    const lead = markup.slice(markup.indexOf('class="sourcing-lead"'));
+    expect(lead).toMatch(/^class="sourcing-lead"[^]*<strong>1 thing to buy<\/strong> · est\. €4\.99/u);
+    expect(markup.indexOf("Copy list")).toBeGreaterThan(-1);
+    expect(markup.indexOf("Copy list")).toBeLessThan(markup.indexOf("M3 threaded inserts"));
+    expect(markup).not.toContain("Copy draft list");
+  });
+
   it("explains how to continue when a Source row has no recorded offer", () => {
     const markup = renderToStaticMarkup(
       <ShoppingList

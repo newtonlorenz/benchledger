@@ -195,9 +195,8 @@ test("completes the LAN-open to password and back access journey without exposin
 
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
   await page.getByRole("button", { name: "Add item", exact: true }).click();
-  await page.getByLabel("What are you adding?").selectOption("tool");
-  await expect(page.getByLabel("Category (required)")).toHaveCount(0);
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("radio", { name: "Tool", exact: true }).check();
+  await expect(page.getByRole("combobox", { name: /Category/u })).toHaveCount(0);
   await page.getByLabel("Name", { exact: true }).fill("LAN-open write check");
   await page.getByRole("button", { name: "Add item", exact: true }).last().click();
   await expect(page.getByText("LAN-open write check")).toBeVisible();

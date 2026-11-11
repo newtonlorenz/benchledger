@@ -1,0 +1,44 @@
+name: mobile
+
+# The Expo export is slow and only depends on the mobile app, the shared API
+# contract and the lockfile, so it runs only when those change. It is not a
+# required check; mobile typechecking still runs in check / static.
+on:
+  pull_request:
+    paths:
+      - "apps/mobile/**"
+      - "packages/api-contract/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/mobile.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/mobile/**"
+      - "packages/api-contract/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/mobile.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  export:
+    name: expo export
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build --workspace=@benchledger/api-contract
+      - run: npm run typecheck --workspace=@benchledger/mobile
+      - run: npm run mobile:export

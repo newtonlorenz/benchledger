@@ -25,7 +25,7 @@ import {
 } from "./mappers.js";
 import { ProductionInventoryAdapter } from "./inventory-adapter.js";
 import { attempt, clone, nowIso, page } from "./utils.js";
-import { createStockEvent } from "@benchledger/domain";
+import { createStockEvent, exceedsReservableQuantity, quantityExceeds } from "@benchledger/domain";
 import { bomAlternativeSchema } from "@benchledger/api-contract";
 
 const PROJECT = "project";
@@ -76,7 +76,7 @@ export function bomMetadata(value: Readonly<Record<string, unknown>>): { readonl
   for (const [key, candidate] of Object.entries(constraintsRecord)) {
     if (typeof candidate === "string") constraints[key] = candidate;
     else if (key === "specification") {
-      if (!bomSpecificationSchema.safeParse(candidate).success) throw new Error("BOM specification decision is malformed");
+      if (!bomSpecificationSchema.safeParse(candidate).success) throw new DomainError("integrity_error", "BOM specification decision is malformed");
       constraints[key] = candidate;
     }
   }
@@ -91,7 +91,7 @@ export function bomMetadata(value: Readonly<Record<string, unknown>>): { readonl
         compatible,
         ...(item.quantityConversion === undefined ? {} : { quantityConversion: item.quantityConversion })
       });
-      if (!parsed.success) throw new Error("BOM alternative metadata is malformed");
+      if (!parsed.success) throw new DomainError("integrity_error", "BOM alternative metadata is malformed");
       return [parsed.data];
     })
     : undefined;
@@ -288,8 +288,7 @@ export class ProductionProjectAdapter implements ProjectPort {
           occurredAt: archivedAt,
           reason: `Archive project ${id}`
         });
-        for (const reservation of this.reservations.list()) {
-          if (reservation.status !== "active" || !projectRevisionIds.has(reservation.projectRevisionId)) continue;
+        for (const reservation of this.reservations.listActiveForRevisions([...projectRevisionIds])) {
           const released = this.reservations.release(reservation.id, releaseOptions(reservation.id));
           const reservationVersion = this.state.bumpVersion(RESERVATION, reservation.id);
           const itemVersion = this.state.bumpVersion("inventory_item", reservation.itemId);
@@ -340,8 +339,7 @@ export class ProductionProjectAdapter implements ProjectPort {
         } as const;
         const projectRevisionIds = new Set(this.projects.listRevisions(id).map((revision) => revision.id));
         const releasedReservationIds: string[] = [];
-        for (const reservation of this.reservations.list()) {
-          if (reservation.status !== "active" || !projectRevisionIds.has(reservation.projectRevisionId)) continue;
+        for (const reservation of this.reservations.listActiveForRevisions([...projectRevisionIds])) {
           this.reservations.release(reservation.id, {
             actor,
             source: ctx.source,
@@ -531,7 +529,7 @@ export class ProductionProjectAdapter implements ProjectPort {
         this.state.ensureVersion(BOM, id, expectedVersion);
         const current = this.toApiBom(native);
         if (changesReservedRequirement(current, input)
-          && this.reservations.list().some((reservation) => reservation.bomLineId === id && reservation.status === "active")) {
+          && this.reservations.hasActiveForLine(id)) {
           throw new ApplicationError("conflict", "Release or reconcile active reservations before changing this requirement’s stock, quantity, unit or use", { lineId: id });
         }
         const optional = input.optional ?? current.optional;
@@ -574,7 +572,7 @@ export class ProductionProjectAdapter implements ProjectPort {
     return attempt(async () => {
       const native = this.boms.getLine(id);
       if (native === undefined) throw new DomainError("bom_line_not_found", `BOM line ${id} does not exist`);
-      if (this.reservations.list().some((reservation) => reservation.bomLineId === id && reservation.status === "active")) {
+      if (this.reservations.hasActiveForLine(id)) {
         throw new DomainError("active_reservation_conflict", "release active reservations before retiring this BOM line");
       }
       return this.database.transaction(() => {
@@ -631,9 +629,7 @@ export class ProductionProjectAdapter implements ProjectPort {
       const conversion = bomQuantityConversion(apiLine, item);
       if (item.unit !== this.apiUnit(line.unit) && conversion === undefined) throw new DomainError("invalid_reservation_reference", "reservation unit does not match the BOM line and has no valid quantity conversion");
       if (!isConfirmedEvidence(item.evidence.state)) throw new DomainError("insufficient_stock", "only physically confirmed stock can be reserved");
-      const factor = conversion?.requirement.quantity ?? 1;
-      const reservedForLine = this.reservations.list()
-        .filter((reservation) => reservation.status === "active" && reservation.projectRevisionId === revisionId && reservation.bomLineId === input.lineId)
+      const reservedForLine = this.reservations.listActiveForLine(revisionId, input.lineId)
         .reduce((total, reservation) => {
           const reservedNative = this.inventory.native(reservation.itemId);
           if (reservedNative === undefined) throw new DomainError("inventory_not_found", `inventory item ${reservation.itemId} does not exist`);
@@ -642,10 +638,8 @@ export class ProductionProjectAdapter implements ProjectPort {
           if (reservedItem.unit !== this.apiUnit(line.unit) && reservedConversion === undefined) throw new DomainError("invalid_reservation_reference", "existing reservation has no valid quantity conversion");
           return total + reservation.quantity * (reservedConversion?.requirement.quantity ?? 1);
         }, 0);
-      const remainingCoverage = Math.max(0, line.quantity - reservedForLine);
-      const maximumInventoryUnits = Math.ceil(remainingCoverage / factor);
-      if (input.quantity > maximumInventoryUnits) throw new DomainError("insufficient_stock", `cannot reserve beyond the BOM requirement of ${line.quantity} ${this.apiUnit(line.unit)}; ${input.quantity} inventory unit(s) would exceed whole-unit coverage`);
-      if (item.availableQuantity < input.quantity) throw new DomainError("insufficient_stock", `cannot reserve ${input.quantity}; only ${item.availableQuantity} unallocated unit(s) remain`);
+      if (exceedsReservableQuantity(input.quantity, line.quantity, reservedForLine, conversion?.requirement.quantity)) throw new DomainError("insufficient_stock", `cannot reserve beyond the BOM requirement of ${line.quantity} ${this.apiUnit(line.unit)}; ${input.quantity} inventory unit(s) would exceed whole-unit coverage`);
+      if (quantityExceeds(input.quantity, item.availableQuantity)) throw new DomainError("insufficient_stock", `cannot reserve ${input.quantity}; only ${item.availableQuantity} unallocated unit(s) remain`);
       const reservation = this.reservations.create({ ...(input.id === undefined ? {} : { id: input.id }), projectRevisionId: revisionId, bomLineId: input.lineId, itemId: input.itemId, quantity: input.quantity, createdAt: nowIso() });
       this.state.setInitialVersion(RESERVATION, reservation.id);
       const itemVersion = this.state.bumpVersion("inventory_item", input.itemId);
@@ -668,7 +662,7 @@ export class ProductionProjectAdapter implements ProjectPort {
   }
 
   async listReservations(revisionId: string): Promise<readonly ApiReservation[]> {
-    return attempt(() => this.reservations.list().filter((reservation) => reservation.projectRevisionId === revisionId).map((reservation) => apiReservationFromNative(reservation, this.state.getVersion(RESERVATION, reservation.id))));
+    return attempt(() => this.reservations.listForRevision(revisionId).map((reservation) => apiReservationFromNative(reservation, this.state.getVersion(RESERVATION, reservation.id))));
   }
 
   async getReservationDetails(id: string): Promise<ReservationDetails | null> {
@@ -721,7 +715,9 @@ export class ProductionProjectAdapter implements ProjectPort {
         source: ctx.source,
         evidence: { projectId: project.id, reservationId: input.reservationId, ...(input.note === undefined ? {} : { note: input.note }) },
         correlationId: ctx.correlationId,
-        ...(ctx.idempotencyKey === undefined ? {} : { idempotencyKey: ctx.idempotencyKey })
+        // Actor- and item-scoped: the service idempotency store is actor
+        // scoped, so a raw key may legitimately recur across actors.
+        ...(ctx.idempotencyKey === undefined ? {} : { idempotencyKey: `usage:${encodeURIComponent(ctx.actor)}:${encodeURIComponent(input.itemId)}:${ctx.idempotencyKey}` })
       });
       const consumed = this.reservations.consume(input.reservationId, input.quantity, usageEvent);
       this.state.bumpVersion(RESERVATION, input.reservationId);
@@ -742,7 +738,7 @@ export class ProductionProjectAdapter implements ProjectPort {
 
   private toProjectTombstone(project: Project, version = this.state.getVersion(PROJECT, project.id)): ProjectTombstone {
     if (project.removedAt === undefined || project.removedBy === undefined || project.lastLifecycleStatus === undefined) {
-      throw new Error(`project ${project.id} is missing removal tombstone metadata`);
+      throw new DomainError("integrity_error", `project ${project.id} is missing removal tombstone metadata`);
     }
     return {
       id: project.id,

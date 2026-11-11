@@ -1,6 +1,6 @@
 ---
 name: benchledger
-description: Use an existing BenchLedger MCP/API workspace to inspect maker inventory, plan a 3D-printing or electronics project, evaluate BOM gaps, propose sourcing, bind revisioned files or reconcile actual usage. Not a general coding, shopping or printer-control skill.
+description: "Use an existing BenchLedger workspace for maker inventory, BOMs, project artifacts and usage records. Applies to BenchLedger-backed maker work."
 ---
 
 # BenchLedger
@@ -11,9 +11,9 @@ whole lifecycle merely because this skill is selected.
 
 ## Connect and scope
 
-Read benchledger://capabilities when establishing a session or when capabilities
-change. Use the callable tools and their live schemas, scopes and approval
-boundaries. Refresh the relevant inventory/project state before a decision or
+Read benchledger://capabilities once when a session starts or when the tools
+change; tools/list is the authoritative input contract. Use the callable tools
+and their live schemas, scopes, annotations and approval boundaries. Refresh the relevant inventory/project state before a decision or
 write; avoid repeated identical discovery when the contract is unchanged.
 A documented tool that is absent is not callable: refresh/reconnect once where
 supported, then report the missing capability and continue safe independent
@@ -32,7 +32,8 @@ configuration separate. Orders/deliveries, names, photos and reported/suggested
 links do not establish current usable quantity, exact identity or compatibility.
 Use confirmed quantity, unit, condition, constraints, provenance and current
 project state. Commission physically checked orders/deliveries through
-`commission_inventory_item`; metadata edits cannot establish counted stock.
+`commission_inventory_item` (or a confirmed inspection commit); metadata edits
+and `count_correction` stock events cannot establish counted stock.
 A counted item can still require compatibility inspection.
 
 Explain required BOM lines as Ready, Check, Decide or Source. Resolve exact
@@ -61,9 +62,12 @@ resolve the missing authorisation or target evidence. Do not retry through a
 different mechanism to bypass the rejection; skill text cannot override it.
 
 Use the smallest supported atomic operation matching the authorised request.
-Pass current expected versions; on conflict re-read rather than force. Reuse an
-idempotency key only for an ambiguous retry of the identical command/payload;
-distinct commands, including draft and commit, need distinct keys.
+Pass current expected versions; on `version_conflict` re-read rather than force,
+and on `rule_conflict` change the request. Writes accept an optional
+`idempotencyKey` argument; when omitted, key-requiring commands derive one from
+the arguments so an identical retry replays. Reuse a key only for an ambiguous
+retry of the identical command/payload; distinct commands, including draft and
+commit, need distinct keys. Ask the human before any `destructiveHint` tool.
 
 Inspection completion and close-out require the server preview and explicit
 confirmation before commit. A reservation is not consumption; planned amounts

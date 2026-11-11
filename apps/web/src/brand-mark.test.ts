@@ -16,12 +16,12 @@ describe("BenchLedger brand mark", () => {
     expect(stylesSource).toContain(".brand-mark span:nth-child(1) { height: 48%; }");
     expect(stylesSource).toContain(".brand-mark span:nth-child(2) { height: 78%; }");
     expect(stylesSource).toContain(".brand-mark span:nth-child(3) { height: 100%; }");
-    expect(stylesSource).toContain("background: #1F4A40");
-    expect(stylesSource).toContain("background: #A5D5AF");
+    expect(stylesSource).toContain("background: #352820");
+    expect(stylesSource).toContain("background: #F59C6D");
 
     expect(faviconSource).toContain('viewBox="0 0 28 28"');
-    expect(faviconSource).toContain('fill="#1F4A40"');
-    expect(faviconSource).toContain('fill="#A5D5AF"');
+    expect(faviconSource).toContain('fill="#352820"');
+    expect(faviconSource).toContain('fill="#F59C6D"');
     expect(faviconSource).not.toContain("<path");
     expect(faviconSource.match(/<rect\b/gu)).toHaveLength(4);
     expect(faviconSource).toContain('x="6" y="14.3" width="3.33" height="7.7"');

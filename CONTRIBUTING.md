@@ -37,12 +37,16 @@ Requirements: Node.js 24 LTS and npm 11 or later.
 
 ```bash
 npm ci
-npm run build
+npm run build:server
 npm run dev
 ```
 
-The development server uses synthetic demo data at
-`http://127.0.0.1:8792`.
+The development server uses synthetic, in-memory demo data at
+`http://127.0.0.1:8792` (demo password `demo-password-please-change`). Use
+`npm run build` only when you also need the slower Expo mobile export.
+Install from the lockfile with `npm ci`; dependency changes go through
+`npm install <pkg>@<version> --workspace=<workspace>` so the lockfile stays
+consistent.
 
 ## Branch and integration workflow
 
@@ -72,6 +76,9 @@ Use the smallest useful check while iterating:
 | Type or contract changes | `npm run typecheck` |
 | UI behavior | the focused web test plus the affected Playwright flow |
 | Domain, authorization, storage, imports | focused invariant and failure-path tests |
+| Mobile app | `npm run typecheck --workspace=@benchledger/mobile`, then `npm run check:mobile` |
+| Dockerfile or deployment files | `docker build -f deploy/Dockerfile -t benchledger:local .` and a demo-mode health check |
+| Scripts under `scripts/` | `npx vitest run scripts` |
 | HTTP, MCP, runtime, Docker, auth, artifacts, deployment behavior | focused local checks plus read-only LAN development/test smoke checks when configured |
 
 Write tests first when a rule is risky or a regression would be expensive.
@@ -83,6 +90,10 @@ Before requesting a release or merge, run the full gate once:
 ```bash
 npm run check
 ```
+
+CI runs the same gates as parallel jobs, plus a container build and smoke test,
+CodeQL and (when mobile files change) the Expo export. The job list is in
+[`docs/development-workflow.md`](docs/development-workflow.md#4-contribute-through-github).
 
 ## Pull requests
 

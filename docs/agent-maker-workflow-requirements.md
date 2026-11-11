@@ -229,7 +229,7 @@ without loading the entire schema catalog into context.
 2. An agent can retrieve the complete schema and examples for one named tool without
    receiving unrelated tool schemas.
 3. An unchanged contract hash permits cached capability use followed by normal
-   `refresh_context`.
+   current-state reads (`refresh_context` is an optional live snapshot).
 4. Approval boundaries and stock semantics remain available in compact output.
 
 ### REQ-003 — Previewable atomic project setup
@@ -564,8 +564,8 @@ predicate, unit, and effects in expert mode. The web dialog cannot commit until
 the server preview is displayed and the user explicitly confirms it; confirmed
 compatibility and unit-conversion observations collect explicit values and
 evidence and show exact per-line changes before commit. MCP list/read/preview/
-commit tools deep-map nested REST `each` quantities and conversions to MCP
-`piece` quantities, preserve before/after and reevaluation data, and fail closed
+commit tools return canonical `each` quantities and conversions (legacy
+`piece` accepted on input), preserve before/after and reevaluation data, and fail closed
 for non-project-scoped access. REQ-011 is complete for this tranche.
 
 ### REQ-012 — Safe maker project templates

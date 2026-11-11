@@ -1,9 +1,10 @@
 import { test, expect, type Page } from "@playwright/test";
+import { openProjectIndex } from "./project-nav";
 async function login(page: Page) {
   await page.goto("/"); await page.getByLabel("Workspace password").fill("demo-password-please-change"); await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
   if ((page.viewportSize()?.width ?? 1440) < 801) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
-  await page.getByRole("button", { name: /^Projects/u }).click();
+  await openProjectIndex(page);
 }
 async function guided(page: Page, name: string) {
   await page.getByRole("button", { name: "New project", exact: true }).click();
@@ -33,18 +34,18 @@ for (const width of [1440, 390]) test(`reviewed setup, append and quotes are usa
   await expect(page.locator(".bom-row")).toHaveCount(3);
   await page.keyboard.press("Escape");
   await page.getByRole("tab", { name: /^Shopping list/u }).click();
-  await expect(page.getByRole("heading", { name: "Supplier quotes for this project", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Compare supplier quotes", exact: true })).toBeVisible();
   const row = page.locator(".sourcing-requirement").filter({ has: page.getByRole("heading", { name: "M3 mounting screw", exact: true }) });
   await row.getByRole("button", { name: "Record quote for M3 mounting screw", exact: true }).click();
   await row.getByLabel("Supplier", { exact: true }).fill("Synthetic supplier"); await row.getByLabel("Supplier source URL").fill("https://supplier.example/fasteners");
-  await row.getByLabel("Quantity per pack", { exact: true }).fill("4"); await row.getByLabel("Pack price", { exact: true }).fill("2.50");
+  await row.getByLabel("Quantity per pack", { exact: true }).fill("4"); await row.getByLabel("Pack price", { exact: true }).fill("2.50"); /* The default currency follows the browser locale; this fixture quotes in euros. */ await row.getByLabel("Quoted currency", { exact: true }).selectOption("EUR");
   await row.getByLabel("Shipping for this quote, blank if unknown").fill("2.00"); await row.getByLabel("Quoted tax included").selectOption("yes");
   await row.getByRole("button", { name: "Save supplier observation", exact: true }).click();
   await row.getByLabel("I checked that this quoted item meets the current requirement").check(); await row.getByRole("button", { name: "Use reviewed quote", exact: true }).click();
   await expect(page.locator(".sourcing-totals")).toContainText("€7.00");
   expect(await (await page.request.get("/api/v1/inventory")).json()).toEqual(inventoryBefore);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.reload(); await expect(page.getByRole("heading", { name: "Supplier quotes for this project", exact: true })).toBeVisible(); await expect(page.locator(".sourcing-totals")).toContainText("€7.00");
+  await page.reload(); await expect(page.getByRole("heading", { name: "Compare supplier quotes", exact: true })).toBeVisible(); await expect(page.locator(".sourcing-totals")).toContainText("€7.00");
 });
 test("a maker saves repeated plate plans and workstream progress without consuming stock", async ({ page }) => {
   await login(page); await guided(page, "Release repeated plates");

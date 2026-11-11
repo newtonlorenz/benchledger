@@ -37,7 +37,7 @@ import type {
   ProjectSetupProposal, ProjectSetupPreview, CommitProjectSetup, ProjectSetupCommitResult, ProjectSetupFieldError, BeginUpload as ApiBeginUpload, ArtifactListQuery, InspectionAction, InspectionCompletionPreview, InspectionObservation, InspectionCompletionCommit
 } from "@benchledger/api-contract";
 import { ApplicationError, conflict, notFound, projectRemoved } from "./errors.js";
-import { isLedResistorRequirement, resolveBomSpecification } from "@benchledger/domain";
+import { exceedsReservableQuantity, isLedResistorRequirement, quantityExceeds, resolveBomSpecification } from "@benchledger/domain";
 import { parseInventoryCursor } from "./inventory-pagination.js";
 import type {
   ApplicationPorts, ArtifactDownload, AuditEvent, AuditInput, BeginUploadInput, BulkMutation, EventBusEvent,
@@ -1650,7 +1650,10 @@ export class ApplicationService {
 
   async recordStockEvent(input: StockEventInput, ctx: RequestContext): Promise<Mutation<StockMutation>> {
     const parsed = stockEventInputSchema.parse(input);
-    if (parsed.type === "count") return this.recordPhysicalCount(parsed.itemId, parsed.quantity, ctx, parsed.unit, parsed.note);
+    // The generic stock-event path (MCP count_correction) corrects stock that
+    // is already counted; it never promotes ordered, delivered or unknown
+    // evidence (docs/stock-evidence-semantics.md).
+    if (parsed.type === "count") return this.countInventory(parsed.itemId, parsed.quantity, ctx, parsed.unit, parsed.note, true);
     return this.mutate(ctx, `inventory.stock.${parsed.type}`, "inventory_item", parsed.itemId, async () => {
       const current = await this.ports.inventory.getItem(parsed.itemId);
       if (!current) throw notFound("Inventory item", parsed.itemId);
@@ -1661,11 +1664,24 @@ export class ApplicationService {
   }
 
   async recordPhysicalCount(itemId: string, quantity: number, ctx: RequestContext, unit?: InventoryItem["unit"], note?: string): Promise<Mutation<StockMutation>> {
+    return this.countInventory(itemId, quantity, ctx, unit, note, false);
+  }
+
+  private async countInventory(itemId: string, quantity: number, ctx: RequestContext, unit: InventoryItem["unit"] | undefined, note: string | undefined, correctionOnly: boolean): Promise<Mutation<StockMutation>> {
     const parsedId = requireId(itemId, "item id");
     if (!Number.isFinite(quantity) || quantity < 0) throw new ApplicationError("validation", "Physical count must be zero or greater");
     return this.mutate(ctx, "inventory.stock.count", "inventory_item", parsedId, async () => {
       const current = await this.ports.inventory.getItem(parsedId);
       if (!current) throw notFound("Inventory item", parsedId);
+      if (correctionOnly && !CONFIRMED_EVIDENCE.has(current.evidence.state)) {
+        throw conflict("A count correction cannot establish counted stock; commission the item or record a physical count", {
+          reason: "evidence_not_counted",
+          itemId: parsedId,
+          evidenceState: current.evidence.state,
+          recoveryAction: "commission_inventory_item",
+          retryable: false
+        });
+      }
       assertCompatibleInventoryUnit(current, "Cannot record a physical count");
       if (unit !== undefined && unit !== current.unit) throw new ApplicationError("validation", `Unit mismatch: item uses ${current.unit}, count uses ${unit}`);
       const value = this.ports.inventory.recordPhysicalCount
@@ -2043,15 +2059,14 @@ export class ApplicationService {
         // scalar total or commit a mixed-unit reservation set.
         if (mixedReservationLines.has(line.localRef)) continue;
         const priorCoverage = plannedByLineCoverage.get(line.localRef) ?? 0;
-        const remainingCoverage = Math.max(0, line.requiredQuantity - priorCoverage);
-        if (reservation.quantity > Math.ceil(remainingCoverage / factor)) fieldErrors.push({ path: `reservations.${index}.quantity`, code: "requirement_exceeded", message: "Reservation cannot exceed the BOM requirement after whole-unit conversion" });
+        if (exceedsReservableQuantity(reservation.quantity, line.requiredQuantity, priorCoverage, conversion?.requirement.quantity)) fieldErrors.push({ path: `reservations.${index}.quantity`, code: "requirement_exceeded", message: "Reservation cannot exceed the BOM requirement after whole-unit conversion" });
         plannedByItem.set(item.id, (plannedByItem.get(item.id) ?? 0) + reservation.quantity);
         plannedByLineCoverage.set(line.localRef, priorCoverage + reservation.quantity * factor);
       }
     }
     for (const item of inventory) {
       const planned = plannedByItem.get(item.id) ?? 0;
-      if (planned > item.availableQuantity) fieldErrors.push({ path: "reservations", code: "insufficient_stock", message: `Planned reservations exceed available stock for '${item.id}'` });
+      if (quantityExceeds(planned, item.availableQuantity)) fieldErrors.push({ path: "reservations", code: "insufficient_stock", message: `Planned reservations exceed available stock for '${item.id}'` });
     }
     const revisionId = proposal.revision.id as string;
     const plannedReservationRecords = setupReservationRecords(proposal, setupLines, now);
@@ -2553,18 +2568,12 @@ export class ApplicationService {
         }
         reservedCoverage += reservation.quantity * reservedConversion.requirement.quantity;
       }
-      if (conversion === undefined) {
-        if (reservedCoverage + parsed.quantity > line.requiredQuantity) {
-          throw conflict(`Cannot reserve beyond the BOM requirement of ${line.requiredQuantity} ${line.unit}`);
-        }
-      } else {
-        const remainingCoverage = Math.max(0, line.requiredQuantity - reservedCoverage);
-        const maximumSets = Math.ceil(remainingCoverage / conversion.requirement.quantity);
-        if (parsed.quantity > maximumSets) {
-          throw conflict(`Cannot reserve beyond the BOM requirement of ${line.requiredQuantity} ${line.unit}; ${parsed.quantity} set(s) would exceed whole-set coverage`);
-        }
+      if (exceedsReservableQuantity(parsed.quantity, line.requiredQuantity, reservedCoverage, conversion?.requirement.quantity)) {
+        throw conflict(conversion === undefined
+          ? `Cannot reserve beyond the BOM requirement of ${line.requiredQuantity} ${line.unit}`
+          : `Cannot reserve beyond the BOM requirement of ${line.requiredQuantity} ${line.unit}; ${parsed.quantity} set(s) would exceed whole-set coverage`);
       }
-      if (item.availableQuantity < parsed.quantity) {
+      if (quantityExceeds(parsed.quantity, item.availableQuantity)) {
         throw conflict(`Not enough confirmed stock to reserve ${parsed.quantity} ${item.unit}`);
       }
       const reservation = await this.ports.projects.createReservation(parentId, parsed, ctx);

@@ -17,7 +17,9 @@ test("inventory image gallery uploads, renders and survives reload on a narrow s
   await expect.poll(() => photo.evaluate(img => (img as HTMLImageElement).naturalWidth)).toBe(8);
   await expect(gallery.locator("figcaption")).toContainText("Reference image");
   await page.reload();
-  await page.getByRole("button", { name: /Bambu Lab H2D/u }).first().click();
+  // The item drawer is part of the URL, so reload restores it directly.
+  await expect(page).toHaveURL(/#\/inventory\/[^/?#]+$/u);
+  await expect(page.getByRole("heading", { name: /^Bambu Lab H2D/u })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(photo).toBeVisible();
   const bounds = await photo.boundingBox(); expect(bounds!.width).toBeLessThanOrEqual(390);

@@ -76,23 +76,23 @@ function pageLimit(value: number | undefined): number {
 
 function text(row: SqliteRow, key: string): string {
   const value = row[key];
-  if (typeof value !== "string") throw new Error(`database row ${key} is not text`);
+  if (typeof value !== "string") throw new DomainError("integrity_error", `database row ${key} is not text`);
   return value;
 }
 
 function integer(row: SqliteRow, key: string): number {
   const value = row[key];
-  if (typeof value !== "number" || !Number.isInteger(value)) throw new Error(`database row ${key} is not an integer`);
+  if (typeof value !== "number" || !Number.isInteger(value)) throw new DomainError("integrity_error", `database row ${key} is not an integer`);
   return value;
 }
 
 function jsonObject(row: SqliteRow, key: string): unknown {
   const value = row[key];
-  if (typeof value !== "string") throw new Error(`database row ${key} is not JSON text`);
+  if (typeof value !== "string") throw new DomainError("integrity_error", `database row ${key} is not JSON text`);
   try {
     return JSON.parse(value) as unknown;
   } catch {
-    throw new Error(`database row ${key} contains malformed JSON`);
+    throw new DomainError("integrity_error", `database row ${key} contains malformed JSON`);
   }
 }
 
@@ -109,9 +109,9 @@ function decodeCursor(value: string | undefined): Cursor | undefined {
   if (value === undefined) return undefined;
   try {
     const parsed: unknown = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
-    if (parsed === null || typeof parsed !== "object") throw new Error("not object");
+    if (parsed === null || typeof parsed !== "object") throw new TypeError("not object");
     const candidate = parsed as Record<string, unknown>;
-    if (typeof candidate.createdAt !== "string" || typeof candidate.id !== "string" || candidate.id.length === 0) throw new Error("invalid fields");
+    if (typeof candidate.createdAt !== "string" || typeof candidate.id !== "string" || candidate.id.length === 0) throw new TypeError("invalid fields");
     return { createdAt: candidate.createdAt, id: candidate.id };
   } catch {
     throw new DomainError("invalid_cursor", "cursor is invalid or expired");
@@ -180,7 +180,7 @@ function nowIso(): string {
 function parseCatalogProduct(row: SqliteRow): CatalogProduct {
   const product = catalogProductSchema.parse(jsonObject(row, "payload_json"));
   if (product.id !== text(row, "id") || product.kind !== text(row, "kind") || product.version !== integer(row, "version") || product.createdAt !== text(row, "created_at") || product.updatedAt !== text(row, "updated_at")) {
-    throw new Error(`catalog product ${product.id} metadata is inconsistent`);
+    throw new DomainError("integrity_error", `catalog product ${product.id} metadata is inconsistent`);
   }
   return product;
 }
@@ -239,9 +239,9 @@ function parseInventoryProductProfile(row: SqliteRow): InventoryProductProfile {
 function parseBuildConfigurationSnapshot(row: SqliteRow): BuildConfigurationSnapshot {
   const snapshot = buildConfigurationSnapshotSchema.parse(jsonObject(row, "payload_json"));
   const storedHash = text(row, "content_sha256");
-  if (snapshot.contentSha256 !== storedHash) throw new Error(`snapshot ${snapshot.id} hash is inconsistent`);
+  if (snapshot.contentSha256 !== storedHash) throw new DomainError("integrity_error", `snapshot ${snapshot.id} hash is inconsistent`);
   if (computeBuildConfigurationContentSha256(snapshot) !== snapshot.contentSha256) {
-    throw new Error(`snapshot ${snapshot.id} content hash does not match its configuration`);
+    throw new DomainError("integrity_error", `snapshot ${snapshot.id} content hash does not match its configuration`);
   }
   return snapshot;
 }
@@ -413,7 +413,7 @@ export class CatalogProductRepository {
       }
       corrected = parsed;
     });
-    if (corrected === undefined) throw new Error(`catalog product ${id} correction did not complete`);
+    if (corrected === undefined) throw new DomainError("integrity_error", `catalog product ${id} correction did not complete`);
     return corrected;
   }
 
@@ -586,7 +586,7 @@ export class BuildConfigurationSnapshotRepository {
     const row = this.database.get<SqliteRow>("SELECT * FROM build_configuration_snapshots WHERE id = ?", [id]);
     if (row === undefined) return undefined;
     const snapshot = parseBuildConfigurationSnapshot(row);
-    if (snapshot.projectRevisionId !== text(row, "project_revision_id")) throw new Error(`snapshot ${id} ancestry is inconsistent`);
+    if (snapshot.projectRevisionId !== text(row, "project_revision_id")) throw new DomainError("integrity_error", `snapshot ${id} ancestry is inconsistent`);
     return snapshot;
   }
 

@@ -318,6 +318,8 @@ export interface InventoryItem {
   unitStatus?: "compatible" | "needs_correction";
   unitCorrectionReason?: string;
   lastCounted?: string;
+  /** Server record update time (ISO), when known. */
+  updatedAt?: string;
   accent: "orange" | "teal" | "blue" | "yellow" | "slate";
   /** Exact catalog identity and physical profile, when this legacy item has
    * been through the guided confirmation flow. */
@@ -500,8 +502,35 @@ export function getStockLabel(state: StockState): { label: string; tone: StockLa
   }
 }
 
-export function formatMoney(minorUnits: number, currency: CurrencyCode = "EUR"): string {
-  return new Intl.NumberFormat("en", { style: "currency", currency }).format(minorUnits / 100);
+/** The maker's browser locale (undefined lets Intl use the runtime default). */
+export function browserLocale(): string | undefined {
+  return typeof navigator === "undefined" ? undefined : navigator.languages?.[0] ?? navigator.language;
+}
+
+export function formatMoney(minorUnits: number, currency: CurrencyCode = "EUR", locale: string | undefined = browserLocale()): string {
+  return new Intl.NumberFormat(locale, { style: "currency", currency }).format(minorUnits / 100);
+}
+
+const regionCurrencies: Readonly<Record<string, CurrencyCode>> = {
+  US: "USD", GB: "GBP", CA: "CAD", AU: "AUD", NZ: "NZD", JP: "JPY", CH: "CHF", SE: "SEK", NO: "NOK", DK: "DKK", PL: "PLN", CZ: "CZK", HU: "HUF", IN: "INR", CN: "CNY", KR: "KRW", SG: "SGD", HK: "HKD", BR: "BRL", MX: "MXN", ZA: "ZAR",
+  AT: "EUR", BE: "EUR", CY: "EUR", DE: "EUR", EE: "EUR", ES: "EUR", FI: "EUR", FR: "EUR", GR: "EUR", HR: "EUR", IE: "EUR", IT: "EUR", LT: "EUR", LU: "EUR", LV: "EUR", MT: "EUR", NL: "EUR", PT: "EUR", SI: "EUR", SK: "EUR"
+};
+
+/**
+ * Default currency for a new price: the currency the workspace already uses
+ * most, otherwise the browser region's currency, otherwise EUR.
+ */
+export function preferredCurrency(known: readonly string[] = [], locale: string | undefined = browserLocale()): CurrencyCode {
+  const counts = new Map<string, number>();
+  for (const code of known) if (/^[A-Z]{3}$/u.test(code)) counts.set(code, (counts.get(code) ?? 0) + 1);
+  const mostUsed = [...counts.entries()].sort((left, right) => right[1] - left[1])[0]?.[0];
+  if (mostUsed) return mostUsed as CurrencyCode;
+  let region: string | undefined;
+  try { region = locale ? new Intl.Locale(locale).maximize().region : undefined; } catch { region = undefined; }
+  // A bare language (for example "en") maximizes to a guessed region; only
+  // trust an explicit region in the locale tag.
+  const explicit = locale && /[-_][A-Za-z]{2}\b/u.test(locale) ? region : undefined;
+  return (explicit && regionCurrencies[explicit.toUpperCase()]) || "EUR";
 }
 
 /**
@@ -843,9 +872,11 @@ function summaryFromCanonicalGaps(project: Project, items: InventoryItem[], gaps
     readyDecisionLines: gaps.totals.readyLines,
     checkLines: gaps.totals.checkLines,
     decideLines: gaps.totals.decideLines,
-    sourceLines: gaps.totals.sourceLines,
+    // A retained evaluation whose refresh failed is shown for context only;
+    // it must not drive sourcing until a fresh evaluation replaces it.
+    sourceLines: project.readinessUnavailable === true ? 0 : gaps.totals.sourceLines,
     partialLines: gaps.totals.partialLines,
-    readinessUnavailable: false,
+    readinessUnavailable: project.readinessUnavailable === true,
     lineStatuses,
   };
 }

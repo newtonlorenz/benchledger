@@ -1,8 +1,10 @@
 import { access, readdir, readFile } from "node:fs/promises";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
+import { generatedMobilePaths } from "./generated-mobile-paths.mjs";
 
 const root = new URL("../", import.meta.url);
 const rootPath = root.pathname;
+const generatedMobile = generatedMobilePaths(root);
 const findings = [];
 
 const requiredFiles = [
@@ -58,6 +60,7 @@ async function collect(directory) {
   for (const entry of entries) {
     if (entry.isDirectory() && ignoredDirectories.has(entry.name)) continue;
     const path = join(directory, entry.name);
+    if (entry.isDirectory() && generatedMobile.has(relative(rootPath, path))) continue;
     if (entry.isSymbolicLink()) {
       findings.push(`${relative(rootPath, path)}: symbolic links are not allowed in the public source archive`);
     } else if (entry.isDirectory()) {
@@ -102,7 +105,11 @@ const lockfile = JSON.parse(await readFile(join(rootPath, "package-lock.json"), 
 for (const [path, metadata] of Object.entries(lockfile.packages ?? {})) {
   if (!path.startsWith("node_modules/") || metadata.link) continue;
   if (!metadata.license) findings.push(`package-lock.json: ${path} has no recorded license`);
-  if (/\b(?:AGPL|GPL|SSPL)\b|Commons-Clause/i.test(metadata.license ?? "")) {
+  // node-forge explicitly offers BSD-3-Clause OR GPL-2.0. This exact reviewed
+  // release is used under BSD; retain its notice in docs/third-party-notices.md.
+  const reviewedBsdChoice = path.endsWith("node_modules/node-forge")
+    && metadata.version === "1.4.3" && metadata.license === "(BSD-3-Clause OR GPL-2.0)";
+  if (!reviewedBsdChoice && /\b(?:AGPL|GPL|SSPL)\b|Commons-Clause/i.test(metadata.license ?? "")) {
     findings.push(`package-lock.json: ${path} uses review-required license ${metadata.license}`);
   }
 }

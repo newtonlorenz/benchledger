@@ -1,7 +1,7 @@
 import { calculateProjectSummary } from "./domain";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { ProjectEditingContext, ProjectManagementBar, RequirementEditAction, RequirementEditForm, ProjectEditForm, matchesRequirementFilter } from "./project-editing";
+import { ProjectEditingContext, ProjectExportOptions, ProjectManagementBar, RequirementEditAction, RequirementEditForm, ProjectEditForm, matchesRequirementFilter, projectMenuItems } from "./project-editing";
 import { inventory, projects } from "./mock-data";
 
 describe("maker correction surfaces", () => {
@@ -10,11 +10,13 @@ describe("maker correction surfaces", () => {
   it("keeps unauthorised or archived contexts read-only", () => {
     expect(renderToStaticMarkup(<RequirementEditAction line={line} />)).toBe("");
     const html = renderToStaticMarkup(<ProjectEditingContext.Provider value={{ ...actions, project: { ...project, status: "archived" } }}><RequirementEditAction line={line} /><ProjectManagementBar /></ProjectEditingContext.Provider>);
-    expect(html).not.toContain("Edit requirement"); expect(html).not.toContain("Edit project"); expect(html).toContain("Export project");
+    expect(html).not.toContain("Edit requirement"); expect(html).not.toContain("Edit project");
+    expect(projectMenuItems({ project: { ...project, status: "archived" }, onEdit: () => undefined, onExport: () => undefined, onNewRevision: () => undefined, onArchive: () => undefined, onRestore: () => undefined }).map((item) => item.label)).toEqual(["Export summary", "Restore project"]);
   });
   it("offers explicit active project actions and bounded exports", () => {
-    const html = renderToStaticMarkup(<ProjectEditingContext.Provider value={actions}><RequirementEditAction line={line} /><ProjectManagementBar /></ProjectEditingContext.Provider>);
-    expect(html).toContain("Edit project"); expect(html).toContain("Download requirements CSV"); expect(html).toContain("snapshots, not backups");
+    expect(projectMenuItems({ project, onEdit: () => undefined, onExport: () => undefined, onNewRevision: () => undefined, onArchive: () => undefined, onRestore: () => undefined }).map((item) => item.label)).toEqual(["Edit project", "Export summary", "New revision", "Archive project"]);
+    const html = renderToStaticMarkup(<ProjectExportOptions project={project} />);
+    expect(html).toContain("Download requirements CSV"); expect(html).toContain("Download project brief JSON"); expect(html).toContain("snapshots, not backups");
   });
   it("keeps editing distinct from stock evidence and permanent deletion", () => {
     const html = renderToStaticMarkup(<RequirementEditForm line={line} items={inventory} onSave={async () => undefined} onRetire={async () => undefined} onClose={() => undefined} onBusy={() => undefined} />);

@@ -1267,10 +1267,13 @@ describe("BenchLedger HTTP API", () => {
   it("starts the file-backed runtime and reports readiness before serving production requests", async () => {
     const dataDir = await mkdtemp(join(tmpdir(), "benchledger-server-"));
     try {
-      const app = await createApp({ dataDir, publicBaseUrl: "http://127.0.0.1:8792", auth: { sessionSecret: "s".repeat(48), secureCookies: false }, logger: false });
+      const app = await createApp({ dataDir, publicBaseUrl: "http://127.0.0.1:8792", auth: { sessionSecret: "s".repeat(48), secureCookies: false, bearerTokens: [bearerRecord("ready-operator", ["read"])] }, logger: false });
       const ready = await app.inject({ method: "GET", url: "/api/v1/ready" });
       expect(ready.statusCode).toBe(200);
-      expect(ready.json()).toMatchObject({ status: "ok", checks: { database: "ok", artifacts: "ok" }, demo: false });
+      expect(ready.json()).toMatchObject({ status: "ok", demo: false });
+      expect(ready.json()).not.toHaveProperty("checks");
+      const operatorReady = await app.inject({ method: "GET", url: "/api/v1/ready", headers: { authorization: "Bearer ready-operator" } });
+      expect(operatorReady.json()).toMatchObject({ status: "ok", checks: { database: "ok", artifacts: "ok" }, demo: false });
       await app.close();
     } finally {
       await rm(dataDir, { recursive: true, force: true });
@@ -1331,12 +1334,12 @@ describe("BenchLedger HTTP API", () => {
       quantity: { value: 1, unit: "piece" },
     });
     expect(created.statusCode).toBe(200);
-    expect(created.json()).toMatchObject({ result: { isError: false, structuredContent: { id: expect.any(String), projectRevisionId: "synthetic-revision-lamp-r01", quantity: { unit: "piece" } } } });
-    const reservationId = created.json<{ result: { structuredContent: { id: string } } }>().result.structuredContent.id;
+    expect(created.json()).toMatchObject({ result: { isError: false, structuredContent: { id: expect.any(String), projectRevisionId: "synthetic-revision-lamp-r01", quantity: { unit: "each" } } } });
+    const { id: reservationId, version: reservationVersion } = created.json<{ result: { structuredContent: { id: string; version: number } } }>().result.structuredContent;
 
-    const released = await call("release", "release_reservation", { reservationId });
+    const released = await call("release", "release_reservation", { reservationId, expectedVersion: reservationVersion });
     expect(released.statusCode).toBe(200);
-    expect(released.json()).toMatchObject({ result: { isError: false, structuredContent: { id: reservationId, projectRevisionId: "synthetic-revision-lamp-r01", bomLineId: "synthetic-bom-board", quantity: { unit: "piece" }, status: "released" } } });
+    expect(released.json()).toMatchObject({ result: { isError: false, structuredContent: { id: reservationId, projectRevisionId: "synthetic-revision-lamp-r01", bomLineId: "synthetic-bom-board", quantity: { unit: "each" }, status: "released" } } });
     await app.close();
   });
 
@@ -1354,12 +1357,12 @@ describe("BenchLedger HTTP API", () => {
       quantity: { value: 1, unit: "piece" },
     });
     expect(created.json()).toMatchObject({ result: { isError: false, structuredContent: { projectRevisionId: historicalRevisionId } } });
-    const reservationId = created.json<{ result: { structuredContent: { id: string } } }>().result.structuredContent.id;
+    const { id: reservationId, version: reservationVersion } = created.json<{ result: { structuredContent: { id: string; version: number } } }>().result.structuredContent;
 
     await runtime.ports.projects.createProjectRevision("synthetic-project-lamp", { id: "synthetic-revision-lamp-r02", name: "Current baseline", status: "concept" }, {
       actor: "test-agent", source: "api", correlationId: "historical-current-revision", scopes: new Set(["read", "write"])
     });
-    const released = await call("release-reservation", "release_reservation", { reservationId });
+    const released = await call("release-reservation", "release_reservation", { reservationId, expectedVersion: reservationVersion });
     expect(released.json()).toMatchObject({ result: { isError: false, structuredContent: { id: reservationId, projectRevisionId: historicalRevisionId, bomLineId: "synthetic-bom-board", status: "released" } } });
 
     const body = Buffer.from("historical-step");
@@ -1542,7 +1545,8 @@ describe("BenchLedger HTTP API", () => {
     expect(health.json()).not.toHaveProperty("checks");
     const ready = await degraded.inject({ method: "GET", url: "/api/v1/ready" });
     expect(ready.statusCode).toBe(503);
-    expect(ready.json()).toMatchObject({ status: "degraded", checks: { database: "failed" } });
+    expect(ready.json()).toMatchObject({ status: "degraded" });
+    expect(ready.json()).not.toHaveProperty("checks");
     await degraded.close();
 
     const service = new ApplicationService(runtime.ports);

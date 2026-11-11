@@ -1,10 +1,11 @@
 import { expect, test } from "@playwright/test";
+import { openCurrentProject } from "./project-nav";
 
 test("project files preview Markdown, images and STL and preserve download-only files", async ({ page }) => {
   await page.goto("/");
   await page.getByLabel("Workspace password").fill("demo-password-please-change");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await page.getByRole("button", { name: /^Projects/u }).click();
+  await openCurrentProject(page);
   await page.getByRole("tab", { name: /^Files/u }).click();
   const files = [
     { name: "preview-instructions.md", mimeType: "text/markdown", buffer: Buffer.from("# Assembly preview\n\n**Read first**\n\n<script>window.previewUnsafe = true</script>\n\n![remote](https://example.org/tracker)") },

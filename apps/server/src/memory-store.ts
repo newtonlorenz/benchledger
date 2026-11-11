@@ -29,7 +29,7 @@ import type {
   InspectionCommitInput, InspectionCommitReceipt, InspectionPort,
   InventoryBulkUpdate, InventoryBulkUpdateResult, ReservationDetails, StockMutation, UnitOfWorkOperation, UnitOfWorkPort, UpdateInventoryInput, UploadSessionDetails, UsageInput
 } from "@benchledger/application";
-import { BUILTIN_INVENTORY_CATEGORIES, canonicalProjectStatus, compareInventoryCategoryKeys, normalizeInventoryCategoryKey, normalizeInventoryCategoryName, slugify } from "@benchledger/domain";
+import { BUILTIN_INVENTORY_CATEGORIES, canonicalProjectStatus, exceedsReservableQuantity, quantityExceeds, compareInventoryCategoryKeys, normalizeInventoryCategoryKey, normalizeInventoryCategoryName, slugify } from "@benchledger/domain";
 import { computeBuildConfigurationContentSha256 } from "@benchledger/runtime";
 
 const clone = <T>(value: T): T => structuredClone(value);
@@ -992,7 +992,6 @@ class MemoryProjects implements ProjectPort {
     if (!matchesBomConstraints(item, line.constraints)) throw new ApplicationError("validation", "Inventory item does not satisfy the BOM constraints");
     if (!canCount(item.evidence.state)) throw new ApplicationError("conflict", "Only physically confirmed stock can be reserved");
     ensurePositive(input.quantity, "Reservation quantity");
-    const factor = conversion?.requirement.quantity ?? 1;
     const reservedCoverage = [...this.reservations.values()]
       .filter((reservation) => reservation.status === "active" && reservation.lineId === input.lineId)
       .reduce((total, reservation) => {
@@ -1003,10 +1002,8 @@ class MemoryProjects implements ProjectPort {
         if (reservedConversion !== undefined && !Number.isSafeInteger(reservation.quantity)) throw new ApplicationError("integrity_error", "Existing converted reservation is not a whole number of sets");
         return total + reservation.quantity * (reservedConversion?.requirement.quantity ?? 1);
       }, 0);
-    const remainingCoverage = Math.max(0, line.requiredQuantity - reservedCoverage);
-    const maximumInventoryUnits = Math.ceil(remainingCoverage / factor);
-    if (input.quantity > maximumInventoryUnits) throw new ApplicationError("conflict", `Cannot reserve beyond the BOM requirement of ${line.requiredQuantity} ${line.unit}; whole-unit coverage would be exceeded`);
-    if (item.availableQuantity < input.quantity) throw new ApplicationError("conflict", "Not enough confirmed stock to reserve");
+    if (exceedsReservableQuantity(input.quantity, line.requiredQuantity, reservedCoverage, conversion?.requirement.quantity)) throw new ApplicationError("conflict", `Cannot reserve beyond the BOM requirement of ${line.requiredQuantity} ${line.unit}; whole-unit coverage would be exceeded`);
+    if (quantityExceeds(input.quantity, item.availableQuantity)) throw new ApplicationError("conflict", "Not enough confirmed stock to reserve");
     const reservation: Reservation = { id: input.id ?? id("reservation", ++this.sequence), lineId: input.lineId, itemId: input.itemId, quantity: input.quantity, status: "active", createdAt: iso(), updatedAt: iso(), version: 1 };
     this.reservations.set(reservation.id, reservation);
     this.inventory.items.set(item.id, { ...item, availableQuantity: item.availableQuantity - input.quantity, updatedAt: iso(), version: item.version + 1 });
@@ -1167,15 +1164,13 @@ class MemoryProjectSetup implements ProjectSetupPort {
       if (conversion !== undefined && !Number.isSafeInteger(reservation.quantity)) throw conflict("Converted reservation quantity is not a whole number of sets", { reason: "reservation_preflight", itemId: item.id, retryable: false, commitState: "not_committed", recoveryAction: "preview_project_setup" });
       const factor = conversion?.requirement.quantity ?? 1;
       const priorCoverage = reservedByLine.get(line.localRef) ?? 0;
-      const remainingCoverage = Math.max(0, line.requiredQuantity - priorCoverage);
-      const maximumInventoryUnits = Math.ceil(remainingCoverage / factor);
-      if (reservation.quantity > maximumInventoryUnits) throw conflict("Reservation exceeds BOM requirement", { reason: "reservation_requirement", itemId: item.id, retryable: false, commitState: "not_committed", recoveryAction: "preview_project_setup" });
+      if (exceedsReservableQuantity(reservation.quantity, line.requiredQuantity, priorCoverage, conversion?.requirement.quantity)) throw conflict("Reservation exceeds BOM requirement", { reason: "reservation_requirement", itemId: item.id, retryable: false, commitState: "not_committed", recoveryAction: "preview_project_setup" });
       reservedByLine.set(line.localRef, priorCoverage + reservation.quantity * factor);
       reservedByItem.set(item.id, (reservedByItem.get(item.id) ?? 0) + reservation.quantity);
     }
     for (const [itemId, quantity] of reservedByItem) {
       const item = await this.inventory.getItem(itemId);
-      if (item === null || quantity > item.availableQuantity) throw conflict("Reservation stock is no longer available", { reason: "reservation_stock", staleItems: [itemId], recoveryAction: "preview_project_setup", retryable: false, commitState: "not_committed" });
+      if (item === null || quantityExceeds(quantity, item.availableQuantity)) throw conflict("Reservation stock is no longer available", { reason: "reservation_stock", staleItems: [itemId], recoveryAction: "preview_project_setup", retryable: false, commitState: "not_committed" });
     }
 
     const snapshot = this.snapshotState();

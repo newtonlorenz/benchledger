@@ -210,8 +210,8 @@ describe("runtime utility and port behavior", () => {
   it("pages deterministically and clones values without sharing mutable state", () => {
     expect(page(["a", "b", "c"], 2)).toEqual({ data: ["a", "b"], limit: 2, nextCursor: "2", total: 3 });
     expect(page(["a", "b", "c"], 2, "2")).toEqual({ data: ["c"], limit: 2, total: 3 });
-    expect(page(["a", "b"], 2, "bad")).toEqual({ data: ["a", "b"], limit: 2, total: 2 });
-    expect(page(["a", "b"], 2, "-3")).toEqual({ data: ["a", "b"], limit: 2, total: 2 });
+    expect(() => page(["a", "b"], 2, "bad")).toThrow(expect.objectContaining({ code: "invalid_cursor" }));
+    expect(() => page(["a", "b"], 2, "-3")).toThrow(expect.objectContaining({ code: "invalid_cursor" }));
     const original = { nested: { value: 1 } };
     const copy = clone(original);
     copy.nested.value = 2;
@@ -228,10 +228,10 @@ describe("runtime utility and port behavior", () => {
     ] as const) {
       expect(() => mapPersistenceError(new DomainError(code, "domain failure"))).toThrowError(new ApplicationError(expected, expected === "integrity_error" ? "The stored record could not be updated safely" : "domain failure"));
     }
-    expect(() => mapPersistenceError(new Error("UNIQUE constraint failed"))).toThrow(/conflicts/);
-    expect(() => mapPersistenceError(new Error("foreign key violation"))).toThrow(/referenced record/);
-    expect(() => mapPersistenceError(new Error("unrelated database failure"))).toThrow(/persistence operation failed/);
-    expect(() => mapPersistenceError("bad error")).toThrow(/persistence operation failed/);
+    // Unclassified failures are internal (500), not disguised as 409s; SQLite codes are covered in utils.test.ts.
+    const unrelated = new Error("unrelated database failure");
+    expect(() => mapPersistenceError(unrelated)).toThrow(expect.objectContaining({ code: "internal", cause: unrelated }));
+    expect(() => mapPersistenceError("bad error")).toThrow(expect.objectContaining({ code: "internal", cause: "bad error" }));
 
     for (const [code, expected] of [
       ["NOT_FOUND", "not_found"], ["CONFLICT", "conflict"], ["MANIFEST_IMMUTABLE", "conflict"], ["BUNDLE_EXISTS", "conflict"],
@@ -477,6 +477,8 @@ describe("production inventory and procurement adapters", () => {
     expect(mutations[0]).toMatchObject({ event: { actor: "coverage-agent", source: "mcp", projectId: "project-ledger", correlationId: "input-correlation", idempotencyKey: "ledger-operation" } });
     expect(mutations[2]).toMatchObject({ event: { actor: "coverage-agent", source: "api" } });
     expect(mutations.at(-1)).toMatchObject({ item: { quantity: 9, availableQuantity: 9 } });
+    // Reusing a key for a different movement is a conflict, never a silent replay of the first event.
+    await expect(runtime.ports.inventory.recordStockEvent({ itemId: "ledger-item", type: "allocate", quantity: 3, unit: "each" }, context({ source: "mcp", idempotencyKey: "ledger-operation" }))).rejects.toMatchObject({ code: "idempotency_conflict" });
     const retry = await runtime.ports.inventory.recordStockEvent({ itemId: "ledger-item", type: "allocate", quantity: 2, unit: "each" }, context({ source: "mcp", idempotencyKey: "ledger-operation" }));
     expect(retry.event.id).toBe(mutations[0]?.event.id);
     await expect(runtime.ports.inventory.recordStockEvent({ itemId: "ledger-item", type: "receipt", quantity: 1, unit: "gram" }, context())).rejects.toMatchObject({ code: "validation" });
@@ -520,6 +522,14 @@ describe("production audit adapter", () => {
     const secondPage = await runtime.ports.audit.list(2, firstPage.nextCursor);
     expect(secondPage).toMatchObject({ data: expect.any(Array), limit: 2, total: 5, nextCursor: "4" });
     await expect(runtime.ports.audit.list(10, "4")).resolves.toMatchObject({ data: [{ entityId: expect.stringMatching(/^audit-item-/) }], total: 5 });
+    const all = await runtime.ports.audit.list(10);
+    expect(all.data.map((event) => event.action).sort()).toEqual(sources.map((source) => `audit.${source}`).sort());
+    expect(all.data.find((event) => event.action === "audit.ui")).toMatchObject({ idempotencyKey: "audit-key" });
+    // Same entity id under another type must not leak into an entity history.
+    await runtime.ports.audit.append({ action: "other-type.audit", actor: "actor-other", source: "api", correlationId: "audit-other", entityType: "project", entityId: "audit-item-0" });
+    await expect(runtime.ports.audit.listEntity!("inventory_item", "audit-item-0", 10)).resolves.toMatchObject({ data: [{ action: "audit.ui", idempotencyKey: "audit-key", version: 2 }], total: 1 });
+    await expect(runtime.ports.audit.listEntity!("project", "audit-item-0", 10)).resolves.toMatchObject({ data: [{ action: "other-type.audit" }], total: 1 });
+    await expect(runtime.ports.audit.list(2, "bad")).rejects.toMatchObject({ code: "invalid_cursor" });
     const storedActors = runtime.database.all("SELECT action, actor_json FROM audit_log WHERE action LIKE 'audit.%'") as Array<{ action: string; actor_json: string }>;
     const actorTypes = Object.fromEntries(storedActors.map((row) => [row.action, (JSON.parse(row.actor_json) as { type: string }).type]));
     expect(actorTypes).toEqual({
@@ -549,7 +559,7 @@ describe("production project adapter", () => {
     await expect(runtime.ports.projects.getProject("missing-project")).resolves.toBeNull();
     await expect(runtime.ports.projects.listProjects({ limit: 100, q: "lamp" })).resolves.toMatchObject({ data: [{ id: project.id }], total: 1 });
     await expect(runtime.ports.projects.listProjects({ limit: 2, status: "idea" })).resolves.toMatchObject({ data: [{ id: "status-idea" }], total: 1 });
-    await expect(runtime.ports.projects.listProjects({ limit: 2, cursor: "bad" })).resolves.toMatchObject({ data: expect.any(Array), limit: 2, total: 7, nextCursor: "2" });
+    await expect(runtime.ports.projects.listProjects({ limit: 2, cursor: "bad" })).rejects.toMatchObject({ code: "invalid_cursor" });
 
     const updatedProject = await runtime.ports.projects.updateProject(project.id, { name: "Lamp controller v2", description: "Updated description", status: "building" }, project.version, context());
     expect(updatedProject).toMatchObject({ name: "Lamp controller v2", description: "Updated description", status: "building", version: 2 });

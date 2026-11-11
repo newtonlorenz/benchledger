@@ -1,4 +1,4 @@
-import { MCP_QUANTITY_UNITS, MCP_EVIDENCE_STATES } from "./types.js";
+import { MCP_QUANTITY_UNITS, MCP_EVIDENCE_STATES, MCP_CONDITIONS, INVENTORY_KINDS, INVENTORY_KIND_ALIASES } from "./types.js";
 import { McpAdapterError } from "./errors.js";
 import {
   createBuildConfigurationSnapshotSchema,
@@ -173,17 +173,52 @@ function optionalNullableId(value: unknown, label: string): string | null | unde
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const categoryIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 
-function apiInventoryKind(category: string): "printer" | "tool" | "accessory" | "consumable" | "electronic" | "fastener" | "filament" | "wire" | "adhesive" | "other" {
-  if (["printer", "tool", "accessory", "consumable", "electronic", "fastener", "filament", "wire", "adhesive", "other"].includes(category)) {
-    return category as ReturnType<typeof apiInventoryKind>;
-  }
-  if (category === "printer_accessory" || category === "printer_part") return "accessory";
-  if (category === "electronics" || category === "electrical") return "electronic";
-  return "other";
+type InventoryKind = typeof INVENTORY_KINDS[number];
+
+function apiInventoryKind(category: string): InventoryKind {
+  if ((INVENTORY_KINDS as readonly string[]).includes(category)) return category as InventoryKind;
+  const alias = INVENTORY_KIND_ALIASES[category];
+  if (alias !== undefined) return alias;
+  // An unknown category used to become `other` silently, hiding typos.
+  fail(`arguments.category '${category.slice(0, 64)}' is not a semantic inventory kind; use one of: ${INVENTORY_KINDS.join(", ")}. Use categoryNodeId for user-managed categories.`);
 }
 
-function apiInventoryUnit(unit: Quantity["unit"]): "each" | "gram" | "millimetre" | "millilitre" | "metre" | "set" {
-  return unit === "piece" ? "each" : unit === "roll" || unit === "set" ? "set" : unit;
+/** Validate and canonicalize a semantic inventory kind; aliases are input-only. */
+export function inventoryKind(value: unknown, label: string): InventoryKind {
+  return apiInventoryKind(stringValue(value, label, { max: 128 }));
+}
+
+type CanonicalUnit = "each" | "gram" | "millimetre" | "millilitre" | "metre" | "set";
+
+function apiInventoryUnit(unit: Quantity["unit"]): CanonicalUnit {
+  return unit === "piece" ? "each" : unit === "roll" ? "set" : unit;
+}
+
+/** Accept canonical units and the legacy piece/roll aliases; return canonical. */
+export function quantityUnit(value: unknown, label: string): CanonicalUnit {
+  return apiInventoryUnit(enumValue(value, label, MCP_QUANTITY_UNITS));
+}
+
+const EVIDENCE_ALIASES: Readonly<Record<string, EvidenceSummary["state"]>> = {
+  physical_count: "physically_counted",
+  delivery: "delivered_uncounted",
+  order: "ordered_unverified",
+  measured: "unknown",
+  manufacturer: "unknown",
+  user_reported: "unknown",
+  inferred: "unknown",
+};
+
+/** Accept canonical evidence states and legacy aliases; return canonical. */
+export function evidenceState(value: unknown, label: string): EvidenceSummary["state"] {
+  const state = enumValue(value, label, MCP_EVIDENCE_STATES);
+  return EVIDENCE_ALIASES[state] ?? state;
+}
+
+/** Accept canonical conditions and legacy used/opened aliases; return canonical. */
+function optionalCondition(value: unknown, label: string): "new" | "good" | "worn" | "needs_repair" | "unknown" | undefined {
+  const condition = optionalEnum(value, label, MCP_CONDITIONS);
+  return condition === "used" ? "good" : condition === "opened" ? "worn" : condition;
 }
 
 function validateInventoryKindUnit(category: string, unit: Quantity["unit"], label: string): void {
@@ -220,13 +255,29 @@ export function categorySingleId(value: unknown, field: string): string {
   return categoryId(input[field], `arguments.${field}`);
 }
 
-export function retireProject(value: unknown): { projectId: string; expectedVersion?: number } {
+/** Read the mandatory optimistic version for an update of an existing record. */
+function requiredVersion(value: unknown, label = "arguments.expectedVersion"): number {
+  if (value === undefined) fail(`${label} is required; read the record first and pass its current version.`);
+  return integer(value, label, 1);
+}
+
+export function retireProject(value: unknown): { projectId: string; expectedVersion: number } {
   const input = record(value, "arguments");
   keys(input, ["projectId", "expectedVersion"], "arguments");
-  const result: { projectId: string; expectedVersion?: number } = { projectId: id(input.projectId, "arguments.projectId") };
-  const version = optionalInteger(input.expectedVersion, "arguments.expectedVersion");
-  if (version !== undefined) result.expectedVersion = version;
-  return result;
+  return { projectId: id(input.projectId, "arguments.projectId"), expectedVersion: requiredVersion(input.expectedVersion) };
+}
+
+export function inventoryRetire(value: unknown): { itemId: string; expectedVersion: number } {
+  const input = record(value, "arguments");
+  keys(input, ["itemId", "expectedVersion"], "arguments");
+  return { itemId: id(input.itemId, "arguments.itemId"), expectedVersion: requiredVersion(input.expectedVersion) };
+}
+
+/** read_inventory_summary always summarizes the whole inventory; it takes no paging arguments. */
+export function inventorySummaryInput(value: unknown): Record<string, never> {
+  const input = record(value ?? {}, "arguments");
+  keys(input, [], "arguments");
+  return {};
 }
 
 /** Irreversible removal requires both optimistic concurrency and exact name confirmation. */
@@ -252,11 +303,11 @@ export function removedProjectHistory(value: unknown): { projectId: string; limi
   return { projectId: id(input.projectId, "arguments.projectId"), ...(page.limit === undefined ? {} : { limit: page.limit }), ...(page.cursor === undefined ? {} : { cursor: page.cursor }) };
 }
 
-export function archiveProject(value: unknown): { projectId: string; expectedVersion?: number } {
+export function archiveProject(value: unknown): { projectId: string; expectedVersion: number } {
   return retireProject(value);
 }
 
-export function restoreProject(value: unknown): { projectId: string; expectedVersion?: number } {
+export function restoreProject(value: unknown): { projectId: string; expectedVersion: number } {
   return retireProject(value);
 }
 
@@ -317,7 +368,7 @@ function inspectionObservation(value: unknown, label: string): InspectionObserva
   keys(input, ["result", "quantity", "unit", "source", "sourceId", "observedAt", "note", "conversion"], label);
   const result = enumValue(input.result, `${label}.result`, ["confirmed", "inconclusive"] as const);
   const quantity = input.quantity === undefined ? undefined : finiteNumber(input.quantity, `${label}.quantity`);
-  const unit = input.unit === undefined ? undefined : enumValue(input.unit, `${label}.unit`, MCP_QUANTITY_UNITS);
+  const unit = input.unit === undefined ? undefined : quantityUnit(input.unit, `${label}.unit`);
   const source = stringValue(input.source, `${label}.source`, { max: 500 });
   const sourceId = optionalString(input.sourceId, `${label}.sourceId`, 500);
   const observedAt = stringValue(input.observedAt, `${label}.observedAt`, { max: 80 });
@@ -395,13 +446,13 @@ export function catalogProductUpdate(value: unknown): CatalogProductUpdateInput 
   const input = record(value, "arguments");
   keys(input, ["productId", "expectedVersion", ...catalogProductUpdateKeys], "arguments");
   const productId = id(input.productId, "arguments.productId");
-  const expectedVersion = optionalInteger(input.expectedVersion, "arguments.expectedVersion");
+  const expectedVersion = requiredVersion(input.expectedVersion);
   const changes: UnknownRecord = { ...input };
   delete changes.productId;
   delete changes.expectedVersion;
   const parsed = canonicalSchema(updateCatalogProductSchema, changes, "arguments");
   if (Object.keys(changes).length === 0) fail("arguments must contain at least one catalog product change.");
-  return { productId, ...(expectedVersion === undefined ? {} : { expectedVersion }), ...parsed } as CatalogProductUpdateInput;
+  return { productId, expectedVersion, ...parsed } as CatalogProductUpdateInput;
 }
 
 export function inventoryProductProfileRead(value: unknown): InventoryProductProfileReadInput {
@@ -445,7 +496,10 @@ export function reconciliationRead(value: unknown): ReconciliationReadInput {
 
 /** Validate the full canonical draft shape, including all evidence-bearing outcomes. */
 export function reconciliationDraftSave(value: unknown): ReconciliationDraftSaveInput {
-  return canonicalSchema(saveReconciliationDraftSchema, record(value, "arguments"), "arguments");
+  const input = record(value, "arguments");
+  // Saving over an existing draft is an update: its version is mandatory.
+  if (input.draftId !== undefined) requiredVersion(input.expectedVersion);
+  return canonicalSchema(saveReconciliationDraftSchema, input, "arguments");
 }
 
 /** The revision is the MCP ancestry anchor; the remaining fields use the canonical commit schema. */
@@ -455,7 +509,7 @@ export function reconciliationCommit(value: unknown): ReconciliationCommitInput 
   const projectRevisionId = id(input.projectRevisionId, "arguments.projectRevisionId");
   const command = canonicalSchema(commitReconciliationSchema, {
     draftId: input.draftId,
-    ...(input.expectedVersion === undefined ? {} : { expectedVersion: input.expectedVersion }),
+    expectedVersion: requiredVersion(input.expectedVersion),
   }, "arguments");
   return { projectRevisionId, ...command };
 }
@@ -465,7 +519,7 @@ export function quantity(value: unknown, label: string): Quantity {
   keys(input, ["value", "unit"], label);
   const result: Quantity = {
     value: finiteNumber(input.value, `${label}.value`, 0.000001),
-    unit: enumValue(input.unit, `${label}.unit`, MCP_QUANTITY_UNITS),
+    unit: quantityUnit(input.unit, `${label}.unit`),
   };
   return result;
 }
@@ -498,7 +552,7 @@ export function evidence(value: unknown, label: string): EvidenceSummary {
   const input = record(value, label);
   keys(input, ["state", "source", "sourceId", "recordedAt", "note"], label);
   const result: EvidenceSummary = {
-    state: enumValue(input.state, `${label}.state`, MCP_EVIDENCE_STATES),
+    state: evidenceState(input.state, `${label}.state`),
     source: stringValue(input.source, `${label}.source`, { max: 256 }),
     ...(input.sourceId === undefined ? {} : { sourceId: optionalString(input.sourceId, `${label}.sourceId`, 500) }),
     recordedAt: stringValue(input.recordedAt, `${label}.recordedAt`, { max: 64 }),
@@ -555,7 +609,6 @@ function tagList(value: unknown, label: string, max = 50): readonly string[] | u
   return result;
 }
 
-const INVENTORY_BULK_CONDITIONS = ["new", "good", "worn", "needs_repair", "unknown"] as const satisfies readonly InventoryBulkCondition[];
 
 function inventoryBulkTags(value: unknown, label: string): NonNullable<InventoryBulkUpdateInput["changes"]["tags"]> {
   const input = record(value, label);
@@ -590,7 +643,7 @@ export function inventoryList(value: unknown): InventoryListInput {
   const result: InventoryListInput = {
     ...page,
     query: optionalString(input.query, "arguments.query", 200),
-    category: optionalString(input.category, "arguments.category", 128),
+    category: input.category === undefined ? undefined : inventoryKind(input.category, "arguments.category"),
     categoryNodeId: input.categoryNodeId === undefined ? undefined : categoryId(input.categoryNodeId, "arguments.categoryNodeId"),
     unassigned: optionalBoolean(input.unassigned, "arguments.unassigned"),
     availability: optionalEnum(input.availability, "arguments.availability", ["confirmed", "inspect_first", "ordered_unverified", "delivered_uncounted", "allocated", "depleted", "retired"] satisfies readonly Availability[]),
@@ -602,10 +655,10 @@ export function inventoryList(value: unknown): InventoryListInput {
 
 export function inventoryCreate(value: unknown): InventoryCreateInput {
   const input = record(value, "arguments");
-  keys(input, ["name", "category", "categoryNodeId", "quantity", "evidence", "description", "manufacturer", "model", "sku", "dimensions", "condition", "location", "links"], "arguments");
+  keys(input, ["name", "category", "categoryNodeId", "quantity", "evidence", "description", "manufacturer", "model", "sku", "dimensions", "condition", "location", "tags", "links"], "arguments");
   const result: InventoryCreateInput = {
     name: stringValue(input.name, "arguments.name", { max: 256 }),
-    category: stringValue(input.category, "arguments.category", { max: 128 }),
+    category: inventoryKind(input.category, "arguments.category"),
     quantity: quantity(input.quantity, "arguments.quantity"),
     evidence: evidence(input.evidence, "arguments.evidence"),
   };
@@ -615,7 +668,9 @@ export function inventoryCreate(value: unknown): InventoryCreateInput {
   textFields(input, "arguments", text);
   Object.assign(result, text);
   result.dimensions = optionalDimensions(input.dimensions, "arguments.dimensions");
-  result.condition = optionalEnum(input.condition, "arguments.condition", ["new", "used", "opened", "unknown"] as const);
+  result.condition = optionalCondition(input.condition, "arguments.condition");
+  const tags = tagList(input.tags, "arguments.tags");
+  if (tags !== undefined) result.tags = tags;
   result.links = links(input.links, "arguments.links");
   return result;
 }
@@ -632,8 +687,9 @@ export function inventoryWithProductProfileCreate(value: unknown): InventoryWith
 export function inventoryUpdate(value: unknown): InventoryUpdateInput {
   const input = record(value, "arguments");
   keys(input, ["itemId", "expectedVersion", "name", "category", "categoryNodeId", "description", "manufacturer", "model", "sku", "dimensions", "condition", "location", "tags", "links"], "arguments");
-  const result: InventoryUpdateInput = { itemId: id(input.itemId, "arguments.itemId") };
-  result.expectedVersion = optionalInteger(input.expectedVersion, "arguments.expectedVersion");
+  const result: InventoryUpdateInput = { itemId: id(input.itemId, "arguments.itemId"), expectedVersion: requiredVersion(input.expectedVersion) };
+  if (input.name !== undefined) result.name = stringValue(input.name, "arguments.name", { max: 256 });
+  if (input.category !== undefined) result.category = inventoryKind(input.category, "arguments.category");
   result.categoryNodeId = input.categoryNodeId === null || input.categoryNodeId === undefined
     ? input.categoryNodeId
     : categoryId(input.categoryNodeId, "arguments.categoryNodeId");
@@ -641,7 +697,7 @@ export function inventoryUpdate(value: unknown): InventoryUpdateInput {
   textFields(input, "arguments", text);
   Object.assign(result, text);
   result.dimensions = optionalDimensions(input.dimensions, "arguments.dimensions");
-  result.condition = optionalEnum(input.condition, "arguments.condition", ["new", "used", "opened", "unknown"] as const);
+  result.condition = optionalCondition(input.condition, "arguments.condition");
   result.tags = tagList(input.tags, "arguments.tags");
   if (input.links !== undefined) result.links = links(input.links, "arguments.links");
   return result;
@@ -667,7 +723,7 @@ export function inventoryBulkUpdate(value: unknown): InventoryBulkUpdateInput {
   keys(changes, ["location", "condition", "tags"], "arguments.changes");
   const location = changes.location === undefined ? undefined : stringValue(changes.location, "arguments.changes.location", { max: 256 }).trim();
   if (location !== undefined && location.length === 0) fail("arguments.changes.location must not be blank.");
-  const condition = optionalEnum(changes.condition, "arguments.changes.condition", INVENTORY_BULK_CONDITIONS);
+  const condition = optionalCondition(changes.condition, "arguments.changes.condition") satisfies InventoryBulkCondition | undefined;
   const tags = changes.tags === undefined ? undefined : inventoryBulkTags(changes.tags, "arguments.changes.tags");
   if (location === undefined && condition === undefined && tags === undefined) fail("arguments.changes must contain at least one metadata change.");
   return {
@@ -781,8 +837,7 @@ export function projectWithInitialRevisionCreate(value: unknown): ProjectWithIni
 export function projectUpdate(value: unknown): ProjectUpdateInput {
   const input = record(value, "arguments");
   keys(input, ["projectId", "expectedVersion", "name", "description", "status"], "arguments");
-  const result: ProjectUpdateInput = { projectId: id(input.projectId, "arguments.projectId") };
-  result.expectedVersion = optionalInteger(input.expectedVersion, "arguments.expectedVersion");
+  const result: ProjectUpdateInput = { projectId: id(input.projectId, "arguments.projectId"), expectedVersion: requiredVersion(input.expectedVersion) };
   result.name = optionalString(input.name, "arguments.name", 240);
   result.description = optionalString(input.description, "arguments.description");
   result.status = optionalEnum(input.status, "arguments.status", ["idea", "planned", "ready", "building", "validating", "complete", "archived"] as const);
@@ -927,7 +982,7 @@ export function bomLineCreate(value: unknown): BomLineCreateInput {
     projectRevisionId: id(input.projectRevisionId, "arguments.projectRevisionId"),
     description: stringValue(input.description, "arguments.description", { max: 512 }),
     quantity: finiteNumber(input.quantity, "arguments.quantity", 0.000001),
-    unit: enumValue(input.unit, "arguments.unit", MCP_QUANTITY_UNITS),
+    unit: quantityUnit(input.unit, "arguments.unit"),
     requirement: optionalEnum(input.requirement, "arguments.requirement", ["required", "optional"] as const),
     role: optionalNullableEnum(input.role, "arguments.role", ["consumed", "reusable"] as const),
   };
@@ -941,11 +996,10 @@ export function bomLineCreate(value: unknown): BomLineCreateInput {
 export function bomLineUpdate(value: unknown): BomLineUpdateInput {
   const input = record(value, "arguments");
   keys(input, ["bomLineId", "expectedVersion", "description", "quantity", "unit", "requirement", "role", "itemId", "alternatives", "compatibleItemIds", "constraints", "notes"], "arguments");
-  const result: BomLineUpdateInput = { bomLineId: id(input.bomLineId, "arguments.bomLineId") };
-  result.expectedVersion = optionalInteger(input.expectedVersion, "arguments.expectedVersion");
+  const result: BomLineUpdateInput = { bomLineId: id(input.bomLineId, "arguments.bomLineId"), expectedVersion: requiredVersion(input.expectedVersion) };
   result.description = optionalString(input.description, "arguments.description", 512);
   result.quantity = input.quantity === undefined ? undefined : finiteNumber(input.quantity, "arguments.quantity", 0.000001);
-  result.unit = optionalEnum(input.unit, "arguments.unit", MCP_QUANTITY_UNITS);
+  result.unit = input.unit === undefined ? undefined : quantityUnit(input.unit, "arguments.unit");
   result.requirement = optionalEnum(input.requirement, "arguments.requirement", ["required", "optional"] as const);
   result.role = optionalNullableEnum(input.role, "arguments.role", ["consumed", "reusable"] as const);
   result.itemId = input.itemId === null ? null : optionalId(input.itemId, "arguments.itemId");
@@ -957,7 +1011,10 @@ export function bomLineUpdate(value: unknown): BomLineUpdateInput {
 
 export function bomEvaluation(value: unknown): BomEvaluationInput {
   const input = record(value, "arguments");
-  keys(input, ["projectRevisionId"], "arguments");
+  keys(input, ["projectRevisionId", "limit", "cursor"], "arguments");
+  // Line paging is applied by the adapter after whole-revision evaluation.
+  if (input.limit !== undefined) integer(input.limit, "arguments.limit", 1, 100);
+  if (input.cursor !== undefined) stringValue(input.cursor, "arguments.cursor", { max: 20 });
   return { projectRevisionId: id(input.projectRevisionId, "arguments.projectRevisionId") };
 }
 
@@ -990,7 +1047,7 @@ export function releaseReservation(value: unknown): ReleaseReservationInput {
   keys(input, ["reservationId", "expectedVersion"], "arguments");
   return {
     reservationId: id(input.reservationId, "arguments.reservationId"),
-    expectedVersion: optionalInteger(input.expectedVersion, "arguments.expectedVersion"),
+    expectedVersion: requiredVersion(input.expectedVersion),
   };
 }
 
@@ -1108,7 +1165,7 @@ export function artifactMetadata(value: unknown): { artifactId: string; revision
 export function retireArtifact(value: unknown): RetireArtifactInput {
   const input = record(value, "arguments");
   keys(input, ["artifactId", "expectedVersion"], "arguments");
-  return { artifactId: id(input.artifactId, "arguments.artifactId"), expectedVersion: optionalInteger(input.expectedVersion, "arguments.expectedVersion") };
+  return { artifactId: id(input.artifactId, "arguments.artifactId"), expectedVersion: requiredVersion(input.expectedVersion) };
 }
 
 export function offerList(value: unknown): OfferListInput {
@@ -1143,9 +1200,12 @@ export function recordOffer(value: unknown): RecordOfferSnapshotInput {
 
 export function contextRefresh(value: unknown): ContextRefreshInput {
   const input = record(value ?? {}, "arguments");
+  // maxAgeSeconds is accepted for older agents but ignored: the snapshot is
+  // always read live and carries no invented expiry.
   keys(input, ["projectId", "includeInventory", "maxAgeSeconds"], "arguments");
   if (input.includeInventory !== undefined && typeof input.includeInventory !== "boolean") fail("arguments.includeInventory must be a boolean.");
-  return { projectId: optionalId(input.projectId, "arguments.projectId"), includeInventory: input.includeInventory as boolean | undefined, maxAgeSeconds: input.maxAgeSeconds === undefined ? undefined : integer(input.maxAgeSeconds, "arguments.maxAgeSeconds", 0, 86_400) };
+  if (input.maxAgeSeconds !== undefined) integer(input.maxAgeSeconds, "arguments.maxAgeSeconds", 0, 86_400);
+  return { projectId: optionalId(input.projectId, "arguments.projectId"), includeInventory: input.includeInventory as boolean | undefined };
 }
 
 export function assertScope(scopes: readonly Scope[], required: Scope): void {

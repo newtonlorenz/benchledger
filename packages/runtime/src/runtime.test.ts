@@ -964,6 +964,91 @@ describe("production runtime mappings", () => {
     await expect(runtime.ports.inventory.getItem("board-1")).resolves.toMatchObject({ quantity: 2, availableQuantity: 2 });
   });
 
+  it("never drops a stock movement when an idempotency key is reused on another item or shape", async () => {
+    const runtime = await makeRuntime();
+    for (const id of ["board-key-a", "board-key-b"]) {
+      await runtime.ports.inventory.createItem({ id, name: id, kind: "electronic", quantity: 0, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
+    }
+    const receipt = (itemId: string, quantity: number, actor = "test-agent") => runtime.ports.inventory.recordStockEvent({ itemId, type: "receipt", quantity, unit: "each", idempotencyKey: "shared-receipt-key" }, context({ actor }));
+    const first = await receipt("board-key-a", 2);
+    const other = await receipt("board-key-b", 5);
+    expect(other.event.id).not.toBe(first.event.id);
+    await expect(runtime.ports.inventory.getItem("board-key-b")).resolves.toMatchObject({ quantity: 5, availableQuantity: 5 });
+    await expect(receipt("board-key-a", 3)).rejects.toMatchObject({ code: "idempotency_conflict" });
+    await expect(receipt("board-key-a", 2, "other-actor")).rejects.toMatchObject({ code: "idempotency_conflict" });
+    await expect(receipt("board-key-a", 2)).resolves.toMatchObject({ event: { id: first.event.id } });
+    await expect(runtime.ports.inventory.getItem("board-key-a")).resolves.toMatchObject({ quantity: 2, availableQuantity: 2 });
+  });
+
+  it("replays a legacy raw-key stock event instead of duplicating it", async () => {
+    const runtime = await makeRuntime();
+    await runtime.ports.inventory.createItem({ id: "board-legacy", name: "Legacy board", kind: "electronic", quantity: 0, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
+    runtime.database.run(
+      "INSERT INTO stock_events (id, item_id, kind, semantics, quantity, unit, reason, actor_json, source, evidence_json, correlation_id, idempotency_key, occurred_at, created_at) VALUES (?, ?, 'receipt', 'delta', 4, 'piece', 'legacy', ?, 'api', NULL, NULL, ?, ?, ?)",
+      ["legacy-receipt", "board-legacy", JSON.stringify({ type: "human", id: "test-agent" }), "legacy-raw-key", new Date().toISOString(), new Date().toISOString()]
+    );
+    const replay = await runtime.ports.inventory.recordStockEvent({ itemId: "board-legacy", type: "receipt", quantity: 4, unit: "each", idempotencyKey: "legacy-raw-key" }, context());
+    expect(replay.event.id).toBe("legacy-receipt");
+    await expect(runtime.ports.inventory.getItem("board-legacy")).resolves.toMatchObject({ quantity: 4 });
+  });
+
+  it("records usage for each actor and reservation even when idempotency keys collide", async () => {
+    const runtime = await makeRuntime();
+    const project = await runtime.ports.projects.createProject({ id: "project-usage-key", name: "Usage keys", status: "planned" }, context());
+    const revision = await runtime.ports.projects.createProjectRevision(project.id, { id: "revision-usage-key", name: "Initial", status: "concept" }, context());
+    const reservations: Array<{ readonly id: string; readonly itemId: string }> = [];
+    for (const id of ["usage-a", "usage-b", "usage-c"]) {
+      const itemId = id === "usage-c" ? "usage-a" : id;
+      if (id !== "usage-c") await runtime.ports.inventory.createItem({ id: itemId, name: itemId, kind: "electronic", quantity: 2, unit: "each", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
+      const line = await runtime.ports.projects.createBomLine(revision.id, { id: `bom-${id}`, name: itemId, role: "consumed", itemId, requiredQuantity: 1, unit: "each", optional: false, alternatives: [], constraints: {} }, context());
+      reservations.push(await runtime.ports.projects.createReservation(revision.id, { id: `reservation-${id}`, lineId: line.id, itemId, quantity: 1 }, context()));
+    }
+    const use = (index: number, actor: string) => {
+      const reservation = reservations[index]!;
+      return runtime.ports.projects.recordUsage({ reservationId: reservation.id, projectId: project.id, itemId: reservation.itemId, quantity: 1, unit: "each" }, context({ actor, idempotencyKey: "shared-usage-key" }));
+    };
+    await use(0, "actor-a");
+    await use(1, "actor-b");
+    await expect(runtime.ports.inventory.getItem("usage-b")).resolves.toMatchObject({ quantity: 1 });
+    // Same actor, item and key for a different reservation must not mark the
+    // reservation consumed without recording its consumption.
+    await expect(use(2, "actor-a")).rejects.toMatchObject({ code: "idempotency_conflict" });
+    await expect(runtime.ports.projects.listReservations(revision.id)).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ id: "reservation-usage-c", status: "active" })]));
+    await expect(runtime.ports.inventory.getItem("usage-a")).resolves.toMatchObject({ quantity: 1, availableQuantity: 0 });
+  });
+
+  it("reserves decimal quantities up to the requirement despite binary rounding", async () => {
+    const runtime = await makeRuntime();
+    const service = new ApplicationService(runtime.ports);
+    await runtime.ports.inventory.createItem({ id: "decimal-filament", name: "Decimal filament", kind: "filament", quantity: 1, unit: "gram", tags: [], links: [], evidence: { state: "physically_counted" } }, context());
+    const project = await runtime.ports.projects.createProject({ id: "decimal-project", name: "Decimal reservations", status: "planned" }, context());
+    const revision = await runtime.ports.projects.createProjectRevision(project.id, { id: "decimal-revision", name: "Initial", status: "concept" }, context());
+    const line = await runtime.ports.projects.createBomLine(revision.id, { id: "decimal-line", name: "Decimal filament", role: "consumed", itemId: "decimal-filament", requiredQuantity: 0.3, unit: "gram", optional: false, alternatives: [], constraints: {} }, context());
+    await service.createReservation(revision.id, { lineId: line.id, itemId: "decimal-filament", quantity: 0.1 }, context());
+    await expect(service.createReservation(revision.id, { lineId: line.id, itemId: "decimal-filament", quantity: 0.2 }, context())).resolves.toMatchObject({ data: { quantity: 0.2 } });
+    await expect(service.createReservation(revision.id, { lineId: line.id, itemId: "decimal-filament", quantity: 0.01 }, context())).rejects.toMatchObject({ code: "conflict" });
+    const fresh = await runtime.ports.projects.createBomLine(revision.id, { id: "decimal-line-2", name: "Decimal filament", role: "consumed", itemId: "decimal-filament", requiredQuantity: 0.25, unit: "gram", optional: false, alternatives: [], constraints: {} }, context());
+    await expect(runtime.ports.projects.createReservation(revision.id, { id: "decimal-over", lineId: fresh.id, itemId: "decimal-filament", quantity: 0.5 }, context())).rejects.toMatchObject({ code: "conflict" });
+  });
+
+  it("lists inventory from batched reads identical to per-item reads", async () => {
+    const runtime = await makeRuntime();
+    const categories = await runtime.ports.inventoryCategories!.listCategories({ limit: 1 } as never);
+    const categoryNodeId = categories.data[0]?.id;
+    await runtime.ports.inventory.createItem({ id: "batch-a", name: "Batch A", kind: "electronic", quantity: 4, availableQuantity: 3, unit: "each", tags: ["batch"], links: [], evidence: { state: "physically_counted" }, ...(categoryNodeId === undefined ? {} : { categoryNodeId }) }, context());
+    await runtime.ports.inventory.createItem({ id: "batch-b", name: "Batch B", kind: "filament", quantity: 250, unit: "gram", tags: ["batch"], links: [], evidence: { state: "delivered_uncounted" } }, context());
+    await runtime.ports.inventory.createItem({ id: "batch-c", name: "Batch C", kind: "tool", quantity: 1, unit: "each", tags: ["batch"], links: [], evidence: { state: "physically_counted" } }, context());
+    await runtime.ports.inventory.recordStockEvent({ itemId: "batch-a", type: "receipt", quantity: 2, unit: "each" }, context());
+    await runtime.ports.inventory.retireItem("batch-c", 1, context());
+    const listed = await runtime.ports.inventory.listItems({ q: "batch", limit: 10 });
+    expect(listed.data.map((item) => item.id)).toEqual(["batch-a", "batch-b"]);
+    for (const item of listed.data) expect(item).toEqual(await runtime.ports.inventory.getItem(item.id));
+    expect(listed.data[0]).toMatchObject({ quantity: 6, availableQuantity: 5, version: 2, ...(categoryNodeId === undefined ? {} : { categoryNodeId }) });
+    const withRetired = await runtime.ports.inventory.listItems({ q: "batch", limit: 10, includeRetired: true });
+    expect(withRetired.data.map((item) => item.id)).toEqual(["batch-a", "batch-b", "batch-c"]);
+    expect(withRetired.data[2]).toMatchObject({ retiredAt: expect.any(String), version: 2 });
+  });
+
   it("keeps reservation allocation transactional when a reservation is rejected", async () => {
     const runtime = await makeRuntime();
     await runtime.ports.inventory.createItem({
@@ -1204,7 +1289,7 @@ describe("production runtime mappings", () => {
       exclusive: <T>(operation: () => T | PromiseLike<T>): Promise<T> => Promise.resolve(operation())
     });
 
-    await expect(adapter.beginUpload({ projectId: "adapter-begin-project", role: "step", filename: "part.step", mediaType: "model/step", byteSize: 1, sha256: "a".repeat(64) }, context())).rejects.toMatchObject({ code: "integrity_error" });
+    await expect(adapter.beginUpload({ projectId: "adapter-begin-project", role: "step", filename: "part.step", mediaType: "model/step", byteSize: 1, sha256: "a".repeat(64) }, context())).rejects.toMatchObject({ code: "internal", cause: expect.objectContaining({ message: "injected metadata persistence failure" }) });
     expect(metadataWrites).toBe(1);
     const orphans = await store.listOrphanUploads();
     expect(orphans).toMatchObject({ ok: true, value: [] });
@@ -1229,7 +1314,7 @@ describe("production runtime mappings", () => {
       originalSetMetadata(entityType, entityId, payload);
     };
     try {
-      await expect(adapter.finalizeUpload(session.id, context())).rejects.toMatchObject({ code: "integrity_error" });
+      await expect(adapter.finalizeUpload(session.id, context())).rejects.toMatchObject({ code: "internal", cause: expect.objectContaining({ message: "injected artifact metadata projection failure" }) });
     } finally {
       state.setMetadata = originalSetMetadata;
     }
@@ -1264,7 +1349,7 @@ describe("production runtime mappings", () => {
       originalSetInitialVersion(entityType, entityId);
     };
     try {
-      await expect(adapter.finalizeUpload(session.id, context())).rejects.toMatchObject({ code: "integrity_error" });
+      await expect(adapter.finalizeUpload(session.id, context())).rejects.toMatchObject({ code: "internal", cause: expect.objectContaining({ message: "injected artifact version projection failure" }) });
     } finally {
       state.setInitialVersion = originalSetInitialVersion;
     }
@@ -1303,7 +1388,7 @@ describe("production runtime mappings", () => {
       return originalRollback(...args);
     };
     try {
-      await expect(adapter.finalizeUpload(session.id, context())).rejects.toMatchObject({ code: "integrity_error" });
+      await expect(adapter.finalizeUpload(session.id, context())).rejects.toMatchObject({ code: "internal", cause: expect.objectContaining({ message: "injected replay metadata projection failure" }) });
     } finally {
       state.setMetadata = originalSetMetadata;
       runtime.artifacts.rollbackFinalization = originalRollback;

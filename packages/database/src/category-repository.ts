@@ -203,6 +203,15 @@ export class InventoryCategoryRepository {
     return { ...current, archived: true, updatedAt, version: current.version + 1 };
   }
 
+  /** Every item's assigned category node, for batch inventory reads. */
+  public listItemCategoryNodes(): ReadonlyMap<string, string> {
+    const assignments = new Map<string, string>();
+    for (const row of this.database.all<SqliteRow>("SELECT item_id, category_node_id FROM inventory_item_category_assignments", [])) {
+      if (typeof row.item_id === "string" && typeof row.category_node_id === "string") assignments.set(row.item_id, row.category_node_id);
+    }
+    return assignments;
+  }
+
   public getItemCategoryNode(itemId: string): string | undefined {
     const row = this.database.get<SqliteRow>("SELECT category_node_id FROM inventory_item_category_assignments WHERE item_id = ?", [itemId]);
     return typeof row?.category_node_id === "string" ? row.category_node_id : undefined;

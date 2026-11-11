@@ -21,8 +21,9 @@ sourced shopping list for genuine gaps.
 - Restrained product color strategy.
 - Physical scene: a maker reviews a build at a well-lit workbench during focused
   daytime work, moving between a laptop, printer, components, and measuring tools.
-- Bright pure-white/cool-neutral surface, graphite ink, moss-green primary,
-  mineral slate-teal secondary, and safety amber/red reserved for meaningful state.
+- Bright pure-white/cool-neutral surface, graphite ink and navigation, rust-orange
+  primary, with moss green, slate blue, safety amber and red reserved for
+  meaningful state (see `docs/brand.md` and `docs/ui-design.md`).
 - Linear-like hierarchy and restraint, the project context of Bambu Studio, and
   the exact scannability of a strong engineering parts catalog—without imitating
   any product's branding or component system.

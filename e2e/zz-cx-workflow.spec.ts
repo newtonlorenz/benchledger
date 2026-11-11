@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { openProjectIndex } from "./project-nav";
 
 async function startProject(page: Page, name: string) {
   await page.goto("/");
@@ -6,7 +7,7 @@ async function startProject(page: Page, name: string) {
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Workspace overview", exact: true })).toBeVisible();
   if ((page.viewportSize()?.width ?? 1440) < 801) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
-  await page.getByRole("button", { name: /^Projects/u }).click();
+  await openProjectIndex(page);
   await page.getByRole("button", { name: "New project", exact: true }).click();
   await page.getByLabel("Project name", { exact: true }).fill(name);
   await page.getByLabel("Project goal", { exact: true }).fill("Synthetic maker workflow acceptance.");
@@ -44,16 +45,22 @@ for (const width of [1440, 320]) test(`maker can correct, remove, restore and ha
   await page.getByText("Removed requirements", { exact: true }).click();
   await page.getByRole("button", { name: "Restore requirement M3 enclosure screws", exact: true }).click();
   await expect(page.locator(".bom-row")).toHaveCount(1);
-  await page.getByRole("button", { name: "Edit project", exact: true }).click();
+  // Secondary project actions live in the header's overflow menu.
+  const more = page.getByRole("button", { name: "More project actions", exact: true });
+  await more.click();
+  await page.getByRole("menuitem", { name: "Edit project", exact: true }).click();
   await page.getByLabel("Project name", { exact: true }).fill(`${name} revised`);
   await page.getByLabel("Project goal and brief").fill("Build and test a reusable enclosure fixture.");
   await page.getByLabel("Project stage", { exact: true }).selectOption("building");
   await page.getByRole("button", { name: "Save project", exact: true }).click();
   await expect(page.getByRole("heading", { name: `${name} revised`, exact: true })).toBeVisible();
   await page.reload();
-  await expect(page.locator(".project-stage")).toContainText("Building");
+  await expect(page.locator(".project-header-meta")).toContainText("Stage: Building");
   await expect(page.locator(".bom-row")).toHaveCount(1);
-  await page.getByText("Export project", { exact: true }).click();
+  await more.click();
+  await page.getByRole("menuitem", { name: "Export summary", exact: true }).click();
+  const exportDialog = page.getByRole("dialog", { name: "Export project summary" });
+  await expect(exportDialog).toContainText("Review before sharing");
   const jsonEvent = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download project brief JSON", exact: true }).click();
   const jsonDownload = await jsonEvent;

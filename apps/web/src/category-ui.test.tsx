@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { CategoryManager, CategorySelection, categoryTree, categoryDisplayLabel, inventoryCategoryFilterOptions } from "./category-ui";
+import { CategoryManager, CategorySelection, DEFAULT_MANAGED_INVENTORY_CATEGORIES, categoryIcon, categoryTree, categoryDisplayLabel, inventoryCategoryFilterOptions } from "./category-ui";
 import type { ManagedInventoryCategory } from "./category-ui";
 
 const categories: ManagedInventoryCategory[] = [
@@ -18,6 +18,15 @@ describe("managed category UI", () => {
       ["category-tools", []]
     ]);
     expect(categoryDisplayLabel(categories[1]!, categories[0])).toBe("Printers / Printer parts");
+  });
+
+  it("gives every starter category a distinct icon and lets custom children inherit", () => {
+    const icons = DEFAULT_MANAGED_INVENTORY_CATEGORIES.map((category) => categoryIcon(category));
+    expect(new Set(icons).size).toBe(DEFAULT_MANAGED_INVENTORY_CATEGORIES.length);
+    const custom = { ...categories[1]!, id: "custom-1", name: "Hotend spares" };
+    expect(categoryIcon(custom, categories[0])).toBe("printer");
+    expect(categoryIcon({ ...custom, id: "custom-2", name: "Electronics" })).toBe("circuit");
+    expect(categoryIcon({ ...custom, id: "custom-3", name: "Odds" })).toBe("tag");
   });
 
   it("builds inventory filter options from managed category ids and tree labels", () => {
@@ -40,7 +49,10 @@ describe("managed category UI", () => {
     expect(markup).toContain("Manage inventory categories");
     expect(markup).toContain("New category");
     expect(markup).toContain('aria-label="Rename Printers"');
-    expect(markup).toContain("Order");
+    expect(markup).toContain("Rename or reorder");
+    expect(markup).toContain("Main category · 1 subcategory");
+    expect(markup).toContain("Subcategory of Printers");
+    expect(markup).not.toContain("Top-level category ·");
     expect(markup).not.toContain("Move Printers up");
     expect(markup).toContain('aria-label="Archive Printers"');
     expect(markup).toContain("Add subcategory");

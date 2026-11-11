@@ -19,11 +19,20 @@ describe("project file previews", () => {
     expect(html).not.toMatch(/<script|<img|javascript:|href="\/api/u);
     expect(html).toContain('rel="noopener noreferrer"');
   });
+  it("renders GitHub-flavoured tables in a scrollable region and keeps raw HTML inert", () => {
+    const html = renderToStaticMarkup(<MarkdownPreview text={"| Part | Qty |\n| --- | ---: |\n| M3 insert | 4 |\n| <b>x</b> | ~~2~~ |\n\n- [x] Printed\n- [ ] Assembled"} />);
+    expect(html).toMatch(/<div class="markdown-table-scroll"[^>]*><table>/u);
+    expect(html).toContain("<th>Part</th>"); expect(html).toContain("<td>M3 insert</td>");
+    expect(html).toContain("<del>2</del>"); expect(html).toContain('type="checkbox"');
+    expect(html).not.toContain("<b>");
+  });
   it("uses verified, bounded bytes and supports Escape", async () => {
     vi.mocked(fetchArtifactDownload).mockResolvedValue({ text: async () => "# Assembly\n\nRead this first." } as Blob);
     const close = vi.fn(); const view = render(<ArtifactPreview file={file} onClose={close} />);
     expect(screen.getByRole("status").textContent).toContain("Loading");
     await screen.findByRole("heading", { name: "Assembly" });
+    // Portalled to <body> so the overlay is not trapped under the sticky sidebar's stacking order.
+    expect(view.container.querySelector(".artifact-preview-backdrop")).toBeNull(); expect(document.body.querySelector(":scope > .artifact-preview-backdrop")).toBeTruthy();
     const options = vi.mocked(fetchArtifactDownload).mock.calls[0]![2]!;
     expect(options.maxBytes).toBe(1024 * 1024);
     fireEvent.keyDown(document, { key: "Escape" }); expect(close).toHaveBeenCalledOnce();

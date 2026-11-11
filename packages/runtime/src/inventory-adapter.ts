@@ -1,5 +1,5 @@
 import { matchesInventorySearch } from "@benchledger/domain/inventory-search";
-import { createId, createStockEvent, DomainError } from "@benchledger/domain";
+import { assertStockCommandReplay, createId, createStockEvent, DomainError } from "@benchledger/domain";
 import type { CommissionInventoryItem, InventoryItem as ApiInventoryItem, CreateInventoryItem, StockEvent as ApiStockEvent, StockEventInput } from "@benchledger/api-contract";
 import type { InventoryItem, StockEvent } from "@benchledger/domain";
 import { ApplicationError, applyInventoryBulkChanges, normalizeInventoryBulkChanges, parseInventoryCursor } from "@benchledger/application";
@@ -14,6 +14,11 @@ import {
 import { attempt, clone, nowIso, page } from "./utils.js";
 
 const ENTITY = "inventory_item";
+
+/** Scope a caller idempotency key to one item so reuse on another item can never replay the wrong movement. */
+export function stockEventIdempotencyKey(itemId: string, key: string): string {
+  return `stock-event:${encodeURIComponent(itemId)}:${key}`;
+}
 
 function ensureDescriptiveUpdate(input: UpdateInventoryInput): void {
   const controlledField = Object.keys(input).find((field) => ["quantity", "availableQuantity", "evidence", "unit"].includes(field));
@@ -96,8 +101,17 @@ export class ProductionInventoryAdapter implements InventoryPort {
   async listItems(options: InventoryListOptions): Promise<Page<ApiInventoryItem>> {
     return this.unitOfWork.exclusive(() => attempt(async () => {
       const offset = parseInventoryCursor(options.cursor);
-      const records = this.repository.list({ includeRetired: true });
-      const items = records.map((item) => this.toApi(item)).filter((item) => {
+      const records = this.repository.list({ includeRetired: options.includeRetired === true });
+      // Batch the per-item reads (category, version, ledger) instead of N+1 queries.
+      const categories = this.categoryAssignments?.listItemCategoryNodes();
+      const versions = this.state.getVersions(ENTITY);
+      const ledgers = this.repository.listStockEventsByItem();
+      const items = records.map((item) => {
+        const assigned = categories?.get(item.id);
+        const withCategory = assigned === undefined ? item : { ...item, categoryNodeId: assigned };
+        const balance = this.repository.balanceOf(item, ledgers.get(item.id) ?? []);
+        return apiInventoryFromNative(withCategory, balance, versions.get(item.id) ?? 1);
+      }).filter((item) => {
         if (!options.includeRetired && item.retiredAt !== undefined) return false;
         if (options.kind !== undefined && item.kind !== options.kind) return false;
         if (options.evidence !== undefined && item.evidence.state !== options.evidence) return false;
@@ -106,7 +120,7 @@ export class ProductionInventoryAdapter implements InventoryPort {
         if (options.unassigned === true && item.categoryNodeId !== undefined) return false;
         return isSearchMatch(item, options.q);
       }).sort(compareInventoryItems);
-      const data = items.slice(offset, offset + options.limit);
+      const data = items.slice(offset, offset + options.limit).map((item) => clone(item));
       const nextOffset = offset + data.length < items.length ? offset + data.length : undefined;
       return {
         data,
@@ -155,12 +169,12 @@ export class ProductionInventoryAdapter implements InventoryPort {
     await this.unitOfWork.exclusive(() => attempt(() => {
       const current = this.repository.get(itemId);
       if (current === undefined) return;
-      if (this.state.getVersion(ENTITY, itemId) !== 1) throw new Error("created inventory item is no longer at version 1");
+      if (this.state.getVersion(ENTITY, itemId) !== 1) throw new DomainError("integrity_error", "created inventory item is no longer at version 1");
       this.database.transaction(() => {
         this.database.run("DELETE FROM stock_events WHERE item_id = ?", [itemId]);
         const result = this.database.run("DELETE FROM inventory_items WHERE id = ?", [itemId]) as { readonly changes?: number | bigint };
         const removed = typeof result.changes === "number" ? result.changes === 1 : typeof result.changes === "bigint" ? result.changes === 1n : this.repository.get(itemId) === undefined;
-        if (!removed) throw new Error("created inventory item compensation did not remove the item");
+        if (!removed) throw new DomainError("integrity_error", "created inventory item compensation did not remove the item");
       });
       this.state.deleteMetadata(ENTITY, itemId);
       this.state.deleteVersion(ENTITY, itemId);
@@ -353,11 +367,21 @@ export class ProductionInventoryAdapter implements InventoryPort {
       if (nativeItem === undefined || nativeItem.retiredAt !== undefined) throw new DomainError("inventory_not_found", `inventory item ${input.itemId} does not exist`);
       const expectedUnit = mapApiUnitToDomain(input.unit);
       if (nativeItem.unit !== expectedUnit) throw new DomainError("invalid_unit", `unit mismatch: item uses ${nativeItem.unit}, event uses ${expectedUnit}`);
-      const idempotencyKey = input.idempotencyKey ?? ctx.idempotencyKey;
+      const rawKey = input.idempotencyKey ?? ctx.idempotencyKey;
+      const idempotencyKey = rawKey === undefined ? undefined : stockEventIdempotencyKey(input.itemId, rawKey);
       const normalized: StockEventInput = idempotencyKey === undefined ? input : { ...input, idempotencyKey };
       return this.database.transaction(() => {
         const nextVersion = this.state.getVersion(ENTITY, input.itemId) + 1;
         const event = nativeStockEventFromApi(normalized, ctx, nativeItem.unit, nextVersion);
+        // Events stored before keys were item-scoped used the caller's raw
+        // key. Replay those for the same item and command; a raw key used on
+        // another item is a different command under the scoped key.
+        const legacy = rawKey === undefined ? undefined : this.repository.findStockEventByIdempotencyKey(rawKey);
+        if (legacy !== undefined && legacy.itemId === input.itemId) {
+          assertStockCommandReplay(legacy, event);
+          const version = this.state.getVersion(ENTITY, input.itemId);
+          return { event: this.toApiStockEvent(legacy, version), item: this.toApi(nativeItem, version) };
+        }
         const appended = this.repository.appendStockEvent(event);
         if (appended.inserted) this.state.setVersion(ENTITY, input.itemId, nextVersion);
         const current = this.repository.get(input.itemId);

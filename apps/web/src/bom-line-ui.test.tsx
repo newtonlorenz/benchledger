@@ -250,4 +250,15 @@ describe("BOM line version and expert context", () => {
       }),
     ).toBe("Physical item");
   });
+
+  it("offers Record use on each requirement, or explains why it is unavailable", () => {
+    const line: BomLineStatus = { line: { id: "line-insert", version: 1, label: "M3 inserts", required: 4, unit: "each" }, supplied: 4, remaining: 0, state: "ready", decision: "ready" };
+    const available = renderToStaticMarkup(<BomLineRow line={line} expert={false} onOpenItem={() => undefined} recordUse={{ available: true, onOpen: () => undefined }} />);
+    expect(available).toContain('aria-label="Record use for M3 inserts"');
+    expect(available).not.toMatch(/aria-label="Record use for M3 inserts"[^>]*disabled/u);
+    const unavailable = renderToStaticMarkup(<BomLineRow line={line} expert={false} onOpenItem={() => undefined} recordUse={{ available: false, reason: "Create a project revision before recording used stock.", onOpen: () => undefined }} />);
+    expect(unavailable).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Record use for M3 inserts"|<button[^>]*aria-label="Record use for M3 inserts"[^>]*disabled=""/u);
+    expect(unavailable).toContain("Create a project revision before recording used stock.");
+    expect(renderToStaticMarkup(<BomLineRow line={line} expert={false} onOpenItem={() => undefined} />)).not.toContain("Record use");
+  });
 });

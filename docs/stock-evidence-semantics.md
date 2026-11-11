@@ -17,9 +17,14 @@ overpromising.
 | `depleted` | Ledger says no usable amount remains | No | Receive/count new stock |
 | `retired` | Logical record is no longer active | No | Preserve history; create a replacement record if needed |
 
-The domain may expose additional source-specific evidence labels, but the MCP
-adapter maps them to the plain-language states above. It never upgrades an
-uncertain state simply because a BOM line mentions the same name.
+MCP outputs report the stored canonical evidence state exactly
+(`physically_counted`, `commissioned`, `delivered_uncounted`,
+`ordered_unverified`, `allocated`, `consumed`, `unknown`) alongside the derived
+availability above; legacy input labels (`physical_count`, `delivery`, `order`)
+are accepted, and non-observations (`measured`, `manufacturer`,
+`user_reported`, `inferred`) store `unknown`. Stock events report only the
+evidence they actually recorded. The adapter never upgrades an uncertain state
+simply because a BOM line mentions the same name.
 
 Every MCP inventory row keeps three quantities distinct: total on-hand,
 currently available, and currently allocated. When allocation is present it
@@ -63,7 +68,10 @@ An uncertain `delivered_uncounted` or `ordered_unverified` item can become
 `commissioned` only through the explicit commissioning command. The command
 requires a current version, an observed quantity, and commissioned provenance
 (source and observation time). It appends a count event that keeps the prior
-evidence in its audit payload; generic metadata PATCH cannot change evidence.
+evidence in its audit payload; generic metadata PATCH cannot change evidence,
+and a generic `count_correction` stock event adjusts already-counted stock but
+does not make uncertain stock counted. A confirmed inspection completion is the
+other supported path.
 
 ## BOM evaluation
 

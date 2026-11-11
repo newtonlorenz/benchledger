@@ -150,6 +150,8 @@ CREATE TABLE IF NOT EXISTS reservations (
 );
 
 CREATE INDEX IF NOT EXISTS reservations_item_idx ON reservations(item_id, status);
+CREATE INDEX IF NOT EXISTS reservations_revision_idx ON reservations(project_revision_id, bom_line_id, status);
+CREATE INDEX IF NOT EXISTS reservations_bom_line_idx ON reservations(bom_line_id, status);
 
 CREATE TABLE IF NOT EXISTS suppliers (
   id TEXT PRIMARY KEY NOT NULL,
@@ -190,6 +192,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 
 CREATE INDEX IF NOT EXISTS audit_log_entity_idx ON audit_log(entity_type, entity_id, occurred_at, id);
+CREATE INDEX IF NOT EXISTS audit_log_occurred_idx ON audit_log(occurred_at, id);
 
 `;
 

@@ -28,7 +28,6 @@ import type {
   ProjectWorkItem
 } from "./domain";
 import { filterArtifactsForScope } from "./artifact-scope";
-import { sha256 } from "@noble/hashes/sha2.js";
 import type { ArtifactUploadTarget } from "./artifact-scope";
 import type {
   ReconciliationEvidenceState,
@@ -159,7 +158,29 @@ export type ExactInventoryInput = {
   printer?: InventoryProductProfile["printer"];
 };
 
-export type ApiErrorKind = "unauthenticated" | "forbidden" | "csrf" | "offline" | "server" | "validation";
+export type ApiErrorKind = "unauthenticated" | "forbidden" | "csrf" | "offline" | "server" | "validation" | "conflict";
+
+/**
+ * How a 409 conflict should be explained. `stale` means the record changed
+ * elsewhere (reload), `idempotency` means a retry key was reused for a
+ * different request, and `rule` is a business-rule refusal whose server
+ * message is the useful explanation.
+ */
+export type ConflictReason = "stale" | "idempotency" | "rule";
+
+export function conflictReason(error: ApiError): ConflictReason | undefined {
+  if (error.kind !== "conflict") return undefined;
+  if (error.code === "idempotency_conflict") return "idempotency";
+  if (error.code === "version_conflict" || error.code === "precondition_required" || error.status === 428 || error.reason === "stale_basis" || error.reason === "version_conflict") return "stale";
+  if (/\b(version|changed (?:since|elsewhere)|stale|out of date|modified)\b/iu.test(error.message)) return "stale";
+  return "rule";
+}
+
+/** Default request timeouts. Uploads get a longer budget in their own path. */
+export const REQUEST_TIMEOUT_MS = 20_000;
+
+/** One field-level problem from a 400 `validation` response. */
+export interface ApiValidationIssue { readonly path: string; readonly message: string; readonly code?: string }
 
 export class ApiError extends Error {
   readonly kind: ApiErrorKind;
@@ -167,8 +188,10 @@ export class ApiError extends Error {
   readonly code: string | undefined;
   readonly correlationId: string | undefined;
   readonly demo: boolean | undefined;
+  readonly reason: string | undefined;
+  readonly issues: readonly ApiValidationIssue[] | undefined;
 
-  constructor(message: string, options: { kind: ApiErrorKind; status?: number; code?: string; correlationId?: string; demo?: boolean }) {
+  constructor(message: string, options: { kind: ApiErrorKind; status?: number; code?: string; correlationId?: string; demo?: boolean; reason?: string; issues?: readonly ApiValidationIssue[] }) {
     super(message);
     this.name = "ApiError";
     this.kind = options.kind;
@@ -176,6 +199,8 @@ export class ApiError extends Error {
     this.code = options.code;
     this.correlationId = options.correlationId;
     this.demo = options.demo;
+    this.reason = options.reason;
+    this.issues = options.issues;
   }
 }
 
@@ -259,7 +284,14 @@ export interface WorkspaceAdapter {
   logout(): Promise<void>;
   loadWorkspace(): Promise<WorkspaceSnapshot>;
   listArchivedProjects(): Promise<Project[]>;
-  refreshProjectReadiness(): Promise<Project[]>;
+  /**
+   * Re-evaluate stock readiness for active projects (optionally only the
+   * given ids). Never returns archived projects. A project whose refresh
+   * failed keeps its previous evaluation with `readinessUnavailable: true`.
+   */
+  refreshProjectReadiness(projectIds?: readonly string[]): Promise<Project[]>;
+  /** One inventory record by id (deep links to an item that is not loaded). */
+  getInventoryItem(id: string): Promise<InventoryItem>;
   listInventory(query: InventoryListQuery): Promise<InventoryPage>;
   bulkUpdateInventory(input: InventoryBulkUpdateInput): Promise<InventoryBulkUpdateResult>;
   recordCount(itemId: string, quantity: number): Promise<InventoryItem>;
@@ -298,7 +330,7 @@ export interface WorkspaceAdapter {
   updateBomLineRole(projectId: string, lineId: string, role: NonNullable<BomLine["role"]>, expectedVersion: number): Promise<Project>;
   /** Read one exact scope, or all project artifacts when scope is omitted. */
   listArtifacts(projectId: string, scope?: ArtifactUploadTarget): Promise<Artifact[]>;
-  uploadArtifact(projectId: string, file: File, role: string, target?: ArtifactUploadTarget): Promise<Project>;
+  uploadArtifact(projectId: string, file: File, role: string, target?: ArtifactUploadTarget, options?: UploadOptions): Promise<Project>;
   readReconciliation(projectId: string, revisionId: string): Promise<ReconciliationViewModel>;
   saveReconciliationDraft(projectId: string, revisionId: string, model: ReconciliationViewModel): Promise<ReconciliationViewModel>;
   commitReconciliation(projectId: string, revisionId: string, model: ReconciliationViewModel): Promise<ReconciliationViewModel>;
@@ -317,11 +349,32 @@ function cookieValue(name: string): string | undefined {
   return document.cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith(prefix))?.slice(prefix.length);
 }
 
+function validationIssues(value: unknown): ApiValidationIssue[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const issues = value.flatMap((entry): ApiValidationIssue[] => {
+    if (!entry || typeof entry !== "object") return [];
+    const record = entry as Record<string, unknown>;
+    if (typeof record.message !== "string" || !record.message.trim()) return [];
+    const path = typeof record.path === "string" ? record.path : Array.isArray(record.path) ? record.path.map(String).join(".") : "";
+    return [{ path, message: record.message, ...(typeof record.code === "string" ? { code: record.code } : {}) }];
+  });
+  return issues.length ? issues.slice(0, 20) : undefined;
+}
+
+/** A write must carry its version precondition; without one, ask for a reload. */
+function requireExpectedVersion(version: number | undefined, what: string): number {
+  if (version === undefined || !Number.isSafeInteger(version) || version <= 0) throw new ApiError(`Reload ${what} before changing it; its current version is not known.`, { kind: "conflict", status: 428, code: "precondition_required" });
+  return version;
+}
+
 function errorKind(status: number, code?: string): ApiErrorKind {
   if (status === 401) return "unauthenticated";
   if (status === 403 && code === "csrf") return "csrf";
   if (status === 403) return "forbidden";
-  if ([400, 409, 413, 415].includes(status)) return "validation";
+  // 428: the write was sent without a version precondition. Like a 409 the
+  // fix is to reload the record and try again.
+  if (status === 409 || status === 428) return "conflict";
+  if ([400, 413, 415].includes(status)) return "validation";
   return "server";
 }
 
@@ -330,6 +383,7 @@ async function request<T>(path: string, init: RequestInit = {}, csrfToken?: stri
   try {
     response = await fetch(`${apiRoot()}${path}`, {
       ...init,
+      signal: init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       credentials: "include",
       headers: {
         Accept: "application/json",
@@ -339,7 +393,8 @@ async function request<T>(path: string, init: RequestInit = {}, csrfToken?: stri
       }
     });
   } catch (error) {
-    throw new ApiError(error instanceof Error ? error.message : "The BenchLedger service could not be reached", { kind: "offline" });
+    const timedOut = error instanceof Error && error.name === "TimeoutError";
+    throw new ApiError(timedOut ? "BenchLedger did not respond in time" : error instanceof Error ? error.message : "The BenchLedger service could not be reached", { kind: "offline" });
   }
   let payload: unknown;
   try { payload = await response.json(); } catch { payload = undefined; }
@@ -348,7 +403,10 @@ async function request<T>(path: string, init: RequestInit = {}, csrfToken?: stri
     const detail = envelope && typeof envelope === "object" && "message" in envelope && typeof envelope.message === "string" ? envelope.message : `BenchLedger returned HTTP ${response.status}`;
     const code = envelope && typeof envelope === "object" && "code" in envelope && typeof envelope.code === "string" ? envelope.code : undefined;
     const correlationId = envelope && typeof envelope === "object" && "correlationId" in envelope && typeof envelope.correlationId === "string" ? envelope.correlationId : response.headers.get("x-correlation-id") ?? undefined;
-    throw new ApiError(detail, { kind: errorKind(response.status, code), status: response.status, ...(code ? { code } : {}), ...(correlationId ? { correlationId } : {}) });
+    const details = envelope && typeof envelope === "object" && "details" in envelope && envelope.details && typeof envelope.details === "object" ? envelope.details as Record<string, unknown> : undefined;
+    const reason = typeof details?.reason === "string" ? details.reason : undefined;
+    const issues = validationIssues(details?.issues);
+    throw new ApiError(detail, { kind: errorKind(response.status, code), status: response.status, ...(code ? { code } : {}), ...(correlationId ? { correlationId } : {}), ...(reason ? { reason } : {}), ...(issues ? { issues } : {}) });
   }
   return payload as T;
 }
@@ -968,7 +1026,7 @@ export function mapInventoryItem(item: ServerInventoryItem): InventoryItem {
       ...(item.evidence.note ? { note: item.evidence.note } : {})
     },
     version: item.version,
-    ...(item.evidence.observedAt ? { lastCounted: item.evidence.observedAt.slice(0, 10) } : {}), accent: mapAccent(category), serverUnit: item.unit,
+    ...(item.evidence.observedAt ? { lastCounted: item.evidence.observedAt.slice(0, 10) } : {}), ...(typeof item.updatedAt === "string" ? { updatedAt: item.updatedAt } : {}), accent: mapAccent(category), serverUnit: item.unit,
     ...(item.unitStatus ? { unitStatus: item.unitStatus } : {}),
     ...(item.unitCorrectionReason ? { unitCorrectionReason: item.unitCorrectionReason } : {}),
     ...(catalogProduct ? { catalogProduct } : {}), ...(productProfile ? { productProfile } : {})
@@ -1751,13 +1809,17 @@ function mutationFailureIsAmbiguous(error: unknown): boolean {
   // An offline/server failure can occur after the server committed but before
   // the browser received its response. Keep the key for an explicit retry.
   // Validation/auth/CSRF failures have a known outcome and can release it.
-  return !(error instanceof ApiError && error.status < 500 && ["validation", "forbidden", "unauthenticated", "csrf"].includes(error.kind));
+  return !(error instanceof ApiError && error.status < 500 && ["validation", "conflict", "forbidden", "unauthenticated", "csrf"].includes(error.kind));
 }
 
-export async function sha256Hex(file: Blob): Promise<string> {
-  // Plain HTTP LAN origins do not expose crypto.subtle. Hashing still needs
-  // to work there without weakening the server's byte-integrity check.
-  const digest = sha256(new Uint8Array(await file.arrayBuffer()));
+export async function sha256Hex(file: Blob | ArrayBuffer): Promise<string> {
+  const bytes = file instanceof ArrayBuffer ? file : await file.arrayBuffer();
+  // Secure contexts hash off the main thread with WebCrypto. Plain HTTP LAN
+  // origins do not expose crypto.subtle, so they fall back to a JS digest
+  // without weakening the server's byte-integrity check.
+  const subtle = typeof crypto === "undefined" ? undefined : crypto.subtle;
+  // The JS fallback loads on demand so secure contexts never download it.
+  const digest = subtle ? new Uint8Array(await subtle.digest("SHA-256", bytes)) : (await import("@noble/hashes/sha2.js")).sha256(new Uint8Array(bytes));
   return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
@@ -2173,7 +2235,51 @@ function reconciliationInitialModel(project: Project, reservations: readonly Ser
   };
 }
 
-export async function binaryRequest<T>(url: string, body: ArrayBuffer, csrfToken: string): Promise<T> {
+export interface UploadOptions {
+  /** Called with the uploaded fraction (0..1) while bytes are sent. */
+  onProgress?: (fraction: number) => void;
+  /** Aborts the byte transfer; the promise rejects with an AbortError. */
+  signal?: AbortSignal;
+}
+
+export const UPLOAD_TIMEOUT_MS = 10 * 60_000;
+
+function uploadFailure(status: number, payload: unknown): ApiError {
+  const envelope = payload && typeof payload === "object" && "error" in payload ? payload.error : undefined;
+  const code = envelope && typeof envelope === "object" && "code" in envelope && typeof envelope.code === "string" ? envelope.code : undefined;
+  const detail = envelope && typeof envelope === "object" && "message" in envelope && typeof envelope.message === "string" ? envelope.message : `BenchLedger returned HTTP ${status}`;
+  return new ApiError(detail, { kind: errorKind(status, code), status, ...(code ? { code } : {}) });
+}
+
+function xhrUpload<T>(target: string, body: ArrayBuffer, csrfToken: string, options: UploadOptions): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const abort = () => xhr.abort();
+    const cleanup = () => options.signal?.removeEventListener("abort", abort);
+    xhr.open("PUT", target);
+    xhr.withCredentials = true;
+    xhr.timeout = UPLOAD_TIMEOUT_MS;
+    xhr.setRequestHeader("Accept", "application/json");
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.setRequestHeader("X-CSRF-Token", csrfToken);
+    xhr.upload.onprogress = (event: ProgressEvent) => { if (event.lengthComputable && event.total > 0) options.onProgress?.(event.loaded / event.total); };
+    xhr.onload = () => {
+      cleanup();
+      let payload: unknown;
+      try { payload = xhr.responseText ? JSON.parse(xhr.responseText) : undefined; } catch { payload = undefined; }
+      if (xhr.status >= 200 && xhr.status < 300) { options.onProgress?.(1); resolve(payload as T); }
+      else reject(uploadFailure(xhr.status, payload));
+    };
+    xhr.onerror = () => { cleanup(); reject(new ApiError("The BenchLedger service could not be reached", { kind: "offline" })); };
+    xhr.ontimeout = () => { cleanup(); reject(new ApiError("BenchLedger did not respond in time", { kind: "offline" })); };
+    xhr.onabort = () => { cleanup(); reject(new DOMException("Upload cancelled", "AbortError")); };
+    if (options.signal?.aborted) { xhr.abort(); return; }
+    options.signal?.addEventListener("abort", abort, { once: true });
+    xhr.send(body);
+  });
+}
+
+export async function binaryRequest<T>(url: string, body: ArrayBuffer, csrfToken: string, options: UploadOptions = {}): Promise<T> {
   const configuredRoot = apiRoot();
   const target = url.startsWith("http")
     ? url
@@ -2187,20 +2293,19 @@ export async function binaryRequest<T>(url: string, body: ArrayBuffer, csrfToken
   if (uploadTarget.origin !== base.origin || uploadTarget.username || uploadTarget.password) {
     throw new ApiError("The service returned an unsafe upload destination.", { kind: "validation" });
   }
+  if (options.onProgress && typeof XMLHttpRequest !== "undefined") return xhrUpload<T>(target, body, csrfToken, options);
   let response: Response;
   try {
-    response = await fetch(target, { method: "PUT", body, credentials: "include", redirect: "error", headers: { "Accept": "application/json", "Content-Type": "application/octet-stream", "X-CSRF-Token": csrfToken } });
+    const timeout = AbortSignal.timeout(UPLOAD_TIMEOUT_MS);
+    response = await fetch(target, { method: "PUT", body, credentials: "include", redirect: "error", signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout, headers: { "Accept": "application/json", "Content-Type": "application/octet-stream", "X-CSRF-Token": csrfToken } });
   } catch (error) {
-    throw new ApiError(error instanceof Error ? error.message : "The BenchLedger service could not be reached", { kind: "offline" });
+    if (error instanceof Error && error.name === "AbortError" && options.signal?.aborted) throw error;
+    const timedOut = error instanceof Error && error.name === "TimeoutError";
+    throw new ApiError(timedOut ? "BenchLedger did not respond in time" : error instanceof Error ? error.message : "The BenchLedger service could not be reached", { kind: "offline" });
   }
   let payload: unknown;
   try { payload = await response.json(); } catch { payload = undefined; }
-  if (!response.ok) {
-    const envelope = payload && typeof payload === "object" && "error" in payload ? payload.error : undefined;
-    const code = envelope && typeof envelope === "object" && "code" in envelope && typeof envelope.code === "string" ? envelope.code : undefined;
-    const detail = envelope && typeof envelope === "object" && "message" in envelope && typeof envelope.message === "string" ? envelope.message : `BenchLedger returned HTTP ${response.status}`;
-    throw new ApiError(detail, { kind: errorKind(response.status, code), status: response.status, ...(code ? { code } : {}) });
-  }
+  if (!response.ok) throw uploadFailure(response.status, payload);
   return payload as T;
 }
 
@@ -2356,15 +2461,20 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     async logout() {},
     async loadWorkspace() { return state; },
     async listArchivedProjects() { return structuredClone(state.projects.filter((project) => project.status === "archived")); },
-    async refreshProjectReadiness() { return structuredClone(state.projects); },
+    async refreshProjectReadiness(projectIds) { return structuredClone(state.projects.filter((project) => project.status !== "archived" && (projectIds === undefined || projectIds.includes(project.id)))); },
     async listInventory(query) { return sampleInventoryPage(state.inventory, query); },
+    async getInventoryItem(id) {
+      const found = state.inventory.find((item) => item.id === id);
+      if (!found) throw new ApiError("Inventory item not found", { kind: "validation", status: 404, code: "not_found" });
+      return structuredClone(found);
+    },
     async bulkUpdateInventory(input) {
       const prepared = prepareBulkInventoryInput(input);
       const currentById = new Map(state.inventory.map((item) => [item.id, item] as const));
       for (const target of prepared.targets) {
         const current = currentById.get(target.itemId);
         if (!current) throw new ApiError("Inventory item not found", { kind: "validation", status: 404 });
-        if (typeof current.version !== "number" || !Number.isSafeInteger(current.version) || current.version <= 0 || current.version !== target.expectedVersion) throw new ApiError("Inventory changed since it was selected; nothing was changed", { kind: "validation", status: 409, code: "version_conflict" });
+        if (typeof current.version !== "number" || !Number.isSafeInteger(current.version) || current.version <= 0 || current.version !== target.expectedVersion) throw new ApiError("Inventory changed since it was selected; nothing was changed", { kind: "conflict", status: 409, code: "version_conflict" });
       }
       const correlationId = `sample-bulk-${Date.now()}`;
       const updated: InventoryItem[] = [];
@@ -2475,7 +2585,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     async updateInventoryCategory(id, input, expectedVersion) {
       const current = categoryState.find((category) => category.id === id);
       if (!current) throw new ApiError("Inventory category not found.", { kind: "validation", status: 404 });
-      if (current.version !== expectedVersion) throw new ApiError("This category changed in another tab. Reload it and try again.", { kind: "validation", status: 409, code: "version_conflict" });
+      if (current.version !== expectedVersion) throw new ApiError("This category changed in another tab. Reload it and try again.", { kind: "conflict", status: 409, code: "version_conflict" });
       const nextName = input.name === undefined ? current.name : input.name.trim();
       const siblingNames = categoryState.filter((category) => category.id !== id && category.parentId === current.parentId && !category.archived).map((category) => category.name.toLocaleLowerCase());
       if (siblingNames.includes(nextName.toLocaleLowerCase())) throw new ApiError("A category with this name already exists beside it.", { kind: "validation", status: 409 });
@@ -2486,7 +2596,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
     async archiveInventoryCategory(id, expectedVersion) {
       const current = categoryState.find((category) => category.id === id);
       if (!current) throw new ApiError("Inventory category not found.", { kind: "validation", status: 404 });
-      if (current.version !== expectedVersion) throw new ApiError("This category changed in another tab. Reload it and try again.", { kind: "validation", status: 409, code: "version_conflict" });
+      if (current.version !== expectedVersion) throw new ApiError("This category changed in another tab. Reload it and try again.", { kind: "conflict", status: 409, code: "version_conflict" });
       if (categoryState.some((category) => category.parentId === id && !category.archived)) throw new ApiError("Archive its active subcategories first.", { kind: "validation", status: 409 });
       if (state.inventory.some((item) => item.categoryNodeId === id)) throw new ApiError("This category is in use by active inventory. Reassign those items first.", { kind: "validation", status: 409 });
       const archived: ManagedInventoryCategory = { ...current, archived: true, updatedAt: new Date().toISOString(), version: current.version + 1 };
@@ -2658,7 +2768,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
       const current = state.projects.find((candidate) => candidate.serverRevisionId === revisionId);
       if (!current) throw new ApiError("Revision not found", { kind: "validation", status: 404 });
       const currentVersion = current.serverRevisionVersion ?? 1;
-      if (expectedVersion !== undefined && expectedVersion !== currentVersion) throw new ApiError("This revision changed; reload before updating its build approach", { kind: "validation", status: 409, code: "version_conflict" });
+      if (expectedVersion !== undefined && expectedVersion !== currentVersion) throw new ApiError("This revision changed; reload before updating its build approach", { kind: "conflict", status: 409, code: "version_conflict" });
       const route = input.fabricationRoute ?? current.fabricationRoute ?? (current.intendedPrinterItemId ? "printed" : "undecided");
       const hasPrinterField = Object.prototype.hasOwnProperty.call(input, "intendedPrinterItemId");
       if (hasPrinterField && input.intendedPrinterItemId !== undefined && input.intendedPrinterItemId !== null && route !== "printed") {
@@ -2700,7 +2810,7 @@ export function createSampleWorkspaceAdapter(): WorkspaceAdapter {
       if (!project) throw new ApiError("Project not found", { kind: "validation", status: 404 });
       const line = project.bom.find((candidate) => candidate.id === lineId);
       if (!line) throw new ApiError("Requirement not found", { kind: "validation", status: 404 });
-      if (line.version !== expectedVersion) throw new ApiError("This requirement changed; reload and try again", { kind: "validation", status: 409, code: "version_conflict" });
+      if (line.version !== expectedVersion) throw new ApiError("This requirement changed; reload and try again", { kind: "conflict", status: 409, code: "version_conflict" });
       const updated = { ...project, bom: project.bom.map((candidate) => candidate.id === lineId ? { ...candidate, role, version: candidate.version + 1 } : candidate) };
       state.projects = state.projects.map((candidate) => candidate.id === projectId ? updated : candidate);
       return structuredClone(updated);
@@ -2966,17 +3076,34 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       archived.forEach((project) => projectCache.set(project.id, project));
       return archived;
     },
-    async refreshProjectReadiness() {
-      const refreshed = await Promise.all([...projectCache.values()].map(async (project): Promise<Project> => {
+    async refreshProjectReadiness(projectIds) {
+      // Archived projects share the cache (for their own page) but must never
+      // be refreshed or returned as part of the active list.
+      const wanted = projectIds === undefined ? undefined : new Set(projectIds);
+      const active = [...projectCache.values()].filter((project) => project.status !== "archived" && (wanted === undefined || wanted.has(project.id)));
+      const settled = await Promise.allSettled(active.map(async (project): Promise<Project> => {
         const revisionId = project.serverRevisionId;
         if (revisionId === undefined) return project;
         const gaps = await request<ServerGapEvaluation>(`/project-revisions/${encodeURIComponent(revisionId)}/gaps`);
         const gapEvaluation = mapGapEvaluation(gaps, project.bom);
         if (gapEvaluation === undefined) return invalidGapEvaluation();
-        return { ...project, gapEvaluation };
+        return { ...project, gapEvaluation, readinessUnavailable: false };
       }));
+      const authFailure = settled.find((result): result is PromiseRejectedResult => result.status === "rejected" && result.reason instanceof ApiError && (result.reason.kind === "unauthenticated" || result.reason.kind === "csrf"));
+      if (authFailure) throw authFailure.reason;
+      if (settled.length > 0 && settled.every((result) => result.status === "rejected")) throw (settled[0] as PromiseRejectedResult).reason;
+      const refreshed = settled.map((result, index) => result.status === "fulfilled" ? result.value : { ...active[index]!, readinessUnavailable: true });
       refreshed.forEach((project) => projectCache.set(project.id, project));
       return refreshed;
+    },
+    async getInventoryItem(id) {
+      const payload = await request<unknown>(`/inventory/${encodeURIComponent(id)}`);
+      const record = asRecord(payload);
+      const raw = (record && "data" in record && asRecord(record.data) ? record.data : payload) as ServerInventoryItem;
+      const item = mapInventoryItem(raw);
+      serverUnits.set(item.id, raw.unit);
+      inventoryCache.set(item.id, item);
+      return item;
     },
     async listInventory(query) {
       const params = new URLSearchParams();
@@ -3093,9 +3220,10 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
         ...(input.tags === undefined ? {} : { tags: [...input.tags] }),
         ...(input.categoryNodeId === undefined ? {} : { categoryNodeId: input.categoryNodeId })
       };
+      const version = requireExpectedVersion(expectedVersion ?? inventoryCache.get(itemId)?.version, "this item");
       const payload = await request<{ data?: ServerInventoryItem }>(`/inventory/${encodeURIComponent(itemId)}`, {
         method: "PATCH",
-        headers: expectedVersion === undefined ? {} : { "If-Match": String(expectedVersion) },
+        headers: { "If-Match": String(version) },
         body: JSON.stringify(body)
       }, token);
       const item = mutationData(payload);
@@ -3317,9 +3445,8 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       const token = csrfToken ?? cookieValue("forge_csrf");
       if (!token) throw new ApiError("Sign in again before archiving a project", { kind: "csrf", status: 403 });
       const current = projectCache.get(projectId);
-      const version = expectedVersion ?? current?.version;
-      const headers: Record<string, string> = { "Idempotency-Key": idempotencyKey("project-archive") };
-      if (version !== undefined) headers["If-Match"] = String(version);
+      const version = requireExpectedVersion(expectedVersion ?? current?.version, "this project");
+      const headers: Record<string, string> = { "Idempotency-Key": idempotencyKey("project-archive"), "If-Match": String(version) };
       const payload = await request<{ data?: ServerProject }>(`/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", headers, body: JSON.stringify({ status: "archived" }) }, token);
       const archived = mapProject(mutationData(payload));
       projectCache.delete(projectId);
@@ -3595,14 +3722,14 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       const payload = await request<unknown>(`/projects/${encodeURIComponent(projectId)}/artifacts${query ? `?${query}` : ""}`);
       return responseList(payload).map((value) => mapArtifact(value as ServerArtifact));
     },
-    async uploadArtifact(projectId, file, role, target) {
+    async uploadArtifact(projectId, file, role, target, options) {
       const token = csrfToken ?? cookieValue("forge_csrf");
       if (!token) throw new ApiError("Your session needs a fresh CSRF token before uploading a file", { kind: "csrf", status: 403 });
       const current = projectCache.get(projectId);
       const selectedTarget = target ?? (current?.serverRevisionId === undefined ? undefined : { kind: "project" as const, projectRevisionId: current.serverRevisionId });
       if (selectedTarget === undefined) throw new ApiError("Create a project revision before uploading a file", { kind: "validation", status: 409 });
       const bytes = await file.arrayBuffer();
-      const sha256 = await sha256Hex(file);
+      const sha256 = await sha256Hex(bytes);
       const projectRevisionId = selectedTarget.kind === "project" ? selectedTarget.projectRevisionId : undefined;
       const buildConfigurationSnapshotId = projectRevisionId !== undefined && current?.buildConfigSnapshot
         && (current.buildConfigSnapshot.revisionId === projectRevisionId || current.buildConfigSnapshot.projectRevisionId === projectRevisionId)
@@ -3627,7 +3754,7 @@ export function createWorkspaceAdapter(): WorkspaceAdapter {
       }, token);
       const session = mutationData(beginPayload);
       const uploadUrl = session.uploadUrl.startsWith("http") ? session.uploadUrl : session.uploadUrl.startsWith("/api/v1") ? session.uploadUrl : `${apiRoot()}${session.uploadUrl.startsWith("/") ? session.uploadUrl : `/${session.uploadUrl}`}`;
-      await binaryRequest(uploadUrl, bytes, token);
+      await binaryRequest(uploadUrl, bytes, token, options);
       const finalizePayload = await request<{ data: ServerArtifact }>(`/artifacts/uploads/${encodeURIComponent(session.id)}/finalize`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey("upload-finalize") } }, token);
       const artifact = mutationData(finalizePayload);
       if (!current) throw new ApiError("The project is not available in this workspace snapshot", { kind: "validation", status: 409 });

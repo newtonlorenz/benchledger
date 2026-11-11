@@ -1,3 +1,4 @@
+import { DomainError } from "@benchledger/domain";
 import {
   inspectionCompletionPreviewSchema,
   inspectionEvidenceSchema,
@@ -9,26 +10,26 @@ import type { BenchDatabase, SqliteRow } from "./sqlite.js";
 function clone<T>(value: T): T { return structuredClone(value); }
 function text(row: SqliteRow, key: string): string {
   const value = row[key];
-  if (typeof value !== "string") throw new Error(`inspection row ${key} is not text`);
+  if (typeof value !== "string") throw new DomainError("integrity_error", `inspection row ${key} is not text`);
   return value;
 }
 function integer(row: SqliteRow, key: string): number {
   const value = row[key];
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) throw new Error(`inspection row ${key} is not a positive integer`);
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) throw new DomainError("integrity_error", `inspection row ${key} is not a positive integer`);
   return value;
 }
 function payload<T>(row: SqliteRow, schema: { parse(value: unknown): T }): T {
   const raw = row.payload_json;
-  if (typeof raw !== "string") throw new Error("inspection payload is not text");
+  if (typeof raw !== "string") throw new DomainError("integrity_error", "inspection payload is not text");
   let value: unknown;
-  try { value = JSON.parse(raw) as unknown; } catch { throw new Error("inspection payload is malformed JSON"); }
+  try { value = JSON.parse(raw) as unknown; } catch { throw new DomainError("integrity_error", "inspection payload is malformed JSON"); }
   return schema.parse(value);
 }
 
 function previewFromRow(row: SqliteRow): InspectionCompletionPreview {
   const preview = payload(row, inspectionCompletionPreviewSchema);
   if (preview.id !== text(row, "id") || preview.actor !== text(row, "actor") || preview.version !== integer(row, "version") || preview.contentSha256 !== text(row, "content_sha256")) {
-    throw new Error("inspection preview identity or version disagrees with its columns");
+    throw new DomainError("integrity_error", "inspection preview identity or version disagrees with its columns");
   }
   return preview;
 }
@@ -36,7 +37,7 @@ function previewFromRow(row: SqliteRow): InspectionCompletionPreview {
 function evidenceFromRow(row: SqliteRow): InspectionEvidence {
   const evidence = payload(row, inspectionEvidenceSchema);
   if (evidence.id !== text(row, "id") || evidence.projectRevisionId !== text(row, "project_revision_id") || evidence.actionId !== text(row, "action_id") || evidence.itemId !== text(row, "item_id")) {
-    throw new Error("inspection evidence identity disagrees with its columns");
+    throw new DomainError("integrity_error", "inspection evidence identity disagrees with its columns");
   }
   return evidence;
 }

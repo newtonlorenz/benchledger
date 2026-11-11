@@ -7,6 +7,8 @@ import type { BomUpdateInput, ProjectEditInput } from "./api";
 import { matchesInventorySearch } from "@benchledger/domain/inventory-search";
 import { inventoryCandidateText } from "./inventory-identity";
 import { saveProjectHandoff } from "./project-handoff";
+import { useDialogDraft } from "./dialog-draft";
+import type { OverflowMenuItem } from "./project-header";
 
 export const ProjectEditingContext = createContext<{
   project: Project;
@@ -29,6 +31,28 @@ export function RequirementEditAction({ line }: { line: BomLine }) {
   return <button type="button" className="text-button requirement-edit-action" aria-label={`Edit requirement ${line.label}`} onClick={() => actions.editRequirement(line)}>Edit requirement</button>;
 }
 
+/** Secondary project actions for the header overflow menu. Delete stays in Project settings. */
+export function projectMenuItems({ project, onEdit, onExport, onNewRevision, onArchive, onRestore }: { project: Project; onEdit(): void; onExport(): void; onNewRevision(): void; onArchive(): void; onRestore(): void }): OverflowMenuItem[] {
+  const archived = project.status === "archived";
+  return [
+    ...(archived ? [] : [{ id: "edit", label: "Edit project", icon: "sliders" as const, onSelect: onEdit }]),
+    { id: "export", label: "Export summary", icon: "download" as const, onSelect: onExport },
+    ...(archived ? [] : [{ id: "revision", label: "New revision", icon: "plus" as const, onSelect: onNewRevision }]),
+    archived ? { id: "restore", label: "Restore project", icon: "refresh" as const, onSelect: onRestore } : { id: "archive", label: "Archive project", icon: "archive" as const, onSelect: onArchive },
+  ];
+}
+
+/** Export choices with the privacy reminder; shown in the Export summary dialog. */
+export function ProjectExportOptions({ project }: { project: Project }) {
+  const [error, setError] = useState<string>();
+  const download = (format: "json" | "csv") => { try { saveProjectHandoff(project, format); setError(undefined); } catch { setError("The export could not be created. Retry in this browser."); } };
+  return <div className="project-export-options">
+    <p>Includes project names, notes and identifiers. Review before sharing. These are snapshots, not backups.</p>
+    <div className="dialog-actions"><button type="button" className="button button-secondary" onClick={() => download("csv")}><Icon name="download" size={15} />Download requirements CSV</button><button type="button" className="button button-secondary" onClick={() => download("json")}><Icon name="download" size={15} />Download project brief JSON</button></div>
+    {error && <p role="alert" className="form-error">{error}</p>}
+  </div>;
+}
+
 export function ProjectManagementBar() {
   const actions = useContext(ProjectEditingContext);
   const [error, setError] = useState<string>();
@@ -42,14 +66,9 @@ export function ProjectManagementBar() {
     catch { setError("Project refresh failed. Previous records remain visible. Retry before using stock."); }
     finally { setRefreshing(false); }
   };
-  if (!actions) return null;
-  const { project } = actions;
-  const download = (format: "json" | "csv") => { try { saveProjectHandoff(project, format); setError(undefined); } catch { setError("The export could not be created. Retry in this browser."); } };
+  if (!actions?.refreshProject) return null;
   return <section className="project-management-bar" aria-label="Project management">
-    <span className="project-stage">Stage: <strong>{project.status.charAt(0).toUpperCase() + project.status.slice(1)}</strong></span>
-    {actions.refreshProject && <button type="button" className="button button-quiet" disabled={refreshing} onClick={() => navigation ? navigation.request(() => { void refresh(); }) : void refresh()} aria-label="Refresh project"><Icon name="refresh" size={15} />{refreshing ? "Refreshing…" : "Refresh"}</button>}
-    {project.status !== "archived" && <button type="button" className="button button-quiet" onClick={actions.editProject}>Edit project</button>}
-    <details className="project-export"><summary>Export project</summary><div className="project-export-options"><p>Includes project names, notes and identifiers. Review before sharing. These are snapshots, not backups.</p><button type="button" className="button button-quiet" onClick={() => download("csv")}>Download requirements CSV</button><button type="button" className="button button-quiet" onClick={() => download("json")}>Download project brief JSON</button></div></details>
+    <button type="button" className="button button-quiet" disabled={refreshing} onClick={() => navigation ? navigation.request(() => { void refresh(); }) : void refresh()} aria-label="Refresh project"><Icon name="refresh" size={15} />{refreshing ? "Refreshing…" : "Refresh"}</button>
     {error && <p role="alert" className="form-error">{error}</p>}
     {refreshed && !refreshing && !error && <p role="status" className="project-refresh-status">Project refreshed from the workspace.</p>}
   </section>;
@@ -89,6 +108,7 @@ export function RequirementEditForm({ line, items, onSave, onRetire, onClose, on
   const [optional, setOptional] = useState(line.optional ?? false), [note, setNote] = useState(line.note ?? "");
   const [busy, setBusy] = useState(false), [confirmRemove, setConfirmRemove] = useState(false), [error, setError] = useState<string>();
   const [uncertainOperation, setUncertainOperation] = useState<"save" | "remove">();
+  useDialogDraft(name !== line.label || quantity !== String(line.required) || unit !== line.unit || role !== (line.role ?? "") || itemId !== (line.itemId ?? "") || optional !== (line.optional ?? false) || note !== (line.note ?? "") || confirmRemove);
   const eligible = items.filter((item) => item.category !== "Printers" && (item.id === itemId || matchesInventorySearch([item.name, item.manufacturer, item.variant, item.location, item.sku], query)));
   const run = async (kind: "save" | "remove", operation: () => Promise<void>) => {
     if (busy) return; setBusy(true); onBusy(true); setError(undefined);
@@ -130,6 +150,7 @@ export function ProjectEditForm({ project, onSave, onClose, onBusy }: { project:
   const [name, setName] = useState(project.name), [description, setDescription] = useState(project.description);
   const [status, setStatus] = useState<ProjectEditInput["status"]>(project.status === "archived" ? "idea" : project.status);
   const [busy, setBusy] = useState(false), [error, setError] = useState<string>(), [uncertain, setUncertain] = useState(false);
+  useDialogDraft(name !== project.name || description !== project.description || status !== (project.status === "archived" ? "idea" : project.status));
   const save = async () => {
     if (busy) return; setBusy(true); onBusy(true); setError(undefined);
     try { await onSave({ name: name.trim(), description, status }); }

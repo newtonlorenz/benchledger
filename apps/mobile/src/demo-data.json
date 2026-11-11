@@ -1,0 +1,345 @@
+{
+  "inventory": {
+    "data": [
+      {
+        "id": "printer-h2d",
+        "name": "Bambu Lab H2D",
+        "kind": "printer",
+        "quantity": 1,
+        "availableQuantity": 1,
+        "unit": "each",
+        "tags": [
+          "3d-printing",
+          "bambu"
+        ],
+        "links": [],
+        "evidence": {
+          "state": "commissioned",
+          "source": "synthetic-demo"
+        },
+        "createdAt": "2026-08-30T00:00:00.000Z",
+        "updatedAt": "2026-08-30T00:00:00.000Z",
+        "version": 1,
+        "unitStatus": "compatible",
+        "productProfile": {
+          "id": "profile-printer-h2d",
+          "itemId": "printer-h2d",
+          "catalogProductId": "catalog-printer-h2d",
+          "linkState": "confirmed",
+          "createdAt": "2026-08-30T00:00:00.000Z",
+          "updatedAt": "2026-08-30T00:00:00.000Z",
+          "version": 1,
+          "profileType": "printer_asset",
+          "details": {
+            "assetLabel": "Synthetic H2D"
+          }
+        },
+        "catalogProduct": {
+          "kind": "printer",
+          "manufacturer": "Bambu Lab",
+          "exactModel": "H2D",
+          "technology": "fff",
+          "buildVolumeMm": {
+            "x": 325,
+            "y": 320,
+            "z": 325
+          },
+          "id": "catalog-printer-h2d",
+          "createdAt": "2026-08-30T00:00:00.000Z",
+          "updatedAt": "2026-08-30T00:00:00.000Z",
+          "version": 1
+        }
+      },
+      {
+        "id": "filament-petg-hf",
+        "name": "Bambu PETG HF",
+        "kind": "filament",
+        "quantity": 1000,
+        "availableQuantity": 1000,
+        "unit": "gram",
+        "tags": [
+          "petg",
+          "bambu"
+        ],
+        "links": [],
+        "evidence": {
+          "state": "physically_counted",
+          "source": "synthetic-demo"
+        },
+        "createdAt": "2026-08-30T00:00:00.000Z",
+        "updatedAt": "2026-08-30T00:00:00.000Z",
+        "version": 1,
+        "unitStatus": "compatible",
+        "productProfile": {
+          "id": "profile-filament-petg-hf",
+          "itemId": "filament-petg-hf",
+          "catalogProductId": "catalog-filament-petg-hf",
+          "linkState": "confirmed",
+          "createdAt": "2026-08-30T00:00:00.000Z",
+          "updatedAt": "2026-08-30T00:00:00.000Z",
+          "version": 1,
+          "profileType": "filament_spool",
+          "details": {
+            "openedState": "sealed"
+          }
+        },
+        "catalogProduct": {
+          "kind": "filament",
+          "manufacturer": "Bambu Lab",
+          "productName": "PETG HF",
+          "materialFamily": "PETG",
+          "colourName": "Black",
+          "diameterMm": 1.75,
+          "nominalNetMassG": 1000,
+          "lengthBasis": "unknown",
+          "id": "catalog-filament-petg-hf",
+          "createdAt": "2026-08-30T00:00:00.000Z",
+          "updatedAt": "2026-08-30T00:00:00.000Z",
+          "version": 1
+        }
+      },
+      {
+        "id": "wire-dupont",
+        "name": "Dupont jumper wire assortment",
+        "kind": "wire",
+        "quantity": 1,
+        "availableQuantity": 0,
+        "unit": "set",
+        "tags": [
+          "wire",
+          "electronics"
+        ],
+        "links": [],
+        "evidence": {
+          "state": "delivered_uncounted",
+          "source": "synthetic-demo"
+        },
+        "createdAt": "2026-08-30T00:00:00.000Z",
+        "updatedAt": "2026-08-30T00:00:00.000Z",
+        "version": 1,
+        "unitStatus": "compatible"
+      },
+      {
+        "id": "board-esp32",
+        "name": "ESP32 development board",
+        "kind": "electronic",
+        "quantity": 2,
+        "availableQuantity": 2,
+        "unit": "each",
+        "tags": [
+          "esp32",
+          "microcontroller"
+        ],
+        "links": [],
+        "evidence": {
+          "state": "physically_counted",
+          "source": "synthetic-demo"
+        },
+        "createdAt": "2026-08-30T00:00:00.000Z",
+        "updatedAt": "2026-08-30T00:00:00.000Z",
+        "version": 1,
+        "unitStatus": "compatible"
+      }
+    ],
+    "limit": 100,
+    "total": 4
+  },
+  "projects": {
+    "data": [
+      {
+        "id": "synthetic-project-lamp",
+        "name": "Synthetic H2D desk lamp",
+        "description": "Synthetic reference project covering reuse, inspect-first stock, and a missing requirement.",
+        "status": "planned",
+        "currentRevisionId": "synthetic-revision-lamp-r01",
+        "createdAt": "2026-08-30T00:00:00.000Z",
+        "updatedAt": "2026-08-30T00:00:00.000Z",
+        "version": 1
+      }
+    ],
+    "limit": 100,
+    "total": 1
+  },
+  "items": {
+    "printer-h2d": {
+      "id": "printer-h2d",
+      "name": "Bambu Lab H2D",
+      "kind": "printer",
+      "quantity": 1,
+      "availableQuantity": 1,
+      "unit": "each",
+      "tags": [
+        "3d-printing",
+        "bambu"
+      ],
+      "links": [],
+      "evidence": {
+        "state": "commissioned",
+        "source": "synthetic-demo"
+      },
+      "createdAt": "2026-08-30T00:00:00.000Z",
+      "updatedAt": "2026-08-30T00:00:00.000Z",
+      "version": 1,
+      "unitStatus": "compatible"
+    },
+    "filament-petg-hf": {
+      "id": "filament-petg-hf",
+      "name": "Bambu PETG HF",
+      "kind": "filament",
+      "quantity": 1000,
+      "availableQuantity": 1000,
+      "unit": "gram",
+      "tags": [
+        "petg",
+        "bambu"
+      ],
+      "links": [],
+      "evidence": {
+        "state": "physically_counted",
+        "source": "synthetic-demo"
+      },
+      "createdAt": "2026-08-30T00:00:00.000Z",
+      "updatedAt": "2026-08-30T00:00:00.000Z",
+      "version": 1,
+      "unitStatus": "compatible"
+    },
+    "wire-dupont": {
+      "id": "wire-dupont",
+      "name": "Dupont jumper wire assortment",
+      "kind": "wire",
+      "quantity": 1,
+      "availableQuantity": 0,
+      "unit": "set",
+      "tags": [
+        "wire",
+        "electronics"
+      ],
+      "links": [],
+      "evidence": {
+        "state": "delivered_uncounted",
+        "source": "synthetic-demo"
+      },
+      "createdAt": "2026-08-30T00:00:00.000Z",
+      "updatedAt": "2026-08-30T00:00:00.000Z",
+      "version": 1,
+      "unitStatus": "compatible"
+    },
+    "board-esp32": {
+      "id": "board-esp32",
+      "name": "ESP32 development board",
+      "kind": "electronic",
+      "quantity": 2,
+      "availableQuantity": 2,
+      "unit": "each",
+      "tags": [
+        "esp32",
+        "microcontroller"
+      ],
+      "links": [],
+      "evidence": {
+        "state": "physically_counted",
+        "source": "synthetic-demo"
+      },
+      "createdAt": "2026-08-30T00:00:00.000Z",
+      "updatedAt": "2026-08-30T00:00:00.000Z",
+      "version": 1,
+      "unitStatus": "compatible"
+    }
+  },
+  "details": {
+    "synthetic-project-lamp": {
+      "project": {
+        "id": "synthetic-project-lamp",
+        "name": "Synthetic H2D desk lamp",
+        "description": "Synthetic reference project covering reuse, inspect-first stock, and a missing requirement.",
+        "status": "planned",
+        "currentRevisionId": "synthetic-revision-lamp-r01",
+        "createdAt": "2026-08-30T00:00:00.000Z",
+        "updatedAt": "2026-08-30T00:00:00.000Z",
+        "version": 1
+      },
+      "workItems": []
+    }
+  },
+  "revisions": {
+    "synthetic-revision-lamp-r01": {
+      "id": "synthetic-revision-lamp-r01",
+      "projectId": "synthetic-project-lamp",
+      "number": 1,
+      "name": "Initial concept",
+      "notes": "Synthetic reference project for the guided planning flow.",
+      "status": "concept",
+      "fabricationRoute": "undecided",
+      "createdAt": "2026-08-30T00:00:00.000Z",
+      "version": 1
+    }
+  },
+  "boms": {
+    "synthetic-revision-lamp-r01": [
+      {
+        "id": "synthetic-bom-filament",
+        "revisionId": "synthetic-revision-lamp-r01",
+        "name": "Bambu PETG HF",
+        "role": "consumed",
+        "itemId": "filament-petg-hf",
+        "requiredQuantity": 250,
+        "unit": "gram",
+        "optional": false,
+        "constraints": {},
+        "alternatives": [],
+        "notes": "Representative material allowance for the first prototype.",
+        "createdAt": "2026-08-30T00:00:00.000Z",
+        "updatedAt": "2026-08-30T00:00:00.000Z",
+        "version": 1
+      },
+      {
+        "id": "synthetic-bom-board",
+        "revisionId": "synthetic-revision-lamp-r01",
+        "name": "ESP32 development board",
+        "role": "consumed",
+        "itemId": "board-esp32",
+        "requiredQuantity": 1,
+        "unit": "each",
+        "optional": false,
+        "constraints": {},
+        "alternatives": [],
+        "createdAt": "2026-08-30T00:00:00.000Z",
+        "updatedAt": "2026-08-30T00:00:00.000Z",
+        "version": 1
+      },
+      {
+        "id": "synthetic-bom-wire",
+        "revisionId": "synthetic-revision-lamp-r01",
+        "name": "Dupont jumper wire assortment",
+        "role": "consumed",
+        "itemId": "wire-dupont",
+        "requiredQuantity": 1,
+        "unit": "set",
+        "optional": false,
+        "constraints": {},
+        "alternatives": [],
+        "notes": "Delivery is recorded; physical count is still required.",
+        "createdAt": "2026-08-30T00:00:00.000Z",
+        "updatedAt": "2026-08-30T00:00:00.000Z",
+        "version": 1
+      },
+      {
+        "id": "synthetic-bom-fasteners",
+        "revisionId": "synthetic-revision-lamp-r01",
+        "name": "M3 mounting screws",
+        "role": "consumed",
+        "requiredQuantity": 4,
+        "unit": "each",
+        "optional": false,
+        "constraints": {
+          "kind": "fastener"
+        },
+        "alternatives": [],
+        "notes": "Synthetic missing line to exercise shopping guidance.",
+        "createdAt": "2026-08-30T00:00:00.000Z",
+        "updatedAt": "2026-08-30T00:00:00.000Z",
+        "version": 1
+      }
+    ]
+  }
+}

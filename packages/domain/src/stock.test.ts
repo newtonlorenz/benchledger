@@ -55,3 +55,39 @@ describe("stock ledger", () => {
     expect(derived.available).toBe(1);
   });
 });
+
+describe("decimal ledger balances", () => {
+  it("allocates a decimal on-hand quantity in full without a false over-allocation", () => {
+    const item = { id: "decimal-item", name: "Decimal", category: "filament", purchasedQuantity: 0.3, unit: "gram" as const, sourceStatus: "physically_confirmed" as const, reusePolicy: "available" as const, confidence: "confirmed" as const, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+    const at = "2026-01-01T00:00:00.000Z";
+    const events = [
+      createStockEvent({ id: "c", itemId: item.id, kind: "count", quantity: 0.3, unit: "gram", reason: "count", occurredAt: at, createdAt: at }),
+      createStockEvent({ id: "a1", itemId: item.id, kind: "allocate", quantity: 0.1, unit: "gram", reason: "a", occurredAt: at, createdAt: at }),
+      createStockEvent({ id: "a2", itemId: item.id, kind: "allocate", quantity: 0.2, unit: "gram", reason: "b", occurredAt: at, createdAt: at })
+    ];
+    expect(deriveStockBalance(item, events)).toMatchObject({ onHand: 0.3, allocated: 0.3, available: 0 });
+  });
+});
+
+describe("ledger replay order", () => {
+  const item = { id: "order-item", name: "Order", category: "parts", purchasedQuantity: 0, unit: "piece" as const, sourceStatus: "physically_confirmed" as const, reusePolicy: "available" as const, confidence: "confirmed" as const, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+
+  it("orders mixed-precision timestamps chronologically", () => {
+    // Lexically ".500Z" sorts before "Z", which would replay the consumption first.
+    const events = [
+      createStockEvent({ id: "consume", itemId: item.id, kind: "consume", quantity: 1, unit: "piece", reason: "use", occurredAt: "2026-01-01T00:00:00.500Z", createdAt: "2026-01-01T00:00:00.500Z" }),
+      createStockEvent({ id: "receipt", itemId: item.id, kind: "receipt", quantity: 2, unit: "piece", reason: "in", occurredAt: "2026-01-01T00:00:00Z", createdAt: "2026-01-01T00:00:00Z" })
+    ];
+    expect(deriveStockBalance(item, events)).toMatchObject({ onHand: 1 });
+  });
+
+  it("keeps input order for identical timestamps", () => {
+    const at = "2026-01-01T00:00:00.000Z";
+    const events = [
+      createStockEvent({ id: "z-receipt", itemId: item.id, kind: "receipt", quantity: 1, unit: "piece", reason: "in", occurredAt: at, createdAt: at }),
+      createStockEvent({ id: "a-consume", itemId: item.id, kind: "consume", quantity: 1, unit: "piece", reason: "use", occurredAt: at, createdAt: at })
+    ];
+    expect(deriveStockBalance(item, events)).toMatchObject({ onHand: 0 });
+    expect(() => deriveStockBalance(item, [...events].reverse())).toThrow(expect.objectContaining({ code: "negative_stock" }));
+  });
+});
